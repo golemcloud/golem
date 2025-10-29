@@ -18,6 +18,8 @@ use async_mutex::Mutex;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::worker::UpdateRecord;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use http::StatusCode;
@@ -29,8 +31,6 @@ use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, Instrument};
-use golem_common::model::worker::UpdateRecord;
-use golem_common::model::component::ComponentRevision;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -150,16 +150,23 @@ async fn auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(&component.id, "auto_update_on_running", vec![], env, vec![])
         .await?;
-    let _ = executor.log_output(&worker_id).await?;
+    executor.log_output(&worker_id).await?;
 
     let updated_component = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -188,7 +195,7 @@ async fn auto_update_on_running(
     let mut control2 = http_server.f1_control(110).await;
 
     control2.await_reached().await;
-    let _ = executor.log_output(&worker_id).await?;
+    executor.log_output(&worker_id).await?;
     control2.resume();
 
     let result = fiber.await??;
@@ -209,15 +216,27 @@ async fn auto_update_on_running(
     check!(result[0] == Value::U64(150));
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -233,16 +252,23 @@ async fn auto_update_on_idle(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "auto_update_on_idle")
         .await?;
-    let _ = executor.log_output(&worker_id).await?;
+    executor.log_output(&worker_id).await?;
 
     let updated_component = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .auto_update_worker(&worker_id, updated_component.revision)
@@ -262,15 +288,27 @@ async fn auto_update_on_idle(
     check!(result[0] == Value::U64(0));
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -291,7 +329,11 @@ async fn failing_auto_update_on_idle(
 
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(
             &component.id,
@@ -301,12 +343,15 @@ async fn failing_auto_update_on_idle(
             vec![],
         )
         .await?;
-    let _ = executor.log_output(&worker_id).await?;
+    executor.log_output(&worker_id).await?;
 
     let updated_component = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -339,15 +384,27 @@ async fn failing_auto_update_on_idle(
     check!(result[0] != Value::U64(300));
     check!(metadata.component_version == ComponentRevision(0));
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 0);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 1);
     }
     Ok(())
@@ -363,7 +420,11 @@ async fn auto_update_on_idle_with_non_diverging_history(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(
             &component.id,
@@ -377,7 +438,10 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .update_component(&component.id, "update-test-v2")
         .await?;
 
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
@@ -406,15 +470,27 @@ async fn auto_update_on_idle_with_non_diverging_history(
     check!(result[0] == Value::U64(11));
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -434,7 +510,11 @@ async fn failing_auto_update_on_running(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(
             &component.id,
@@ -449,7 +529,10 @@ async fn failing_auto_update_on_running(
     let updated_component = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     let _ = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
@@ -504,15 +587,27 @@ async fn failing_auto_update_on_running(
     check!(result[0] == Value::U64(300));
     check!(metadata.component_version == ComponentRevision(0));
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 0);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 1);
     }
     Ok(())
@@ -532,7 +627,11 @@ async fn manual_update_on_idle(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v2").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v2")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(&component.id, "manual_update_on_idle", vec![], env, vec![])
         .await?;
@@ -541,7 +640,10 @@ async fn manual_update_on_idle(
     let updated_component = executor
         .update_component(&component.id, "update-test-v3")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -577,15 +679,27 @@ async fn manual_update_on_idle(
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -605,7 +719,11 @@ async fn manual_update_on_idle_without_save_snapshot(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(
             &component.id,
@@ -620,7 +738,10 @@ async fn manual_update_on_idle_without_save_snapshot(
     let updated_component = executor
         .update_component(&component.id, "update-test-v3")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -651,15 +772,27 @@ async fn manual_update_on_idle_without_save_snapshot(
     check!(result == vec![Value::U64(5)]);
     check!(metadata.component_version == ComponentRevision(0));
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 0);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 1);
     }
     Ok(())
@@ -679,7 +812,11 @@ async fn auto_update_on_running_followed_by_manual(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(
             &component.id,
@@ -694,12 +831,18 @@ async fn auto_update_on_running_followed_by_manual(
     let updated_component_1 = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component_1.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component_1.revision
+    );
 
     let updated_component_2 = executor
         .update_component(&component.id, "update-test-v3")
         .await?;
-    info!("Updated component to version {}", updated_component_2.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component_2.revision
+    );
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -756,15 +899,27 @@ async fn auto_update_on_running_followed_by_manual(
     check!(result2[0] == Value::U64(150));
     check!(metadata.component_version == updated_component_2.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 2);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -784,7 +939,11 @@ async fn manual_update_on_idle_with_failing_load(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component = executor.component(&executor.environment_id, "update-test-v2").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v2")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker_with(
             &component.id,
@@ -799,7 +958,10 @@ async fn manual_update_on_idle_with_failing_load(
     let updated_component = executor
         .update_component(&component.id, "update-test-v4")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -829,15 +991,27 @@ async fn manual_update_on_idle_with_failing_load(
     check!(result == vec![Value::U64(5)]);
     check!(metadata.component_version == ComponentRevision(0));
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 0);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 1);
     }
     Ok(())
@@ -876,7 +1050,10 @@ async fn manual_update_on_idle_using_v11(
     let updated_component = executor
         .update_component(&component.id, "update-test-v3-11")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -912,15 +1089,27 @@ async fn manual_update_on_idle_using_v11(
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -959,7 +1148,10 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     let updated_component = executor
         .update_component(&component.id, "update-test-v3-sdk")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .invoke_and_await(
@@ -995,15 +1187,27 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 0);
     }
     Ok(())
@@ -1019,7 +1223,11 @@ async fn auto_update_on_idle_to_non_existing(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "auto_update_on_idle")
         .await?;
@@ -1028,7 +1236,10 @@ async fn auto_update_on_idle_to_non_existing(
     let updated_component = executor
         .update_component(&component.id, "update-test-v2")
         .await?;
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .auto_update_worker(&worker_id, updated_component.revision)
@@ -1059,15 +1270,27 @@ async fn auto_update_on_idle_to_non_existing(
     check!(result2[0] == Value::U64(0));
     check!(metadata.component_version == updated_component.revision);
     {
-        let pending_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::PendingUpdate(_))).count();
+        let pending_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
+            .count();
         check!(pending_updates == 0);
     }
     {
-        let successful_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_))).count();
+        let successful_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
+            .count();
         check!(successful_updates == 1);
     }
     {
-        let failed_updates = metadata.updates.iter().filter(|u| matches!(u, UpdateRecord::FailedUpdate(_))).count();
+        let failed_updates = metadata
+            .updates
+            .iter()
+            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
+            .count();
         check!(failed_updates == 1);
     }
     Ok(())
@@ -1084,7 +1307,10 @@ async fn update_component_version_environment_variable(
     let context = common::TestContext::new(last_unique_id);
     let executor = common::start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "update-test-env-var").store().await?;
+    let component = executor
+        .component(&executor.environment_id, "update-test-env-var")
+        .store()
+        .await?;
 
     let worker_id = executor.start_worker(&component.id, "worker-1").await?;
 

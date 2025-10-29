@@ -78,7 +78,10 @@ async fn custom_durability_1(
         .in_current_span(),
     );
 
-    let component = executor.component(&executor.environment_id, "custom_durability").store().await?;
+    let component = executor
+        .component(&executor.environment_id, "custom_durability")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -171,7 +174,10 @@ async fn lazy_pollable(
         .in_current_span(),
     );
 
-    let component = executor.component(&executor.environment_id, "custom_durability").store().await?;
+    let component = executor
+        .component(&executor.environment_id, "custom_durability")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
