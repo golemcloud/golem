@@ -15,7 +15,6 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
-use std::time::Duration;
 use crate::stubgen::{golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;

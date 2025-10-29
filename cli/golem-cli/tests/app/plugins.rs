@@ -31,9 +31,7 @@ use tracing::{debug, error, info};
 
 inherit_test_dep!(Tracing);
 
-// TODO; remove ignore
 #[test]
-#[ignore]
 async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";

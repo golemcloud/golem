@@ -616,14 +616,12 @@ fn parse_template(
         // TODO: this is just a quickfix for hiding "<lang>-app-<component>" prefixes, let's decide later if we want
         //       reorganize the template directories directly
         let segments = name.split("-").collect::<Vec<_>>();
-        if segments.len() > 2 && segments[1] == "app" {
-            if segments.len() > 3 && segments[2] == "component" {
-                segments[3..].join("-").into()
-            } else {
-                segments[2..].join("-").into()
-            }
-        } else {
-            name.into()
+        match segments.iter().position(|&s| s == "app") {
+            Some(idx) => match segments.get(idx + 1) {
+                Some(&"component") => segments[idx + 2..].join("-").into(),
+                _ => name.into(),
+            },
+            None => name.into(),
         }
     };
 
