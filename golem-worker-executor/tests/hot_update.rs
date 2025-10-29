@@ -19,7 +19,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::worker::UpdateRecord;
+use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use http::StatusCode;
@@ -136,6 +136,22 @@ impl TestHttpServer {
     }
 }
 
+fn update_counts(metadata: &WorkerMetadataDto) -> (usize, usize, usize) {
+    let mut pending_updates = 0;
+    let mut successful_updates = 0;
+    let mut failed_updates = 0;
+
+    for update in &metadata.updates {
+        match update {
+            UpdateRecord::PendingUpdate(_) => pending_updates += 1,
+            UpdateRecord::SuccessfulUpdate(_) => successful_updates += 1,
+            UpdateRecord::FailedUpdate(_) => failed_updates += 1,
+        }
+    }
+
+    (pending_updates, successful_updates, failed_updates)
+}
+
 #[test]
 #[tracing::instrument]
 async fn auto_update_on_running(
@@ -215,30 +231,7 @@ async fn auto_update_on_running(
     // and eventually finishes with 150. The update is marked as a success.
     check!(result[0] == Value::U64(150));
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
     Ok(())
 }
 
@@ -287,30 +280,7 @@ async fn auto_update_on_idle(
     // the current state which is 0
     check!(result[0] == Value::U64(0));
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
     Ok(())
 }
 
@@ -383,30 +353,7 @@ async fn failing_auto_update_on_idle(
     check!(result[0] != Value::U64(150));
     check!(result[0] != Value::U64(300));
     check!(metadata.component_version == ComponentRevision(0));
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 0);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 1);
-    }
+    check!(update_counts(&metadata) == (0, 0, 1));
     Ok(())
 }
 
@@ -469,30 +416,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
     // the current state which is 0
     check!(result[0] == Value::U64(11));
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
     Ok(())
 }
 
@@ -586,30 +510,7 @@ async fn failing_auto_update_on_running(
     // with the original version, resulting in 300.
     check!(result[0] == Value::U64(300));
     check!(metadata.component_version == ComponentRevision(0));
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 0);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 1);
-    }
+    check!(update_counts(&metadata) == (0, 0, 1));
     Ok(())
 }
 
@@ -678,30 +579,8 @@ async fn manual_update_on_idle(
 
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
+
     Ok(())
 }
 
@@ -771,30 +650,8 @@ async fn manual_update_on_idle_without_save_snapshot(
     // the original version which we can invoke.
     check!(result == vec![Value::U64(5)]);
     check!(metadata.component_version == ComponentRevision(0));
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 0);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 1);
-    }
+    check!(update_counts(&metadata) == (0, 0, 1));
+
     Ok(())
 }
 
@@ -898,30 +755,8 @@ async fn auto_update_on_running_followed_by_manual(
     check!(result1[0] == Value::U64(150));
     check!(result2[0] == Value::U64(150));
     check!(metadata.component_version == updated_component_2.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 2);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 2, 0));
+
     Ok(())
 }
 
@@ -990,30 +825,8 @@ async fn manual_update_on_idle_with_failing_load(
     // the component must stay on v2, on which we can invoke f3.
     check!(result == vec![Value::U64(5)]);
     check!(metadata.component_version == ComponentRevision(0));
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 0);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 1);
-    }
+    check!(update_counts(&metadata) == (0, 0, 1));
+
     Ok(())
 }
 
@@ -1088,30 +901,8 @@ async fn manual_update_on_idle_using_v11(
 
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
+
     Ok(())
 }
 
@@ -1186,30 +977,8 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
 
     check!(before_update == after_update);
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 0);
-    }
+    check!(update_counts(&metadata) == (0, 1, 0));
+
     Ok(())
 }
 
@@ -1269,30 +1038,8 @@ async fn auto_update_on_idle_to_non_existing(
     check!(result1[0] == Value::U64(0));
     check!(result2[0] == Value::U64(0));
     check!(metadata.component_version == updated_component.revision);
-    {
-        let pending_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::PendingUpdate(_)))
-            .count();
-        check!(pending_updates == 0);
-    }
-    {
-        let successful_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::SuccessfulUpdate(_)))
-            .count();
-        check!(successful_updates == 1);
-    }
-    {
-        let failed_updates = metadata
-            .updates
-            .iter()
-            .filter(|u| matches!(u, UpdateRecord::FailedUpdate(_)))
-            .count();
-        check!(failed_updates == 1);
-    }
+    check!(update_counts(&metadata) == (0, 1, 1));
+
     Ok(())
 }
 
