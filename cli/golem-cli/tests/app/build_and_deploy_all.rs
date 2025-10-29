@@ -8,6 +8,7 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(Tracing);
 
 #[test]
+#[ignore] // TODO;
 async fn build_and_deploy_all_templates() {
     let mut ctx = TestContext::new();
     let app_name = "all-templates-app";

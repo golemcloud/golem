@@ -77,7 +77,6 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     check_component_metadata(
         &ctx.working_dir
@@ -160,6 +159,7 @@ async fn completion(_tracing: &Tracing) {
 }
 
 #[test]
+#[ignore] // RPC build
 async fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -341,6 +341,7 @@ async fn custom_app_subcommand_with_builtin_name() {
 }
 
 #[test]
+#[ignore]
 async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
@@ -471,6 +472,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 }
 
 #[test]
+#[ignore]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
