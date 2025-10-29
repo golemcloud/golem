@@ -42,7 +42,7 @@ pub mod agent;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
-// pub mod durability;
+pub mod durability;
 // pub mod hot_update;
 // pub mod http;
 // pub mod indexed_storage;
