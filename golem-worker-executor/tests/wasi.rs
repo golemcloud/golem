@@ -665,7 +665,7 @@ async fn file_update_1(
         .unique()
         .with_files(&[
             IFSEntry {
-                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                source_path: PathBuf::from("ifs-update/files/foo.txt"),
                 target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                 permissions: ComponentFilePermissions::ReadOnly,
             },
@@ -703,7 +703,7 @@ async fn file_update_1(
                 "golem_it_ifs_update",
                 vec![
                     IFSEntry {
-                        source_path: PathBuf::from("initial-file-read-write/files/bar.txt"),
+                        source_path: PathBuf::from("ifs-update/files/bar.txt"),
                         target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                         permissions: ComponentFilePermissions::ReadOnly,
                     },
@@ -783,7 +783,7 @@ async fn file_update_1(
                 "golem_it_ifs_update",
                 vec![
                     IFSEntry {
-                        source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                        source_path: PathBuf::from("ifs-update/files/baz.txt"),
                         target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                         permissions: ComponentFilePermissions::ReadOnly,
                     },
@@ -1872,7 +1872,7 @@ async fn file_service_write_direct(
     let executor = start(deps, &context).await?;
 
     let component = executor.component(&context.default_environment_id, "file-service").store().await?;
-    let worker_id = executor.start_worker(&component.id, "file-service-2").await;
+    let worker_id = executor.start_worker(&component.id, "file-service-2").await?;
 
     executor
         .invoke_and_await(
@@ -2454,7 +2454,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         )
         .await??;
 
-    let info1 = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",

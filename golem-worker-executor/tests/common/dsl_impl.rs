@@ -103,7 +103,8 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_files = Vec::new();
         for entry in files {
-            let data = tokio::fs::read(entry.source_path).await?;
+            let full_source_path = component_directy.join(entry.source_path);
+            let data = tokio::fs::read(full_source_path).await?;
             let key = self
                 .deps
                 .initial_component_files_service
@@ -203,7 +204,8 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_new_files = Vec::new();
         for entry in new_files {
-            let data = tokio::fs::read(entry.source_path).await?;
+            let full_source_path = component_directy.join(entry.source_path);
+            let data = tokio::fs::read(full_source_path).await?;
             let key = self
                 .deps
                 .initial_component_files_service
@@ -1025,9 +1027,9 @@ impl TestDsl for TestWorkerExecutor {
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
                 let file_node = data.file
-                    .ok_or(WorkerServiceError::Internal("Missing file data in response".to_string()))?
+                    .ok_or(anyhow!("Missing file data in response"))?
                     .try_into()
-                    .map_err(|_| WorkerServiceError::Internal("Failed to convert file node".to_string()))?;
+                    .map_err(|_| anyhow!("Failed to convert file node"))?;
                 Ok(vec![file_node])
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)) => {
@@ -1046,6 +1048,7 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut stream = self
             .client
+            .clone()
             .get_file_contents(
                 GetFileContentsRequest {
                     worker_id: Some(worker_id.clone().into()),
@@ -1056,7 +1059,7 @@ impl TestDsl for TestWorkerExecutor {
                     auth_ctx: Some(self.auth_ctx().into()),
                 },
             )
-            .await
+            .await?
             .into_inner();
 
         let mut bytes = Vec::new();
