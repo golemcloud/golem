@@ -867,18 +867,11 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
 }
 
 pub fn worker_error_underlying_error(
-    error: &WorkerGrpcError,
+    error: &WorkerExecutorError,
 ) -> Option<golem_common::model::oplog::WorkerError> {
     match error {
-        WorkerGrpcError::InternalError(error) => match &error.error {
-            Some(worker_execution_error::Error::InvocationFailed(error)) => {
-                Some(error.error.clone().unwrap().try_into().unwrap())
-            }
-            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
-                Some(error.error.clone().unwrap().try_into().unwrap())
-            }
-            _ => None,
-        },
+        WorkerExecutorError::InvocationFailed { error, .. } => Some(error.clone()),
+        WorkerExecutorError::PreviousInvocationFailed { error, .. } => Some(error.clone()),
         _ => None,
     }
 }
