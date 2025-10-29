@@ -507,6 +507,7 @@ script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1_sequential --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-group2]
