@@ -30,8 +30,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - name: Temporarily log github workspace
-        run: ls ${{ github.workspace }}
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
@@ -269,8 +267,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - name: Temporarily log github workspace
-        run: ls ${{ github.workspace }}
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -322,7 +318,7 @@ jobs:
         run: cargo make --profile ci clear-v8
       - name: ${{ matrix.group.description }}
         env:
-          QUIET: true
+          QUIET: false
           GOLEM_RUST_PATH: ${{ github.workspace }}/sdks/rust/golem-rust
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 15
