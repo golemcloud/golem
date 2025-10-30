@@ -14,10 +14,7 @@
 
 use proc_macro::TokenStream;
 
-use crate::{
-    agentic::{agent_definition_impl, agent_implementation_impl},
-    transaction::golem_operation_impl,
-};
+use crate::transaction::golem_operation_impl;
 
 mod agentic;
 mod transaction;
@@ -46,10 +43,10 @@ pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn agent_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
-    agent_definition_impl(attr, item)
+    agentic::agent_definition_impl(attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
-    agent_implementation_impl(attr, item)
+    agentic::agent_implementation_impl(attr, item)
 }
