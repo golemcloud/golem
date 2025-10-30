@@ -29,7 +29,7 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
         #[::ctor::ctor]
         fn #register_fn_name() {
             golem_rust::agentic::register_agent_type(
-               #agent_type.type_name.to_string(),
+               golem_rust::agentic::AgentTypeName(#agent_type.type_name.to_string()),
                #agent_type
             );
         }

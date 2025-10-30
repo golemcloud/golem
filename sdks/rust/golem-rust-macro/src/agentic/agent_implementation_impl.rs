@@ -198,7 +198,7 @@ fn generate_base_agent_impl(
 
             fn get_definition(&self)
                 -> ::golem_rust::golem_agentic::golem::agent::common::AgentType {
-                golem_rust::agentic::get_agent_type_by_name(&#trait_name_str_kebab)
+                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str_kebab.to_string()))
                     .expect("Agent definition not found")
             }
         }

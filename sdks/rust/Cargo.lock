@@ -319,7 +319,6 @@ version = "0.0.0"
 dependencies = [
  "golem-rust-macro",
  "golem-wasm",
- "once_cell",
  "serde",
  "serde_json",
  "uuid",
