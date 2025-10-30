@@ -17,14 +17,14 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_common::model::component::ComponentType;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
-use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Record, Value};
 use http::HeaderMap;
 use log::info;
@@ -43,56 +43,53 @@ async fn get_oplog_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "runtime-service")
+        .store()
+        .await?;
 
     let worker_id = WorkerId {
-        component_id,
+        component_id: component.id,
         worker_name: "getoplog1".to_string(),
     };
 
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await_with_key(
             &worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-    let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
-    drop(executor);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await?;
 
     tracing::warn!("oplog: {oplog:?}");
     assert_eq!(oplog.len(), 16);
@@ -113,6 +110,8 @@ async fn get_oplog_1(
             .count(),
         3
     );
+
+    Ok(())
 }
 
 #[test]
@@ -121,30 +120,29 @@ async fn search_oplog_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("shopping-cart").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "shopping-cart")
+        .store()
+        .await?;
 
     let worker_id = WorkerId {
-        component_id,
+        component_id: component.id,
         worker_name: "searchoplog1".to_string(),
     };
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -156,9 +154,9 @@ async fn search_oplog_1(
             ])
             .into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -170,9 +168,9 @@ async fn search_oplog_1(
             ])
             .into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -184,39 +182,41 @@ async fn search_oplog_1(
             ])
             .into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{update-item-quantity}",
             vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
-        .await;
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
-        .await;
+        .await??;
 
-    let _oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
-    let result1 = executor.search_oplog(&worker_id, "G1002").await;
+    let result1 = executor.search_oplog(&worker_id, "G1002").await?;
 
-    let result2 = executor.search_oplog(&worker_id, "imported-function").await;
+    let result2 = executor
+        .search_oplog(&worker_id, "imported-function")
+        .await?;
 
     let result3 = executor
         .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
-        .await;
-
-    drop(executor);
+        .await?;
 
     assert_eq!(result1.len(), 7); // two invocations and two log messages and the get-cart-contents result
     assert_eq!(result2.len(), 1); // get_random_bytes
     assert_eq!(result3.len(), 5); // two invocations and the get-cart-contents result
+
+    Ok(())
 }
 
 #[test]
@@ -225,43 +225,44 @@ async fn get_oplog_with_api_changing_updates(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
+    let component = executor
+        .component(&context.default_environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "get_oplog_with_api_changing_updates")
-        .await;
+        .start_worker(&component.id, "get_oplog_with_api_changing_updates")
+        .await?;
 
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
-    let _ = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
-        .await
-        .unwrap();
+    let updated_component = executor
+        .update_component(&component.id, "update-test-v2")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
-        .auto_update_worker(&worker_id, target_version)
-        .await;
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await??;
+
+    executor
+        .invoke_and_await(&worker_id, "golem:component/api.{f3}", vec![])
+        .await??;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision)
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     // there might be a pending invocation entry before the update entry. Filter it out to make the test more robust
     let oplog = oplog
@@ -271,6 +272,8 @@ async fn get_oplog_with_api_changing_updates(
 
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 17);
+
+    Ok(())
 }
 
 #[test]
@@ -279,32 +282,37 @@ async fn get_oplog_starting_with_updated_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("update-test-v1").unique().store().await;
-    let target_version = executor
-        .update_component(&component_id, "update-test-v2")
-        .await;
-    info!("Updated component to version {target_version}");
+    let component = executor
+        .component(&context.default_environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
+    let updated_component = executor
+        .update_component(&component.id, "update-test-v2")
+        .await?;
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     let worker_id = executor
-        .start_worker(&component_id, "get_oplog_starting_with_updated_component")
-        .await;
+        .start_worker(&component.id, "get_oplog_starting_with_updated_component")
+        .await?;
+
     let result = executor
         .invoke_and_await(&worker_id, "golem:component/api.{f4}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     check!(result[0] == Value::U64(11));
     assert_eq!(oplog.len(), 4);
+
+    Ok(())
 }
 
 #[test]
@@ -314,13 +322,9 @@ async fn invocation_context_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -355,8 +359,8 @@ async fn invocation_context_test(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let component_id = executor
-        .component("golem_ictest")
+    let component = executor
+        .component(&context.default_environment_id, "golem_ictest")
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -371,10 +375,11 @@ async fn invocation_context_test(
             }),
         )])
         .store()
-        .await;
+        .await?;
+
     let worker_id = executor
-        .start_worker_with(&component_id, "w1", vec![], env.clone(), vec![])
-        .await;
+        .start_worker_with(&component.id, "w1", vec![], env.clone(), vec![])
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -382,7 +387,7 @@ async fn invocation_context_test(
             "golem:ictest-exports/golem-ictest-api.{test1}",
             vec![],
         )
-        .await;
+        .await?;
 
     let start = std::time::Instant::now();
     loop {
@@ -401,7 +406,7 @@ async fn invocation_context_test(
     let dump: Vec<_> = contexts.lock().unwrap().drain(..).collect();
     info!("{dump:#?}");
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     http_server.abort();
     drop(executor);
@@ -445,4 +450,6 @@ async fn invocation_context_test(
             .len()
             == 10
     ); // + custom1, custom2, rpc-connection, rpc-invocation, invoke-exported-function
+
+    Ok(())
 }

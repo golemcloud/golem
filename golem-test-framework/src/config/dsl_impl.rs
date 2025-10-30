@@ -18,6 +18,7 @@ use crate::dsl::{build_ifs_archive, rename_component_if_needed, TestDsl, TestDsl
 use crate::model::IFSEntry;
 use applying::Apply;
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
@@ -30,11 +31,11 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::WorkerMetadataDto;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{ComponentFileSystemNode, IdempotencyKey};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -42,6 +43,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -243,10 +245,36 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         unimplemented!()
     }
 
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: &IdempotencyKey,
+        _function_name: &str,
+        _params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        unimplemented!()
+    }
+
+    async fn revert(
+        &self,
+        _worker_id: &WorkerId,
+        _target: RevertWorkerTarget,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
     async fn get_oplog(
         &self,
         _worker_id: &WorkerId,
         _from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        unimplemented!()
+    }
+
+    async fn search_oplog(
+        &self,
+        _worker_id: &WorkerId,
+        _query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         unimplemented!()
     }
@@ -281,7 +309,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
     async fn capture_output_with_termination(
         &self,
         _worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>> {
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
         unimplemented!()
     }
 
@@ -336,6 +364,18 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         _worker_id: &WorkerId,
         _idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+
+    async fn get_file_system_node(
+        &self,
+        _worker_id: &WorkerId,
+        _path: &str,
+    ) -> anyhow::Result<Vec<ComponentFileSystemNode>> {
+        unimplemented!()
+    }
+
+    async fn get_file_contents(&self, _worker_id: &WorkerId, _path: &str) -> anyhow::Result<Bytes> {
         unimplemented!()
     }
 }

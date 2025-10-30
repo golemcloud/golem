@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
+use crate::common::{start, TestContext, TestWorkerExecutor};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_common::model::component::ComponentId;
+use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
@@ -214,22 +214,21 @@ async fn rdbms_postgres_crud(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids1 =
-        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 1).await;
+    let worker_ids_1 =
+        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_ids3 =
-        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 3).await;
+        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 3).await?;
 
     let table_name = "test_users";
 
@@ -252,10 +251,10 @@ async fn rdbms_postgres_crud(
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
@@ -279,23 +278,23 @@ async fn rdbms_postgres_crud(
             Some(TransactionEnd::Commit),
         ),
     )
-    .await;
+    .await?;
 
     let delete = StatementTest::execute_test("DELETE FROM test_users".to_string(), vec![], None);
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
     )
-    .await;
+    .await?;
 
     let select_test = select_test1.with_action(StatementAction::Query);
 
@@ -304,55 +303,50 @@ async fn rdbms_postgres_crud(
         worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let select_test = select_test.with_expected(Some(query_empty_response()));
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
-    let worker_id = worker_ids1[0].clone();
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let worker_id = worker_ids_1[0].clone();
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    workers_interrupt_test(&executor, worker_ids1.clone()).await;
-    workers_interrupt_test(&executor, worker_ids3.clone()).await;
+    workers_interrupt_test(&executor, worker_ids_1.clone()).await?;
+    workers_interrupt_test(&executor, worker_ids3.clone()).await?;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
-        worker_ids1.clone(),
+        worker_ids_1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<PostgresType>(
         &executor,
         worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
-    drop(executor);
+    Ok(())
 }
 
 #[test]
@@ -362,19 +356,18 @@ async fn rdbms_postgres_idempotency(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids =
-        start_workers::<PostgresType>(&executor, &component_id, &db_address, "", 1).await;
+        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -403,11 +396,11 @@ async fn rdbms_postgres_idempotency(
 
     let result1 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
@@ -421,11 +414,11 @@ async fn rdbms_postgres_idempotency(
 
     let result1 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
@@ -443,23 +436,18 @@ async fn rdbms_postgres_idempotency(
 
     let result1 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let select_tests = postgres_select_statements(table_name, vec![]);
     let test = RdbmsTest::new(select_tests.clone(), None);
@@ -468,15 +456,15 @@ async fn rdbms_postgres_idempotency(
 
     let result1 =
         execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    drop(executor);
+    Ok(())
 }
 
 async fn postgres_transaction_recovery_test(
@@ -485,24 +473,23 @@ async fn postgres_transaction_recovery_test(
     postgres: &DockerPostgresRdb,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
-) {
+) -> anyhow::Result<()> {
     let db_address = postgres.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids = start_workers::<PostgresType>(
         &executor,
-        &component_id,
+        &component.id,
         &db_address,
         format!("-{}", fail_on.name()).as_str(),
         1,
     )
-    .await;
+    .await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -526,7 +513,7 @@ async fn postgres_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         create_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), create_test.clone());
 
@@ -545,7 +532,7 @@ async fn postgres_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         insert_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
@@ -564,25 +551,20 @@ async fn postgres_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         select_test.clone(),
     )
-    .await;
+    .await?;
 
-    let _ = executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    workers_interrupt_test(&executor, worker_ids.clone()).await;
+    workers_interrupt_test(&executor, worker_ids.clone()).await?;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result1 = execute_worker_test::<PostgresType>(
         &executor,
@@ -590,7 +572,7 @@ async fn postgres_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         select_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
@@ -604,15 +586,15 @@ async fn postgres_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    drop(executor);
+    Ok(())
 }
 
 #[test]
@@ -622,7 +604,7 @@ async fn rdbms_postgres_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         postgres_transaction_recovery_test(
             last_unique_id,
@@ -631,8 +613,9 @@ async fn rdbms_postgres_commit_recovery(
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
         )
-        .await;
+        .await?;
     }
+    Ok(())
 }
 
 #[test]
@@ -642,7 +625,7 @@ async fn rdbms_postgres_pre_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -650,7 +633,8 @@ async fn rdbms_postgres_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -658,7 +642,9 @@ async fn rdbms_postgres_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -668,7 +654,7 @@ async fn rdbms_postgres_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         postgres_transaction_recovery_test(
             last_unique_id,
@@ -677,8 +663,10 @@ async fn rdbms_postgres_rollback_recovery(
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
         )
-        .await;
+        .await?;
     }
+
+    Ok(())
 }
 
 #[test]
@@ -688,7 +676,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -696,7 +684,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
 
     postgres_transaction_recovery_test(
         last_unique_id,
@@ -705,7 +693,9 @@ async fn rdbms_postgres_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -716,7 +706,7 @@ async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     postgres_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -729,7 +719,9 @@ async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
         ),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 fn postgres_create_table_statement(table_name: &str) -> String {
@@ -880,7 +872,7 @@ async fn rdbms_postgres_select1(
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -909,7 +901,9 @@ async fn rdbms_postgres_select1(
         RdbmsTest::new(vec![test1, test2], None),
         3,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -919,22 +913,22 @@ async fn rdbms_mysql_crud(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids1 =
-        start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_ids3 =
-        start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 3).await;
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 3).await?;
 
     let table_name = "test_users";
 
@@ -961,7 +955,7 @@ async fn rdbms_mysql_crud(
         worker_ids1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let expected = mysql_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
@@ -985,7 +979,7 @@ async fn rdbms_mysql_crud(
             Some(TransactionEnd::Commit),
         ),
     )
-    .await;
+    .await?;
 
     let delete = StatementTest::execute_test("DELETE FROM test_users".to_string(), vec![], None);
 
@@ -994,14 +988,14 @@ async fn rdbms_mysql_crud(
         worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Rollback)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
         worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::None)),
     )
-    .await;
+    .await?;
 
     let select_test = select_test1.with_action(StatementAction::Query);
 
@@ -1010,14 +1004,14 @@ async fn rdbms_mysql_crud(
         worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
         worker_ids1.clone(),
         RdbmsTest::new(vec![delete.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let select_test = select_test.with_expected(Some(query_empty_response()));
 
@@ -1026,38 +1020,34 @@ async fn rdbms_mysql_crud(
         worker_ids1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let worker_id = worker_ids1[0].clone();
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    workers_interrupt_test(&executor, worker_ids1.clone()).await;
-    workers_interrupt_test(&executor, worker_ids3.clone()).await;
+    workers_interrupt_test(&executor, worker_ids1.clone()).await?;
+    workers_interrupt_test(&executor, worker_ids3.clone()).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
         worker_ids1.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     rdbms_workers_test::<MysqlType>(
         &executor,
         worker_ids3.clone(),
         RdbmsTest::new(vec![select_test.clone()], Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
-    drop(executor);
+    Ok(())
 }
 
 #[test]
@@ -1067,18 +1057,18 @@ async fn rdbms_mysql_idempotency(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1108,11 +1098,11 @@ async fn rdbms_mysql_idempotency(
 
     let result1 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
@@ -1125,11 +1115,11 @@ async fn rdbms_mysql_idempotency(
 
     let result1 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
     check!(result2 == result1);
 
     let delete =
@@ -1144,22 +1134,18 @@ async fn rdbms_mysql_idempotency(
 
     let result1 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     let result2 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
     check!(result2 == result1);
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let select_tests = mysql_select_statements(table_name, vec![]);
     let test = RdbmsTest::new(select_tests.clone(), None);
@@ -1168,15 +1154,15 @@ async fn rdbms_mysql_idempotency(
 
     let result1 =
         execute_worker_test::<MysqlType>(&executor, &worker_id, &idempotency_key, test.clone())
-            .await;
+            .await?;
 
-    check_test_result(&worker_id, result1.clone(), test.clone());
+    check_test_result(&worker_id, result1, test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    drop(executor);
+    Ok(())
 }
 
 async fn mysql_transaction_recovery_test(
@@ -1185,24 +1171,23 @@ async fn mysql_transaction_recovery_test(
     mysql: &DockerMysqlRdb,
     fail_on: TransactionFailOn,
     transaction_end: TransactionEnd,
-) {
+) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids = start_workers::<MysqlType>(
         &executor,
-        &component_id,
+        &component.id,
         &db_address,
         format!("-{}", fail_on.name()).as_str(),
         1,
     )
-    .await;
+    .await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1226,7 +1211,7 @@ async fn mysql_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         create_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), create_test.clone());
 
@@ -1245,7 +1230,7 @@ async fn mysql_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         insert_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), insert_test.clone());
 
@@ -1261,23 +1246,18 @@ async fn mysql_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         select_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    workers_interrupt_test(&executor, worker_ids.clone()).await;
+    workers_interrupt_test(&executor, worker_ids.clone()).await?;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result1 = execute_worker_test::<MysqlType>(
         &executor,
@@ -1285,7 +1265,7 @@ async fn mysql_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         select_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
@@ -1299,15 +1279,15 @@ async fn mysql_transaction_recovery_test(
         &IdempotencyKey::fresh(),
         test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog_json = serde_json::to_string(&oplog);
     check!(oplog_json.is_ok());
 
-    drop(executor);
+    Ok(())
 }
 
 #[test]
@@ -1317,7 +1297,7 @@ async fn rdbms_mysql_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         mysql_transaction_recovery_test(
             last_unique_id,
@@ -1326,8 +1306,10 @@ async fn rdbms_mysql_commit_recovery(
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
         )
-        .await;
+        .await?;
     }
+
+    Ok(())
 }
 
 #[test]
@@ -1337,7 +1319,7 @@ async fn rdbms_mysql_pre_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1345,7 +1327,7 @@ async fn rdbms_mysql_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
 
     mysql_transaction_recovery_test(
         last_unique_id,
@@ -1354,7 +1336,9 @@ async fn rdbms_mysql_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -1364,7 +1348,7 @@ async fn rdbms_mysql_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         mysql_transaction_recovery_test(
             last_unique_id,
@@ -1373,8 +1357,10 @@ async fn rdbms_mysql_rollback_recovery(
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
         )
-        .await;
+        .await?;
     }
+
+    Ok(())
 }
 
 #[test]
@@ -1384,7 +1370,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1392,7 +1378,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
 
     mysql_transaction_recovery_test(
         last_unique_id,
@@ -1401,7 +1387,9 @@ async fn rdbms_mysql_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -1412,7 +1400,7 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1425,7 +1413,8 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
         ),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+    Ok(())
 }
 
 fn mysql_create_table_statement(table_name: &str) -> String {
@@ -1561,7 +1550,7 @@ async fn rdbms_mysql_select1(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -1590,7 +1579,9 @@ async fn rdbms_mysql_select1(
         RdbmsTest::new(vec![test1, test2], None),
         1,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -1600,17 +1591,17 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1637,13 +1628,14 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
         &IdempotencyKey::fresh(),
         create_read_user_test.clone(),
     )
-    .await;
+    .await?;
 
     check_test_result(&worker_id, result1.clone(), create_read_user_test.clone());
 
     let db_address = mysql.public_connection_string_with_user("global_reader", "SomeSecurePass!");
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, "", 1).await;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1662,14 +1654,14 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
         &IdempotencyKey::fresh(),
         test.clone(),
     )
-    .await;
+    .await?;
 
     let error = get_test_result_error(result1);
 
     // Error::Other("There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: 1142 (42000): CREATE command denied to user 'global_reader'@'192.168.65.1' for table 'golem_transactions')")
     check!(error.contains("There was a problem to create 'golem_transactions' table"));
 
-    drop(executor);
+    Ok(())
 }
 
 async fn rdbms_component_test<T: RdbmsType>(
@@ -1678,28 +1670,33 @@ async fn rdbms_component_test<T: RdbmsType>(
     db_address: &str,
     test: RdbmsTest,
     n_workers: u8,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let component_id = executor.component("rdbms-service").store().await;
-    let worker_ids = start_workers::<T>(&executor, &component_id, db_address, "", n_workers).await;
+    let executor = start(deps, &context).await?;
 
-    rdbms_workers_test::<T>(&executor, worker_ids, test).await;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
+    let worker_ids =
+        start_workers::<T>(&executor, &component.id, db_address, "", n_workers).await?;
+
+    rdbms_workers_test::<T>(&executor, worker_ids, test).await?;
+
+    Ok(())
 }
 
 async fn rdbms_workers_test<T: RdbmsType>(
-    executor: &(impl TestDslUnsafe + Clone + Send + Sync + 'static),
+    executor: &TestWorkerExecutor,
     worker_ids: Vec<WorkerId>,
     test: RdbmsTest,
-) {
-    let mut workers_results: HashMap<WorkerId, Result<Option<ValueAndType>, Error>> =
+) -> anyhow::Result<()> {
+    let mut workers_results: HashMap<WorkerId, Result<Option<ValueAndType>, WorkerExecutorError>> =
         HashMap::new(); // <worker_id, results>
 
-    let mut fibers = JoinSet::new();
+    let mut fibers = JoinSet::<
+        anyhow::Result<(WorkerId, Result<Option<ValueAndType>, WorkerExecutorError>)>,
+    >::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
@@ -1713,33 +1710,35 @@ async fn rdbms_workers_test<T: RdbmsType>(
                     &IdempotencyKey::fresh(),
                     test_clone,
                 )
-                .await;
-                (worker_id_clone, result)
+                .await?;
+                Ok((worker_id_clone, result))
             }
             .in_current_span(),
         );
     }
 
     while let Some(res) = fibers.join_next().await {
-        let (worker_id, result_execute) = res.unwrap();
+        let (worker_id, result_execute) = res??;
         workers_results.insert(worker_id, result_execute);
     }
 
     for worker_id in workers_results.keys() {
-        executor.check_oplog_is_queryable(worker_id).await;
+        executor.check_oplog_is_queryable(worker_id).await?;
     }
 
     for (worker_id, result) in workers_results {
         check_test_result(&worker_id, result, test.clone());
     }
+
+    Ok(())
 }
 
 async fn execute_worker_test<T: RdbmsType>(
-    executor: &impl TestDslUnsafe,
+    executor: &TestWorkerExecutor,
     worker_id: &WorkerId,
     idempotency_key: &IdempotencyKey,
     test: RdbmsTest,
-) -> Result<Option<ValueAndType>, Error> {
+) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
     let db_type = T::default().to_string();
 
     let fn_name = test.fn_name();
@@ -1791,7 +1790,7 @@ async fn execute_worker_test<T: RdbmsType>(
 
 fn check_test_result(
     worker_id: &WorkerId,
-    result: Result<Option<ValueAndType>, Error>,
+    result: Result<Option<ValueAndType>, WorkerExecutorError>,
     test: RdbmsTest,
 ) {
     let fn_name = test.fn_name();
@@ -1837,7 +1836,7 @@ fn check_test_result(
     }
 }
 
-fn get_test_result_error(result: Result<Option<ValueAndType>, Error>) -> String {
+fn get_test_result_error(result: Result<Option<ValueAndType>, WorkerExecutorError>) -> String {
     check!(result.is_ok());
 
     let response = result
@@ -1855,12 +1854,12 @@ fn get_test_result_error(result: Result<Option<ValueAndType>, Error>) -> String 
 }
 
 async fn start_workers<T: RdbmsType>(
-    executor: &impl TestDslUnsafe,
+    executor: &TestWorkerExecutor,
     component_id: &ComponentId,
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> Vec<WorkerId> {
+) -> anyhow::Result<Vec<WorkerId>> {
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let db_type = T::default().to_string();
 
@@ -1877,45 +1876,44 @@ async fn start_workers<T: RdbmsType>(
         );
         let worker_id = executor
             .start_worker_with(component_id, &worker_name, vec![], env.clone(), vec![])
-            .await;
+            .await?;
         worker_ids.push(worker_id.clone());
         let _result = executor
             .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
-            .await
-            .unwrap();
+            .await??;
     }
-    worker_ids
+    Ok(worker_ids)
 }
 
 async fn workers_interrupt_test(
-    executor: &(impl TestDslUnsafe + Clone + Send + 'static),
+    executor: &TestWorkerExecutor,
     worker_ids: Vec<WorkerId>,
-) {
+) -> anyhow::Result<()> {
     let mut workers_results: HashMap<WorkerId, WorkerStatus> = HashMap::new();
 
-    let mut fibers = JoinSet::new();
+    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, WorkerStatus)>>::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
         let executor_clone = executor.clone();
         let _ = fibers.spawn(
             async move {
-                executor_clone.interrupt(&worker_id_clone).await;
+                executor_clone.interrupt(&worker_id_clone).await?;
 
                 let metadata = executor_clone
                     .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
-                    .await;
+                    .await?;
 
-                let status = metadata.last_known_status.status;
+                let status = metadata.status;
 
-                (worker_id_clone, status)
+                Ok((worker_id_clone, status))
             }
             .in_current_span(),
         );
     }
 
     while let Some(res) = fibers.join_next().await {
-        let (worker_id, status) = res.unwrap();
+        let (worker_id, status) = res??;
         workers_results.insert(worker_id, status);
     }
 
@@ -1925,6 +1923,8 @@ async fn workers_interrupt_test(
             "status for worker {worker_id} is Idle"
         );
     }
+
+    Ok(())
 }
 
 fn execute_response(value: u64) -> serde_json::Value {

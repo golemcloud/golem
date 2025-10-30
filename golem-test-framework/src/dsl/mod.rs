@@ -22,6 +22,7 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcError;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
@@ -42,12 +43,13 @@ use golem_common::model::environment::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
 use golem_common::model::{
-    IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
+    ComponentFileSystemNode, IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter,
+    WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm::Value;
 use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, HashMap};
@@ -57,6 +59,7 @@ use std::time::{Duration, Instant};
 use tempfile::{Builder, TempDir};
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
@@ -241,10 +244,41 @@ pub trait TestDsl {
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>>;
 
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        self.invoke_and_await_typed_with_key(
+            worker_id,
+            &IdempotencyKey::fresh(),
+            function_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>>;
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
+
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
         from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
@@ -284,7 +318,7 @@ pub trait TestDsl {
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>>;
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)>;
 
     async fn log_output(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
         let mut rx = self.capture_output(worker_id).await?;
@@ -372,6 +406,14 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool>;
+
+    async fn get_file_system_node(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+    ) -> anyhow::Result<Vec<ComponentFileSystemNode>>;
+
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes>;
 }
 
 #[async_trait]
@@ -635,6 +677,22 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     }
 }
 
+pub fn update_counts(metadata: &WorkerMetadataDto) -> (usize, usize, usize) {
+    let mut pending_updates = 0;
+    let mut successful_updates = 0;
+    let mut failed_updates = 0;
+
+    for update in &metadata.updates {
+        match update {
+            UpdateRecord::PendingUpdate(_) => pending_updates += 1,
+            UpdateRecord::SuccessfulUpdate(_) => successful_updates += 1,
+            UpdateRecord::FailedUpdate(_) => failed_updates += 1,
+        }
+    }
+
+    (pending_updates, successful_updates, failed_updates)
+}
+
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
     events
         .flat_map(|event| match event {
@@ -820,18 +878,11 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
 }
 
 pub fn worker_error_underlying_error(
-    error: &WorkerGrpcError,
+    error: &WorkerExecutorError,
 ) -> Option<golem_common::model::oplog::WorkerError> {
     match error {
-        WorkerGrpcError::InternalError(error) => match &error.error {
-            Some(worker_execution_error::Error::InvocationFailed(error)) => {
-                Some(error.error.clone().unwrap().try_into().unwrap())
-            }
-            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
-                Some(error.error.clone().unwrap().try_into().unwrap())
-            }
-            _ => None,
-        },
+        WorkerExecutorError::InvocationFailed { error, .. } => Some(error.clone()),
+        WorkerExecutorError::PreviousInvocationFailed { error, .. } => Some(error.clone()),
         _ => None,
     }
 }

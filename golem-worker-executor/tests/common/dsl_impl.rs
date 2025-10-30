@@ -14,16 +14,19 @@
 
 use super::TestWorkerExecutor;
 use anyhow::anyhow;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     cancel_invocation_response, complete_promise_response, create_worker_response,
     delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
+    revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest,
+    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
+    GetFileContentsRequest, GetFileSystemNodeRequest, GetRunningWorkersMetadataRequest,
     GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
+    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -33,20 +36,21 @@ use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::worker::WorkerMetadataDto;
-use golem_common::model::PromiseId;
+use golem_common::model::{ComponentFileSystemNode, PromiseId};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{Value, ValueAndType};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use tracing::{debug, Instrument};
 use uuid::Uuid;
 
@@ -107,7 +111,8 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_files = Vec::new();
         for entry in files {
-            let data = tokio::fs::read(entry.source_path).await?;
+            let full_source_path = component_directy.join(entry.source_path);
+            let data = tokio::fs::read(full_source_path).await?;
             let key = self
                 .deps
                 .initial_component_files_service
@@ -137,9 +142,9 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.application_id.clone(),
-                        self.account_id.clone(),
-                        self.environment_roles_from_shares.clone(),
+                        self.context.application_id.clone(),
+                        self.context.account_id.clone(),
+                        HashSet::new(),
                     )
                     .await
                     .expect("Failed to add component")
@@ -155,9 +160,9 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.application_id.clone(),
-                        self.account_id.clone(),
-                        self.environment_roles_from_shares.clone(),
+                        self.context.application_id.clone(),
+                        self.context.account_id.clone(),
+                        HashSet::new(),
                     )
                     .await
             }
@@ -207,7 +212,8 @@ impl TestDsl for TestWorkerExecutor {
 
         let mut converted_new_files = Vec::new();
         for entry in new_files {
-            let data = tokio::fs::read(entry.source_path).await?;
+            let full_source_path = component_directy.join(entry.source_path);
+            let data = tokio::fs::read(full_source_path).await?;
             let key = self
                 .deps
                 .initial_component_files_service
@@ -385,6 +391,88 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let result = self
+            .client
+            .clone()
+            .invoke_and_await_worker_typed(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                name: function_name.to_string(),
+                input: params
+                    .clone()
+                    .into_iter()
+                    .map(|param| param.value.into())
+                    .collect(),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                context: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await;
+
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor invoke call"
+            )),
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                result,
+            )) => match result.output {
+                None => Ok(Ok(None)),
+                Some(response) => {
+                    let response: ValueAndType = response
+                        .try_into()
+                        .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?;
+                    Ok(Ok(Some(response)))
+                }
+            },
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
+                error,
+            )) => Ok(Err(error
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
+        }
+    }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .revert_worker(RevertWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                target: Some(target.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to revert worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to revert worker: unknown error")),
+        }
+    }
+
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
@@ -443,6 +531,64 @@ impl TestDsl for TestWorkerExecutor {
                     }
                     get_oplog_response::Result::Failure(error) => {
                         return Err(anyhow!("Failed to get oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .client
+                .clone()
+                .search_oplog(SearchOplogRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.clone().into()),
+                    cursor,
+                    count: 100,
+                    query: query.to_string(),
+                    auth_ctx: Some(self.auth_ctx().into()),
+                })
+                .await?
+                .into_inner();
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    search_oplog_response::Result::Success(chunk) => {
+                        if chunk.entries.is_empty() {
+                            break;
+                        } else {
+                            result.extend(
+                                chunk
+                                    .entries
+                                    .into_iter()
+                                    .map(|entry| entry.try_into())
+                                    .collect::<Result<Vec<_>, _>>()
+                                    .map_err(|err| {
+                                        anyhow!("Failed to convert oplog entry: {err}")
+                                    })?,
+                            );
+                            cursor = chunk.next;
+                        }
+                    }
+                    search_oplog_response::Result::Failure(error) => {
+                        return Err(anyhow!("Failed to search oplog: {error:?}"));
                     }
                 }
             } else {
@@ -574,11 +720,14 @@ impl TestDsl for TestWorkerExecutor {
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>> {
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
         let latest_version = self
             .get_latest_component_version(&worker_id.component_id)
             .await?;
+
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+
         let mut response = self
             .client
             .clone()
@@ -594,9 +743,26 @@ impl TestDsl for TestWorkerExecutor {
 
         tokio::spawn(
             async move {
-                while let Some(event) = response.message().await.expect("Failed to get message") {
-                    debug!("Received event: {:?}", event);
-                    let _ = tx.send(Some(event));
+                loop {
+                    tokio::select! {
+                        msg = response.message() => {
+                            match msg {
+                                Ok(Some(event)) =>  {
+                                    debug!("Received event: {:?}", event);
+                                    tx.send(Some(event)).expect("Failed to send event");
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    panic!("Failed to get message: {e:?}");
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            break;
+                        }
+                    }
                 }
 
                 debug!("Finished receiving events");
@@ -606,7 +772,7 @@ impl TestDsl for TestWorkerExecutor {
             .in_current_span(),
         );
 
-        Ok(rx)
+        Ok((rx, abort_tx))
     }
 
     async fn auto_update_worker(
@@ -829,5 +995,103 @@ impl TestDsl for TestWorkerExecutor {
             }
             _ => Err(anyhow!("Failed to cancel invocation: unknown error")),
         }
+    }
+
+    async fn get_file_system_node(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+    ) -> anyhow::Result<Vec<ComponentFileSystemNode>> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .get_file_system_node(GetFileSystemNodeRequest {
+                worker_id: Some(worker_id.clone().into()),
+                path: path.to_string(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
+                data.nodes
+                    .into_iter()
+                    .map(|v| v.try_into().map_err(|_| anyhow!("Failed to convert node")))
+                    .collect::<Result<Vec<_>, _>>()
+            }
+            Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
+                let file_node = data
+                    .file
+                    .ok_or(anyhow!("Missing file data in response"))?
+                    .try_into()
+                    .map_err(|_| anyhow!("Failed to convert file node"))?;
+                Ok(vec![file_node])
+            }
+            Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)) => {
+                Ok(Vec::new())
+            }
+            Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(error)) => {
+                Err(anyhow!("Error getting file system node: {error:?}"))
+            }
+            None => Err(anyhow!(
+                "No response from golem-worker-executor list-directory call"
+            )),
+        }
+    }
+
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let mut stream = self
+            .client
+            .clone()
+            .get_file_contents(GetFileContentsRequest {
+                worker_id: Some(worker_id.clone().into()),
+                file_path: path.to_string(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.message().await? {
+            match chunk.result {
+                Some(workerexecutor::v1::get_file_contents_response::Result::Success(data)) => {
+                    bytes.extend_from_slice(&data);
+                }
+                Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
+                    match header.result {
+                        Some(
+                            workerexecutor::v1::get_file_contents_response_header::Result::Success(
+                                _,
+                            ),
+                        ) => {}
+                        _ => {
+                            return Err(anyhow!("Unexpected header from get_file_contents"));
+                        }
+                    }
+                }
+                Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
+                    return Err(anyhow!("Error from get_file_contents: {err:?}"));
+                }
+                None => {
+                    return Err(anyhow!("Unexpected response from get_file_contents"));
+                }
+            }
+        }
+        Ok(Bytes::from(bytes))
     }
 }

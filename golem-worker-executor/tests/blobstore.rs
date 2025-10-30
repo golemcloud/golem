@@ -35,7 +35,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "blob-store-service")
+        .component(&context.default_environment_id, "blob-store-service")
         .store()
         .await?;
     let worker_name = "blob-store-service-1";
@@ -79,7 +79,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "blob-store-service")
+        .component(&context.default_environment_id, "blob-store-service")
         .store()
         .await?;
     let worker_name = "blob-store-service-1";

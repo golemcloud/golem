@@ -40,7 +40,7 @@ async fn agent_self_rpc_is_not_allowed(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "golem_it_agent_self_rpc")
+        .component(&context.default_environment_id, "golem_it_agent_self_rpc")
         .store()
         .await?;
     let worker_id = executor
@@ -77,7 +77,7 @@ async fn agent_await_parallel_rpc_calls(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "golem_it_agent_rpc")
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .store()
         .await?;
@@ -112,7 +112,7 @@ async fn agent_env_inheritance(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "golem_it_agent_rpc")
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .with_env(vec![
             ("ENV1".to_string(), "1".to_string()),

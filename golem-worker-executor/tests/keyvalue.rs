@@ -15,8 +15,7 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use test_r::{inherit_test_dep, test};
 
@@ -30,46 +29,41 @@ async fn readwrite_get_returns_the_value_that_was_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-1";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -79,6 +73,8 @@ async fn readwrite_get_returns_the_value_that_was_set(
                 Value::U8(3),
             ]))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -87,35 +83,33 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-2";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result == vec![Value::Option(None)]);
+
+    Ok(())
 }
 
 #[test]
@@ -124,59 +118,53 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-3";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -186,6 +174,8 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
                 Value::U8(6),
             ]))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -194,60 +184,56 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-4";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{delete}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result == vec![Value::Option(None)]);
+
+    Ok(())
 }
 
 #[test]
@@ -256,48 +242,44 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-5";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{exists}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result == vec![Value::Bool(true)]);
+    Ok(())
 }
 
 #[test]
@@ -306,35 +288,33 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-6";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{exists}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result == vec![Value::Bool(false)]);
+
+    Ok(())
 }
 
 #[test]
@@ -343,51 +323,46 @@ async fn readwrite_buckets_can_be_shared_between_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_id_1 = executor
-        .start_worker(&component_id, "key-value-service-7")
-        .await;
+        .start_worker(&component.id, "key-value-service-7")
+        .await?;
     let worker_id_2 = executor
-        .start_worker(&component_id, "key-value-service-8")
-        .await;
+        .start_worker(&component.id, "key-value-service-8")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id_1,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-bucket").into_value_and_type(),
+                format!("{}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id_2,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-bucket").into_value_and_type(),
+                format!("{}-bucket", component.id).into_value_and_type(),
                 "key".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id_1).await;
-    executor.check_oplog_is_queryable(&worker_id_2).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id_1).await?;
+    executor.check_oplog_is_queryable(&worker_id_2).await?;
 
     check!(
         result
@@ -397,6 +372,8 @@ async fn readwrite_buckets_can_be_shared_between_workers(
                 Value::U8(3),
             ]))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -405,72 +382,65 @@ async fn batch_get_many_gets_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-9";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
                 vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key3".into_value_and_type(),
                 vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-many}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -480,6 +450,8 @@ async fn batch_get_many_gets_multiple_values(
                 Value::List(vec![Value::U8(7), Value::U8(8), Value::U8(9),])
             ]))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -488,61 +460,55 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-10";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
                 vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-many}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
-
+    executor.check_oplog_is_queryable(&worker_id).await?;
     check!(result == vec![Value::Option(None)]);
+    Ok(())
 }
 
 #[test]
@@ -551,24 +517,23 @@ async fn batch_set_many_sets_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-11";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set-many}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 vec![
                     ("key1", vec![1u8, 2u8, 3u8]),
                     ("key2", vec![4u8, 5u8, 6u8]),
@@ -577,48 +542,42 @@ async fn batch_set_many_sets_multiple_values(
                 .into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result3 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key3".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result1
@@ -644,6 +603,8 @@ async fn batch_set_many_sets_multiple_values(
                 Value::U8(9),
             ]))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -652,112 +613,104 @@ async fn batch_delete_many_deletes_multiple_values(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-12";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
                 vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key3".into_value_and_type(),
                 vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{delete-many}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 vec!["key1", "key2", "key3"].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result3 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key3".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result1 == vec![Value::Option(None)]);
     check!(result2 == vec![Value::Option(None)]);
     check!(result3 == vec![Value::Option(None)]);
+
+    Ok(())
 }
 
 #[test]
@@ -766,69 +719,62 @@ async fn batch_get_keys_returns_multiple_keys(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("key-value-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "key-value-service")
+        .store()
+        .await?;
     let worker_name = "key-value-service-13";
-    let worker_id = executor.start_worker(&component_id, worker_name).await;
+    let worker_id = executor.start_worker(&component.id, worker_name).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key1".into_value_and_type(),
                 vec![1u8, 2u8, 3u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key2".into_value_and_type(),
                 vec![4u8, 5u8, 6u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{set}",
             vec![
-                format!("{component_id}-{worker_name}-bucket").into_value_and_type(),
+                format!("{}-{worker_name}-bucket", component.id).into_value_and_type(),
                 "key3".into_value_and_type(),
                 vec![7u8, 8u8, 9u8].into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-keys}",
-            vec![format!("{component_id}-{worker_name}-bucket").into_value_and_type()],
+            vec![format!("{}-{worker_name}-bucket", component.id).into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -838,4 +784,6 @@ async fn batch_get_keys_returns_multiple_keys(
                 Value::String("key3".to_string()),
             ])]
     );
+
+    Ok(())
 }
