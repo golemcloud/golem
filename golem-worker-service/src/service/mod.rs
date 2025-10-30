@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod auth;
 // pub mod api_certificate;
 // pub mod api_domain;
 // pub mod api_security;
 pub mod component;
 // pub mod gateway;
 pub mod worker;
+pub mod limit;
 
 // use crate::aws_config::AwsConfig;
 // use crate::config::GatewaySessionStorageConfig;
@@ -54,7 +56,6 @@ use crate::config::WorkerServiceConfig;
 // use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 // use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
 use crate::service::component::ComponentService;
-use golem_service_base::clients::auth::{AuthService, AuthServiceDefault};
 // use crate::service::component::{CachedComponentService, ComponentService, RemoteComponentService};
 // use crate::service::gateway::api_definition::{
 //     ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
@@ -70,7 +71,6 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 // use golem_common::model::auth::{TokenSecret};
 use golem_common::model::RetryConfig;
 // use golem_common::redis::RedisPool;
-use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
 // use golem_service_base::config::BlobStorageConfig;
 // use golem_service_base::db::postgres::PostgresPool;
 // use golem_service_base::db::sqlite::SqlitePool;
@@ -81,11 +81,13 @@ use self::component::{CachedComponentService, RemoteComponentService};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
+use self::auth::AuthService;
+use self::limit::LimitService;
 // use tracing::error;
 
 #[derive(Clone)]
 pub struct Services {
-    pub worker_auth_service: Arc<dyn AuthService>,
+    pub auth_service: Arc<dyn AuthService>,
     // pub project_service: Arc<dyn ProjectService>,
     pub limit_service: Arc<dyn LimitService>,
     // pub definition_service: Arc<dyn ApiDefinitionService>,
@@ -393,7 +395,7 @@ impl Services {
         // );
 
         Ok(Self {
-            worker_auth_service: auth_service,
+            auth_service,
             limit_service,
             // project_service,
             // definition_service,

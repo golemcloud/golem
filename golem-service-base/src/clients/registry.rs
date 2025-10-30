@@ -675,6 +675,8 @@ pub enum RegistryServiceError {
     AlreadyExists(String),
     #[error("Internal error: {0}")]
     InternalError(String),
+    #[error("Cound not authenticate: {0}")]
+    CouldNotAuthenticate(String),
     #[error("Internal client error: {0}")]
     InternalClientError(String),
 }
@@ -760,6 +762,7 @@ impl Display for RegistryServiceClientError {
                     write!(f, "Internal server error: {}", error.error)
                 }
                 Some(Error::Unauthorized(error)) => write!(f, "Unauthorized: {}", error.error),
+                Some(Error::CouldNotAuthenticate(error)) => write!(f, "Could not authenticate: {}", error.error),
                 None => write!(f, "Unknown error"),
             },
             Self::Connection(status) => write!(f, "Connection error: {status}"),
@@ -807,6 +810,7 @@ impl From<RegistryServiceClientError> for RegistryServiceError {
                 Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
                 Some(Error::InternalError(error)) => Self::InternalError(error.error),
                 Some(Error::Unauthorized(error)) => Self::Unauthorized(error.error),
+                Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
                 None => Self::internal_client_error("Unknown error"),
             },
             RegistryServiceClientError::Connection(status) => {

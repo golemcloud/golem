@@ -26,8 +26,6 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::auth::AuthServiceError;
-use golem_service_base::clients::limit::LimitError;
 // use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
