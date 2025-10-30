@@ -24,7 +24,7 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, GetComponentsRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetComponentsRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
 use crate::model::ResourceLimits;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
@@ -33,6 +33,7 @@ use golem_common::model::plugin_registration::{PluginRegistrationId};
 use crate::model::plugin_registration::PluginRegistration;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -72,6 +73,12 @@ pub trait RegistryService: Send + Sync {
         environment_id: &EnvironmentId,
         component_name: &str,
     ) -> Result<Option<ComponentDto>, RegistryServiceError>;
+
+    async fn download_component(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError>;
 }
 
 pub struct GrpcRegistryService {
@@ -370,6 +377,56 @@ impl RegistryService for GrpcRegistryService {
                             Err(error.into())
                         }
                     }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn download_component(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError> {
+        let result: Result<Vec<u8>, RegistryServiceClientError> = with_retries(
+            "components",
+            "download-component",
+            Some(format!("{component_id} - {component_revision}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_id.clone(),
+                component_revision,
+            ),
+            |(client, component_id, component_revision)| {
+                Box::pin(async move {
+                    let mut response = client
+                        .call("download-component", move |client| {
+                            let request = DownloadComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: Some(component_revision.0),
+                                auth_ctx: Some(AuthCtx::System.into()),
+                            };
+
+                            Box::pin(client.download_component(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    let mut bytes = Vec::new();
+
+                    while let Some(message) = response.message().await? {
+                        match message.result {
+                            None => return Err(RegistryServiceClientError::empty_response()),
+                            Some(download_component_response::Result::SuccessChunk(chunk)) => bytes.extend_from_slice(&chunk),
+                            Some(download_component_response::Result::Error(error)) => Err(error)?
+                        };
+                    };
+
+                    Ok(bytes)
                 })
             },
             RegistryServiceClientError::is_retriable,
