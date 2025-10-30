@@ -35,6 +35,7 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::agent::RegisteredAgentType;
+use golem_api_grpc::proto::golem::auth::auth_ctx;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -46,6 +47,7 @@ pub trait RegistryService: Send + Sync {
     async fn get_resource_limits(
         &self,
         account_id: &AccountId,
+        auth_ctx: &AuthCtx,
     ) -> Result<ResourceLimits, RegistryServiceError>;
 
     async fn update_worker_limit(
@@ -53,6 +55,7 @@ pub trait RegistryService: Send + Sync {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
     async fn update_worker_connection_limit(
@@ -60,12 +63,14 @@ pub trait RegistryService: Send + Sync {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
     // plugins api
     async fn get_plugin_registration_by_id(
         &self,
         plugin_id: &PluginRegistrationId,
+        auth_ctx: &AuthCtx,
     ) -> Result<PluginRegistration, RegistryServiceError>;
 
     // components api
@@ -73,35 +78,41 @@ pub trait RegistryService: Send + Sync {
         &self,
         environment_id: &EnvironmentId,
         component_name: &str,
+        auth_ctx: &AuthCtx,
     ) -> Result<Option<ComponentDto>, RegistryServiceError>;
 
     async fn download_component(
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError>;
 
     async fn get_component_metadata(
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     async fn get_latest_component_metadata(
         &self,
-        component_id: &ComponentId
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     // agent types api
     async fn get_all_agent_types(
         &self,
-        environment_id: &EnvironmentId
+        environment_id: &EnvironmentId,
+        auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
 
     async fn get_agent_type(
         &self,
         environment_id: &EnvironmentId,
         name: &str,
+        auth_ctx: &AuthCtx,
     ) -> Result<Option<RegisteredAgentType>, RegistryServiceError>;
 }
 
@@ -175,6 +186,7 @@ impl RegistryService for GrpcRegistryService {
     async fn get_resource_limits(
         &self,
         account_id: &AccountId,
+        auth_ctx: &AuthCtx,
     ) -> Result<ResourceLimits, RegistryServiceError> {
         info!(account_id = %account_id, "Getting resource limits");
         let result: Result<ResourceLimits, RegistryServiceClientError> = with_retries(
@@ -185,8 +197,9 @@ impl RegistryService for GrpcRegistryService {
             &(
                 self.client.clone(),
                 account_id.clone(),
+                auth_ctx.clone(),
             ),
-            |(client, id)| {
+            |(client, id, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-resource-limits", move |client| {
@@ -221,6 +234,7 @@ impl RegistryService for GrpcRegistryService {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
             "limit",
@@ -231,9 +245,10 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value
+                value,
+                auth_ctx.clone()
             ),
-            |(client, account_id, worker_id, value)| {
+            |(client, account_id, worker_id, value, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-limit", move |client| {
@@ -269,6 +284,7 @@ impl RegistryService for GrpcRegistryService {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
             "limit",
@@ -279,9 +295,10 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value
+                value,
+                auth_ctx.clone()
             ),
-            |(client, account_id, worker_id, value)| {
+            |(client, account_id, worker_id, value, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-connection-limit", move |client| {
@@ -315,6 +332,7 @@ impl RegistryService for GrpcRegistryService {
     async fn get_plugin_registration_by_id(
         &self,
         plugin_id: &PluginRegistrationId,
+        auth_ctx: &AuthCtx,
     ) -> Result<PluginRegistration, RegistryServiceError> {
         let result: Result<PluginRegistration, RegistryServiceClientError> = with_retries(
             "plugins",
@@ -323,9 +341,10 @@ impl RegistryService for GrpcRegistryService {
             &self.retry_config,
             &(
                 self.client.clone(),
-                plugin_id.clone()
+                plugin_id.clone(),
+                auth_ctx.clone(),
             ),
-            |(client, plugin_id)| {
+            |(client, plugin_id, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-plugin-registration-by-id", move |client| {
@@ -360,6 +379,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         environment_id: &EnvironmentId,
         component_name: &str,
+        auth_ctx: &AuthCtx,
     ) -> Result<Option<ComponentDto>, RegistryServiceError> {
         let result: Result<Option<ComponentDto>, RegistryServiceClientError> = with_retries(
             "components",
@@ -370,15 +390,16 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 environment_id.clone(),
                 component_name.to_string(),
+                auth_ctx.clone()
             ),
-            |(client, environment_id, component_name)| {
+            |(client, environment_id, component_name, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("resolve-component-by-name", move |client| {
                             let request = GetComponentsRequest {
                                 environment_id: Some(environment_id.clone().into()),
                                 component_name: Some(component_name.clone()),
-                                auth_ctx: Some(AuthCtx::System.into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.get_components(request))
@@ -414,6 +435,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError> {
         let result: Result<Vec<u8>, RegistryServiceClientError> = with_retries(
             "components",
@@ -424,15 +446,16 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 component_id.clone(),
                 component_revision,
+                auth_ctx.clone(),
             ),
-            |(client, component_id, component_revision)| {
+            |(client, component_id, component_revision, auth_ctx)| {
                 Box::pin(async move {
                     let mut response = client
                         .call("download-component", move |client| {
                             let request = DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),
                                 version: Some(component_revision.0),
-                                auth_ctx: Some(AuthCtx::System.into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.download_component(request))
@@ -464,6 +487,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
         let result: Result<ComponentDto, RegistryServiceClientError> = with_retries(
             "components",
@@ -474,15 +498,16 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 component_id.clone(),
                 component_revision,
+                auth_ctx.clone()
             ),
-            |(client, component_id, component_revision)| {
+            |(client, component_id, component_revision, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-component-metadata", move |client| {
                             let request = GetComponentMetadataRequest {
                                 component_id: Some(component_id.clone().into()),
                                 version: component_revision.0,
-                                auth_ctx: Some(AuthCtx::System.into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.get_component_metadata(request))
@@ -514,7 +539,8 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_latest_component_metadata(
         &self,
-        component_id: &ComponentId
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
         let result: Result<ComponentDto, RegistryServiceClientError> = with_retries(
             "components",
@@ -523,15 +549,16 @@ impl RegistryService for GrpcRegistryService {
             &self.retry_config,
             &(
                 self.client.clone(),
-                component_id.clone()
+                component_id.clone(),
+                auth_ctx.clone()
             ),
-            |(client, component_id)| {
+            |(client, component_id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-latest-component-metadata", move |client| {
                             let request = GetLatestComponentRequest {
                                 component_id: Some(component_id.clone().into()),
-                                auth_ctx: Some(AuthCtx::System.into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.get_latest_component_metadata(request))
@@ -563,7 +590,8 @@ impl RegistryService for GrpcRegistryService {
 
     async fn get_all_agent_types(
         &self,
-        environment_id: &EnvironmentId
+        environment_id: &EnvironmentId,
+        auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
         let result: Result<Vec<RegisteredAgentType>, RegistryServiceClientError> = with_retries(
             "agent-types",
@@ -572,9 +600,10 @@ impl RegistryService for GrpcRegistryService {
             &self.retry_config,
             &(
                 self.client.clone(),
-                environment_id.clone()
+                environment_id.clone(),
+                auth_ctx.clone(),
             ),
-            |(client, environment_id)| {
+            |(client, environment_id, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-all-agent-types", move |client| {
@@ -614,6 +643,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         environment_id: &EnvironmentId,
         name: &str,
+        auth_ctx: &AuthCtx,
     ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
         let result: Result<Option<RegisteredAgentType>, RegistryServiceClientError> = with_retries(
             "agent-types",
@@ -623,9 +653,10 @@ impl RegistryService for GrpcRegistryService {
             &(
                 self.client.clone(),
                 environment_id.clone(),
-                name.to_string()
+                name.to_string(),
+                auth_ctx.clone(),
             ),
-            |(client, environment_id, name)| {
+            |(client, environment_id, name, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-all-agent-types", move |client| {
