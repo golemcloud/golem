@@ -16,8 +16,6 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{ItemImpl, ReturnType, Type};
 
-use crate::agentic::helpers::to_kebab_case;
-
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
@@ -130,7 +128,7 @@ fn build_match_arms(
 
             let param_idents = extract_param_idents(method);
             let method_param_extraction = generate_method_param_extraction(&param_idents);
-            let method_name = to_kebab_case(&method.sig.ident.to_string());
+            let method_name = &method.sig.ident.to_string();
             let ident = &method.sig.ident;
 
             match_arms.push(quote! {

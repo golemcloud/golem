@@ -105,7 +105,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
             }
 
 
-            let mut parameter_types = vec![]; // This is WIT type for now, but needs to support structured text type
+            let mut parameter_types = vec![];
             let mut result_type = vec![];
 
             if let syn::TraitItem::Fn(trait_fn) = item {
