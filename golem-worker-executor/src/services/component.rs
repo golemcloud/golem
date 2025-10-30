@@ -16,12 +16,6 @@ use super::golem_config::{ComponentCacheConfig, ComponentServiceConfig};
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::{
-    download_component_response, get_component_metadata_response, ComponentError,
-    DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
-    GetVersionedComponentRequest,
-};
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -52,6 +46,7 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -119,7 +114,7 @@ pub struct ComponentServiceDefault {
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService>,
-    component_client: GrpcClient<ComponentServiceClient<Channel>>,
+    component_client: GrpcRegistryService,
 }
 
 impl ComponentServiceDefault {
@@ -164,70 +159,6 @@ impl ComponentServiceDefault {
             ),
         }
     }
-
-    fn resolve_component_remotely(
-        &self,
-        environment_id: &EnvironmentId,
-        component_name: &str,
-    ) -> impl Future<Output = Result<Option<ComponentId>, WorkerExecutorError>> + 'static {
-        use golem_api_grpc::proto::golem::component::v1::{
-            get_components_response, ComponentError,
-        };
-
-        let client = self.component_client.clone();
-        let retry_config = self.retry_config.clone();
-        let access_token = self.access_token;
-
-        let environment_id = environment_id.clone();
-        let component_name = component_name.to_string();
-
-        async move {
-            with_retries(
-                "component",
-                "resolve_component_remotely",
-                Some(format!("{environment_id}/{component_name}").to_string()),
-                &retry_config,
-                &(client, environment_id, component_name, access_token),
-                |(client, environment_id, component_name, access_token)| {
-                    Box::pin(async move {
-                        let response = client
-                            .call("lookup_component_by_name", move |client| {
-                                let request = authorised_grpc_request(
-                                    GetComponentsRequest {
-                                        environment_id: Some(environment_id.clone().into()),
-                                        component_name: Some(component_name.clone()),
-                                        auth_ctx: Some(AuthCtx::System.into()),
-                                    },
-                                    access_token,
-                                );
-                                Box::pin(client.get_components(request))
-                            })
-                            .await?
-                            .into_inner();
-
-                        match response
-                            .result
-                            .expect("Didn't receive expected field result")
-                        {
-                            get_components_response::Result::Success(payload) => {
-                                let component_id = payload
-                                    .components
-                                    .first()
-                                    .map(|c| c.component_id.unwrap().try_into().unwrap());
-                                Ok(component_id)
-                            }
-                            get_components_response::Result::Error(err) => {
-                                Err(GrpcError::Domain(err))?
-                            }
-                        }
-                    })
-                },
-                is_grpc_retriable::<ComponentError>,
-            )
-            .await
-            .map_err(|err| WorkerExecutorError::unknown(format!("Failed to get component: {err}")))
-        }
-    }
 }
 
 #[async_trait]
@@ -242,11 +173,8 @@ impl ComponentService for ComponentServiceDefault {
             component_id: component_id.clone(),
             component_version,
         };
-        let client_clone = self.component_client.clone();
         let component_id_clone = component_id.clone();
         let engine = engine.clone();
-        let access_token = self.access_token;
-        let retry_config_clone = self.retry_config.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_version))
@@ -277,14 +205,13 @@ impl ComponentService for ComponentServiceDefault {
                     match component {
                         Some(component) => Ok(component),
                         None => {
-                            let bytes = download_via_grpc(
-                                &client_clone,
-                                &access_token,
-                                &retry_config_clone,
-                                &component_id_clone,
-                                component_version,
-                            )
-                            .await?;
+                            let bytes = self.component_client.download_component(&component_id_clone, component_version, &AuthCtx::System).await.map_err(|e|
+                                WorkerExecutorError::ComponentDownloadFailed {
+                                    component_id: component_id_clone.clone(),
+                                    component_version,
+                                    reason: format!("{e}"),
+                                }
+                            )?;
 
                             let start = Instant::now();
                             let component_id_clone2 = component_id_clone.clone();
@@ -355,14 +282,7 @@ impl ComponentService for ComponentServiceDefault {
                         },
                         || {
                             Box::pin(async move {
-                                let metadata = get_metadata_via_grpc(
-                                    &client,
-                                    &access_token,
-                                    &retry_config,
-                                    &component_id,
-                                    forced_version,
-                                )
-                                .await?;
+                                let metadata = client.get_component_metadata(&component_id, version, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}")))?;
                                 Ok(metadata)
                             })
                         },
@@ -370,14 +290,7 @@ impl ComponentService for ComponentServiceDefault {
                     .await
             }
             None => {
-                let metadata = get_metadata_via_grpc(
-                    &self.component_client,
-                    &self.access_token,
-                    &self.retry_config,
-                    component_id,
-                    None,
-                )
-                .await?;
+                let metadata = self.component_client.get_latest_component_metadata(&component_id, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}")))?;
 
                 let metadata = self
                     .component_metadata_cache
@@ -397,29 +310,22 @@ impl ComponentService for ComponentServiceDefault {
 
     async fn resolve_component(
         &self,
-        component_reference: String,
+        component_slug: String,
         resolving_environment: EnvironmentId,
-        _resolving_application: ApplicationId,
-        _resolving_account: AccountId,
+        resolving_application: ApplicationId,
+        resolving_account: AccountId,
     ) -> Result<Option<ComponentId>, WorkerExecutorError> {
-        let component_slug = ComponentSlug::parse(&component_reference).map_err(|e| {
-            WorkerExecutorError::invalid_request(format!("Invalid component reference: {e}"))
-        })?;
+        let component = self.component_client.resolve_component(
+            &resolving_account,
+            &resolving_application,
+            &resolving_environment,
+            &component_slug,
+            &AuthCtx::System
+        )
+        .await
+        .map_err(|e| WorkerExecutorError::runtime(format!("Resolving component failed: {e}")))?;
 
-        if component_slug.environment_name.is_some() {
-            // TODO: Fix me
-            todo!("Resolving environments is not implemented")
-        };
-
-        let environment_id = resolving_environment;
-
-        let component_name = component_slug.component_name;
-
-        self.resolved_component_cache
-            .get_or_insert_simple(&(environment_id.clone(), component_name.clone()), || {
-                Box::pin(self.resolve_component_remotely(&environment_id, &component_name))
-            })
-            .await
+        Ok(component.map(|c| c.id))
     }
 
     async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
@@ -432,161 +338,139 @@ impl ComponentService for ComponentServiceDefault {
     }
 }
 
-async fn download_via_grpc(
-    client: &GrpcClient<ComponentServiceClient<Channel>>,
-    access_token: &Uuid,
-    retry_config: &RetryConfig,
-    component_id: &ComponentId,
-    component_version: ComponentRevision,
-) -> Result<Vec<u8>, WorkerExecutorError> {
-    with_retries(
-        "components",
-        "download",
-        Some(component_id.to_string()),
-        retry_config,
-        &(
-            client.clone(),
-            component_id.clone(),
-            access_token.to_owned(),
-        ),
-        |(client, component_id, access_token)| {
-            Box::pin(async move {
-                let response = client
-                    .call("download_component", move |client| {
-                        let request = authorised_grpc_request(
-                            DownloadComponentRequest {
-                                component_id: Some(component_id.clone().into()),
-                                version: Some(component_version.0),
-                                auth_ctx: Some(AuthCtx::System.into()),
-                            },
-                            access_token,
-                        );
-                        Box::pin(client.download_component(request))
-                    })
-                    .await?
-                    .into_inner();
+// async fn download_via_grpc(
+//     client: &GrpcClient<ComponentServiceClient<Channel>>,
+//     access_token: &Uuid,
+//     retry_config: &RetryConfig,
+//     component_id: &ComponentId,
+//     component_version: ComponentRevision,
+// ) -> Result<Vec<u8>, WorkerExecutorError> {
+//     with_retries(
+//         "components",
+//         "download",
+//         Some(component_id.to_string()),
+//         retry_config,
+//         &(
+//             client.clone(),
+//             component_id.clone(),
+//             access_token.to_owned(),
+//         ),
+//         |(client, component_id, access_token)| {
+//             Box::pin(async move {
+//                 let response = client
+//                     .call("download_component", move |client| {
+//                         let request = authorised_grpc_request(
+//                             DownloadComponentRequest {
+//                                 component_id: Some(component_id.clone().into()),
+//                                 version: Some(component_version.0),
+//                                 auth_ctx: Some(AuthCtx::System.into()),
+//                             },
+//                             access_token,
+//                         );
+//                         Box::pin(client.download_component(request))
+//                     })
+//                     .await?
+//                     .into_inner();
 
-                let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
-                let bytes = chunks
-                    .into_iter()
-                    .map(|chunk| match chunk.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
-                        Some(download_component_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    })
-                    .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
+//                 let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
+//                 let bytes = chunks
+//                     .into_iter()
+//                     .map(|chunk| match chunk.result {
+//                         None => Err("Empty response".to_string().into()),
+//                         Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
+//                         Some(download_component_response::Result::Error(error)) => {
+//                             Err(GrpcError::Domain(error))
+//                         }
+//                     })
+//                     .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
 
-                let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
+//                 let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
 
-                record_external_call_response_size_bytes("components", "download", bytes.len());
+//                 record_external_call_response_size_bytes("components", "download", bytes.len());
 
-                Ok(bytes)
-            })
-        },
-        is_grpc_retriable::<ComponentError>,
-    )
-    .await
-    .map_err(|error| grpc_component_download_error(error, component_id, component_version))
-}
+//                 Ok(bytes)
+//             })
+//         },
+//         is_grpc_retriable::<ComponentError>,
+//     )
+//     .await
+//     .map_err(|error| grpc_component_download_error(error, component_id, component_version))
+// }
 
-async fn get_metadata_via_grpc(
-    client: &GrpcClient<ComponentServiceClient<Channel>>,
-    access_token: &Uuid,
-    retry_config: &RetryConfig,
-    component_id: &ComponentId,
-    component_version: Option<ComponentRevision>,
-) -> Result<ComponentDto, WorkerExecutorError> {
-    let desc = format!("Getting component metadata of {component_id}");
-    debug!("{}", &desc);
-    with_retries(
-        "components",
-        "get_metadata",
-        Some(component_id.to_string()),
-        retry_config,
-        &(
-            client.clone(),
-            component_id.clone(),
-            access_token.to_owned(),
-        ),
-        |(client, component_id, access_token)| {
-            Box::pin(async move {
-                let response = match component_version {
-                    Some(component_version) => client
-                        .call("get_component_metadata", move |client| {
-                            let request = authorised_grpc_request(
-                                GetVersionedComponentRequest {
-                                    component_id: Some(component_id.clone().into()),
-                                    version: component_version.0,
-                                    auth_ctx: Some(AuthCtx::System.into()),
-                                },
-                                access_token,
-                            );
-                            Box::pin(client.get_component_metadata(request))
-                        })
-                        .await?
-                        .into_inner(),
-                    None => client
-                        .call("get_latest_component_metadata", move |client| {
-                            let request = authorised_grpc_request(
-                                GetLatestComponentRequest {
-                                    component_id: Some(component_id.clone().into()),
-                                    auth_ctx: Some(AuthCtx::System.into()),
-                                },
-                                access_token,
-                            );
-                            Box::pin(client.get_latest_component_metadata(request))
-                        })
-                        .await?
-                        .into_inner(),
-                };
-                let len = response.encoded_len();
-                let component = match response.result {
-                    None => Err("Empty response".to_string().into()),
-                    Some(get_component_metadata_response::Result::Success(response)) => {
-                        Ok(response.component.ok_or(GrpcError::Unexpected(
-                            "No component information in response".to_string(),
-                        ))?)
-                    }
-                    Some(get_component_metadata_response::Result::Error(error)) => {
-                        Err(GrpcError::Domain(error))
-                    }
-                }?;
+// async fn get_metadata_via_grpc(
+//     client: &GrpcClient<ComponentServiceClient<Channel>>,
+//     access_token: &Uuid,
+//     retry_config: &RetryConfig,
+//     component_id: &ComponentId,
+//     component_version: Option<ComponentRevision>,
+// ) -> Result<ComponentDto, WorkerExecutorError> {
+//     let desc = format!("Getting component metadata of {component_id}");
+//     debug!("{}", &desc);
+//     with_retries(
+//         "components",
+//         "get_metadata",
+//         Some(component_id.to_string()),
+//         retry_config,
+//         &(
+//             client.clone(),
+//             component_id.clone(),
+//             access_token.to_owned(),
+//         ),
+//         |(client, component_id, access_token)| {
+//             Box::pin(async move {
+//                 let response = match component_version {
+//                     Some(component_version) => client
+//                         .call("get_component_metadata", move |client| {
+//                             let request = authorised_grpc_request(
+//                                 GetVersionedComponentRequest {
+//                                     component_id: Some(component_id.clone().into()),
+//                                     version: component_version.0,
+//                                     auth_ctx: Some(AuthCtx::System.into()),
+//                                 },
+//                                 access_token,
+//                             );
+//                             Box::pin(client.get_component_metadata(request))
+//                         })
+//                         .await?
+//                         .into_inner(),
+//                     None => client
+//                         .call("get_latest_component_metadata", move |client| {
+//                             let request = authorised_grpc_request(
+//                                 GetLatestComponentRequest {
+//                                     component_id: Some(component_id.clone().into()),
+//                                     auth_ctx: Some(AuthCtx::System.into()),
+//                                 },
+//                                 access_token,
+//                             );
+//                             Box::pin(client.get_latest_component_metadata(request))
+//                         })
+//                         .await?
+//                         .into_inner(),
+//                 };
+//                 let len = response.encoded_len();
+//                 let component = match response.result {
+//                     None => Err("Empty response".to_string().into()),
+//                     Some(get_component_metadata_response::Result::Success(response)) => {
+//                         Ok(response.component.ok_or(GrpcError::Unexpected(
+//                             "No component information in response".to_string(),
+//                         ))?)
+//                     }
+//                     Some(get_component_metadata_response::Result::Error(error)) => {
+//                         Err(GrpcError::Domain(error))
+//                     }
+//                 }?;
 
-                let result = component.try_into()?;
-                record_external_call_response_size_bytes("components", "get_metadata", len);
+//                 let result = component.try_into()?;
+//                 record_external_call_response_size_bytes("components", "get_metadata", len);
 
-                Ok(result)
-            })
-        },
-        is_grpc_retriable::<ComponentError>,
-    )
-    .await
-    .map_err(|error| grpc_get_latest_version_error(error, component_id))
-}
-
-fn grpc_component_download_error(
-    error: GrpcError<ComponentError>,
-    component_id: &ComponentId,
-    component_version: ComponentRevision,
-) -> WorkerExecutorError {
-    WorkerExecutorError::ComponentDownloadFailed {
-        component_id: component_id.clone(),
-        component_version,
-        reason: format!("{error}"),
-    }
-}
-
-fn grpc_get_latest_version_error(
-    error: GrpcError<ComponentError>,
-    component_id: &ComponentId,
-) -> WorkerExecutorError {
-    WorkerExecutorError::GetLatestVersionOfComponentFailed {
-        component_id: component_id.clone(),
-        reason: format!("{error}"),
-    }
-}
+//                 Ok(result)
+//             })
+//         },
+//         is_grpc_retriable::<ComponentError>,
+//     )
+//     .await
+//     .map_err(|error| grpc_get_latest_version_error(error, component_id))
+// }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentKey {

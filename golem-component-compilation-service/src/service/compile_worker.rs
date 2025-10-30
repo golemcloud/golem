@@ -16,10 +16,6 @@ use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
 use crate::metrics::record_compilation_time;
 use crate::model::*;
 use futures::TryStreamExt;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::download_component_response;
-use golem_api_grpc::proto::golem::component::v1::ComponentError;
-use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -39,6 +35,8 @@ use tonic::transport::Channel;
 use tracing::{info, warn, Instrument};
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::RemoteServiceConfig;
 
 // Single worker that compiles WASM components.
 #[derive(Clone)]
@@ -49,7 +47,7 @@ pub struct CompileWorker {
     // Resources
     engine: Engine,
     compiled_component_service: Arc<dyn CompiledComponentService>,
-    client: Arc<Mutex<Option<GrpcClient<ComponentServiceClient<Channel>>>>>,
+    client: Arc<Mutex<Option<GrpcRegistryService>>>,
 }
 
 impl CompileWorker {
@@ -124,21 +122,12 @@ impl CompileWorker {
             config.host, config.port
         );
 
-        let max_component_size = self.config.max_component_size;
-        let client = GrpcClient::new(
-            "component_service",
-            move |channel| {
-                ComponentServiceClient::new(channel)
-                    .max_decoding_message_size(max_component_size)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-            },
-            config.uri(),
-            GrpcClientConfig {
-                retries_on_unavailable: self.config.retries.clone(),
-                connect_timeout: self.config.connect_timeout,
-            },
-        );
+        let client = GrpcRegistryService::new(&RemoteServiceConfig {
+            host: config.host,
+            port: config.port,
+            retries: self.config.retries.clone()
+        });
+
         self.client.lock().await.replace(client);
     }
 
@@ -172,13 +161,13 @@ impl CompileWorker {
         };
 
         if let Some(client) = &*self.client.lock().await {
-            let bytes = download_via_grpc(
-                client,
-                &self.config.retries,
+            let bytes = client.download_component(
                 &component_with_version.id,
                 component_with_version.version,
+                &AuthCtx::System
             )
-            .await?;
+            .await
+            .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
             let start = Instant::now();
             let component = spawn_blocking({
@@ -214,59 +203,4 @@ impl CompileWorker {
             ))
         }
     }
-}
-
-async fn download_via_grpc(
-    client: &GrpcClient<ComponentServiceClient<Channel>>,
-    retry_config: &RetryConfig,
-    component_id: &ComponentId,
-    component_version: ComponentRevision,
-) -> Result<Vec<u8>, CompilationError> {
-    with_retries(
-        "components",
-        "download",
-        Some(format!("{component_id}@{component_version}")),
-        retry_config,
-        &(client.clone(), component_id.clone()),
-        |(client, component_id)| {
-            Box::pin(async move {
-                let component_id = component_id.clone();
-                let response = client
-                    .call("download_component", move |client| {
-                        let request = DownloadComponentRequest {
-                            component_id: Some(component_id.clone().into()),
-                            version: Some(component_version.0),
-                            auth_ctx: Some(AuthCtx::System.into()),
-                        };
-                        Box::pin(client.download_component(request))
-                    })
-                    .await?
-                    .into_inner();
-
-                let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
-                let bytes = chunks
-                    .into_iter()
-                    .map(|chunk| match chunk.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
-                        Some(download_component_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    })
-                    .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
-
-                let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
-
-                record_external_call_response_size_bytes("components", "download", bytes.len());
-
-                Ok(bytes)
-            })
-        },
-        is_grpc_retriable::<ComponentError>,
-    )
-    .await
-    .map_err(|error| {
-        tracing::error!("Failed to download component {component_id}@{component_version}: {error}");
-        CompilationError::ComponentDownloadFailed(error.to_string())
-    })
 }

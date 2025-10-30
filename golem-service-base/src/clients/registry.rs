@@ -13,19 +13,14 @@
 // limitations under the License.
 
 use super::RemoteServiceConfig;
+use golem_common::model::application::ApplicationId;
 use crate::model::ResourceLimits;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest,
-    GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest,
-    GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest,
-    UpdateWorkerLimitRequest, authenticate_token_response, download_component_response,
-    get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response,
-    get_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, update_worker_limit_response,
+    authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -109,6 +104,15 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, RegistryServiceError>;
 
+    async fn resolve_component(
+        &self,
+        resolving_account_id: &AccountId,
+        resolving_application_id: &ApplicationId,
+        resolving_environment_id: &EnvironmentId,
+        component_slug: &str,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Option<ComponentDto>, RegistryServiceError>;
+
     // agent types api
     async fn get_all_agent_types(
         &self,
@@ -124,6 +128,7 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<RegisteredAgentType>, RegistryServiceError>;
 }
 
+#[derive(Clone)]
 pub struct GrpcRegistryService {
     client: GrpcClient<RegistryServiceClient<Channel>>,
     retry_config: RetryConfig,
@@ -573,6 +578,59 @@ impl RegistryService for GrpcRegistryService {
                             Ok(converted)
                         }
                         Some(get_all_component_versions_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn resolve_component(
+        &self,
+        resolving_account_id: &AccountId,
+        resolving_application_id: &ApplicationId,
+        resolving_environment_id: &EnvironmentId,
+        component_slug: &str,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Option<ComponentDto>, RegistryServiceError> {
+        let result: Result<Option<ComponentDto>, RegistryServiceClientError> = with_retries(
+            "components",
+            "resolve-component",
+            Some(format!("{resolving_account_id}-{resolving_application_id}-{resolving_environment_id}-{component_slug}")),
+            &self.retry_config,
+            &(self.client.clone(), resolving_account_id.clone(), resolving_application_id.clone(), resolving_environment_id.clone(), component_slug.to_string(), auth_ctx.clone()),
+            |(client, resolving_account_id, resolving_application_id, resolving_environment_id, component_slug, auth_ctx)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("resolve-component", move |client| {
+                            let request = ResolveComponentRequest {
+                                resolving_account_id: Some(resolving_account_id.clone().into()),
+                                resolving_application_id: Some(resolving_application_id.clone().into()),
+                                resolving_environment_id: Some(resolving_environment_id.clone().into()),
+                                component_slug: component_slug.clone(),
+                                auth_ctx: Some(auth_ctx.clone().into()),
+                            };
+
+                            Box::pin(client.resolve_component(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(resolve_component_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .component
+                                .map(ComponentDto::try_from)
+                                .transpose()?;
+                            Ok(converted)
+                        }
+                        Some(resolve_component_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }

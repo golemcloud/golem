@@ -3,23 +3,24 @@ syntax = "proto3";
 package golem.registry.v1;
 
 import "golem/auth/auth_ctx.proto";
+import "golem/common/account_id.proto";
+import "golem/common/application.proto";
 import "golem/common/empty.proto";
 import "golem/common/environment.proto";
-import "golem/common/uuid.proto";
-import "golem/common/account_id.proto";
 import "golem/common/resource_limits.proto";
-import "golem/worker/worker_id.proto";
+import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
-import "golem/component/plugin_registration.proto";
 import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
 import "golem/component/component_type.proto";
 import "golem/component/dynamic_linked_instance.proto";
 import "golem/component/plugin_installation.proto";
+import "golem/component/plugin_registration.proto";
 import "golem/component/v1/component_error.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
+import "golem/worker/worker_id.proto";
 
 service RegistryService {
   // auth api
@@ -38,6 +39,7 @@ service RegistryService {
   rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
   rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
   rpc GetAllComponentVersions (GetAllComponentVersionsRequest) returns (GetAllComponentVersionsResponse);
+  rpc ResolveComponent (ResolveComponentRequest) returns (ResolveComponentResponse);
 
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
@@ -149,6 +151,24 @@ message GetAllComponentVersionsSuccessResponse {
   repeated golem.component.Component components = 1;
 }
 
+message ResolveComponentRequest {
+  golem.common.AccountId resolving_account_id = 1;
+  golem.common.ApplicationId resolving_application_id = 2;
+  golem.common.EnvironmentId resolving_environment_id = 3;
+  string component_slug = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+}
+
+message ResolveComponentResponse {
+  oneof result {
+    ResolveComponentSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveComponentSuccessResponse {
+  optional golem.component.Component component = 1;
+}
 
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;
