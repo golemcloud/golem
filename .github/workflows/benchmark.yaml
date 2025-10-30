@@ -22,9 +22,11 @@ jobs:
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
-      - uses: taiki-e/install-action@v2
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.35.1
         with:
-          tool: nextest
+          redis-version: latest
+          auto-start: false
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
 
