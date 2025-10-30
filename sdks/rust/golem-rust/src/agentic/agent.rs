@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentType, DataValue};
+use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
 
 pub trait Agent {
     fn get_id(&self) -> String;
-    fn invoke(&mut self, method_name: String, input: DataValue) -> DataValue;
+    fn invoke(&mut self, method_name: String, input: DataValue) -> Result<DataValue, AgentError>;
     fn get_definition(&self) -> AgentType;
 }

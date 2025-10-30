@@ -75,7 +75,7 @@ impl Guest for Component {
             resolved_agent.agent.invoke(method_name, input)
         });
         if let Some(result) = result {
-            Ok(result)
+            result
         } else {
             Err(AgentError::CustomError(
                 golem_wasm::ValueAndType::new(

@@ -143,7 +143,7 @@ fn build_match_arms(
                     let result = self.#ident(#(#param_idents),*);
                     let wit_value = <_ as golem_rust::agentic::Schema>::to_wit_value(result);
                     let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
-                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                    Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
                 }
             });
         }
@@ -155,20 +155,38 @@ fn build_match_arms(
 fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_macro2::TokenStream> {
     param_idents.iter().enumerate().map(|(i, ident)| {
         quote! {
-            let element_value = match &input {
+            let element_value_result = match &input {
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
                     values.get(#i).expect("missing argument").clone()
                 },
-                _ => panic!("expected tuple input"),
+                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String("Only component types supported".into()),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    ).into(),
+                ))
             };
+
+            let element_value = element_value_result?;
 
             let wit_value = match element_value {
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => wit_value,
-                _ => panic!("Currently only ComponentModel ElementValue is supported"),
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementValue supported".into()),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    ).into(),
+                ))
             };
 
-            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value)
-                .expect("internal error, failed to convert wit value to expected type");
+            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).map_err(|e| {
+                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!("Failed parsing arg {}: {}", #i, e)),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    ).into(),
+                )
+            })?;
         }
     }).collect()
 }
@@ -189,10 +207,15 @@ fn generate_base_agent_impl(
             }
 
             fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
-                -> golem_rust::golem_agentic::golem::agent::common::DataValue {
+                -> Result<golem_rust::golem_agentic::golem::agent::common::DataValue, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 match method_name.as_str() {
                     #(#match_arms,)*
-                    _ => panic!("failed"),
+                    _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                        golem_rust::wasm_rpc::ValueAndType::new(
+                            golem_rust::wasm_rpc::Value::String(format!("Method not found: {}", method_name)),
+                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                        ).into(),
+                    )),
                 }
             }
 
