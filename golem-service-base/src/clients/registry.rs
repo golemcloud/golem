@@ -24,13 +24,15 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, GetComponentsRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
 use crate::model::ResourceLimits;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use tracing::info;
 use golem_common::model::plugin_registration::{PluginRegistrationId};
 use crate::model::plugin_registration::PluginRegistration;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -63,6 +65,13 @@ pub trait RegistryService: Send + Sync {
         &self,
         plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, RegistryServiceError>;
+
+    // components api
+    async fn resolve_component_by_name(
+        &self,
+        environment_id: &EnvironmentId,
+        component_name: &str,
+    ) -> Result<Option<ComponentDto>, RegistryServiceError>;
 }
 
 pub struct GrpcRegistryService {
@@ -304,6 +313,60 @@ impl RegistryService for GrpcRegistryService {
                             Ok(payload.plugin.ok_or("missing plugin field".to_string())?.try_into()?)
                         },
                         Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn resolve_component_by_name(
+        &self,
+        environment_id: &EnvironmentId,
+        component_name: &str,
+    ) -> Result<Option<ComponentDto>, RegistryServiceError> {
+        let result: Result<Option<ComponentDto>, RegistryServiceClientError> = with_retries(
+            "components",
+            "resolve-component-by-name",
+            Some(format!("{environment_id} - {component_name}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                environment_id.clone(),
+                component_name.to_string(),
+            ),
+            |(client, environment_id, component_name)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("resolve-component-by-name", move |client| {
+                            let request = GetComponentsRequest {
+                                environment_id: Some(environment_id.clone().into()),
+                                component_name: Some(component_name.clone()),
+                                auth_ctx: Some(AuthCtx::System.into()),
+                            };
+
+                            Box::pin(client.get_components(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_components_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .components
+                                .into_iter()
+                                .next()
+                                .map(|c| ComponentDto::try_from(c))
+                                .transpose()?;
+                            Ok(converted)
+                        },
+                        Some(get_components_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
