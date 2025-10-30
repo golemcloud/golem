@@ -113,6 +113,8 @@ async fn env_vars(
     component_service: Arc<dyn ComponentService + Send + Sync>,
     cloud_service: &Arc<dyn CloudService>,
     verbosity: Level,
+    enable_fs_cache: bool,
+    otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
@@ -134,8 +136,12 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
-        .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
+        .with(
+            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            enable_fs_cache.to_string(),
+        )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_optional_otlp("component_compilation_service", otlp)
         .build()
 }

@@ -21,9 +21,12 @@ use super::{new_auth_grpc_client, CloudService};
 use crate::components::new_reqwest_client;
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_common::base_model::ProjectId;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 use tracing::info;
+use uuid::Uuid;
 
 pub struct ProvidedCloudService {
     host: String,
@@ -35,6 +38,7 @@ pub struct ProvidedCloudService {
     token_grpc_client: OnceCell<TokenServiceGrpcClient<Channel>>,
     project_grpc_client: OnceCell<ProjectServiceGrpcClient<Channel>>,
     auth_grpc_client: OnceCell<AuthServiceGrpcClient<Channel>>,
+    default_project_cache: Cache<Uuid, (), ProjectId, String>,
 }
 
 impl ProvidedCloudService {
@@ -56,6 +60,12 @@ impl ProvidedCloudService {
             token_grpc_client: OnceCell::new(),
             project_grpc_client: OnceCell::new(),
             auth_grpc_client: OnceCell::new(),
+            default_project_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "default-project-cache",
+            ),
         }
     }
 }
@@ -107,6 +117,10 @@ impl CloudService for ProvidedCloudService {
             })
             .await
             .clone()
+    }
+
+    fn default_project_cache(&self) -> &Cache<Uuid, (), ProjectId, String> {
+        &self.default_project_cache
     }
 
     fn private_host(&self) -> String {
