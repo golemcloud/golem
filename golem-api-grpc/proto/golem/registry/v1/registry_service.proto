@@ -18,6 +18,8 @@ import "golem/component/dynamic_linked_instance.proto";
 import "golem/component/plugin_installation.proto";
 import "golem/component/plugin_registration.proto";
 import "golem/component/v1/component_error.proto";
+import "golem/limit/v1/batch_update_resource_limits.proto";
+import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
@@ -30,6 +32,7 @@ service RegistryService {
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
   rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
 
   // plugins api
   rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
@@ -79,6 +82,17 @@ message UpdateWorkerLimitRequest {
 }
 
 message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message BatchUpdateFuelUsageRequest {
+  repeated golem.registry.FuelUsageUpdate updates = 1;
+}
+
+message BatchUpdateFuelUsageResponse {
   oneof result {
     golem.common.Empty success = 1;
     RegistryServiceError error = 2;

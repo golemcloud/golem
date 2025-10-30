@@ -16,11 +16,6 @@ use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
-use golem_api_grpc::proto::golem::limit::v1::{
-    batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
-    BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
-};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
@@ -38,6 +33,9 @@ use tonic::codec::CompressionEncoding;
 use tonic::Request;
 use tracing::error;
 use uuid::Uuid;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::clients::RemoteServiceConfig;
 
 #[async_trait]
 pub trait ResourceLimits: Send + Sync {
@@ -87,9 +85,7 @@ pub struct CurrentResourceLimitsEntry {
 /// - caches this information for a given amount of time
 /// - periodically sends batched patches to the Cloud Services to update the account's resources as
 pub struct ResourceLimitsGrpc {
-    endpoint: Uri,
-    access_token: Uuid,
-    retry_config: RetryConfig,
+    client: GrpcRegistryService,
     current_limits: scc::HashMap<AccountId, CurrentResourceLimitsEntry>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -99,93 +95,18 @@ impl ResourceLimitsGrpc {
         &self,
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
-        let body = BatchUpdateResourceLimits {
-            updates: updates
-                .into_iter()
-                .map(|(k, v)| (k.0.to_string(), v))
-                .collect(),
-        };
-        with_retries(
-            "resource_limits",
-            "batch_update",
-            None,
-            &self.retry_config,
-            &(self.endpoint.clone(), self.access_token, body),
-            |(endpoint, access_token, body)| {
-                Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(endpoint.clone())
-                        .await?
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip);
-                    let request = authorised_request(
-                        BatchUpdateResourceLimitsRequest {
-                            resource_limits: Some(body.clone()),
-                        },
-                        access_token,
-                    );
-                    let response = client
-                        .batch_update_resource_limits(request)
-                        .await?
-                        .into_inner();
-
-                    match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(batch_update_resource_limits_response::Result::Success(_)) => Ok(()),
-                        Some(batch_update_resource_limits_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    }?;
-
-                    Ok(())
-                })
-            },
-            is_grpc_retriable,
-        )
-        .await
-        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
+        self.client.batch_update_fuel_usage(updates, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed updating fuel usage: {e}")))
     }
 
     async fn fetch_resource_limits(
         &self,
         account_id: &AccountId,
     ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
-        with_retries(
-            "resource_limits",
-            "fetch",
-            Some(format!("{account_id}")),
-            &self.retry_config,
-            &(self.endpoint.clone(), self.access_token, account_id.clone()),
-            |(url, access_token, account_id)| {
-                Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(url.clone())
-                        .await?
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip);
-                    let request = authorised_request(
-                        GetResourceLimitsRequest {
-                            account_id: Some(account_id.clone().into()),
-                        },
-                        access_token,
-                    );
-                    let response = client.get_resource_limits(request).await?.into_inner();
-
-                    let len = response.encoded_len();
-                    let limits = match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_resource_limits_response::Result::Success(limits)) => Ok(limits),
-                        Some(get_resource_limits_response::Result::Error(error)) => {
-                            Err(GrpcError::Domain(error))
-                        }
-                    }?;
-                    record_external_call_response_size_bytes("resource_limits", "fetch", len);
-
-                    Ok(limits.into())
-                })
-            },
-            is_grpc_retriable,
-        )
-        .await
-        .map_err(|_| WorkerExecutorError::InvalidAccount) // TODO: provide more info in the error result?
+        let limits = self.client.get_resource_limits(account_id, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed fetching resource limits: {e}")))?;
+        const _: () = {
+            assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
+        };
+        Ok(CurrentResourceLimits { fuel: limits.available_fuel, max_memory: limits.max_memory_per_worker as usize })
     }
 
     /// Takes all recorded fuel updates and resets them to 0
@@ -205,15 +126,18 @@ impl ResourceLimitsGrpc {
     }
 
     pub async fn new(
-        endpoint: Uri,
-        access_token: Uuid,
+        host: String,
+        port: u16,
         retry_config: RetryConfig,
         batch_update_interval: Duration,
     ) -> Arc<Self> {
+        let client = GrpcRegistryService::new(&RemoteServiceConfig {
+            host,
+            port,
+            retries: retry_config
+        });
         let svc = Self {
-            endpoint,
-            access_token,
-            retry_config,
+            client,
             current_limits: scc::HashMap::new(),
             background_handle: Arc::new(Mutex::new(None)),
         };
@@ -391,11 +315,8 @@ pub async fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits
     match config {
         ResourceLimitsConfig::Grpc(config) => {
             ResourceLimitsGrpc::new(
-                config.uri(),
-                config
-                    .access_token
-                    .parse::<Uuid>()
-                    .expect("Access token must be an UUID"),
+                config.host.clone(),
+                config.port,
                 config.retries.clone(),
                 config.batch_update_interval,
             )

@@ -20,7 +20,7 @@ use crate::model::plugin_registration::PluginRegistration;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_limit_response, AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -39,6 +39,9 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::info;
+use golem_api_grpc::proto::golem::limit::v1::BatchUpdateResourceLimits;
+use std::collections::HashMap;
+use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -67,6 +70,12 @@ pub trait RegistryService: Send + Sync {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError>;
+
+    async fn batch_update_fuel_usage(
+        &self,
+        updates: HashMap<AccountId, i64>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -330,6 +339,52 @@ impl RegistryService for GrpcRegistryService {
                         None => Err("Empty response".to_string().into()),
                         Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
                         Some(update_worker_limit_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn batch_update_fuel_usage(
+        &self,
+        updates: HashMap<AccountId, i64>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        let payload: Vec<FuelUsageUpdate> = updates.into_iter().map(|(k, v)| FuelUsageUpdate { account_id: Some(k.into()), value: v }).collect();
+
+        let result: Result<(), RegistryServiceClientError> = with_retries(
+            "limit",
+            "batch-update-fuel-usage",
+            None,
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                payload,
+                auth_ctx.clone(),
+            ),
+            |(client, payload, _auth_ctx)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("batch-update-fuel-usage", move |client| {
+                            let request = BatchUpdateFuelUsageRequest {
+                                updates: payload.clone()
+                            };
+
+                            Box::pin(client.batch_update_fuel_usage(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(batch_update_fuel_usage_response::Result::Success(_)) => Ok(()),
+                        Some(batch_update_fuel_usage_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
