@@ -16,7 +16,7 @@ use crate::app::context::{collect_sources_and_switch_to_app_root, find_main_sour
 use crate::context::Context;
 use crate::model::app::DEFAULT_CONFIG_FILE_NAME;
 use crate::validation::ValidatedResult;
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use rmcp::{ReadResourceError, ReadResourceResult, Resource, RpcError};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

@@ -16,7 +16,7 @@ use crate::command::{GolemCliCommand, GolemCliGlobalFlags};
 use crate::command_handler::{CommandHandler, CommandHandlerHooks};
 use crate::context::Context;
 use crate::hooks::NoHooks;
-use anyhow::{Context, Result};
+use anyhow::{Context as AnyhowContext, Result};
 use rmcp::{
     schemars::JsonSchema, CallToolError, CallToolRequest, CallToolResult, ListToolsResult,
     RpcError, Tool,
@@ -54,10 +54,12 @@ pub struct ExecuteGolemCliCommandTool {
     pub arguments: Vec<String>,
 }
 
-rmcp::tool_box!(
-    GolemTools,
-    [ExecuteGolemCommandTool, ExecuteGolemCliCommandTool]
-);
+rmcp::tool_box! {
+    GolemTools {
+        ExecuteGolemCommandTool,
+        ExecuteGolemCliCommandTool
+    }
+}
 
 pub struct GolemToolHandler {
     ctx: Arc<Context>,
