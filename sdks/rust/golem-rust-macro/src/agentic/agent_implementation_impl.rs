@@ -157,7 +157,17 @@ fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_mac
         quote! {
             let element_value_result = match &input {
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                    values.get(#i).expect("missing argument").clone()
+                    let value = values.get(#i);
+
+                    match value {
+                        Some(v) => Ok(v.clone()),
+                        None => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                            golem_rust::wasm_rpc::ValueAndType::new(
+                                golem_rust::wasm_rpc::Value::String(format!("Missing arguments at pos {}", #i)),
+                                golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                            ).into(),
+                        )),
+                    }
                 },
                 _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
                     golem_rust::wasm_rpc::ValueAndType::new(
@@ -169,7 +179,7 @@ fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_mac
 
             let element_value = element_value_result?;
 
-            let wit_value = match element_value {
+            let wit_value_result = match element_value {
                 golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
                 _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
                     golem_rust::wasm_rpc::ValueAndType::new(
@@ -178,6 +188,8 @@ fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_mac
                     ).into(),
                 ))
             };
+
+            let wit_value = wit_value_result?;
 
             let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).map_err(|e| {
                 golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(

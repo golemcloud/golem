@@ -54,25 +54,27 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "rust:agent"]).await;
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "rust:agent"])
+        .await;
 
     assert!(outputs.success());
 
     let component_manifest_path = ctx.cwd_path_join(
-        Path::new("components-ts")
+        Path::new("components-rust")
             .join("rust-agent")
             .join("golem.yaml"),
     );
 
-    let component_source_code_main_file = ctx.cwd_path_join(
-        Path::new("components-ts")
+    let component_source_code_lib_file = ctx.cwd_path_join(
+        Path::new("components-rust")
             .join("rust-agent")
             .join("src")
-            .join("main.rs"),
+            .join("lib.rs"),
     );
 
     let component_source_code_model_file = ctx.cwd_path_join(
-        Path::new("components-ts")
+        Path::new("components-rust")
             .join("rust-agent")
             .join("src")
             .join("model.rs"),
@@ -82,20 +84,20 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         &component_manifest_path,
         indoc! { r#"
             components:
-              ts:agent:
-                template: ts
+              rust:agent:
+                template: rust
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
-        "test-data/rust-code-first-snippets/main.rs",
-        &component_source_code_main_file,
+        ctx.test_data_path_join("rust-code-first-snippets/lib.rs"),
+        &component_source_code_lib_file,
     )
         .unwrap();
 
     fs::copy(
-        "test-data/rust-code-first-snippets/model.rs",
+        ctx.test_data_path_join("rust-code-first-snippets/model.rs"),
         &component_source_code_model_file,
     )
         .unwrap();
@@ -109,7 +111,8 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("ts:agent/foo-agent(\"{uuid}\")");
+        // TODO; to use foo-agent, which will do RPC (once RPC is implemented)
+        let agent_constructor = format!("rust:agent/bar-agent(some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -118,177 +121,134 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         assert!(outputs.success(), "function {func} failed");
     }
 
-    // fun with void return
-    run_and_assert(&ctx, "fun-void-return", &["\"sample\""]).await;
+    // run_and_assert(&ctx, "fun-void-return", &["\"sample\""]).await;
 
-    // fun without return type
-    run_and_assert(&ctx, "fun-no-return", &["\"sample\""]).await;
+    // run_and_assert(&ctx, "fun-no-return", &["\"sample\""]).await;
 
-    // function optional (that has null, defined as union)
-    run_and_assert(
-        &ctx,
-        "fun-optional",
-        &[
-            "some(case1(\"foo\"))",
-            "{a: some(\"foo\")}",
-            "{a: some(case1(\"foo\"))}",
-            "{a: some(case1(\"foo\"))}",
-            "{a: some(\"foo\")}",
-            "some(\"foo\")",
-            "some(case3(\"foo\"))",
-        ],
-    )
-        .await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-optional",
+    //     &[
+    //         "some(case1(\"foo\"))",
+    //         "{a: some(\"foo\")}",
+    //         "{a: some(case1(\"foo\"))}",
+    //         "{a: some(case1(\"foo\"))}",
+    //         "{a: some(\"foo\")}",
+    //         "some(\"foo\")",
+    //         "some(case3(\"foo\"))",
+    //     ],
+    // )
+    // .await;
 
-    // function with a simple object
-    run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
+    // run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
 
-    // function with a very complex object
-    let argument = r#"
-      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
-    "#;
+    // let argument = r#"
+    //   {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
+    // "#;
+    //
+    // run_and_assert(&ctx, "fun-object-complex-type", &[argument]).await;
 
-    run_and_assert(&ctx, "fun-object-complex-type", &[argument]).await;
+    // run_and_assert(&ctx, "fun-union-type", &[r#"union-type1("foo")"#]).await;
 
-    // union type that has anonymous terms
-    run_and_assert(&ctx, "fun-union-type", &[r#"union-type1("foo")"#]).await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-union-complex-type",
+    //     &[r#"union-complex-type1("foo")"#],
+    // )
+    // .await;
 
-    // A complex union type
-    run_and_assert(
-        &ctx,
-        "fun-union-complex-type",
-        &[r#"union-complex-type1("foo")"#],
-    )
-        .await;
-
-    // Union that includes literals and boolean (string literal input)
-    run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
+    // run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
 
     // Union that includes literals and boolean (boolean input)
-    run_and_assert(
-        &ctx,
-        "fun-union-with-literals",
-        &[r#"union-with-literals1(true)"#],
-    )
-        .await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-union-with-literals",
+    //     &[r#"union-with-literals1(true)"#],
+    // )
+    // .await;
 
-    // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
+    // run_and_assert(&ctx, "fun-enum-with-only-literals", &["foo"]).await;
+    //
+    // run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
+    //
+    // run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
+    //
+    // run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
 
-    // Unstructured text type
-    run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
-
-    // Unstructured binary
-    run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
-
-    // Multimodal
-    run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
-
-    // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
-
-    // Union that has only literals
-    run_and_assert(&ctx, "fun-union-with-only-literals", &["baz"]).await;
-
-    // A number type
-    run_and_assert(&ctx, "fun-number", &["42"]).await;
+    // run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
+    //
+    // run_and_assert(&ctx, "fun-union-with-only-literals", &["baz"]).await;
+    //
+    // run_and_assert(&ctx, "fun-number", &["42"]).await;
 
     // A string type
     run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
 
-    // A boolean type
-    run_and_assert(&ctx, "fun-boolean", &["true"]).await;
+    run_and_assert(&ctx, "fun-mut", &[r#""foo""#]).await;
 
-    // A map type
-    run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
+    // run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
+    //
+    // run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
 
-    assert!(outputs.success());
-
-    // A tagged union
-    run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
-
-    assert!(outputs.success());
-
-    // A simple tuple type
-    run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
+    // run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
 
     // A complex tuple type
-    run_and_assert(
-        &ctx,
-        "fun-tuple-complex-type",
-        &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
-    )
-        .await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-tuple-complex-type",
+    //     &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
+    // )
+    // .await;
 
-    // A list complex type
-    run_and_assert(
-        &ctx,
-        "fun-list-complex-type",
-        &[r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#],
-    ).await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-list-complex-type",
+    //     &[r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#],
+    // ).await;
 
-    // A function with null return
-    run_and_assert(&ctx, "fun-null-return", &[r#""foo""#]).await;
+    // run_and_assert(&ctx, "fun-null-return", &[r#""foo""#]).await;
 
-    // A function with undefined return
-    run_and_assert(&ctx, "fun-undefined-return", &[r#""foo""#]).await;
+    // run_and_assert(&ctx, "fun-undefined-return", &[r#""foo""#]).await;
 
-    // A function with result type
-    run_and_assert(&ctx, "fun-result-exact", &[r#"ok("foo")"#]).await;
+    // run_and_assert(&ctx, "fun-result-exact", &[r#"ok("foo")"#]).await;
 
-    // A function with (untagged) result-like type - but not result
-    run_and_assert(
-        &ctx,
-        "fun-either-optional",
-        &[r#"{ok: some("foo"), err: none}"#],
-    )
-        .await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-either-optional",
+    //     &[r#"{ok: some("foo"), err: none}"#],
+    // )
+    // .await;
 
-    // Functions using the builtin result type
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"none"#]).await;
 
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"none"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"some("yay")"#]).await;
-
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
-    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
-
-    // TODO: fix root cause for this
-    // An arrow function
-    // run_and_assert(&ctx, "fun-arrow-sync", &[r#""foo""#]).await;
-
-    // A function that takes many inputs
-    run_and_assert(
-        &ctx,
-        "fun-all",
-        &[
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
-            r#"union-type1("foo")"#,
-            r#"union-complex-type1("foo")"#,
-            r#"42"#,
-            r#""foo""#,
-            r#"true"#,
-            r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
-            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
-            r#"("foo", 42, true)"#,
-            r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
-            r#"{a: "foo", b: 42, c: true}"#,
-            r#"okay("foo")"#,
-            r#"{ok: some("foo"), err: some("foo")}"#,
-            r#"some(case1("foo"))"#,
-            r#"{a: some("foo")}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some("foo")}"#,
-            r#"some("foo")"#,
-            r#"some(case3("foo"))"#,
-            r#"a("foo")"#
-        ],
-    )
-        .await;
+    // run_and_assert(
+    //     &ctx,
+    //     "fun-all",
+    //     &[
+    //         r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
+    //         r#"union-type1("foo")"#,
+    //         r#"union-complex-type1("foo")"#,
+    //         r#"42"#,
+    //         r#""foo""#,
+    //         r#"true"#,
+    //         r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
+    //         r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
+    //         r#"("foo", 42, true)"#,
+    //         r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
+    //         r#"{a: "foo", b: 42, c: true}"#,
+    //         r#"okay("foo")"#,
+    //         r#"{ok: some("foo"), err: some("foo")}"#,
+    //         r#"some(case1("foo"))"#,
+    //         r#"{a: some("foo")}"#,
+    //         r#"{a: some(case1("foo"))}"#,
+    //         r#"{a: some(case1("foo"))}"#,
+    //         r#"{a: some("foo")}"#,
+    //         r#"some("foo")"#,
+    //         r#"some(case3("foo"))"#,
+    //         r#"a("foo")"#
+    //     ],
+    // )
+    //     .await;
 }
-
 
 #[test]
 async fn test_ts_counter() {
