@@ -16,8 +16,6 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
 
-use crate::agentic::helpers::to_kebab_case;
-
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
 
@@ -181,11 +179,9 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     };
 
-    let kebab_case_type_name = to_kebab_case(&type_name);
-
     quote! {
         ::golem_rust::golem_agentic::golem::agent::common::AgentType {
-            type_name: #kebab_case_type_name.to_string(),
+            type_name: #type_name.to_string(),
             description: "".to_string(),
             methods: vec![#(#methods),*],
             dependencies: vec![],

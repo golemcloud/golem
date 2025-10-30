@@ -26,7 +26,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
     let self_ty = &impl_block.self_ty;
-    let (trait_name, trait_name_str_raw, trait_name_str_kebab) = extract_trait_name(&impl_block);
+    let (trait_name_ident, trait_name_str_raw) = extract_trait_name(&impl_block);
 
     let (match_arms, constructor_method) = build_match_arms(&impl_block);
     let constructor_method = match constructor_method {
@@ -47,13 +47,13 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
         &match_arms,
-        &trait_name_str_kebab,
+        &trait_name_str_raw,
         &impl_generics,
         &ty_generics,
         where_clause,
     );
     let constructor_param_extraction = generate_constructor_extraction(&ctor_params);
-    let initiator_ident = format_ident!("{}Initiator", trait_name);
+    let initiator_ident = format_ident!("{}Initiator", trait_name_ident);
     let base_initiator_impl = generate_initiator_impl(
         &initiator_ident,
         self_ty,
@@ -61,11 +61,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &ctor_params,
         &constructor_param_extraction,
     );
-    let register_initiator_fn = generate_register_initiator_fn(
-        &trait_name_str_raw,
-        &trait_name_str_kebab,
-        &initiator_ident,
-    );
+    let register_initiator_fn =
+        generate_register_initiator_fn(&trait_name_str_raw, &initiator_ident);
 
     quote! {
         #impl_block
@@ -80,7 +77,7 @@ fn parse_impl_block(item: &TokenStream) -> syn::Result<ItemImpl> {
     syn::parse::<ItemImpl>(item.clone())
 }
 
-fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String, String) {
+fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String) {
     let trait_name = if let Some((_bang, path, _for_token)) = &impl_block.trait_ {
         path.segments.last().unwrap().ident.clone()
     } else {
@@ -88,8 +85,7 @@ fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String, String
     };
 
     let trait_name_str_raw = trait_name.to_string();
-    let trait_name_str_kebab = to_kebab_case(&trait_name_str_raw);
-    (trait_name, trait_name_str_raw, trait_name_str_kebab)
+    (trait_name, trait_name_str_raw)
 }
 
 fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
@@ -206,7 +202,7 @@ fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_mac
 fn generate_base_agent_impl(
     impl_block: &syn::ItemImpl,
     match_arms: &[proc_macro2::TokenStream],
-    trait_name_str_kebab: &str,
+    trait_name_str: &str,
     impl_generics: &syn::ImplGenerics<'_>,
     ty_generics: &syn::TypeGenerics<'_>,
     where_clause: Option<&syn::WhereClause>,
@@ -233,7 +229,7 @@ fn generate_base_agent_impl(
 
             fn get_definition(&self)
                 -> ::golem_rust::golem_agentic::golem::agent::common::AgentType {
-                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str_kebab.to_string()))
+                golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str.to_string()))
                     .expect("Agent definition not found")
             }
         }
@@ -315,7 +311,6 @@ fn generate_initiator_impl(
 
 fn generate_register_initiator_fn(
     trait_name_str_raw: &str,
-    trait_name_str_kebab: &str,
     initiator_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
     let register_initiator_fn_name = format_ident!(
@@ -327,7 +322,7 @@ fn generate_register_initiator_fn(
         #[::ctor::ctor]
         fn #register_initiator_fn_name() {
             golem_rust::agentic::register_agent_initiator(
-                #trait_name_str_kebab.to_string().as_str(),
+                #trait_name_str_raw.to_string().as_str(),
                 Box::new(#initiator_ident)
             );
         }
