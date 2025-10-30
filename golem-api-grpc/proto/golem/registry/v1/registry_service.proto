@@ -34,10 +34,10 @@ service RegistryService {
   rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
 
   // components api
-  rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
   rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
   rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
+  rpc GetAllComponentVersions (GetAllComponentVersionsRequest) returns (GetAllComponentVersionsResponse);
 
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
@@ -98,23 +98,6 @@ message GetPluginRegistrationByIdSuccessResponse {
   golem.component.PluginRegistration plugin = 1;
 }
 
-message GetComponentsRequest {
-  golem.common.EnvironmentId environment_id = 1;
-  optional string component_name = 2;
-  golem.auth.AuthCtx auth_ctx = 3;
-}
-
-message GetComponentsResponse {
-  oneof result {
-    GetComponentsSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message GetComponentsSuccessResponse {
-  repeated golem.component.Component components = 1;
-}
-
 message DownloadComponentRequest {
   golem.component.ComponentId componentId = 1;
   optional uint64 version = 2;
@@ -149,6 +132,23 @@ message GetComponentMetadataResponse {
 message GetComponentMetadataSuccessResponse {
   optional golem.component.Component component = 1;
 }
+
+message GetAllComponentVersionsRequest {
+  golem.component.ComponentId componentId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message GetAllComponentVersionsResponse {
+  oneof result {
+    GetAllComponentVersionsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAllComponentVersionsSuccessResponse {
+  repeated golem.component.Component components = 1;
+}
+
 
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;

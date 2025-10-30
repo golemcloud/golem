@@ -55,7 +55,7 @@ impl SafeDisplay for AuthServiceError {
     }
 }
 
-error_forwarding!(AuthServiceError);
+error_forwarding!(AuthServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
@@ -79,7 +79,7 @@ impl AuthService for RemoteAuthService {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
         self.client.authenticate_token(token).await.map_err(|e| match e {
             RegistryServiceError::CouldNotAuthenticate(_) => AuthServiceError::CouldNotAuthenticate,
-            other => AuthServiceError::InternalError(other.into())
+            other => other.into()
         })
     }
 }

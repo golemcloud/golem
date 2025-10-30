@@ -55,7 +55,7 @@ impl SafeDisplay for LimitServiceError {
     }
 }
 
-error_forwarding!(LimitServiceError);
+error_forwarding!(LimitServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait LimitService: Send + Sync {
@@ -118,7 +118,7 @@ impl LimitService for RemoteLimitService {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), LimitServiceError>  {
         self.client.update_worker_connection_limit(account_id, worker_id, value, &AuthCtx::System).await.map_err(|e| match e {
             RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
             other => other.into()

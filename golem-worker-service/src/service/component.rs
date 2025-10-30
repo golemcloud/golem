@@ -40,8 +40,9 @@ use std::sync::Arc;
 use golem_common::model::component::ComponentName;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::cache::SimpleCache;
+use anyhow::anyhow;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ComponentServiceError {
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -58,7 +59,7 @@ impl SafeDisplay for ComponentServiceError {
     }
 }
 
-error_forwarding!(ComponentServiceError);
+error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
@@ -74,11 +75,17 @@ pub trait ComponentService: Send + Sync {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
+
+    async fn get_all_versions(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<ComponentDto>, ComponentServiceError>;
 }
 
 pub struct CachedComponentService {
     inner: Arc<dyn ComponentService>,
-    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, ComponentServiceError>,
+    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<ComponentServiceError>>,
 }
 
 impl CachedComponentService {
@@ -109,8 +116,13 @@ impl ComponentService for CachedComponentService {
                 inner_clone
                     .get_by_version(component_id, version, auth_ctx)
                     .await
+                    .map_err(Arc::new)
             })
             .await
+            .map_err(|e| match &*e {
+                ComponentServiceError::InternalError(inner) => ComponentServiceError::InternalError(anyhow!("Cached error: {inner}")),
+                ComponentServiceError::ComponentNotFound => ComponentServiceError::ComponentNotFound
+            })
     }
 
     async fn get_latest_by_id(
@@ -119,6 +131,14 @@ impl ComponentService for CachedComponentService {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
         self.inner.get_latest_by_id(component_id, auth_ctx).await
+    }
+
+    async fn get_all_versions(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
+        self.inner.get_all_versions(component_id, auth_ctx).await
     }
 }
 
@@ -154,6 +174,17 @@ impl ComponentService for RemoteComponentService {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
         self.client.get_latest_component_metadata(component_id, auth_ctx).await.map_err(|e| match e {
+            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+            other => other.into()
+        })
+    }
+
+    async fn get_all_versions(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
+        self.client.get_all_component_versions(component_id, auth_ctx).await.map_err(|e| match e {
             RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
             other => other.into()
         })

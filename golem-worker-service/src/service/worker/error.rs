@@ -89,6 +89,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             | WorkerServiceError::AccountIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)
             | WorkerServiceError::FileNotFound(_)
+            | WorkerServiceError::Component(ComponentServiceError::ComponentNotFound)
             | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
                 Self::NotFound(ErrorBody {
                     error: error.to_safe_string(),
@@ -101,10 +102,17 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
                 })
             }
 
+            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_)) => {
+                Self::LimitExceeded(ErrorBody {
+                    error: error.to_safe_string(),
+                })
+            }
+
             WorkerServiceError::Internal(_)
             | WorkerServiceError::InternalCallError(_)
             | WorkerServiceError::LimitError(_)
             | WorkerServiceError::AuthError(_)
+            | WorkerServiceError::Component(ComponentServiceError::InternalError(_))
             => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {
@@ -115,14 +123,6 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
 
             WorkerServiceError::GolemError(worker_execution_error) => {
                 Self::InternalError(worker_execution_error.into())
-            }
-
-            WorkerServiceError::Component(component) => component.into(),
-
-            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_)) => {
-                Self::LimitExceeded(ErrorBody {
-                    error: error.to_safe_string(),
-                })
             }
         }
     }

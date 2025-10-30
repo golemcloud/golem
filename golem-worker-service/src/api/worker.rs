@@ -1537,9 +1537,8 @@ impl WorkerApi {
         // Fallback for previous versions
         let all_component_versions = self
             .component_service
-            .get_all_by_name(
-                &latest_component_version.component_name,
-                &latest_component_version.environment_id,
+            .get_all_versions(
+                &component_id,
                 auth,
             )
             .await

@@ -24,7 +24,7 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_component_metadata_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetComponentMetadataRequest, GetComponentsRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
 use crate::model::ResourceLimits;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
@@ -35,6 +35,8 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::agent::RegisteredAgentType;
+use golem_common::IntoAnyhow;
+
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
 pub trait RegistryService: Send + Sync {
@@ -72,13 +74,6 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<PluginRegistration, RegistryServiceError>;
 
     // components api
-    async fn resolve_component_by_name(
-        &self,
-        environment_id: &EnvironmentId,
-        component_name: &str,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Option<ComponentDto>, RegistryServiceError>;
-
     async fn download_component(
         &self,
         component_id: &ComponentId,
@@ -98,6 +93,12 @@ pub trait RegistryService: Send + Sync {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
+
+    async fn get_all_component_versions(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<ComponentDto>, RegistryServiceError>;
 
     // agent types api
     async fn get_all_agent_types(
@@ -373,62 +374,6 @@ impl RegistryService for GrpcRegistryService {
         result.map_err(|e| e.into())
     }
 
-    async fn resolve_component_by_name(
-        &self,
-        environment_id: &EnvironmentId,
-        component_name: &str,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Option<ComponentDto>, RegistryServiceError> {
-        let result: Result<Option<ComponentDto>, RegistryServiceClientError> = with_retries(
-            "components",
-            "resolve-component-by-name",
-            Some(format!("{environment_id} - {component_name}")),
-            &self.retry_config,
-            &(
-                self.client.clone(),
-                environment_id.clone(),
-                component_name.to_string(),
-                auth_ctx.clone()
-            ),
-            |(client, environment_id, component_name, auth_ctx)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("resolve-component-by-name", move |client| {
-                            let request = GetComponentsRequest {
-                                environment_id: Some(environment_id.clone().into()),
-                                component_name: Some(component_name.clone()),
-                                auth_ctx: Some(auth_ctx.clone().into()),
-                            };
-
-                            Box::pin(client.get_components(request))
-                        })
-                        .await?
-                        .into_inner();
-
-                    match response.result {
-                        None => Err(RegistryServiceClientError::empty_response()),
-                        Some(get_components_response::Result::Success(payload)) => {
-                            let converted = payload
-                                .components
-                                .into_iter()
-                                .next()
-                                .map(|c| ComponentDto::try_from(c))
-                                .transpose()?;
-                            Ok(converted)
-                        },
-                        Some(get_components_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
-                    }
-                })
-            },
-            RegistryServiceClientError::is_retriable,
-        )
-        .await;
-
-        result.map_err(|e| e.into())
-    }
-
     async fn download_component(
         &self,
         component_id: &ComponentId,
@@ -586,6 +531,58 @@ impl RegistryService for GrpcRegistryService {
         result.map_err(|e| e.into())
     }
 
+    async fn get_all_component_versions(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<Vec<ComponentDto>, RegistryServiceError> {
+        let result: Result<Vec<ComponentDto>, RegistryServiceClientError> = with_retries(
+            "components",
+            "get-all-component-versions",
+            Some(format!("{component_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_id.clone(),
+                auth_ctx.clone()
+            ),
+            |(client, component_id, auth_ctx)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("resolve-component-by-name", move |client| {
+                            let request = GetAllComponentVersionsRequest {
+                                component_id: Some(component_id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
+                            };
+
+                            Box::pin(client.get_all_component_versions(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_all_component_versions_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .components
+                                .into_iter()
+                                .map(|c| ComponentDto::try_from(c))
+                                .collect::<Result<_, _>>()?;
+                            Ok(converted)
+                        },
+                        Some(get_all_component_versions_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
     async fn get_all_agent_types(
         &self,
         environment_id: &EnvironmentId,
@@ -716,37 +713,11 @@ impl RegistryServiceError {
     }
 }
 
-// impl SafeDisplay for AuthServiceError {
-//     fn to_safe_string(&self) -> String {
-//         match self {
-//             AuthServiceError::Unauthorized(_) => self.to_string(),
-//             AuthServiceError::Forbidden(_) => self.to_string(),
-//             AuthServiceError::InternalClientError(_) => self.to_string(),
-//         }
-//     }
-// }
-
-// impl From<AuthServiceError> for golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
-//     fn from(value: AuthServiceError) -> Self {
-//         let error = match value {
-//             AuthServiceError::Unauthorized(_) => worker_error::Error::Unauthorized(ErrorBody {
-//                 error: value.to_string(),
-//             }),
-//             AuthServiceError::Forbidden(_) => worker_error::Error::Unauthorized(ErrorBody {
-//                 error: value.to_string(),
-//             }),
-//             // TODO: this used to be unauthorized. How do we handle internal server errors?
-//             AuthServiceError::InternalClientError(message) => {
-//                 worker_error::Error::InternalError(WorkerExecutionError {
-//                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-//                         details: message,
-//                     })),
-//                 })
-//             }
-//         };
-//         golem_api_grpc::proto::golem::worker::v1::WorkerError { error: Some(error) }
-//     }
-// }
+impl IntoAnyhow for RegistryServiceError {
+    fn into_anyhow(self) -> anyhow::Error {
+        anyhow::Error::from(self).context("RegistryServiceError")
+    }
+}
 
 #[derive(Debug)]
 enum RegistryServiceClientError {
