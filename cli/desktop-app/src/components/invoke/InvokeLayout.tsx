@@ -2,9 +2,15 @@ import { Button } from "@/components/ui/button";
 import { ComponentExportFunction, Export, Typ } from "@/types/component.ts";
 import { cn } from "@/lib/utils";
 import { ClipboardCopy, Presentation, TableIcon } from "lucide-react";
-import { DynamicForm } from "@/pages/workers/details/dynamic-form.tsx";
+import { DynamicForm } from "@/pages/agents/details/dynamic-form.tsx";
 import { SectionCard } from "./SectionCard";
-import { parseToJsonEditor, parseTypesData, RawTypesInput } from "@/lib/worker";
+import {
+  parseToJsonEditor,
+  parseTypesData,
+  RawTypesInput,
+  filterExportsForInvoke,
+} from "@/lib/agent";
+import { useParams } from "react-router-dom";
 
 export interface InvokeParams {
   params: Array<{
@@ -54,6 +60,10 @@ export function InvokeLayout({
   onInvoke,
   copyToClipboard,
 }: InvokeLayoutProps) {
+  // get agent name from url
+  const { agentName = "" } = useParams();
+  const filteredExports = filterExportsForInvoke(parsedExports, agentName);
+
   return (
     <div className="flex">
       <div className="flex-1 flex flex-col bg-background">
@@ -61,7 +71,7 @@ export function InvokeLayout({
           {/* Sidebar with exports */}
           <div className="border-r px-8 py-4 min-w-[300px]">
             <div className="flex flex-col gap-4 overflow-scroll h-[85vh]">
-              {parsedExports.map((exportItem, index) => (
+              {filteredExports.map((exportItem, index) => (
                 <div key={exportItem.name + index} className="border-b pb-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-neutral-600 font-bold pb-4">
@@ -69,27 +79,26 @@ export function InvokeLayout({
                     </span>
                   </div>
                   <ul className="space-y-1">
-                    {(exportItem?.functions || []).length > 0 &&
-                      (exportItem.functions || []).map(
-                        (fn: ComponentExportFunction) => (
-                          <li key={fn.name}>
-                            <Button
-                              variant="ghost"
-                              onClick={() =>
-                                onNavigateToFunction(exportItem.name, fn.name)
-                              }
-                              className={cn(
-                                "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
-                                urlFn === fn.name
-                                  ? "bg-gray-300 dark:bg-neutral-800 text-gray-900 dark:text-gray-100"
-                                  : "hover:bg-gray-200 dark:hover:bg-neutral-700 text-gray-700 dark:text-gray-300",
-                              )}
-                            >
-                              <span>{fn.name}</span>
-                            </Button>
-                          </li>
-                        ),
-                      )}
+                    {exportItem.functions?.map(
+                      (fn: ComponentExportFunction) => (
+                        <li key={fn.name}>
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              onNavigateToFunction(exportItem.name, fn.name)
+                            }
+                            className={cn(
+                              "w-full flex items-center px-3 py-2 rounded-md text-sm font-medium justify-start",
+                              urlFn === fn.name
+                                ? "bg-gray-300 dark:bg-neutral-800 text-gray-900 dark:text-gray-100"
+                                : "hover:bg-gray-200 dark:hover:bg-neutral-700 text-gray-700 dark:text-gray-300",
+                            )}
+                          >
+                            <span>{fn.name}</span>
+                          </Button>
+                        </li>
+                      ),
+                    )}
                   </ul>
                 </div>
               ))}

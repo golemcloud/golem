@@ -51,7 +51,7 @@ describe("Service", () => {
     it("should initialize all services", () => {
       expect(service.cliService).toBeDefined();
       expect(service.componentService).toBeDefined();
-      expect(service.workerService).toBeDefined();
+      expect(service.agentService).toBeDefined();
       expect(service.apiService).toBeDefined();
       expect(service.pluginService).toBeDefined();
       expect(service.deploymentService).toBeDefined();

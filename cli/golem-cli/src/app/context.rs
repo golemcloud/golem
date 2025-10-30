@@ -167,6 +167,7 @@ impl ApplicationContext {
                 &application,
                 config.build_profile.as_ref(),
                 &tools_with_ensured_common_deps,
+                config.enable_wasmtime_fs_cache,
             )
             .await;
 
@@ -237,6 +238,7 @@ impl ApplicationContext {
                 &self.application,
                 self.build_profile(),
                 &self.tools_with_ensured_common_deps,
+                self.config.enable_wasmtime_fs_cache,
             )
             .await
             .map(|wit| {

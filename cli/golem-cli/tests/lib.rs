@@ -22,7 +22,7 @@ mod stubgen;
 #[cfg(feature = "mcp")]
 mod mcp_server;
 
-tag_suite!(app, app);
+tag_suite!(stubgen, group1);
 
 #[cfg(feature = "mcp")]
 tag_suite!(mcp_server, mcp_server);

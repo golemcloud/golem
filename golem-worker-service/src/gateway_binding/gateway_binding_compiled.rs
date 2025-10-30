@@ -447,7 +447,7 @@ mod internal {
         let response_rib_output = worker_binding
             .response_compiled
             .rib_output
-            .map(golem_api_grpc::proto::golem::rib::RibOutputType::from);
+            .map(rib::proto::golem::rib::RibOutputType::from);
 
         let worker_functions_in_response = worker_binding
             .response_compiled
@@ -527,7 +527,7 @@ mod internal {
         let response_rib_output = worker_binding
             .response_compiled
             .rib_output
-            .map(golem_api_grpc::proto::golem::rib::RibOutputType::from);
+            .map(rib::proto::golem::rib::RibOutputType::from);
 
         let worker_functions_in_response = worker_binding
             .response_compiled

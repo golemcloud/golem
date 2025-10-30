@@ -19,7 +19,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use std::future::Future;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -53,7 +53,11 @@ async fn spawning_many_workers_that_sleep(
         (result, duration)
     }
 
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
@@ -145,7 +149,11 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
         (result, duration)
     }
 
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let component_id = executor.component("clocks").store().await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;

@@ -24,8 +24,8 @@ use golem_common::model::{ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 use http::StatusCode;
 use poem::web::headers::ContentType;
 use rib::RibResult;
@@ -232,7 +232,7 @@ impl DefaultFileServerBindingHandler {
                 .map_err(FileServerBindingError::ComponentServiceError)?
         } else {
             self.component_service
-                .get_latest(component_id, &self.auth_ctx)
+                .get_latest_by_id(component_id, &self.auth_ctx)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         };
@@ -289,16 +289,15 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         } else {
             // Read write files need to be fetched from a running worker.
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
-            WorkerId::validate_worker_name(worker_name).map_err(|e| {
+
+            let worker_id = WorkerId::from_component_metadata_and_worker_id(
+                component_id.clone(),
+                &component_metadata.metadata,
+                worker_name,
+            )
+            .map_err(|e| {
                 FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
             })?;
-
-            let component_id = component_id.clone();
-
-            let worker_id = WorkerId {
-                component_id,
-                worker_name: worker_name.to_string(),
-            };
 
             let stream = self
                 .worker_service

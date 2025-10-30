@@ -231,16 +231,16 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("get_last_index");
 
         OplogIndex::from_u64(
-        self.indexed_storage
-            .with_entity("oplog", "get_last_index", "entry")
-            .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to get last oplog index for worker {owned_worker_id} from indexed storage: {err}"
-                )
-            })
-            .unwrap_or_default()
+            self.indexed_storage
+                .with_entity("oplog", "get_last_index", "entry")
+                .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to get last oplog index for worker {owned_worker_id} from indexed storage: {err}"
+                    )
+                })
+                .unwrap_or_default()
         )
     }
 
@@ -448,6 +448,7 @@ impl PrimaryOplog {
                 last_committed_idx: last_oplog_idx,
                 last_oplog_idx,
                 owned_worker_id,
+                last_added_non_hint_entry: None,
             })),
             key,
             close: Some(close),
@@ -466,6 +467,7 @@ struct PrimaryOplogState {
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     owned_worker_id: OwnedWorkerId,
+    last_added_non_hint_entry: Option<OplogIndex>,
 }
 
 impl PrimaryOplogState {
@@ -496,14 +498,19 @@ impl PrimaryOplogState {
         result
     }
 
-    async fn add(&mut self, entry: OplogEntry) {
+    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
 
+        let is_hint = entry.is_hint();
         self.buffer.push_back(entry);
         if self.buffer.len() > self.max_operations_before_commit as usize {
             self.commit().await;
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
+        if !is_hint {
+            self.last_added_non_hint_entry = Some(self.last_oplog_idx);
+        }
+        self.last_oplog_idx
     }
 
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -621,18 +628,20 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
-    async fn add(&self, entry: OplogEntry) {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let mut state = self.state.lock().await;
         state.add(entry).await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         let state = self.state.lock().await;
+        let before = state.length().await;
         state.drop_prefix(last_dropped_id).await;
         let remaining = state.length().await;
         if remaining == 0 {
             state.delete().await;
         }
+        before - remaining
     }
 
     async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -643,6 +652,11 @@ impl Oplog for PrimaryOplog {
     async fn current_oplog_index(&self) -> OplogIndex {
         let state = self.state.lock().await;
         state.last_oplog_idx
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        let state = self.state.lock().await;
+        state.last_added_non_hint_entry
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

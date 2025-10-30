@@ -109,6 +109,7 @@ impl Guest for Component {
 
     fn idempotence_flag(enabled: bool) {
         let original = get_idempotence_mode();
+        let original_persistence_level = get_oplog_persistence_level();
         if original != enabled {
             set_idempotence_mode(enabled);
             println!("Changed idempotence mode from {original} to {enabled}");
@@ -117,7 +118,9 @@ impl Guest for Component {
         let future_response = send_remote_side_effect("1");
 
         let begin = mark_begin_operation();
+        set_oplog_persistence_level(PersistenceLevel::PersistNothing);
         let decision = remote_call(1); // will return false on the 2nd call
+        set_oplog_persistence_level(original_persistence_level);
         if decision {
             panic!("crash 1");
         }

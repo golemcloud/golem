@@ -750,11 +750,11 @@ mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn add(&self, _entry: OplogEntry) {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unimplemented!()
         }
 
-        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unimplemented!()
         }
 
@@ -763,6 +763,10 @@ mod tests {
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
             unimplemented!()
         }
 

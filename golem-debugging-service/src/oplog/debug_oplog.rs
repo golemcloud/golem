@@ -69,9 +69,13 @@ pub struct DebugOplogState {
 impl Oplog for DebugOplog {
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
-    async fn add(&self, _entry: OplogEntry) {}
+    async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        OplogIndex::NONE
+    }
 
-    async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {}
+    async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+        0
+    }
 
     // There is no need to commit anything to the indexed storage
     async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -95,6 +99,10 @@ impl Oplog for DebugOplog {
         } else {
             self.inner.current_oplog_index().await
         }
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        None
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

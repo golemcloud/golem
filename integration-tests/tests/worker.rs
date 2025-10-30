@@ -27,15 +27,12 @@ use golem_common::model::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
-    analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
-};
-use golem_wasm_rpc::IntoValue;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
+use golem_wasm::IntoValue;
+use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
@@ -812,14 +809,19 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("5m")]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;
-    let host_http_port = 8585;
 
     let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
     let polling_worker_ids_clone = polling_worker_ids.clone();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let response = Arc::new(Mutex::new("running".to_string()));
+    let response_clone = response.clone();
 
     let http_server = tokio::spawn(async move {
         let route = Router::new().route(
@@ -837,19 +839,12 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
                         let mut ids = polling_worker_ids_clone.lock().unwrap();
                         ids.insert(worker_id.clone());
                     }
-                    "initial"
+                    response_clone.lock().unwrap().clone()
                 }
                 .in_current_span()
             }),
         );
 
-        let listener = tokio::net::TcpListener::bind(
-            format!("0.0.0.0:{host_http_port}")
-                .parse::<SocketAddr>()
-                .unwrap(),
-        )
-        .await
-        .unwrap();
         axum::serve(listener, route).await.unwrap();
     });
 
@@ -878,7 +873,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
             .invoke(
                 worker_id,
                 "golem:it/api.{start-polling}",
-                vec!["first".into_value_and_type()],
+                vec!["stop".into_value_and_type()],
             )
             .await;
         admin
@@ -971,9 +966,18 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
             break;
         }
     }
-    // At least one worker should be running, we cannot guarantee that all of them are running simultaneously
+    // At least one worker should be running; we cannot guarantee that all of them are running simultaneously
     check!(enum_results.len() <= workers_count as usize);
     check!(enum_results.len() > 0);
+
+    *response.lock().unwrap() = "stop".to_string();
+
+    for worker_id in &worker_ids {
+        admin
+            .wait_for_status(worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+            .await;
+        admin.delete_worker(worker_id).await;
+    }
 
     http_server.abort();
 }

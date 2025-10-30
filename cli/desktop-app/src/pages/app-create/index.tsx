@@ -29,17 +29,7 @@ import {
 } from "@/components/ui/tooltip";
 import { FolderOpen, Info, ArrowLeft, Sparkles } from "lucide-react";
 
-const LANGUAGE_OPTIONS = [
-  { value: "c", label: "C" },
-  { value: "go", label: "Go" },
-  { value: "js", label: "JavaScript" },
-  { value: "python", label: "Python" },
-  { value: "rust", label: "Rust" },
-  { value: "ts", label: "TypeScript" },
-  { value: "zig", label: "Zig" },
-  { value: "scala", label: "Scala.js" },
-  { value: "moonbit", label: "MoonBit" },
-];
+const LANGUAGE_OPTIONS = [{ value: "ts", label: "TypeScript" }];
 
 export const CreateApplication = () => {
   const navigate = useNavigate();
@@ -121,11 +111,14 @@ export const CreateApplication = () => {
     setIsCreating(true);
     try {
       // Call the Rust function to create the application
-      const result = await invoke("create_golem_app", {
+      const result = await invoke("call_golem_command", {
+        command: "app",
+        subcommands: ["new", formData.appName, formData.language],
         folderPath: formData.folderPath,
-        appName: formData.appName,
-        language: formData.language,
       });
+
+      // Format the success message similar to the old create_golem_app
+      const successMessage = `Successfully created application: ${formData.appName}\n${result}`;
 
       // Create app object to save to store
       const appPath = `${formData.folderPath}/${formData.appName}`;
@@ -141,7 +134,7 @@ export const CreateApplication = () => {
 
       toast({
         title: "Application created successfully",
-        description: String(result),
+        description: successMessage,
       });
 
       // Navigate to home page after successful creation

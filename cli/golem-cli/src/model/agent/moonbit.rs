@@ -18,7 +18,7 @@ use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
 };
@@ -465,6 +465,19 @@ fn setup_dependencies(
                 .join("logging.mi"),
             "logging",
         )?;
+        component.add_dependency(
+            &format!("{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("golem")
+                .join("rpc")
+                .join("types")
+                .join("types.mi"),
+            "rpcTypes",
+        )?; // NOTE: cannot use depends_on_wasm_rpc_types because needs a different alias
     }
 
     depends_on_golem_agent_common(component, "gen/interface/golem/agent/guest")?;
@@ -625,7 +638,9 @@ fn to_moonbit_parameter_list(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal input is represented as a list of a generated variant type
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-input");
+
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -690,7 +705,8 @@ fn to_moonbit_return_type(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal output is represented as a list of a generated variant type
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -834,7 +850,9 @@ fn build_data_value(
             writeln!(result, "     ])")?;
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+
+            let name = format!("{context_kebab}-input");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -1189,7 +1207,8 @@ fn extract_data_value(
             }
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let variant_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -1220,7 +1239,7 @@ fn extract_data_value(
                             result,
                             ctx,
                             &schema.element_type,
-                            "wit_value",
+                            "@extractor.extract(wit_value)",
                             &format!("{indent}          "),
                         )?;
                         writeln!(result, "{indent}          )")?;
@@ -1552,6 +1571,16 @@ mod tests {
     fn bug_result_types() {
         let component_name = "example:bug".into();
         let agent_types = reproducer_for_issue_with_result_types();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn multimodal_untagged_variant_in_out() {
+        let component_name = "example:bug".into();
+        let agent_types = test::multimodal_untagged_variant_in_out();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

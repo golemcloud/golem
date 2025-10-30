@@ -220,9 +220,14 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             target_version,
             details,
         },
-        OplogEntry::Error { timestamp, error } => OplogEntry::Error {
+        OplogEntry::Error {
+            timestamp,
+            error,
+            retry_from,
+        } => OplogEntry::Error {
             timestamp: rounded_ts(timestamp),
             error,
+            retry_from,
         },
         OplogEntry::PendingWorkerInvocation {
             timestamp,
@@ -326,9 +331,11 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
         OplogEntry::BeginRemoteTransaction {
             timestamp,
             transaction_id,
+            original_begin_index,
         } => OplogEntry::BeginRemoteTransaction {
             timestamp: rounded_ts(timestamp),
             transaction_id,
+            original_begin_index,
         },
         OplogEntry::PreCommitRemoteTransaction {
             timestamp,
@@ -870,7 +877,6 @@ async fn multilayer_transfers_entries_after_limit_reached(
         if primary_length == expected_1 && secondary_length == expected_2 {
             break;
         }
-
         let elapsed = start.elapsed();
         if elapsed.as_secs() > 120 {
             panic!("Timeout");
@@ -975,6 +981,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             rounded(OplogEntry::Error {
                 timestamp,
                 error: WorkerError::Unknown(i.to_string()),
+                retry_from: OplogIndex::NONE,
             })
         })
         .collect();
@@ -1226,6 +1233,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             rounded(OplogEntry::Error {
                 timestamp,
                 error: WorkerError::Unknown(i.to_string()),
+                retry_from: OplogIndex::NONE,
             })
         })
         .collect();
@@ -1299,6 +1307,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             rounded(OplogEntry::Error {
                 timestamp,
                 error: WorkerError::Unknown(i.to_string()),
+                retry_from: OplogIndex::NONE,
             })
         })
         .collect();
@@ -1372,6 +1381,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .add(rounded(OplogEntry::Error {
             timestamp,
             error: WorkerError::Unknown("last".to_string()),
+            retry_from: OplogIndex::NONE,
         }))
         .await;
     oplog.commit(CommitLevel::Always).await;
@@ -1400,6 +1410,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         rounded(OplogEntry::Error {
             timestamp,
             error: WorkerError::Unknown("0".to_string()),
+            retry_from: OplogIndex::NONE,
         })
     );
     assert_eq!(
@@ -1407,6 +1418,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         rounded(OplogEntry::Error {
             timestamp,
             error: WorkerError::Unknown("99".to_string()),
+            retry_from: OplogIndex::NONE,
         })
     );
     assert_eq!(
@@ -1414,6 +1426,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         rounded(OplogEntry::Error {
             timestamp,
             error: WorkerError::Unknown("999".to_string()),
+            retry_from: OplogIndex::NONE,
         })
     );
     assert_eq!(
@@ -1421,6 +1434,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         rounded(OplogEntry::Error {
             timestamp,
             error: WorkerError::Unknown("last".to_string()),
+            retry_from: OplogIndex::NONE,
         })
     );
 }
@@ -1495,6 +1509,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                 rounded(OplogEntry::Error {
                     timestamp,
                     error: WorkerError::Unknown(i.to_string()),
+                    retry_from: OplogIndex::NONE,
                 })
             })
             .collect();
@@ -1593,6 +1608,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             rounded(OplogEntry::Error {
                 timestamp,
                 error: WorkerError::Unknown(i.to_string()),
+                retry_from: OplogIndex::NONE,
             })
         })
         .collect();

@@ -41,7 +41,7 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::agent::{AgentId, DataValue};
+use golem_common::model::agent::{AgentId, DataValue, RegisteredAgentType};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
@@ -64,11 +64,11 @@ use golem_common::model::{
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm::analysis::{AnalysedFunctionParameter, AnalysedType};
+use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -350,7 +350,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &request)
                     .await?;
-                let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
+                let proto_params: Vec<golem_wasm::protobuf::Val> =
                     core_try_deserialize(&payload_bytes)?.unwrap_or_default();
                 let params = proto_params
                     .into_iter()
@@ -412,12 +412,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Suspend { timestamp } => {
                 Ok(PublicOplogEntry::Suspend(TimestampParameter { timestamp }))
             }
-            OplogEntry::Error { timestamp, error } => {
-                Ok(PublicOplogEntry::Error(ErrorParameters {
-                    timestamp,
-                    error: error.to_string(""),
-                }))
-            }
+            OplogEntry::Error {
+                timestamp,
+                error,
+                retry_from,
+            } => Ok(PublicOplogEntry::Error(ErrorParameters {
+                timestamp,
+                error: error.to_string(""),
+                retry_from,
+            })),
             OplogEntry::NoOp { timestamp } => {
                 Ok(PublicOplogEntry::NoOp(TimestampParameter { timestamp }))
             }
@@ -754,6 +757,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
+                ..
             } => Ok(PublicOplogEntry::BeginRemoteTransaction(
                 BeginRemoteTransactionParameters {
                     timestamp,
@@ -1256,6 +1260,11 @@ async fn encode_host_function_request_as_value(
         }
         "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
+        "golem_agent::get_all_agent_types" => no_payload(),
+        "golem_agent::get_agent_type" => {
+            let payload: String = try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
             let payload: ValueAndType = try_deserialize(oplog_index, &what, bytes)?;
@@ -1753,6 +1762,16 @@ fn encode_host_function_response_as_value(
             > = try_deserialize(oplog_index, &what, bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
+        "golem_agent::get_agent_type" => {
+            let payload: Result<Option<RegisteredAgentType>, SerializableError> =
+                try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem_agent::get_all_agent_types" => {
+            let payload: Result<Vec<RegisteredAgentType>, SerializableError> =
+                try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
             let payload: ValueAndType = try_deserialize(oplog_index, &what, bytes)?;
@@ -1841,9 +1860,25 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
                 inherited,
             } => {
                 let linked_context = if let Some(linked_context) = linked_context {
-                    let id = result.len() as u64;
-                    let encoded_linked_context = encode_span_data(linked_context);
+                    let mut encoded_linked_context = encode_span_data(linked_context);
+
+                    // Before merging encoded_linked_context into result, we need to adjust the indices in it
+                    for spans in encoded_linked_context.iter_mut() {
+                        for span in spans.iter_mut() {
+                            match span {
+                                PublicSpanData::LocalSpan(local_span) => {
+                                    if let Some(idx) = local_span.linked_context.as_mut() {
+                                        *idx += (result.len() as u64) + 1;
+                                    }
+                                }
+                                PublicSpanData::ExternalSpan(_) => {}
+                            }
+                        }
+                    }
+
                     result.extend(encoded_linked_context);
+
+                    let id = result.len() as u64 + 1;
                     Some(id)
                 } else {
                     None

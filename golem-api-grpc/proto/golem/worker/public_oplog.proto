@@ -119,6 +119,7 @@ message ExportedFunctionCompletedParameters {
 message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
+  uint64 retry_from = 3;
 }
 
 message JumpParameters {

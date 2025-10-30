@@ -19,7 +19,7 @@ use crate::benchmarks::{
 use async_trait::async_trait;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_wasm_rpc::IntoValueAndType;
+use golem_wasm::IntoValueAndType;
 
 struct WorkerLatencySmall {
     config: RunConfig,

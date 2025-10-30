@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{InferredType, TypeInternal};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use std::fmt;
 use std::ops::Deref;
 

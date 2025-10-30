@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, Result, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -26,6 +26,9 @@ import {
     UnionWithOnlyLiterals,
 } from './model';
 
+
+export type InputText = { val: string };
+export type InputImage = Uint8Array;
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -169,6 +172,8 @@ class FooAgent extends BaseAgent {
     }
 
 
+
+
     async funString(stringType: StringType): Promise<Types.StringType> {
         return await this.barAgent.funString(stringType);
     }
@@ -231,8 +236,16 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUndefinedReturn(text);
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
         return await this.barAgent.funUnstructuredText(unstructuredText);
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return await this.barAgent.funUnstructuredBinary(unstructuredText);
+    }
+
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+        return await this.barAgent.funMultimodal(multimodal);
     }
 
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
@@ -247,6 +260,20 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funResultLike(eitherOneOptional);
     }
 
+    // TODO: accept result type
+    async funBuiltinResultVS(result: string | undefined): Promise<Result<void, string>> {
+        return await this.barAgent.funBuiltinResultVS(result);
+    }
+
+    // TODO: accept result type
+    async funBuiltinResultSV(result: string | undefined): Promise<Result<string, void>> {
+        return await this.barAgent.funBuiltinResultSV(result);
+    }
+
+    // TODO: accept result type
+    async funBuiltinResultSN(result: string | number): Promise<Result<string, number>> {
+        return await this.barAgent.funBuiltinResultSN(result);
+    }
 
     async funNoReturn(text: string) {
         return await this.barAgent.funNoReturn(text);
@@ -380,8 +407,16 @@ class BarAgent extends BaseAgent {
         return
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
-        return unstructuredText
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
+        return "foo"
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return "foo"
+    }
+
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+        return "foo"
     }
 
     async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
@@ -402,6 +437,33 @@ class BarAgent extends BaseAgent {
 
     async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
+    }
+
+    // TODO: accept result type
+    funBuiltinResultVS(result: string | undefined): Result<void, string> {
+        if (result) {
+            return Result.err(result);
+        } else {
+            return Result.ok(undefined);
+        }
+    }
+
+    // TODO: accept result type
+    funBuiltinResultSV(result: string | undefined): Result<string, void> {
+        if (result) {
+            return Result.ok(result);
+        } else {
+            return Result.err(undefined);
+        }
+    }
+
+    // TODO: accept result type
+    funBuiltinResultSN(result: string | number): Result<string, number> {
+        if (typeof result == "string") {
+            return Result.ok(result);
+        } else {
+            return Result.err(result);
+        }
     }
 
     async funNoReturn(text: string) {

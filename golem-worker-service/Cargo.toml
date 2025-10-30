@@ -27,18 +27,22 @@ name = "api_gateway_end_to_end_tests"
 path = "tests/api_gateway_end_to_end_tests.rs"
 harness = false
 
+[[test]]
+name = "api_oas_convert_tests"
+path = "tests/api_oas_convert_tests.rs"
+harness = false
+
 [[bench]]
 name = "tree"
 harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, default-features = true }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

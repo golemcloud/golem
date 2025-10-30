@@ -15,7 +15,7 @@
 use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::model::component::show_exported_functions;
 
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 
 pub fn fuzzy_match_function_name(
@@ -257,10 +257,10 @@ fn duplicate_names_with_syntax_sugar(names: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::model::worker::fuzzy_match_function_name;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, f32, field, handle, list, record, str, u32, variant,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     };

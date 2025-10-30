@@ -25,9 +25,9 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::TransactionId;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::{analysed_type, AnalysedType};
+use golem_wasm::{IntoValue, Value, ValueAndType};
+use golem_wasm_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
@@ -112,9 +112,9 @@ pub trait DbTransaction<T: RdbmsType> {
 pub trait Rdbms<T: RdbmsType> {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
-    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
     async fn execute(
         &self,
@@ -166,7 +166,7 @@ pub trait Rdbms<T: RdbmsType> {
         transaction_id: &TransactionId,
     ) -> Result<(), Error>;
 
-    fn status(&self) -> RdbmsStatus;
+    async fn status(&self) -> RdbmsStatus;
 }
 
 pub trait RdbmsService: Send + Sync {

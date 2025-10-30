@@ -183,10 +183,9 @@ impl Display for VariableId {
 )]
 pub struct Id(pub(crate) u32);
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::VariableId as ProtoVariableId;
     use crate::{Id, VariableId};
-    use golem_api_grpc::proto::golem::rib::VariableId as ProtoVariableId;
 
     impl TryFrom<ProtoVariableId> for VariableId {
         type Error = String;
@@ -195,32 +194,30 @@ mod protobuf {
             let variable_id = value.variable_id.ok_or("Missing variable_id".to_string())?;
 
             match variable_id {
-                golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(global) => {
+                crate::proto::golem::rib::variable_id::VariableId::Global(global) => {
                     Ok(VariableId::Global(global.name))
                 }
-                golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(local) => Ok(
+                crate::proto::golem::rib::variable_id::VariableId::Local(local) => Ok(
                     VariableId::Local(local.name, local.id.map(|x| Id(x as u32))),
                 ),
-                golem_api_grpc::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
+                crate::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
                     match_identifier,
                 ) => Ok(VariableId::MatchIdentifier(crate::MatchIdentifier {
                     name: match_identifier.name,
-                    match_arm_index: match_identifier.match_arm_index as usize
+                    match_arm_index: match_identifier.match_arm_index as usize,
                 })),
-                golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
+                crate::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
                     list_comprehension,
                 ) => Ok(VariableId::ListComprehension(
                     crate::ListComprehensionIdentifier {
                         name: list_comprehension.name,
                     },
                 )),
-                golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
+                crate::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
                     list_aggregation,
-                ) => Ok(VariableId::ListReduce(
-                    crate::ListAggregationIdentifier {
-                        name: list_aggregation.name,
-                    },
-                )),
+                ) => Ok(VariableId::ListReduce(crate::ListAggregationIdentifier {
+                    name: list_aggregation.name,
+                })),
             }
         }
     }
@@ -230,15 +227,15 @@ mod protobuf {
             match value {
                 VariableId::Global(name) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
-                            golem_api_grpc::proto::golem::rib::Global { name },
+                        crate::proto::golem::rib::variable_id::VariableId::Global(
+                            crate::proto::golem::rib::Global { name },
                         ),
                     ),
                 },
                 VariableId::MatchIdentifier(m) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
-                            golem_api_grpc::proto::golem::rib::MatchIdentifier {
+                        crate::proto::golem::rib::variable_id::VariableId::MatchIdentifier(
+                            crate::proto::golem::rib::MatchIdentifier {
                                 name: m.name,
                                 match_arm_index: m.match_arm_index as u32,
                             },
@@ -247,8 +244,8 @@ mod protobuf {
                 },
                 VariableId::Local(name, id) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::Local(
-                            golem_api_grpc::proto::golem::rib::Local {
+                        crate::proto::golem::rib::variable_id::VariableId::Local(
+                            crate::proto::golem::rib::Local {
                                 name,
                                 id: id.map(|x| x.0 as u64),
                             },
@@ -257,8 +254,8 @@ mod protobuf {
                 },
                 VariableId::ListComprehension(l) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
-                            golem_api_grpc::proto::golem::rib::ListComprehensionIdentifier {
+                        crate::proto::golem::rib::variable_id::VariableId::ListComprehensionIdentifier(
+                            crate::proto::golem::rib::ListComprehensionIdentifier {
                                 name: l.name,
                             },
                         ),
@@ -266,8 +263,8 @@ mod protobuf {
                 },
                 VariableId::ListReduce(r) => ProtoVariableId {
                     variable_id: Some(
-                        golem_api_grpc::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
-                            golem_api_grpc::proto::golem::rib::ListAggregationIdentifier {
+                        crate::proto::golem::rib::variable_id::VariableId::ListAggregationIdentifier(
+                            crate::proto::golem::rib::ListAggregationIdentifier {
                                 name: r.name,
                             },
                         ),

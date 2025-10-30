@@ -72,6 +72,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let addresses = if durability.is_live() {
             let result = resolve_and_drain_addresses(self, network, name.clone()).await;
+            durability
+                .try_trigger_retry(self, &result)
+                .await
+                .map_err(SocketError::trap)?;
             durability.persist(self, name, result).await
         } else {
             durability.replay(self).await

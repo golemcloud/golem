@@ -26,8 +26,8 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wave::DisplayNamedFunc;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
@@ -336,30 +336,49 @@ pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
 }
 
 pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
-    agents.iter().map(render_agent_constructor).collect()
+    agents
+        .iter()
+        .map(|c| render_agent_constructor(c, true))
+        .collect()
 }
 
 fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     let mut result = Vec::new();
-    result.push(render_agent_constructor(agent));
+    result.push(render_agent_constructor(agent, true));
     for method in &agent.methods {
-        result.push(format!(
-            "{}.{}({}) -> {}",
-            agent.wrapper_type_name(),
-            method.name,
-            render_data_schema(&method.input_schema),
-            render_data_schema(&method.output_schema)
-        ));
+        let output = render_data_schema(&method.output_schema);
+        if output.is_empty() {
+            result.push(format!(
+                "{}.{}({})",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+            ));
+        } else {
+            result.push(format!(
+                "{}.{}({}) -> {}",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+                output
+            ));
+        }
     }
 
     result
 }
 
-fn render_agent_constructor(agent: &AgentType) -> String {
+pub fn render_agent_constructor(agent: &AgentType, show_dummy_return_type: bool) -> String {
+    let dummy_return_type = if show_dummy_return_type {
+        " agent constructor"
+    } else {
+        ""
+    };
     format!(
-        "{}({}) agent constructor",
+        "{}({}){}",
         agent.wrapper_type_name(),
-        render_data_schema(&agent.constructor.input_schema.to_wit_naming())
+        render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
+        dummy_return_type
     )
 }
 
@@ -368,13 +387,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
         DataSchema::Tuple(elements) => elements
             .elements
             .iter()
-            .map(|named_elem| {
-                format!(
-                    "{}: {}",
-                    named_elem.name,
-                    render_element_schema(&named_elem.schema)
-                )
-            })
+            .map(|named_elem| render_element_schema(&named_elem.schema))
             .join(", "),
         DataSchema::Multimodal(elements) => elements
             .elements
@@ -578,12 +591,12 @@ mod tests {
     use test_r::test;
 
     use crate::model::component::render_exported_function;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,
         result_err, result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case,
         variant,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
         AnalysedResourceMode, AnalysedType,
     };

@@ -30,8 +30,8 @@ use golem_common::model::{
     WorkerInvocation, WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
-use golem_wasm_rpc::wasmtime::ResourceTypeId;
-use golem_wasm_rpc::Value;
+use golem_wasm::wasmtime::ResourceTypeId;
+use golem_wasm::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -127,6 +127,7 @@ pub fn oplog_entry() {
     let oe6 = OplogEntry::Error {
         timestamp: Timestamp::from(1724701938466),
         error: WorkerError::OutOfMemory,
+        retry_from: OplogIndex::from_u64(100),
     };
 
     let oe7 = OplogEntry::NoOp {

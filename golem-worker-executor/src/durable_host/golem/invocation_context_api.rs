@@ -271,6 +271,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 "name".to_string(),
                 golem_common::model::invocation_context::AttributeValue::String(name),
             )],
+            true,
         )
         .await?;
         let entry = SpanEntry {

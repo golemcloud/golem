@@ -22,12 +22,12 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AccountId, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
+    AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -71,19 +71,33 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn new(
-        worker_id: WorkerId,
-        agent_id: &Option<AgentId>,
-        target_component_version: u64,
         worker_args: Vec<String>,
-        mut worker_env: Vec<(String, String)>,
+        worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: u64,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
+        WorkerConfig {
+            args: worker_args,
+            env: worker_env,
+            deleted_regions,
+            total_linear_memory_size,
+            component_version_for_replay,
+            created_by,
+            initial_wasi_config_vars,
+        }
+    }
+
+    pub(crate) fn enrich_env(
+        worker_env: &mut Vec<(String, String)>,
+        worker_id: &WorkerId,
+        agent_id: &Option<AgentId>,
+        target_component_version: u64,
+    ) {
         let worker_name = worker_id.worker_name.clone();
-        let component_id = worker_id.component_id;
+        let component_id = &worker_id.component_id;
         let component_version = target_component_version.to_string();
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
@@ -101,15 +115,6 @@ impl WorkerConfig {
                 String::from("GOLEM_AGENT_TYPE"),
                 agent_id.agent_type.clone(),
             ));
-        }
-        WorkerConfig {
-            args: worker_args,
-            env: worker_env,
-            deleted_regions,
-            total_linear_memory_size,
-            component_version_for_replay,
-            created_by,
-            initial_wasi_config_vars,
         }
     }
 }
@@ -199,35 +204,55 @@ pub enum TrapType {
     /// Called the WASI exit function
     Exit,
     /// Failed with an error
-    Error(WorkerError),
+    Error {
+        error: WorkerError,
+        retry_from: OplogIndex,
+    },
 }
 
 impl TrapType {
-    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error) -> TrapType {
+    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(kind.clone()),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
+                    Some(&Trap::StackOverflow) => TrapType::Error {
+                        error: WorkerError::StackOverflow,
+                        retry_from,
+                    },
                     _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
-                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => {
-                            TrapType::Error(WorkerError::OutOfMemory)
-                        }
-                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => {
-                            TrapType::Error(WorkerError::ExceededMemoryLimit)
-                        }
+                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => TrapType::Error {
+                            error: WorkerError::OutOfMemory,
+                            retry_from,
+                        },
+                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => TrapType::Error {
+                            error: WorkerError::ExceededMemoryLimit,
+                            retry_from,
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
-                            _ => TrapType::Error(WorkerError::Unknown(format!("{error:#}"))),
+                            _ => TrapType::Error {
+                                error: WorkerError::Unknown(format!("{error:#}")),
+                                retry_from,
+                            },
                         },
                     },
                 },
@@ -240,7 +265,7 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
-            TrapType::Error(error) => match error {
+            TrapType::Error { error, .. } => match error {
                 WorkerError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
@@ -263,6 +288,7 @@ impl TrapType {
 pub struct LastError {
     pub error: WorkerError,
     pub stderr: String,
+    pub retry_from: OplogIndex,
 }
 
 impl Display for LastError {

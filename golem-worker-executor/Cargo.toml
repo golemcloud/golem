@@ -25,12 +25,11 @@ test = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host", "extra-bindings"] }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -47,7 +46,6 @@ bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
-dashmap = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
@@ -75,6 +73,7 @@ prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
+scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -102,6 +101,7 @@ golem-test-framework = { workspace = true }
 assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

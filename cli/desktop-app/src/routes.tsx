@@ -2,8 +2,8 @@ import ComponentInvoke from "@/pages/components/details/invoke.tsx";
 import { Dashboard } from "@/pages/dashboard";
 import FileManager from "@/pages/components/details/file.tsx";
 import { RouteObject } from "react-router-dom";
-import WorkerInfo from "@/pages/workers/details/info.tsx";
-import WorkerInvoke from "@/pages/workers/details/invoke.tsx";
+import AgentInfo from "@/pages/agents/details/info.tsx";
+import AgentInvoke from "@/pages/agents/details/invoke.tsx";
 import { lazy } from "react";
 import { Home } from "@/pages/home";
 import AppLayout from "@/layouts/app-layout";
@@ -37,15 +37,15 @@ const ComponentSettings = lazy(
 const ComponentInfo = lazy(() => import("@/pages/components/details/info"));
 const Exports = lazy(() => import("@/pages/components/details/export"));
 // const ComponentUpdate = lazy(() => import("@/pages/components/details/update"));
-const WorkerList = lazy(() => import("@/pages/workers"));
+const AgentList = lazy(() => import("@/pages/agents"));
 const APINewVersion = lazy(() => import("@/pages/api/details/newVersion"));
-const CreateWorker = lazy(() => import("@/pages/workers/create"));
-const WorkerDetails = lazy(() => import("@/pages/workers/details"));
-const WorkerEnvironments = lazy(
-  () => import("@/pages/workers/details/environments"),
+const CreateAgent = lazy(() => import("@/pages/agents/create"));
+const AgentDetails = lazy(() => import("@/pages/agents/details"));
+const AgentEnvironments = lazy(
+  () => import("@/pages/agents/details/environments"),
 );
-const WorkerManage = lazy(() => import("@/pages/workers/details/manage"));
-const WorkerLive = lazy(() => import("@/pages/workers/details/live"));
+const AgentManage = lazy(() => import("@/pages/agents/details/manage"));
+const AgentLive = lazy(() => import("@/pages/agents/details/live"));
 const CreatePlugin = lazy(() => import("@/pages/plugin/create"));
 const PluginView = lazy(() =>
   import("@/pages/plugin/view").then(module => ({
@@ -69,9 +69,9 @@ const ComponentLayout = lazy(() =>
     default: module.ComponentLayout,
   })),
 );
-const WorkerLayout = lazy(() =>
-  import("@/pages/workers/details/worker-layout").then(module => ({
-    default: module.WorkerLayout,
+const AgentLayout = lazy(() =>
+  import("@/pages/agents/details/agent-layout").then(module => ({
+    default: module.AgentLayout,
   })),
 );
 
@@ -156,20 +156,20 @@ export const appRoutes: RouteObject[] = [
           { path: "plugins", element: <Plugins /> },
           { path: "files", element: <FileManager /> },
           { path: "invoke", element: <ComponentInvoke /> },
-          { path: "workers", element: <WorkerList /> },
-          { path: "workers/create", element: <CreateWorker /> },
+          { path: "agents", element: <AgentList /> },
+          { path: "agents/create", element: <CreateAgent /> },
         ],
       },
       {
-        path: "components/:componentId/workers/:workerName",
-        element: <WorkerLayout />,
+        path: "components/:componentId/agents/:agentName",
+        element: <AgentLayout />,
         children: [
-          { path: "", element: <WorkerDetails /> },
-          { path: "environments", element: <WorkerEnvironments /> },
-          { path: "info", element: <WorkerInfo /> },
-          { path: "manage", element: <WorkerManage /> },
-          { path: "invoke", element: <WorkerInvoke /> },
-          { path: "live", element: <WorkerLive /> },
+          { path: "", element: <AgentDetails /> },
+          { path: "environments", element: <AgentEnvironments /> },
+          { path: "info", element: <AgentInfo /> },
+          { path: "manage", element: <AgentManage /> },
+          { path: "invoke", element: <AgentInvoke /> },
+          { path: "live", element: <AgentLive /> },
         ],
       },
       {

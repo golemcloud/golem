@@ -11,6 +11,7 @@ import { GolemApplicationManifest } from "@/types/golemManifest.ts";
 import { parse } from "yaml";
 import { CLIService } from "./cli-service";
 import { Component } from "@/types/component.ts";
+import { AppYamlFiles } from "@/types/yaml-files.ts";
 
 export class ManifestService {
   private cliService: CLIService;
@@ -34,8 +35,8 @@ export class ManifestService {
       throw new Error("App not found");
     }
 
-    // Replace: with - in component name
-    let folderName = componentName.replace(/:/g, "-").toLowerCase();
+    // Convert colons to hyphens for filesystem compatibility
+    const folderName = componentName.replace(/:/g, "-").toLowerCase();
 
     try {
       // Get all folders in app.folderLocation
@@ -197,6 +198,154 @@ export class ManifestService {
       componentName,
     );
     return await readTextFile(componentYamlPath);
+  };
+
+  public getAllAppYamlFiles = async (appId: string): Promise<AppYamlFiles> => {
+    const app = await settingsService.getAppById(appId);
+    if (!app) {
+      throw new Error("App not found");
+    }
+
+    const result: AppYamlFiles = {
+      root: undefined,
+      common: [],
+      components: [],
+    };
+
+    // 1. Get root golem.yaml
+    try {
+      const rootYamlPath = await this.getAppYamlPath(appId);
+      if (rootYamlPath) {
+        const content = await readTextFile(rootYamlPath);
+        result.root = {
+          name: "golem.yaml",
+          path: rootYamlPath,
+          content,
+          type: "root",
+          editable: true,
+        };
+      }
+    } catch (error) {
+      console.warn("Failed to load root golem.yaml:", error);
+    }
+
+    // 2. Scan for common-*/golem.yaml files
+    try {
+      const appEntries = await readDir(app.folderLocation);
+      const commonFolders = appEntries
+        .filter(entry => entry.isDirectory && entry.name.startsWith("common-"))
+        .map(entry => entry.name);
+
+      for (const commonFolder of commonFolders) {
+        try {
+          const commonFolderPath = await join(app.folderLocation, commonFolder);
+          const commonYamlPath = await join(commonFolderPath, "golem.yaml");
+
+          if (await exists(commonYamlPath)) {
+            const content = await readTextFile(commonYamlPath);
+            result.common.push({
+              name: `${commonFolder}/golem.yaml`,
+              path: commonYamlPath,
+              content,
+              type: "common",
+              editable: true,
+            });
+          } else {
+            // Try .yml extension
+            const commonYmlPath = await join(commonFolderPath, "golem.yml");
+            if (await exists(commonYmlPath)) {
+              const content = await readTextFile(commonYmlPath);
+              result.common.push({
+                name: `${commonFolder}/golem.yml`,
+                path: commonYmlPath,
+                content,
+                type: "common",
+                editable: true,
+              });
+            }
+          }
+        } catch (error) {
+          console.warn(`Failed to read common folder ${commonFolder}:`, error);
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to scan for common folders:", error);
+    }
+
+    // 3. Scan for components-*/*/golem.yaml files
+    try {
+      const appEntries = await readDir(app.folderLocation);
+      const componentsFolders = appEntries
+        .filter(
+          entry => entry.isDirectory && entry.name.startsWith("components-"),
+        )
+        .map(entry => entry.name);
+
+      for (const componentsFolder of componentsFolders) {
+        try {
+          const componentsFolderPath = await join(
+            app.folderLocation,
+            componentsFolder,
+          );
+          const subEntries = await readDir(componentsFolderPath);
+          const subFolders = subEntries
+            .filter(entry => entry.isDirectory)
+            .map(entry => entry.name);
+
+          for (const subFolder of subFolders) {
+            try {
+              const componentPath = await join(componentsFolderPath, subFolder);
+              const componentYamlPath = await join(componentPath, "golem.yaml");
+
+              if (await exists(componentYamlPath)) {
+                const content = await readTextFile(componentYamlPath);
+                result.components.push({
+                  name: `${componentsFolder}/${subFolder}/golem.yaml`,
+                  path: componentYamlPath,
+                  content,
+                  type: "component",
+                  editable: true,
+                });
+              } else {
+                // Try .yml extension
+                const componentYmlPath = await join(componentPath, "golem.yml");
+                if (await exists(componentYmlPath)) {
+                  const content = await readTextFile(componentYmlPath);
+                  result.components.push({
+                    name: `${componentsFolder}/${subFolder}/golem.yml`,
+                    path: componentYmlPath,
+                    content,
+                    type: "component",
+                    editable: true,
+                  });
+                }
+              }
+            } catch (error) {
+              console.warn(
+                `Failed to read component folder ${subFolder}:`,
+                error,
+              );
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `Failed to read components folder ${componentsFolder}:`,
+            error,
+          );
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to scan for component folders:", error);
+    }
+
+    return result;
+  };
+
+  public saveYamlFile = async (
+    filePath: string,
+    content: string,
+  ): Promise<void> => {
+    await writeTextFile(filePath, content);
   };
 
   // Helper method to get component by ID (needed for manifest operations)

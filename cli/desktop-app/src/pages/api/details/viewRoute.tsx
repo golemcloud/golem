@@ -268,28 +268,6 @@ export const ApiRoute = () => {
               </div>
             )}
 
-            {/* Worker Name Section */}
-            {/* {currentRoute?.binding?.workerName && (
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <h2 className="text-gray-800 dark:text-gray-200">
-                    Worker Name
-                  </h2>
-                  <span className="text-blue-600 dark:text-blue-400 text-sm border border-blue-300 dark:border-blue-500/30 rounded px-2 py-0.5">
-                    Rib
-                  </span>
-                </div>
-                <RibEditor
-                  value={currentRoute?.binding?.workerName}
-                  disabled={true}
-                />
-                {/* <CodeBlock
-                  code={currentRoute?.binding?.workerName || "No worker name"}
-                  label="worker name RIB script"
-                  allowCopy={true}
-                />
-                </div> */}
-
             {/* Response Section */}
             {currentRoute?.binding?.response && (
               <div className="mb-6">

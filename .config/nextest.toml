@@ -1,0 +1,13 @@
+[profile.default]
+archive.include = [
+    { path = "dev-ci/cloud-service", relative-to = "target" },
+    { path = "dev-ci/golem", relative-to = "target" },
+    { path = "dev-ci/golem-cli", relative-to = "target" },
+    { path = "dev-ci/golem-component-compilation-service", relative-to = "target" },
+    { path = "dev-ci/golem-component-service", relative-to = "target" },
+    { path = "dev-ci/golem-debugging-service", relative-to = "target" },
+    { path = "dev-ci/golem-shard-manager", relative-to = "target" },
+    { path = "dev-ci/golem-worker-service", relative-to = "target" },
+    { path = "dev-ci/rib-repl", relative-to = "target" },
+    { path = "dev-ci/worker-executor", relative-to = "target" },
+]

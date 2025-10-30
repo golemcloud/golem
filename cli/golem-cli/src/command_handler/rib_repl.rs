@@ -33,9 +33,9 @@ use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::OptionallyValueAndTypeJson;
+use golem_wasm::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;

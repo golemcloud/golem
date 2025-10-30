@@ -281,6 +281,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .add(OplogEntry::begin_atomic_region())
                 .await;
             let begin_index = self.state.current_oplog_index().await;
+            self.state.active_atomic_regions.push(begin_index);
             Ok(begin_index.into())
         } else {
             let (begin_index, _) =
@@ -322,6 +323,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            self.state.active_atomic_regions.push(begin_index);
             Ok(begin_index.into())
         }
     }
@@ -339,6 +341,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }
+
+        self.state
+            .active_atomic_regions
+            .retain(|idx| *idx != OplogIndex::from_u64(begin));
 
         Ok(())
     }
@@ -503,6 +509,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker_proxy
                 .update(&owned_worker_id, target_version, mode)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (worker_id, target_version, mode), result)
                 .await
@@ -575,6 +582,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker_proxy
                 .fork_worker(&source_worker_id, &target_worker_id, &oplog_index_cut_off)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(
                     self,
@@ -610,6 +618,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker_proxy()
                 .revert(&worker_id, revert_target.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (worker_id, revert_target), result)
                 .await
@@ -641,6 +650,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.state.component_metadata.owner.clone(),
                 )
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, component_slug, result).await
         } else {
             durability.replay(self).await
@@ -677,36 +687,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let worker_id: Result<_, WorkerExecutorError> = async {
-                let component_id = self
-                    .state
-                    .component_service
-                    .resolve_component(
-                        component_slug.clone(),
-                        self.state.component_metadata.owner.clone(),
-                    )
-                    .await?;
-                let worker_id = component_id.map(|component_id| WorkerId {
-                    component_id,
-                    worker_name: worker_name.clone(),
-                });
+            let worker_id = self
+                .resolve_agent_id_strict_internal(component_slug.clone(), worker_name.clone())
+                .await;
 
-                if let Some(worker_id) = worker_id.clone() {
-                    let owned_id = OwnedWorkerId {
-                        project_id: self.state.owned_worker_id.project_id(),
-                        worker_id,
-                    };
-
-                    let metadata = self.state.worker_service.get(&owned_id).await;
-
-                    if metadata.is_none() {
-                        return Ok(None);
-                    };
-                };
-                Ok(worker_id)
-            }
-            .await;
-
+            durability.try_trigger_retry(self, &worker_id).await?;
             durability
                 .persist(self, (component_slug, worker_name), worker_id)
                 .await
@@ -750,6 +735,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await
                 .map(|_| ForkResult::Original);
 
+            durability.try_trigger_retry(self, &fork_result).await?;
             Ok(durability.persist(self, new_name, fork_result).await?)
         } else {
             durability.replay(self).await
@@ -1019,6 +1005,42 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::search-oplog", "drop");
         self.as_wasi_view().table().delete(rep)?;
         Ok(())
+    }
+}
+
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn resolve_agent_id_strict_internal(
+        &self,
+        component_slug: String,
+        worker_name: String,
+    ) -> Result<Option<WorkerId>, WorkerExecutorError> {
+        let component_id = self
+            .state
+            .component_service
+            .resolve_component(
+                component_slug.clone(),
+                self.state.component_metadata.owner.clone(),
+            )
+            .await?;
+
+        let worker_id = component_id.map(|component_id| WorkerId {
+            component_id,
+            worker_name: worker_name.clone(),
+        });
+
+        if let Some(worker_id) = worker_id.clone() {
+            let owned_id = OwnedWorkerId {
+                project_id: self.state.owned_worker_id.project_id(),
+                worker_id,
+            };
+
+            let metadata = self.state.worker_service.get(&owned_id).await;
+
+            if metadata.is_none() {
+                return Ok(None);
+            };
+        };
+        Ok(worker_id)
     }
 }
 

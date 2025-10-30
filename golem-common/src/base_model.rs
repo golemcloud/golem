@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::{AgentId, AgentTypeResolver};
+use crate::model::component_metadata::ComponentMetadata;
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
@@ -37,11 +39,23 @@ newtype_uuid!(ProjectGrantId);
 newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct ShardId {
     pub(crate) value: i64,
 }
@@ -90,24 +104,34 @@ impl Display for ShardId {
     }
 }
 
-#[cfg(feature = "model")]
-impl golem_wasm_rpc::IntoValue for ShardId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::S64(self.value)
+impl golem_wasm::IntoValue for ShardId {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::S64(self.value)
     }
 
-    fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-        golem_wasm_ast::analysis::analysed_type::s64()
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        golem_wasm::analysis::analysed_type::s64()
     }
 }
 
 pub type ComponentVersion = u64;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+static WORKER_ID_MAX_LENGTH: usize = 512;
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
     pub worker_name: String,
@@ -122,18 +146,61 @@ impl WorkerId {
         format!("urn:worker:{}/{}", self.component_id, self.worker_name)
     }
 
-    pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
-        let length = name.len();
-        if !(1..=512).contains(&length) {
-            Err("Worker name must be between 1 and 512 characters")
-        } else if name.chars().any(|c| c.is_whitespace()) {
-            Err("Worker name must not contain whitespaces")
-        } else if name.contains('/') {
-            Err("Worker name must not contain '/'")
-        } else if name.starts_with('-') {
-            Err("Worker name must not start with '-'")
+    pub fn from_agent_id(
+        component_id: ComponentId,
+        agent_id: &AgentId,
+    ) -> Result<WorkerId, String> {
+        let agent_id = agent_id.to_string();
+        if agent_id.len() > WORKER_ID_MAX_LENGTH {
+            return Err(format!(
+                "Agent id is too long: {}, max length: {}, agent id: {}",
+                agent_id.len(),
+                WORKER_ID_MAX_LENGTH,
+                agent_id,
+            ));
+        }
+        Ok(Self {
+            component_id,
+            worker_name: agent_id,
+        })
+    }
+
+    pub fn from_agent_id_literal<S: AsRef<str>>(
+        component_id: ComponentId,
+        agent_id: S,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<WorkerId, String> {
+        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
+    }
+
+    pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(
+        component_id: ComponentId,
+        component_metadata: &ComponentMetadata,
+        id: S,
+    ) -> Result<WorkerId, String> {
+        if component_metadata.is_agent() {
+            Self::from_agent_id_literal(component_id, id, component_metadata)
         } else {
-            Ok(())
+            let id = id.as_ref();
+            if id.len() > WORKER_ID_MAX_LENGTH {
+                return Err(format!(
+                    "Legacy worker id is too long: {}, max length: {}, worker id: {}",
+                    id.len(),
+                    WORKER_ID_MAX_LENGTH,
+                    id,
+                ));
+            }
+            if id.contains('/') {
+                return Err(format!(
+                    "Legacy worker id cannot contain '/', worker id: {}",
+                    id,
+                ));
+            }
+
+            Ok(WorkerId {
+                component_id,
+                worker_name: id.to_string(),
+            })
         }
     }
 }
@@ -172,17 +239,16 @@ impl AsRef<WorkerId> for &WorkerId {
     }
 }
 
-#[cfg(feature = "model")]
-impl golem_wasm_rpc::IntoValue for WorkerId {
-    fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(vec![
+impl golem_wasm::IntoValue for WorkerId {
+    fn into_value(self) -> golem_wasm::Value {
+        golem_wasm::Value::Record(vec![
             self.component_id.into_value(),
             self.worker_name.into_value(),
         ])
     }
 
-    fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-        use golem_wasm_ast::analysis::analysed_type::{field, record};
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        use golem_wasm::analysis::analysed_type::{field, record};
         record(vec![
             field("component_id", ComponentId::get_type()),
             field("worker_name", String::get_type()),
@@ -190,14 +256,21 @@ impl golem_wasm_rpc::IntoValue for WorkerId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct PromiseId {
     pub worker_id: WorkerId,
     pub oplog_idx: OplogIndex,
@@ -215,11 +288,22 @@ impl Display for PromiseId {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    Default,
+    poem_openapi::NewType,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
 )]
 pub struct OplogIndex(pub(crate) u64);
 
@@ -270,11 +354,21 @@ impl From<OplogIndex> for u64 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    Default,
+    poem_openapi::NewType,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
 )]
 pub struct TransactionId(pub(crate) String);
 
@@ -303,5 +397,41 @@ impl From<TransactionId> for String {
 impl From<String> for TransactionId {
     fn from(value: String) -> Self {
         TransactionId(value)
+    }
+}
+
+mod sql {
+    use crate::model::TransactionId;
+    use sqlx::encode::IsNull;
+    use sqlx::error::BoxDynError;
+    use sqlx::postgres::PgTypeInfo;
+    use sqlx::{Database, Postgres, Type};
+    use std::io::Write;
+
+    impl sqlx::Decode<'_, Postgres> for TransactionId {
+        fn decode(value: <Postgres as Database>::ValueRef<'_>) -> Result<Self, BoxDynError> {
+            let bytes = value.as_bytes()?;
+            Ok(TransactionId(
+                u64::from_be_bytes(bytes.try_into()?).to_string(),
+            ))
+        }
+    }
+
+    impl sqlx::Encode<'_, Postgres> for TransactionId {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <Postgres as Database>::ArgumentBuffer<'_>,
+        ) -> Result<IsNull, BoxDynError> {
+            let u64 = self.0.parse::<u64>()?;
+            let bytes = u64.to_be_bytes();
+            buf.write_all(&bytes)?;
+            Ok(IsNull::No)
+        }
+    }
+
+    impl Type<Postgres> for TransactionId {
+        fn type_info() -> PgTypeInfo {
+            PgTypeInfo::with_name("xid8")
+        }
     }
 }

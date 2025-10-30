@@ -16,12 +16,6 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
 use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
@@ -54,19 +48,25 @@ use golem_common::model::{
     ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
+use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm::analysis::AnalysedFunctionResult;
+use golem_wasm::{IntoValue, Value, ValueAndType};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, span, warn, Instrument, Level};
+use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
 
@@ -100,9 +100,9 @@ pub struct Worker<Ctx: WorkerCtx> {
     // Note: std lock for wasmtime reasons
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     update_state_lock: tokio::sync::Mutex<()>,
-    stopping: AtomicBool,
     worker_estimate_coefficient: f64,
 
+    // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<tokio::sync::Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
 }
@@ -268,8 +268,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
 
-        let stopping = AtomicBool::new(false);
-
         let worker = Worker {
             owned_worker_id,
             agent_id: agent_id.clone(),
@@ -283,7 +281,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_results,
             instance,
             execution_status,
-            stopping,
             initial_worker_metadata,
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
@@ -309,10 +306,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ],
                         invocation_context: invocation_context_stack.clone(),
                     })
-                    .await;
+                    .await
+                    .expect("Failed enqueuing initial agent invocations to worker");
             }
         };
-
         Ok(worker)
     }
 
@@ -332,37 +329,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u32,
     ) -> Result<bool, WorkerExecutorError> {
-        let mut instance = this.instance.lock().await;
-        if instance.is_unloaded() {
-            this.mark_as_loading();
-            *instance = WorkerInstance::WaitingForPermit(WaitingWorker::new(
-                this.clone(),
-                this.memory_requirement().await?,
-                oom_retry_count,
-            ));
-            Ok(true)
-        } else {
-            debug!("Worker is already running or waiting for permit");
-            Ok(false)
+        let mut instance_guard = this.lock_non_stopping_worker().await;
+        match &*instance_guard {
+            WorkerInstance::Unloaded => {
+                this.mark_as_loading();
+                *instance_guard = WorkerInstance::WaitingForPermit(WaitingWorker::new(
+                    this.clone(),
+                    this.memory_requirement().await?,
+                    oom_retry_count,
+                ));
+                Ok(true)
+            }
+            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
+                debug!("Worker is already running or waiting for permit");
+                Ok(false)
+            }
+            WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            )),
+            WorkerInstance::Stopping(_) => panic!("impossible"),
         }
-    }
-
-    pub(crate) async fn start_with_permit(
-        this: Arc<Worker<Ctx>>,
-        permit: OwnedSemaphorePermit,
-        oom_retry_count: u32,
-    ) {
-        let mut instance = this.instance.lock().await;
-        *instance = WorkerInstance::Running(
-            RunningWorker::new(
-                this.owned_worker_id.clone(),
-                this.queue.clone(),
-                this.clone(),
-                permit,
-                oom_retry_count,
-            )
-            .await,
-        );
     }
 
     pub async fn stop(&self) {
@@ -395,30 +381,52 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        let instance_guard = self.instance.lock().await;
-        match &*instance_guard {
+        let mut instance_guard = self.lock_non_stopping_worker().await;
+        let stop_result = match &*instance_guard {
             WorkerInstance::Running(running) => {
                 if is_running_worker_idle(running).await {
-                    if self.stopping.compare_exchange(
-                        false,
-                        true,
-                        Ordering::Acquire,
-                        Ordering::Relaxed,
-                    ) == Ok(false)
-                    {
-                        self.stop_internal_running(instance_guard, false, None)
-                            .await;
-                        true
-                    } else {
-                        false
-                    }
+                    let stop_result = self
+                        .stop_internal_locked(&mut instance_guard, false, None)
+                        .await;
+
+                    Some(stop_result)
                 } else {
-                    false
+                    None
                 }
             }
-            WorkerInstance::WaitingForPermit(_) => false,
-            WorkerInstance::Unloaded => false,
+            WorkerInstance::WaitingForPermit(_) => None,
+            WorkerInstance::Stopping(_) => None,
+            WorkerInstance::Unloaded => None,
+            WorkerInstance::Deleting => None,
+        };
+
+        drop(instance_guard);
+
+        if let Some(stop_result) = stop_result {
+            self.handle_stop_result(stop_result).await;
+            true
+        } else {
+            false
         }
+    }
+
+    /// Transition the worker into a deleting state.
+    /// Rejects all new invocations and stops any running execution.
+    pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
+        let error = WorkerExecutorError::invalid_request("Worker is being deleted");
+        let mut instance_guard = self.lock_stopped_worker(Some(error.clone())).await;
+        match &*instance_guard {
+            WorkerInstance::Unloaded => {
+                *instance_guard = WorkerInstance::Deleting;
+                // More invocations might have been enqueued since the worker has stopped
+                self.fail_pending_invocation(error).await;
+            }
+            WorkerInstance::Deleting => {}
+            _ => panic!("impossible status after lock_stopped_worker"),
+        };
+
+        // TODO: Not sure what to do with execution status here.
+        Ok(())
     }
 
     pub fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
@@ -481,7 +489,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   automatically resumed when the worker is needed again. This only works if the worker context
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        if let WorkerInstance::Running(running) = &*self.instance.lock().await {
+        if let WorkerInstance::Running(running) = &*self.lock_non_stopping_worker().await {
             running.interrupt(interrupt_kind.clone());
         }
 
@@ -510,7 +518,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
-        match &*self.instance.lock().await {
+        match &*self.lock_non_stopping_worker().await {
             WorkerInstance::Running(running) => {
                 running
                     .sender
@@ -524,6 +532,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "Explicit resume is not supported for uninitialized workers",
                 ))
             }
+            WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
+                "Explicit resume is not supported for deleting workers",
+            )),
+            WorkerInstance::Stopping(_) => panic!("impossible"),
         }
     }
 
@@ -534,27 +546,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         function_input: Vec<Value>,
         invocation_context: InvocationContextStack,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
-        let output = self.lookup_invocation_result(&idempotency_key).await;
+        // We need to create the subscription before checking whether the result is still pending, otherwise there is a race.
+        let subscription = self.events().subscribe();
 
+        let output = self.lookup_invocation_result(&idempotency_key).await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
             LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
-            LookupResult::Pending => {
-                let subscription = self.events().subscribe();
-                Ok(ResultOrSubscription::Pending(subscription))
-            }
+            LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
-                // Invoke the function in the background
-                // TODO: there is a race here between checking the loopup result and creating the subscription
-                let subscription = self.events().subscribe();
-
                 self.enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
                     idempotency_key,
                     full_function_name,
                     function_input,
                     invocation_context,
                 })
-                .await;
+                .await?;
                 Ok(ResultOrSubscription::Pending(subscription))
             }
         }
@@ -620,7 +627,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// This enqueues a special function invocation that saves the component's state and
     /// triggers a restart immediately.
-    pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
+    pub async fn enqueue_manual_update(
+        &self,
+        target_version: ComponentVersion,
+    ) -> Result<(), WorkerExecutorError> {
         self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_version })
             .await
     }
@@ -641,12 +651,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .clone()
     }
 
+    // should only be called from invocation loop
     pub async fn store_invocation_success(
         &self,
         key: &IdempotencyKey,
         result: Option<ValueAndType>,
     ) {
-        let guard = self.instance.lock().await;
         let mut map = self.invocation_results.write().await;
         map.insert(
             key.clone(),
@@ -654,7 +664,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result: Ok(result.clone()),
             },
         );
-        drop(guard);
         debug!("Stored invocation success for {key}");
         self.events().publish(Event::InvocationCompleted {
             worker_id: self.owned_worker_id.worker_id(),
@@ -663,8 +672,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         });
     }
 
+    // should only be called from invocation loop
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let guard = self.instance.lock().await;
         let pending = self.pending_invocations().await;
         let keys_to_fail = [
             vec![key],
@@ -695,14 +704,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 });
             }
         }
-        drop(guard)
     }
 
-    pub async fn store_invocation_resuming(&self, key: &IdempotencyKey) {
-        let guard = self.instance.lock().await;
+    pub(super) async fn store_invocation_resuming(&self, key: &IdempotencyKey) {
         let mut map = self.invocation_results.write().await;
         map.remove(key);
-        drop(guard)
     }
 
     pub fn component_type(&self) -> ComponentType {
@@ -725,30 +731,43 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// These workers can be stopped to free up available worker memory.
     pub async fn is_currently_idle_but_running(&self) -> bool {
-        match self.instance.try_lock() {
-            Ok(guard) => match &*guard {
-                WorkerInstance::Running(running) => {
-                    let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-                    let has_invocations = !self.pending_invocations().await.is_empty();
-                    debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_worker_id);
-                    waiting_for_command && !has_invocations
-                }
-                WorkerInstance::WaitingForPermit(_) => {
-                    debug!(
-                        "Worker {} is waiting for permit, cannot be used to free up memory",
-                        self.owned_worker_id
-                    );
-                    false
-                }
-                WorkerInstance::Unloaded => {
-                    debug!(
-                        "Worker {} is unloaded, cannot be used to free up memory",
-                        self.owned_worker_id
-                    );
-                    false
-                }
-            },
-            Err(_) => false,
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+                let has_invocations = !self.pending_invocations().await.is_empty();
+                debug!("Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}", self.owned_worker_id);
+                waiting_for_command && !has_invocations
+            }
+            WorkerInstance::WaitingForPermit(_) => {
+                debug!(
+                    "Worker {} is waiting for permit, cannot be used to free up memory",
+                    self.owned_worker_id
+                );
+                false
+            }
+            WorkerInstance::Unloaded => {
+                debug!(
+                    "Worker {} is unloaded, cannot be used to free up memory",
+                    self.owned_worker_id
+                );
+                false
+            }
+            // TODO: this probably wants to cooperate with memory free up
+            WorkerInstance::Stopping(_) => {
+                debug!(
+                    "Worker {} is stopping, cannot be used to free up memory",
+                    self.owned_worker_id
+                );
+                false
+            }
+            // TODO: this probably wants to cooperate with memory free up
+            WorkerInstance::Deleting => {
+                debug!(
+                    "Worker {} is deleting, cannot be used to free up memory",
+                    self.owned_worker_id
+                );
+                false
+            }
         }
     }
 
@@ -757,6 +776,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.execution_status.read().unwrap().timestamp()
     }
 
+    // Should only be called from invocation loop
     pub async fn increase_memory(&self, delta: u64) -> anyhow::Result<()> {
         match &mut *self.instance.lock().await {
             WorkerInstance::Running(ref mut running) => {
@@ -767,14 +787,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
                 }
             }
+            WorkerInstance::Stopping(_) => Ok(()),
             WorkerInstance::WaitingForPermit(_) => Ok(()),
             WorkerInstance::Unloaded => Ok(()),
+            WorkerInstance::Deleting => Ok(()),
         }
     }
 
     /// Enqueue invocation of an exported function
-    async fn enqueue_worker_invocation(&self, invocation: WorkerInvocation) {
-        let instance_guard = self.instance.lock().await;
+    async fn enqueue_worker_invocation(
+        &self,
+        invocation: WorkerInvocation,
+    ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot enqueue invocation to a deleting worker",
+            ));
+        };
 
         let entry = OplogEntry::pending_worker_invocation(invocation.clone());
         let timestamped_invocation = TimestampedWorkerInvocation {
@@ -796,15 +827,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
 
         drop(instance_guard);
+
+        Ok(())
     }
 
     pub async fn get_file_system_node(
         &self,
         path: ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let (sender, receiver) = oneshot::channel();
+        let instance_guard = self.lock_non_stopping_worker().await;
 
-        let mutex = self.instance.lock().await;
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot access filesystem of a deleting worker",
+            ));
+        };
+
+        let (sender, receiver) = oneshot::channel();
 
         self.queue
             .write()
@@ -815,11 +854,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // - Worker is running, we can send the invocation command and the worker will look at the queue immediately
         // - Worker is starting, it will process the request when it is started
 
-        if let WorkerInstance::Running(running) = &*mutex {
+        if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::Invocation).unwrap();
         };
 
-        drop(mutex);
+        drop(instance_guard);
 
         receiver.await.unwrap()
     }
@@ -828,30 +867,97 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         path: ComponentFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let (sender, receiver) = oneshot::channel();
+        let instance_guard = self.lock_non_stopping_worker().await;
 
-        let mutex = self.instance.lock().await;
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot access filesystem of a deleting worker",
+            ));
+        };
+
+        let (sender, receiver) = oneshot::channel();
 
         self.queue
             .write()
             .await
             .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
 
-        if let WorkerInstance::Running(running) = &*mutex {
+        if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::Invocation).unwrap();
         };
 
-        drop(mutex);
+        drop(instance_guard);
 
         receiver.await.unwrap()
+    }
+
+    pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot await readiness of a deleting worker",
+            ));
+        };
+
+        let (sender, receiver) = oneshot::channel();
+
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+
+        if let WorkerInstance::Running(running) = &*instance_guard {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
+
+        drop(instance_guard);
+
+        receiver.await.unwrap()
+    }
+
+    // Should only be called from invocation loop
+    pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
+        self.oplog.add(entry).await
+    }
+
+    // Should only be called from invocation loop
+    pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
+        let update_state_lock_guard = self.update_state_lock.lock().await;
+
+        self.commit_and_update_state_inner(&update_state_lock_guard, commit_level)
+            .await;
+        let new_index = self.oplog.current_oplog_index().await;
+
+        // ensure we hold mutex for the full duration
+        drop(update_state_lock_guard);
+        new_index
+    }
+
+    // Should only be called from invocation loop
+    pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
+        let result = self.add_to_oplog(entry).await;
+        self.commit_oplog_and_update_state(CommitLevel::Always)
+            .await;
+        result
     }
 
     pub async fn activate_plugin(
         &self,
         plugin_installation_id: PluginInstallationId,
     ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot activate plugin on a deleting worker",
+            ));
+        };
+
         self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_installation_id))
             .await;
+
+        drop(instance_guard);
         Ok(())
     }
 
@@ -859,8 +965,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         plugin_installation_id: PluginInstallationId,
     ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot deactivate plugin on a deleting worker",
+            ));
+        };
+
         self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_installation_id))
             .await;
+
+        drop(instance_guard);
         Ok(())
     }
 
@@ -896,6 +1012,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: IdempotencyKey,
     ) -> Result<(), WorkerExecutorError> {
+        let instance_guard = self.lock_non_stopping_worker().await;
+
+        if instance_guard.is_deleting() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Cannot cancel invocation on a deleting worker",
+            ));
+        };
+
         let mut queue = self.queue.write().await;
         for item in queue.iter_mut() {
             if item.matches_idempotency_key(&idempotency_key) {
@@ -908,6 +1032,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.add_and_commit_oplog(OplogEntry::cancel_pending_invocation(idempotency_key))
             .await;
 
+        drop(instance_guard);
         Ok(())
     }
 
@@ -943,7 +1068,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        self.stop().await;
+        // TODO: all the invocations that are in a deleted region now need to be failed and dropped from the queue.
+        let instance_guard = self.lock_stopped_worker(None).await;
+        match &*instance_guard {
+            WorkerInstance::Unloaded => {}
+            WorkerInstance::Deleting => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot revert a deleting worker",
+                ));
+            }
+            _ => panic!("impossible status after lock_stopped_worker"),
+        };
 
         let region_end = self.oplog.current_oplog_index().await;
         let region_start = last_oplog_index.next();
@@ -966,9 +1101,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.add_and_commit_oplog(OplogEntry::revert(region)).await;
             self.reattach_worker_status().await;
 
-            // TODO: we also need to invalidate the queue here, as we might have reverted to before the invocations were
-            // ever enqueued.
-
+            drop(instance_guard);
             Ok(())
         }
     }
@@ -1037,7 +1170,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
-                            trap_type: TrapType::Error(error),
+                            trap_type: TrapType::Error { error, .. },
                             stderr,
                         }),
                     ..
@@ -1076,84 +1209,166 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         called_from_invocation_loop: bool,
         fail_pending_invocations: Option<WorkerExecutorError>,
     ) {
-        // we don't want to re-enter stop from within the invocation loop
-        if self
-            .stopping
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            == Ok(false)
-        {
-            let instance = self.instance.lock().await;
-            self.stop_internal_running(
-                instance,
+        let mut instance_guard = self.instance.lock().await;
+
+        let stop_result = self
+            .stop_internal_locked(
+                &mut instance_guard,
                 called_from_invocation_loop,
                 fail_pending_invocations,
             )
             .await;
+
+        // IMPORTANT: drop the lock here as the invocation loop might reenter this method after we drop a running worker.
+        drop(instance_guard);
+
+        self.handle_stop_result(stop_result).await;
+    }
+
+    async fn stop_internal_locked(
+        &self,
+        instance_guard: &mut MutexGuard<'_, WorkerInstance>,
+        called_from_invocation_loop: bool,
+        // Only respected when this is the call that triggered the stop
+        fail_pending_invocations: Option<WorkerExecutorError>,
+    ) -> StopResult {
+        // Temporarily set the instance to unloaded so we can work with the old value.
+        // This is not visible to anyone as long as we are holding the lock.
+        let previous_instance_state =
+            std::mem::replace(&mut **instance_guard, WorkerInstance::Unloaded);
+
+        match previous_instance_state {
+            WorkerInstance::Unloaded | WorkerInstance::WaitingForPermit(_) => StopResult::Stopped,
+            WorkerInstance::Deleting => {
+                **instance_guard = previous_instance_state;
+                // Should we return an error here?
+                StopResult::Stopped
+            }
+            WorkerInstance::Stopping(_) if called_from_invocation_loop => {
+                **instance_guard = previous_instance_state;
+                StopResult::Stopped
+            }
+            WorkerInstance::Stopping(stopping) => StopResult::AlreadyStopping {
+                notify: stopping.notify.clone(),
+            },
+            WorkerInstance::Running(running) => {
+                debug!(
+                    "Stopping running worker ({called_from_invocation_loop}) ({})",
+                    fail_pending_invocations.is_some()
+                );
+
+                // TODO: fail pending invocations should be factored out of here and be guaranteed to run
+                // even if there are multiple concurrent stop attempts.
+                if let Some(error) = fail_pending_invocations {
+                    self.fail_pending_invocation(error).await;
+                };
+
+                // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
+                if called_from_invocation_loop {
+                    StopResult::Stopped
+                } else {
+                    // drop the running worker, this signals to the invocation loop to start exiting.
+                    let run_loop_handle = running.stop();
+                    let notify = OneShotEvent::new();
+                    **instance_guard = WorkerInstance::Stopping(StoppingWorker {
+                        notify: notify.clone(),
+                    });
+                    StopResult::NeedsWaitForLoopExit {
+                        run_loop_handle,
+                        notify,
+                    }
+                }
+            }
         }
     }
 
-    async fn stop_internal_running(
-        &self,
-        mut instance: MutexGuard<'_, WorkerInstance>,
-        called_from_invocation_loop: bool,
-        fail_pending_invocations: Option<WorkerExecutorError>,
-    ) {
-        if let WorkerInstance::Running(running) = instance.unload() {
-            debug!(
-                "Stopping running worker ({called_from_invocation_loop}) ({})",
-                fail_pending_invocations.is_some()
-            );
-            if let Some(fail_pending_invocations) = fail_pending_invocations {
-                let queued_items = running
-                    .queue
-                    .write()
-                    .await
-                    .drain(..)
-                    .collect::<VecDeque<_>>();
+    // IMPORTANT: must not be called within a held instance lock
+    async fn handle_stop_result(&self, stop_result: StopResult) {
+        match stop_result {
+            StopResult::Stopped => {}
+            StopResult::AlreadyStopping { notify } => notify.wait().await,
+            StopResult::NeedsWaitForLoopExit {
+                run_loop_handle,
+                notify,
+            } => {
+                run_loop_handle.await.expect("Failed to join run loop");
 
-                // Publishing the provided initialization error to all pending invocations.
-                // We cannot persist these failures, so they remain pending in the oplog, and
-                // on next recovery they will be retried, but we still want waiting callers
-                // to get the error.
-                for item in queued_items {
-                    match item {
-                        QueuedWorkerInvocation::External {
-                            invocation: inner,
-                            canceled,
-                        } => {
-                            if !canceled {
-                                if let Some(idempotency_key) = inner.invocation.idempotency_key() {
-                                    self.events().publish(Event::InvocationCompleted {
-                                        worker_id: self.owned_worker_id.worker_id(),
-                                        idempotency_key: idempotency_key.clone(),
-                                        result: Err(fail_pending_invocations.clone()),
-                                    })
-                                }
-                            }
-                        }
-                        QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
-                            let _ = sender.send(Err(fail_pending_invocations.clone()));
-                        }
-                        QueuedWorkerInvocation::ReadFile { sender, .. } => {
-                            let _ = sender.send(Err(fail_pending_invocations.clone()));
-                        }
-                        QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
-                            let _ = sender.send(Err(fail_pending_invocations.clone()));
+                let mut instance_guard = self.instance.lock().await;
+                assert!(matches!(*instance_guard, WorkerInstance::Stopping(_)));
+                *instance_guard = WorkerInstance::Unloaded;
+                drop(instance_guard);
+
+                notify.set();
+            }
+        }
+    }
+
+    async fn fail_pending_invocation(&self, error: WorkerExecutorError) {
+        let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
+
+        // Publishing the provided initialization error to all pending invocations.
+        // We cannot persist these failures, so they remain pending in the oplog, and
+        // on next recovery they will be retried, but we still want waiting callers
+        // to get the error.
+        for item in queued_items {
+            match item {
+                QueuedWorkerInvocation::External {
+                    invocation: inner,
+                    canceled,
+                } => {
+                    if !canceled {
+                        if let Some(idempotency_key) = inner.invocation.idempotency_key() {
+                            self.events().publish(Event::InvocationCompleted {
+                                worker_id: self.owned_worker_id.worker_id(),
+                                idempotency_key: idempotency_key.clone(),
+                                result: Err(error.clone()),
+                            })
                         }
                     }
                 }
-            };
-
-            if !called_from_invocation_loop {
-                // If stop was called from outside, we wait until the invocation queue stops
-                // (it happens by `running` getting dropped)
-                let run_loop_handle = running.stop(); // this drops `running`
-                run_loop_handle.await.expect("Worker run loop failed");
+                QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::ReadFile { sender, .. } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
             }
-        } else {
-            debug!("Worker was already stopped");
         }
-        self.stopping.store(false, Ordering::Release);
+    }
+
+    // Lock a worker that is not in stopping state.
+    async fn lock_non_stopping_worker(&self) -> MutexGuard<'_, WorkerInstance> {
+        loop {
+            let instance_guard = self.instance.lock().await;
+
+            match &*instance_guard {
+                WorkerInstance::Stopping(stopping) => {
+                    let notify = stopping.notify.clone();
+                    drop(instance_guard);
+                    notify.wait().await;
+                }
+                _ => return instance_guard,
+            }
+        }
+    }
+
+    // Lock a worker in either Unloaded or Deleting state.
+    async fn lock_stopped_worker(
+        &self,
+        fail_pending_invocations: Option<WorkerExecutorError>,
+    ) -> MutexGuard<'_, WorkerInstance> {
+        loop {
+            self.stop_internal(false, fail_pending_invocations.clone())
+                .await;
+            let instance_guard = self.instance.lock().await;
+
+            if let WorkerInstance::Deleting | WorkerInstance::Unloaded = &*instance_guard {
+                return instance_guard;
+            }
+        }
     }
 
     async fn restart_on_oom(
@@ -1255,12 +1470,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .get_metadata(&component_id, component_version)
                     .await?;
 
+                let agent_id = if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+                    Some(agent_id)
+                } else {
+                    None
+                };
+
                 let execution_status = ExecutionStatus::Suspended {
                     component_type: component.component_type,
                     timestamp: Timestamp::now_utc(),
                 };
 
-                let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+                let mut worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+                WorkerConfig::enrich_env(
+                    &mut worker_env,
+                    &owned_worker_id.worker_id,
+                    &agent_id,
+                    component.versioned_component_id.version,
+                );
 
                 let created_at = Timestamp::now_utc();
 
@@ -1295,7 +1530,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     last_known_status: initial_status.clone(),
                 };
 
-                // Alternatively we could just write the oplog entry and recompute the initial_worker_metadata from it.
+                // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
                 // both options are equivalent here, this is just cheaper.
 
                 let initial_oplog_entry = OplogEntry::create(
@@ -1341,20 +1576,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     )
                     .await;
 
-                let agent_id = if component.metadata.is_agent() {
-                    let agent_id =
-                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .map_err(|err| {
-                                WorkerExecutorError::invalid_request(format!(
-                                    "Invalid agent id: {}",
-                                    err
-                                ))
-                            })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
-
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
                     current_status: initial_status,
@@ -1366,51 +1587,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
-        let (sender, receiver) = oneshot::channel();
-
-        let mutex = self.instance.lock().await;
-
-        self.queue
-            .write()
-            .await
-            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
-
-        if let WorkerInstance::Running(running) = &*mutex {
-            running.sender.send(WorkerCommand::Invocation).unwrap();
-        };
-
-        drop(mutex);
-
-        receiver.await.unwrap()
-    }
-
-    pub async fn add_to_oplog(&self, entry: OplogEntry) {
-        self.oplog.add(entry).await
-    }
-
-    pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
-        let update_state_lock_guard = self.update_state_lock.lock().await;
-
-        self.commit_and_update_state_inner(commit_level).await;
-        let new_index = self.oplog.current_oplog_index().await;
-
-        // ensure we hold mutex for the full duration
-        drop(update_state_lock_guard);
-        new_index
-    }
-
-    pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        self.add_to_oplog(entry).await;
-        self.commit_oplog_and_update_state(CommitLevel::Always)
-            .await
-    }
-
     // TODO: should be private, exposed for the invocation loop for now.
     pub async fn reattach_worker_status(&self) {
         let update_state_lock_guard = self.update_state_lock.lock().await;
 
-        self.commit_and_update_state_inner(CommitLevel::Always)
+        self.commit_and_update_state_inner(&update_state_lock_guard, CommitLevel::Always)
             .await;
         if self
             .last_known_status_detached
@@ -1434,7 +1615,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     // must be called within a held update_state_lock lock.
-    async fn commit_and_update_state_inner(&self, commit_level: CommitLevel) {
+    async fn commit_and_update_state_inner(
+        &self,
+        _update_state_lock_guard: &MutexGuard<'_, ()>,
+        commit_level: CommitLevel,
+    ) {
         let new_entries = self.oplog.commit(commit_level).await;
 
         if !self.last_known_status_detached.load(Ordering::Acquire) {
@@ -1468,6 +1653,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
     }
+
+    async fn start_waiting_worker(
+        this: Arc<Worker<Ctx>>,
+        permit: OwnedSemaphorePermit,
+        oom_retry_count: u32,
+        start_attempt: Uuid,
+    ) {
+        let mut instance_guard = this.instance.lock().await;
+        match &*instance_guard {
+            WorkerInstance::WaitingForPermit(waiting_worker)
+                if waiting_worker.start_attempt == start_attempt =>
+            {
+                *instance_guard = WorkerInstance::Running(
+                    RunningWorker::new(
+                        this.owned_worker_id.clone(),
+                        this.queue.clone(),
+                        this.clone(),
+                        permit,
+                        oom_retry_count,
+                    )
+                    .await,
+                );
+            }
+            _ => {
+                debug!("worker was not waiting for permit anymore, not starting");
+            }
+        }
+    }
 }
 
 fn merge_worker_env_with_component_env(
@@ -1494,35 +1707,25 @@ fn merge_worker_env_with_component_env(
     result
 }
 
+#[derive(Debug)]
 enum WorkerInstance {
     Unloaded,
-    #[allow(dead_code)]
     WaitingForPermit(WaitingWorker),
     Running(RunningWorker),
+    Stopping(StoppingWorker),
+    Deleting,
 }
 
 impl WorkerInstance {
-    pub fn is_unloaded(&self) -> bool {
-        matches!(self, WorkerInstance::Unloaded)
-    }
-
-    #[allow(unused)]
-    pub fn is_running(&self) -> bool {
-        matches!(self, WorkerInstance::Running(_))
-    }
-
-    #[allow(unused)]
-    pub fn is_waiting_for_permit(&self) -> bool {
-        matches!(self, WorkerInstance::WaitingForPermit(_))
-    }
-
-    pub fn unload(&mut self) -> WorkerInstance {
-        mem::replace(self, WorkerInstance::Unloaded)
+    fn is_deleting(&self) -> bool {
+        matches!(self, Self::Deleting)
     }
 }
 
+#[derive(Debug)]
 struct WaitingWorker {
     handle: Option<JoinHandle<()>>,
+    start_attempt: Uuid,
 }
 
 impl WaitingWorker {
@@ -1541,15 +1744,22 @@ impl WaitingWorker {
                 .map(|id| id.agent_type.clone())
                 .unwrap_or_else(|| "-".to_string()),
         );
+
+        let start_attempt = Uuid::new_v4();
+
         let handle = tokio::task::spawn(
             async move {
                 let permit = parent.active_workers().acquire(memory_requirement).await;
-                Worker::start_with_permit(parent, permit, oom_retry_count).await;
+                debug!("Attempting to start worker after acquiring enough permits");
+                Worker::start_waiting_worker(parent, permit, oom_retry_count, start_attempt).await;
+                // If we do not start the worker here we will drop the permits here, which will release them to the host.
             }
             .instrument(span),
         );
+
         WaitingWorker {
             handle: Some(handle),
+            start_attempt,
         }
     }
 }
@@ -1562,6 +1772,7 @@ impl Drop for WaitingWorker {
     }
 }
 
+#[derive(Debug)]
 struct RunningWorker {
     handle: Option<JoinHandle<()>>,
     sender: UnboundedSender<WorkerCommand>,
@@ -1706,9 +1917,18 @@ impl RunningWorker {
         };
 
         let component_env = component_metadata.env.clone();
-
-        let worker_env =
+        let mut worker_env =
             merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+
+        // NOTE: calling enrich_env here again to apply changes compared to the initial one, such as the latest
+        // component version. This should not be done like this - changes to the environment should be derived
+        // from the oplog instead.
+        WorkerConfig::enrich_env(
+            &mut worker_env,
+            &parent.owned_worker_id.worker_id,
+            &parent.agent_id,
+            component_metadata.versioned_component_id.version,
+        );
 
         let component_version_for_replay = worker_metadata
             .last_known_status
@@ -1746,9 +1966,6 @@ impl RunningWorker {
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(
-                worker_metadata.worker_id.clone(),
-                &parent.agent_id,
-                component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions,
@@ -1842,6 +2059,11 @@ impl RunningWorker {
     }
 }
 
+#[derive(Debug)]
+struct StoppingWorker {
+    notify: OneShotEvent,
+}
+
 #[derive(Debug, Clone)]
 struct FailedInvocationResult {
     pub trap_type: TrapType,
@@ -1875,9 +2097,9 @@ impl InvocationResult {
 
                     Ok(value)
                 }
-                OplogEntry::Error { error, .. } => {
+                OplogEntry::Error { error, retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
-                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr })
+                    Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }
                 OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string() }),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
@@ -1975,4 +2197,16 @@ struct GetOrCreateWorkerResult {
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     agent_id: Option<AgentId>,
     oplog: Arc<dyn Oplog>,
+}
+
+#[derive(Debug)]
+enum StopResult {
+    AlreadyStopping {
+        notify: OneShotEvent,
+    },
+    Stopped,
+    NeedsWaitForLoopExit {
+        run_loop_handle: JoinHandle<()>,
+        notify: OneShotEvent,
+    },
 }

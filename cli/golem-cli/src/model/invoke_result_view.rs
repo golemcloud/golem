@@ -18,7 +18,7 @@ use crate::model::wave::type_wave_compatible;
 use crate::model::IdempotencyKey;
 use anyhow::{anyhow, bail};
 use golem_client::model::InvokeResult;
-use golem_wasm_rpc::{print_value_and_type, ValueAndType};
+use golem_wasm::{print_value_and_type, ValueAndType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

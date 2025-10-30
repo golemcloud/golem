@@ -14,11 +14,14 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
+use crate::model::TrapType;
 use crate::preview2::golem::durability::durability;
 use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasOplog, HasWorker};
+use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
+use anyhow::Error;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
@@ -26,8 +29,8 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, Pe
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
-use std::fmt::Debug;
+use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
+use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
@@ -114,6 +117,14 @@ pub trait DurabilityHost {
     async fn read_persisted_durable_function_invocation(
         &mut self,
     ) -> Result<PersistedDurableFunctionInvocation, WorkerExecutorError>;
+
+    /// Checks if the current retry policy allows more retries, and if yes, then returns
+    /// with `Err(failure)`. This error should be directly returned from host function
+    /// implementations, triggering a retry.
+    ///
+    /// If retrying is not possible, the function returns Ok(()) and the host function
+    /// can continue persisting the failed result permanently.
+    async fn try_trigger_retry(&mut self, failure: Error) -> anyhow::Result<()>;
 }
 
 impl From<durability::DurableFunctionType> for DurableFunctionType {
@@ -465,6 +476,36 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             }
         }
     }
+
+    async fn try_trigger_retry(&mut self, failure: Error) -> anyhow::Result<()> {
+        let latest_status = self
+            .public_state
+            .worker()
+            .get_non_detached_last_known_status()
+            .await;
+        let current_retry_point = self.state.current_retry_point;
+
+        let default_retry_config = &self.state.config.retry;
+        let retry_config = self
+            .state
+            .overridden_retry_policy
+            .as_ref()
+            .unwrap_or(default_retry_config)
+            .clone();
+        let trap_type = TrapType::from_error::<Ctx>(&failure, current_retry_point);
+        let decision = Self::get_recovery_decision_on_trap(
+            &retry_config,
+            &latest_status.current_retry_count,
+            &trap_type,
+        );
+
+        match decision {
+            RetryDecision::Immediate
+            | RetryDecision::Delayed(_)
+            | RetryDecision::ReacquirePermits => Err(failure),
+            RetryDecision::None => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -508,6 +549,24 @@ impl<SOk, SErr> Durability<SOk, SErr> {
 
     pub fn is_live(&self) -> bool {
         self.durable_execution_state.is_live
+    }
+
+    /// Checks if the current retry policy allows more retries, and if yes, then returns
+    /// with `Err(failure)`. This error should be directly returned from host function
+    /// implementations, triggering a retry.
+    ///
+    /// If retrying is not possible, the function returns Ok(()) and the host function
+    /// can continue persisting the failed result permanently.
+    pub async fn try_trigger_retry<Ok, Err: Display>(
+        &self,
+        ctx: &mut impl DurabilityHost,
+        result: &Result<Ok, Err>,
+    ) -> anyhow::Result<()> {
+        if let Err(err) = result {
+            ctx.try_trigger_retry(Error::msg(err.to_string())).await
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn persist<SIn, Ok, Err>(

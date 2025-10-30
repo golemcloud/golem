@@ -30,7 +30,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -470,7 +470,7 @@ mod tests {
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_wasm_rpc::Value;
+    use golem_wasm::Value;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -637,11 +637,13 @@ mod tests {
             )
             .await;
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         assert_eq!(
             result,
             HashMap::from_iter(vec![
@@ -771,11 +773,14 @@ mod tests {
         svc.cancel(s2).await;
         svc.cancel(s3).await;
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
+
         assert_eq!(
             result,
             HashMap::from([
@@ -885,11 +890,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1003,11 +1010,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1128,11 +1137,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1240,11 +1251,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,

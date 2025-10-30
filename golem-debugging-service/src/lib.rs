@@ -172,7 +172,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
 
         // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -359,7 +359,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
     golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-    golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repl_state::ReplState;
-use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
+use golem_wasm::analysis::{TypeEnum, TypeVariant};
 use rib::*;
 use std::collections::HashMap;
 use std::fmt::Display;

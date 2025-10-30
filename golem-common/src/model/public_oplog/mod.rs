@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "protobuf")]
 mod protobuf;
 
 #[cfg(test)]
@@ -32,28 +31,26 @@ use crate::model::{
     TransactionId, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
-use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
+use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
+use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     #[unit_case]
@@ -61,26 +58,23 @@ pub enum PublicUpdateDescription {
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WriteRemoteTransactionParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
@@ -128,17 +122,15 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DetailsParameter {
     pub details: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryConfig {
     pub max_attempts: u32,
@@ -162,9 +154,8 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
@@ -196,27 +187,35 @@ impl IntoValue for ExportedFunctionParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct ManualUpdateParameters {
     pub target_version: ComponentVersion,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicWorkerInvocation {
     ExportedFunction(ExportedFunctionParameters),
     ManualUpdate(ManualUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationDescription {
     pub installation_id: PluginInstallationId,
@@ -241,9 +240,8 @@ impl PluginInstallationDescription {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct CreateParameters {
     pub timestamp: Timestamp,
@@ -260,9 +258,8 @@ pub struct CreateParameters {
     pub initial_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
@@ -274,18 +271,16 @@ pub struct ImportedFunctionInvokedParameters {
     pub durable_function_type: PublicDurableFunctionType,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct StringAttributeValue {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
@@ -301,9 +296,8 @@ impl From<AttributeValue> for PublicAttributeValue {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicLocalSpanData {
     pub span_id: SpanId,
@@ -314,26 +308,23 @@ pub struct PublicLocalSpanData {
     pub inherited: bool,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicSpanData {
     LocalSpan(PublicLocalSpanData),
@@ -349,9 +340,8 @@ impl PublicSpanData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
@@ -364,9 +354,8 @@ pub struct ExportedFunctionInvokedParameters {
     pub invocation_context: Vec<Vec<PublicSpanData>>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
@@ -375,26 +364,25 @@ pub struct ExportedFunctionCompletedParameters {
     pub consumed_fuel: i64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TimestampParameter {
     pub timestamp: Timestamp,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorParameters {
     pub timestamp: Timestamp,
     pub error: String,
+    #[wit_field(skip)]
+    pub retry_from: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct JumpParameters {
     pub timestamp: Timestamp,
@@ -419,41 +407,36 @@ impl IntoValue for JumpParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeRetryPolicyParameters {
     pub timestamp: Timestamp,
     pub new_policy: PublicRetryConfig,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct EndRegionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
 pub struct PendingWorkerInvocationParameters {
     pub timestamp: Timestamp,
     pub invocation: PublicWorkerInvocation,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub description: PublicUpdateDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
@@ -461,9 +444,8 @@ pub struct SuccessfulUpdateParameters {
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
@@ -471,18 +453,16 @@ pub struct FailedUpdateParameters {
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct GrowMemoryParameters {
     pub timestamp: Timestamp,
     pub delta: u64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
@@ -491,9 +471,8 @@ pub struct ResourceParameters {
     pub owner: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DescribeResourceParameters {
     pub timestamp: Timestamp,
@@ -502,9 +481,8 @@ pub struct DescribeResourceParameters {
     pub resource_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LogParameters {
     pub timestamp: Timestamp,
@@ -513,27 +491,24 @@ pub struct LogParameters {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ActivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DeactivatePluginParameters {
     pub timestamp: Timestamp,
     pub plugin: PluginInstallationDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RevertParameters {
     pub timestamp: Timestamp,
@@ -558,18 +533,16 @@ impl IntoValue for RevertParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct CancelInvocationParameters {
     pub timestamp: Timestamp,
     pub idempotency_key: IdempotencyKey,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct StartSpanParameters {
     pub timestamp: Timestamp,
@@ -579,18 +552,16 @@ pub struct StartSpanParameters {
     pub attributes: Vec<PublicAttribute>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct FinishSpanParameters {
     pub timestamp: Timestamp,
     pub span_id: SpanId,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct SetSpanAttributeParameters {
     pub timestamp: Timestamp,
@@ -599,27 +570,24 @@ pub struct SetSpanAttributeParameters {
     pub value: PublicAttributeValue,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ChangePersistenceLevelParameters {
     pub timestamp: Timestamp,
     pub persistence_level: PersistenceLevel,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteTransactionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BeginRemoteTransactionParameters {
     pub timestamp: Timestamp,
@@ -634,9 +602,8 @@ pub struct BeginRemoteTransactionParameters {
 /// The rest of the system will always use `OplogEntry` internally - the only point where the
 /// oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
 /// before exposing an oplog entry through a public API.
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicOplogEntry {
     Create(CreateParameters),
@@ -1215,16 +1182,14 @@ impl PublicOplogEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct OplogCursor {
     pub next_oplog_index: u64,
     pub current_component_version: u64,
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromParameter for OplogCursor {
     fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
         let parts: Vec<&str> = value.split('-').collect();

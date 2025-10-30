@@ -20,7 +20,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
@@ -51,6 +51,8 @@ pub struct ReplayState {
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
     last_replayed_index: AtomicOplogIndex,
+    /// The oplog index of the last non-hint entry read
+    last_replayed_non_hint_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
 }
@@ -79,6 +81,7 @@ impl ReplayState {
             oplog_service,
             oplog,
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
+            last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
             internal: Arc::new(RwLock::new(InternalReplayState {
                 skipped_regions,
@@ -102,6 +105,10 @@ impl ReplayState {
 
     pub fn last_replayed_index(&self) -> OplogIndex {
         self.last_replayed_index.get()
+    }
+
+    pub fn last_replayed_non_hint_index(&self) -> OplogIndex {
+        self.last_replayed_non_hint_index.get()
     }
 
     pub fn replay_target(&self) -> OplogIndex {
@@ -217,6 +224,7 @@ impl ReplayState {
 
         if condition(&entry) {
             self.skip_forward().await;
+            self.last_replayed_non_hint_index.set(read_idx);
 
             Some((read_idx, entry))
         } else {
@@ -252,7 +260,7 @@ impl ReplayState {
                         logs.insert(hash);
                     }
 
-                    // Moving the replay pointer
+                    // Moving the replay pointer. Leaving last_replayed_non_hint_index unchanged, because this is a hint entry.
                     self.last_replayed_index.set(last_read_idx);
                     // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
                 }
@@ -337,9 +345,13 @@ impl ReplayState {
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> Option<OplogIndex> {
-        self.lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
+        match self
+            .lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
             .await
-            .map(|(idx, _)| idx)
+        {
+            OplogEntryLookupResult::Found { index, .. } => Some(index),
+            OplogEntryLookupResult::NotFound { .. } => None,
+        }
     }
 
     pub async fn lookup_oplog_entry_with_condition(
@@ -347,13 +359,32 @@ impl ReplayState {
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Option<(OplogIndex, OplogEntry)> {
+    ) -> OplogEntryLookupResult {
+        self.lookup_oplog_entry_with_condition_and_state(
+            begin_idx,
+            |entry, idx, ()| end_check(entry, idx),
+            |entry, idx, ()| for_all_intermediate(entry, idx),
+            (),
+            |_, _, ()| {},
+        )
+        .await
+    }
+
+    pub async fn lookup_oplog_entry_with_condition_and_state<State>(
+        &self,
+        begin_idx: OplogIndex,
+        end_check: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
+        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
+        mut state: State,
+        mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
+    ) -> OplogEntryLookupResult {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
         const CHUNK_SIZE: u64 = 1024;
 
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
+        let mut violation = false;
 
         while start < replay_target {
             let entries = self
@@ -382,16 +413,27 @@ impl ReplayState {
                         .skipped_regions
                         .find_next_deleted_region(idx.next());
                 }
-                if end_check(entry, begin_idx) {
-                    return Some((*idx, entry.clone()));
-                } else if !for_all_intermediate(entry, begin_idx) {
-                    return None;
+
+                update_state(entry, *idx, &mut state);
+
+                if end_check(entry, begin_idx, &state) {
+                    return OplogEntryLookupResult::Found {
+                        index: *idx,
+                        entry: Box::new(entry.clone()),
+                        violates_for_all: violation,
+                    };
+                }
+
+                if !for_all_intermediate(entry, begin_idx, &state) {
+                    violation = true;
                 }
             }
             start = start.range_end(entries.len() as u64).next();
         }
 
-        None
+        OplogEntryLookupResult::NotFound {
+            violates_for_all: violation,
+        }
     }
 
     // TODO: can we rewrite this on top of get_oplog_entry?
@@ -410,7 +452,7 @@ impl ReplayState {
                         invocation_context: spans,
                         ..
                     } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
+                        let request: Vec<golem_wasm::protobuf::Val> = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await
@@ -514,4 +556,17 @@ impl ReplayState {
             .into_values()
             .collect()
     }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum OplogEntryLookupResult {
+    Found {
+        index: OplogIndex,
+        entry: Box<OplogEntry>,
+        violates_for_all: bool,
+    },
+    NotFound {
+        violates_for_all: bool,
+    },
 }

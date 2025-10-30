@@ -173,6 +173,9 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub server_no_limit_change: bool,
+
+    #[arg(skip)]
+    pub enable_wasmtime_fs_cache: bool,
 }
 
 impl GolemCliGlobalFlags {
@@ -250,6 +253,13 @@ impl GolemCliGlobalFlags {
 
         if let Ok(server_no_limit_change) = std::env::var("GOLEM_SERVER_NO_LIMIT_CHANGE") {
             self.server_no_limit_change = server_no_limit_change
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
+        }
+
+        if let Ok(enable_wasmtime_fs_cache) = std::env::var("GOLEM_ENABLE_WASMTIME_FS_CACHE") {
+            self.enable_wasmtime_fs_cache = enable_wasmtime_fs_cache
                 .parse::<LenientBool>()
                 .map(|b| b.into())
                 .unwrap_or_default()
@@ -1203,6 +1213,24 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Idempotency key of the invocation to be cancelled
             idempotency_key: IdempotencyKey,
+        },
+        /// List files in a worker's directory
+        Files {
+            #[command(flatten)]
+            worker_name: AgentIdArgs,
+            /// Path to the directory to list files from
+            #[arg(default_value = "/")]
+            path: String,
+        },
+        /// Get contents of a file in a worker
+        FileContents {
+            #[command(flatten)]
+            worker_name: AgentIdArgs,
+            /// Path to the file to get contents from
+            path: String,
+            /// Local path (including filename) to save the file contents. Optional.
+            #[arg(long)]
+            output: Option<String>,
         },
     }
 }

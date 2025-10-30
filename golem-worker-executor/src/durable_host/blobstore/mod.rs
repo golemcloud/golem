@@ -48,6 +48,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .and_then(|_| svc.get_container(account_id, name.clone()))
                 .await
                 .map(|r| r.unwrap());
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, name.clone(), result).await
         } else {
             durability.replay(self).await
@@ -83,6 +84,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .get_container(account_id, name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, name.clone(), result).await
         } else {
             durability.replay(self).await
@@ -116,6 +118,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .delete_container(account_id, name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, name.clone(), result).await
         } else {
             durability.replay(self).await
@@ -145,6 +148,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .container_exists(account_id, name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, name, result).await
         } else {
             durability.replay(self).await
@@ -187,6 +191,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     dest.object,
                 )
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -229,6 +234,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     dest.object,
                 )
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await

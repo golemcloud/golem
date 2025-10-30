@@ -47,11 +47,11 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::wasmtime::ResourceStore;
+use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 use wasmtime::component::{Component, Instance, Linker};
@@ -303,6 +303,10 @@ pub trait InvocationHooks {
         consumed_fuel: i64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Gets the retry point that should be associated with a current error. Errors are grouped
+    /// by this information. The current oplog index is a good default.
+    async fn get_current_retry_point(&self) -> OplogIndex;
 }
 
 #[async_trait]
@@ -352,29 +356,29 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError>;
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
-    /// This can be used to restore the previous state of the worker but by general it can be no-op.
+    /// This can be used to restore the previous state of the worker, but by general it can be no-op.
     ///
-    /// If the result is true, the instance
+    /// If the result is:
+    /// - Err() - a fatal error happened during preparation that cannot be retried
+    /// - Ok(None) - the preparation succeeded and the instance is ready to be used
+    /// - Ok(Some(RetryDecision::Immediate)) - the preparation has been interrupted by an error but should be retried immediately
+    /// - Ok(Some(RetryDecision::Delayed())) - the preparation has been interrupted by an error and should be retried after a delay
+    /// - Ok(Some(RetryDecision::ReacquirePermits)) - the preparation has been interrupted by an error, but should be retried immediately after dropping and reacquiring te permits
+    /// - Ok(Some(RetryDecision::None)) - the preparation has been interrupted and should not be retried, but it is not an error (example: suspend after resuming a previously interrupted invocation)
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError>;
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError>;
-
-    /// Callback called when a worker is deleted
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Callback called when the executor's shard assignment has been changed
@@ -413,7 +417,9 @@ pub trait InvocationContextManagement {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
+
     async fn start_child_span(
         &mut self,
         parent: &SpanId,

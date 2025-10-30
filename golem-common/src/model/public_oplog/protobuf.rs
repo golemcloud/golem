@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_span, oplog_entry, worker_invocation, wrapped_function_type, AttributeValue,
     ExternalParentSpan, InvocationSpan, LocalInvocationSpan,
 };
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -226,6 +226,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParameters {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 error: error.error,
+                retry_from: OplogIndex::from_u64(error.retry_from),
             })),
             oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(TimestampParameter {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -602,6 +603,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
                         error: error.error,
+                        retry_from: error.retry_from.0,
                     },
                 )),
             },

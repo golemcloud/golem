@@ -123,6 +123,7 @@ pub fn update_status_with_new_entries(
         last_known.overridden_retry_config,
         default_retry_policy,
         &skipped_regions,
+        &deleted_regions,
         &new_entries,
     );
 
@@ -197,20 +198,44 @@ pub fn update_status_with_new_entries(
 
 fn calculate_latest_worker_status(
     mut current_status: WorkerStatus,
-    mut current_retry_count: u32,
+    mut current_retry_count: HashMap<OplogIndex, u32>,
     mut current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (WorkerStatus, u32, Option<RetryConfig>) {
+) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
         // Skipping entries in skipped regions, as they are skipped during replay too
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
-        if !matches!(entry, OplogEntry::Error { .. }) {
-            current_retry_count = 0;
+        // Errors are counted in skipped regions too (but not in deleted ones),
+        // otherwise we would not be able to know how many times we retried failures in atomic regions
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            if let OplogEntry::Error {
+                error, retry_from, ..
+            } = entry
+            {
+                let new_count = current_retry_count
+                    .get(retry_from)
+                    .copied()
+                    .unwrap_or_default()
+                    + 1;
+                current_retry_count.insert(*retry_from, new_count);
+                if is_worker_error_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    new_count,
+                ) {
+                    current_status = WorkerStatus::Retrying;
+                } else {
+                    current_status = WorkerStatus::Failed;
+                }
+            }
         }
 
         match entry {
@@ -222,26 +247,14 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::ExportedFunctionInvoked { .. } => {
                 current_status = WorkerStatus::Running;
+                current_retry_count.clear();
             }
             OplogEntry::ExportedFunctionCompleted { .. } => {
                 current_status = WorkerStatus::Idle;
+                current_retry_count.clear();
             }
             OplogEntry::Suspend { .. } => {
                 current_status = WorkerStatus::Suspended;
-            }
-            OplogEntry::Error { error, .. } => {
-                current_retry_count += 1;
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    current_retry_count,
-                ) {
-                    current_status = WorkerStatus::Retrying;
-                } else {
-                    current_status = WorkerStatus::Failed;
-                }
             }
             OplogEntry::NoOp { .. } => {
                 current_status = WorkerStatus::Running;
@@ -318,6 +331,9 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::RolledBackRemoteTransaction { .. } => {
                 current_status = WorkerStatus::Running;
+            }
+            OplogEntry::Error { .. } => {
+                // .. handled separately
             }
         }
     }
@@ -770,7 +786,8 @@ mod test {
     use golem_common::read_only_lock;
     use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_wasm_rpc::Value;
+    use golem_wasm::Value;
+    use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
@@ -1368,37 +1385,34 @@ mod test {
             new_active_plugins: &HashSet<PluginInstallationId>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
-            self.add(
-                rounded(OplogEntry::successful_update(
-                    *update_description.target_version(),
-                    new_component_size,
-                    new_active_plugins.clone(),
-                )),
-                move |mut status| {
-                    let pending = status.pending_updates.pop_front();
-                    status.successful_updates.push(SuccessfulUpdateRecord {
-                        timestamp: pending.unwrap().timestamp,
-                        target_version: *update_description.target_version(),
-                    });
-                    status.component_size = new_component_size;
-                    status.component_version = *update_description.target_version();
-                    status.active_plugins = new_active_plugins.clone();
+            let entry = rounded(OplogEntry::successful_update(
+                *update_description.target_version(),
+                new_component_size,
+                new_active_plugins.clone(),
+            ));
+            self.add(entry.clone(), move |mut status| {
+                let _ = status.pending_updates.pop_front();
+                status.successful_updates.push(SuccessfulUpdateRecord {
+                    timestamp: entry.timestamp(),
+                    target_version: *update_description.target_version(),
+                });
+                status.component_size = new_component_size;
+                status.component_version = *update_description.target_version();
+                status.active_plugins = new_active_plugins.clone();
 
-                    if status.skipped_regions.is_overridden() {
-                        status.skipped_regions.merge_override();
-                        status.total_linear_memory_size = old_status.total_linear_memory_size;
-                        status.owned_resources = HashMap::new();
-                    }
+                if status.skipped_regions.is_overridden() {
+                    status.skipped_regions.merge_override();
+                    status.total_linear_memory_size = old_status.total_linear_memory_size;
+                    status.owned_resources = HashMap::new();
+                }
 
-                    if let UpdateDescription::SnapshotBased { target_version, .. } =
-                        update_description
-                    {
-                        status.component_version_for_replay = target_version;
-                    };
+                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                {
+                    status.component_version_for_replay = target_version;
+                };
 
-                    status
-                },
-            )
+                status
+            })
         }
 
         pub fn failed_update(self, update_description: UpdateDescription) -> Self {
