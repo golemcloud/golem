@@ -4,8 +4,6 @@ package golem.workerexecutor.v1;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
-import "golem/common/plugin_installation_id.proto";
-import "golem/common/project_id.proto";
 import "golem/common/revert_worker_response.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";

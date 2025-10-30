@@ -243,7 +243,7 @@ pub struct InvokeResult {
 #[oai(rename_all = "camelCase")]
 pub struct ResourceLimits {
     pub available_fuel: i64,
-    pub max_memory_per_worker: i64,
+    pub max_memory_per_worker: u64,
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {

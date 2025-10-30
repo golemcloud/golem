@@ -16,6 +16,7 @@ use super::{
     AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
     RandomExecutor, ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
+use crate::service::limit::LimitService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -43,7 +44,6 @@ use golem_common::model::{
     ComponentFileSystemNode, FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_service_base::clients::limit::LimitService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex};

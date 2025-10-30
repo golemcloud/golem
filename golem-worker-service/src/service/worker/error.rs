@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
+use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::limit::LimitError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +27,9 @@ pub enum WorkerServiceError {
     #[error(transparent)]
     Component(#[from] ComponentServiceError),
     #[error(transparent)]
-    LimitError(#[from] LimitError),
+    LimitError(#[from] LimitServiceError),
+    #[error(transparent)]
+    AuthError(#[from] AuthServiceError),
     #[error(transparent)]
     InternalCallError(CallWorkerExecutorError),
     #[error(transparent)]
@@ -61,6 +64,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
+            Self::AuthError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -85,6 +89,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             | WorkerServiceError::AccountIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)
             | WorkerServiceError::FileNotFound(_)
+            | WorkerServiceError::Component(ComponentServiceError::ComponentNotFound)
             | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
                 Self::NotFound(ErrorBody {
                     error: error.to_safe_string(),
@@ -97,9 +102,17 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
                 })
             }
 
+            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_)) => {
+                Self::LimitExceeded(ErrorBody {
+                    error: error.to_safe_string(),
+                })
+            }
+
             WorkerServiceError::Internal(_)
             | WorkerServiceError::InternalCallError(_)
-            | WorkerServiceError::LimitError(LimitError::InternalClientError(_)) => {
+            | WorkerServiceError::LimitError(_)
+            | WorkerServiceError::AuthError(_)
+            | WorkerServiceError::Component(ComponentServiceError::InternalError(_)) => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {
                         details: error.to_safe_string(),
@@ -109,20 +122,6 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
 
             WorkerServiceError::GolemError(worker_execution_error) => {
                 Self::InternalError(worker_execution_error.into())
-            }
-
-            WorkerServiceError::Component(component) => component.into(),
-
-            WorkerServiceError::LimitError(LimitError::LimitExceeded(_)) => {
-                Self::LimitExceeded(ErrorBody {
-                    error: error.to_safe_string(),
-                })
-            }
-
-            WorkerServiceError::LimitError(LimitError::Unauthorized(_)) => {
-                Self::Unauthorized(ErrorBody {
-                    error: error.to_safe_string(),
-                })
             }
         }
     }

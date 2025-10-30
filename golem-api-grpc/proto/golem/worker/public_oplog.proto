@@ -4,7 +4,6 @@ package golem.worker;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
-import "golem/common/plugin_installation_id.proto";
 import "golem/common/environment.proto";
 import "golem/component/agent.proto";
 import "golem/worker/idempotency_key.proto";

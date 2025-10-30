@@ -3,8 +3,6 @@ syntax = "proto3";
 package golem.worker;
 
 import "golem/common/account_id.proto";
-import "golem/common/project_id.proto";
-import "golem/common/plugin_installation_id.proto";
 import "golem/component/agent.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";

@@ -14,31 +14,18 @@
 
 use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
-use golem_api_grpc::proto::golem::component::v1::{
-    get_installed_plugins_response, GetInstalledPluginsRequest,
-};
-use golem_api_grpc::proto::golem::component::v1::{
-    get_plugin_registration_by_id_response, GetPluginRegistrationByIdRequest,
-};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::component::{
     ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::RetryConfig;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::grpc::authorised_grpc_request;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::plugin_registration::PluginRegistration;
-use http::Uri;
 use std::sync::Arc;
-use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait PluginsService: Send + Sync {
@@ -74,15 +61,7 @@ pub trait PluginsService: Send + Sync {
 
 pub fn configured(config: &PluginServiceConfig) -> Arc<dyn PluginsService> {
     let client = CachedPlugins::new(
-        PluginsGrpc::new(
-            config.uri(),
-            config
-                .access_token
-                .parse::<Uuid>()
-                .expect("Access token must be an UUID"),
-            config.retries.clone(),
-            config.connect_timeout,
-        ),
+        PluginsGrpc::new(config.host.clone(), config.port, config.retries.clone()),
         config.plugin_cache_size,
     );
     Arc::new(client)
@@ -168,46 +147,17 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
 
 #[derive(Clone)]
 struct PluginsGrpc {
-    plugins_client: GrpcClient<PluginServiceClient<Channel>>,
-    components_client: GrpcClient<ComponentServiceClient<Channel>>,
-    access_token: Uuid,
+    client: GrpcRegistryService,
 }
 
 impl PluginsGrpc {
-    pub fn new(
-        endpoint: Uri,
-        access_token: Uuid,
-        retry_config: RetryConfig,
-        connect_timeout: Duration,
-    ) -> Self {
+    pub fn new(host: String, port: u16, retry_config: RetryConfig) -> Self {
         Self {
-            plugins_client: GrpcClient::new(
-                "plugins_service",
-                move |channel| {
-                    PluginServiceClient::new(channel)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                },
-                endpoint.clone(),
-                GrpcClientConfig {
-                    retries_on_unavailable: retry_config.clone(),
-                    connect_timeout,
-                },
-            ),
-            components_client: GrpcClient::new(
-                "component_service",
-                move |channel| {
-                    ComponentServiceClient::new(channel)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                },
-                endpoint,
-                GrpcClientConfig {
-                    retries_on_unavailable: retry_config.clone(),
-                    ..Default::default()
-                },
-            ),
-            access_token,
+            client: GrpcRegistryService::new(&RemoteServiceConfig {
+                host,
+                port,
+                retries: retry_config,
+            }),
         }
     }
 }
@@ -220,81 +170,29 @@ impl PluginsService for PluginsGrpc {
         component_version: ComponentRevision,
         plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
-        let response = self
-            .components_client
-            .call("get_installed_plugins", move |client| {
-                let request = authorised_grpc_request(
-                    GetInstalledPluginsRequest {
-                        component_id: Some(component_id.clone().into()),
-                        version: Some(component_version.0),
-                        auth_ctx: Some(AuthCtx::System.into()),
-                    },
-                    &self.access_token,
-                );
-                Box::pin(client.get_installed_plugins(request))
-            })
+        let component = self
+            .client
+            .get_component_metadata(component_id, component_version, &AuthCtx::System)
             .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!("Failed to get installed plugins: {err:?}"))
-            })?
-            .into_inner();
-        let installations: Vec<InstalledPlugin> = match response.result {
-            None => Err(WorkerExecutorError::runtime("Empty response"))?,
-            Some(get_installed_plugins_response::Result::Success(response)) => response
-                .installations
-                .into_iter()
-                .map(|i| i.try_into())
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(WorkerExecutorError::runtime)?,
-            Some(get_installed_plugins_response::Result::Error(error)) => {
-                Err(WorkerExecutorError::runtime(format!("{error:?}")))?
-            }
-        };
-
-        let mut result = None;
-        for installation in installations {
-            if installation.priority == plugin_priority {
-                result = Some(installation);
-            }
-        }
-
-        result.ok_or(WorkerExecutorError::runtime(
-            "Plugin installation not found",
-        ))
+            .map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component: {e}")))?;
+        component
+            .installed_plugins
+            .into_iter()
+            .find(|ip| ip.priority == plugin_priority)
+            .ok_or(WorkerExecutorError::runtime(
+                "failed to find plugin with priority in component",
+            ))
     }
 
     async fn get_plugin_definition(
         &self,
         plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, WorkerExecutorError> {
-        let response = self
-            .plugins_client
-            .call("get_plugin_by_id", move |client| {
-                let request = authorised_grpc_request(
-                    GetPluginRegistrationByIdRequest {
-                        id: Some(plugin_id.clone().into()),
-                    },
-                    &self.access_token,
-                );
-                Box::pin(client.get_plugin_by_id(request))
-            })
+        self.client
+            .get_plugin_registration_by_id(plugin_id, &AuthCtx::System)
             .await
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!("Failed to get plugin definition: {err:?}"))
-            })?
-            .into_inner();
-
-        match response.result {
-            None => Err(WorkerExecutorError::runtime("Empty response"))?,
-            Some(get_plugin_registration_by_id_response::Result::Success(response)) => Ok(response
-                .plugin
-                .ok_or("Missing plugin field")
-                .map_err(WorkerExecutorError::runtime)?
-                .try_into()
-                .map_err(WorkerExecutorError::runtime)?),
-            Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
-                Err(WorkerExecutorError::runtime(format!("{error:?}")))?
-            }
-        }
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed getting plugin registration: {e}"))
+            })
     }
 }

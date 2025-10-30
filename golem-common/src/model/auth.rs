@@ -17,11 +17,8 @@ use crate::{declare_enums, declare_structs, newtype_uuid};
 use chrono::Utc;
 use strum_macros::{EnumIter, FromRepr};
 
-newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
-newtype_uuid!(
-    TokenSecret,
-    golem_api_grpc::proto::golem::token::TokenSecret
-);
+newtype_uuid!(TokenId);
+newtype_uuid!(TokenSecret);
 
 declare_structs! {
     pub struct Token {
@@ -115,24 +112,3 @@ mod protobuf {
         }
     }
 }
-
-// #[cfg(feature = "protobuf")]
-// mod protobuf {
-//     use super::AccountAction;
-
-//     impl TryFrom<golem_api_grpc::proto::golem::auth::AccountAction> for AccountAction {
-//         type Error = String;
-
-//         fn try_from(
-//             value: golem_api_grpc::proto::golem::auth::AccountAction,
-//         ) -> Result<Self, Self::Error> {
-//             Self::try_from(value as i32)
-//         }
-//     }
-
-//     impl From<AccountAction> for golem_api_grpc::proto::golem::auth::AccountAction {
-//         fn from(value: AccountAction) -> Self {
-//             Self::try_from(value as i32).expect("Encoding AccountAction as protobuf")
-//         }
-//     }
-// }

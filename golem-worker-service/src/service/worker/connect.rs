@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::WorkerStream;
+use crate::service::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::WorkerId;
-use golem_service_base::clients::limit::LimitService;
 use std::sync::Arc;
 use tonic::Status;
 
@@ -25,7 +25,7 @@ pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,
     worker_id: WorkerId,
     account_id: AccountId,
-    limit_service: Arc<dyn LimitService + Sync + Send>,
+    limit_service: Arc<dyn LimitService>,
 }
 
 impl ConnectWorkerStream {
@@ -33,7 +33,7 @@ impl ConnectWorkerStream {
         stream: WorkerStream<LogEvent>,
         worker_id: WorkerId,
         account_id: AccountId,
-        limit_service: Arc<dyn LimitService + Sync + Send>,
+        limit_service: Arc<dyn LimitService>,
     ) -> Self {
         Self {
             stream,

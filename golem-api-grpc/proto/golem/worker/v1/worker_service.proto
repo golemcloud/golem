@@ -3,7 +3,6 @@ syntax = "proto3";
 package golem.worker.v1;
 
 import "golem/common/empty.proto";
-import "golem/common/plugin_installation_id.proto";
 import "golem/common/revert_worker_response.proto";
 import "golem/worker/complete_parameters.proto";
 import "golem/worker/cursor.proto";

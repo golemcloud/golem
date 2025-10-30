@@ -4,7 +4,6 @@ package golem.component.v1;
 
 import public "golem/component/agent.proto";
 import public "golem/component/component_id.proto";
-import public "golem/common/project_id.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/common/environment.proto";
 
