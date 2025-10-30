@@ -31,8 +31,8 @@ pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_derive(Schema)]
-pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
-    agentic::derive_agent_arg(input)
+pub fn derive_schema(input: TokenStream) -> TokenStream {
+    agentic::derive_schema(input)
 }
 
 /// Defines a function as an `Operation` that can be used in transactions

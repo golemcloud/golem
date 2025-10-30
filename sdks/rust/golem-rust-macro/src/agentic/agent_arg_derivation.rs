@@ -16,7 +16,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
+pub fn derive_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
 
