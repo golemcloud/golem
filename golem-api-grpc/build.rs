@@ -8,6 +8,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let golem_wasm_root = find_package_root("golem-wasm");
     let golem_rib_root = find_package_root("golem-rib");
 
+    println!("cargo::rerun-if-changed={golem_wasm_root}/proto");
+    println!("cargo::rerun-if-changed={golem_rib_root}/proto");
+    println!("cargo::rerun-if-changed=proto");
+
     let file_descriptors = protox::compile(
         [
             "proto/golem/account/account.proto",
@@ -22,18 +26,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/common/account_id.proto",
             "proto/golem/common/empty.proto",
             "proto/golem/common/error_body.proto",
-            "proto/golem/common/plugin_installation_id.proto",
-            "proto/golem/common/project_id.proto",
             "proto/golem/common/resource_limits.proto",
             "proto/golem/common/uuid.proto",
             "proto/golem/component/component.proto",
-            "proto/golem/component/component_constraints.proto",
             "proto/golem/component/component_id.proto",
             "proto/golem/component/component_metadata.proto",
             "proto/golem/component/export.proto",
             "proto/golem/component/export_function.proto",
             "proto/golem/component/export_instance.proto",
-            "proto/golem/component/function_constraint.proto",
             "proto/golem/component/function_parameter.proto",
             "proto/golem/component/function_result.proto",
             "proto/golem/component/plugin_registration.proto",
@@ -49,24 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/limit/v1/batch_update_resource_limits.proto",
             "proto/golem/limit/v1/limits_error.proto",
             "proto/golem/limit/v1/limits_service.proto",
-            "proto/golem/project/project.proto",
-            "proto/golem/project/project_data.proto",
-            "proto/golem/project/project_type.proto",
-            "proto/golem/project/v1/project_error.proto",
-            "proto/golem/project/v1/project_service.proto",
             "proto/golem/shardmanager/pod.proto",
             "proto/golem/shardmanager/routing_table.proto",
             "proto/golem/shardmanager/routing_table_entry.proto",
             "proto/golem/shardmanager/shard_id.proto",
             "proto/golem/shardmanager/v1/shard_manager_error.proto",
             "proto/golem/shardmanager/v1/shard_manager_service.proto",
-            "proto/golem/token/create_token_dto.proto",
-            "proto/golem/token/token.proto",
-            "proto/golem/token/token_id.proto",
-            "proto/golem/token/token_secret.proto",
-            "proto/golem/token/unsafe_token.proto",
-            "proto/golem/token/v1/token_error.proto",
-            "proto/golem/token/v1/token_service.proto",
             "proto/golem/worker/complete_parameters.proto",
             "proto/golem/worker/idempotency_key.proto",
             "proto/golem/worker/invoke_parameters.proto",

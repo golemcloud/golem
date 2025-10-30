@@ -10,7 +10,6 @@ fn main() {
     let root_yaml_path = PathBuf::from("../openapi/golem-service.yaml");
     let local_yaml_path = PathBuf::from("openapi/golem-service.yaml");
 
-    println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed={}", root_yaml_path.display());
     println!("cargo::rerun-if-changed={}", local_yaml_path.display());
 
