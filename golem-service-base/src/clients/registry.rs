@@ -24,7 +24,7 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetComponentsRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_component_metadata_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetComponentMetadataRequest, GetComponentsRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
 use crate::model::ResourceLimits;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
@@ -34,6 +34,7 @@ use crate::model::plugin_registration::PluginRegistration;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::agent::RegisteredAgentType;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -79,6 +80,29 @@ pub trait RegistryService: Send + Sync {
         component_id: &ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Vec<u8>, RegistryServiceError>;
+
+    async fn get_component_metadata(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<ComponentDto, RegistryServiceError>;
+
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId
+    ) -> Result<ComponentDto, RegistryServiceError>;
+
+    // agent types api
+    async fn get_all_agent_types(
+        &self,
+        environment_id: &EnvironmentId
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
+
+    async fn get_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError>;
 }
 
 pub struct GrpcRegistryService {
@@ -427,6 +451,204 @@ impl RegistryService for GrpcRegistryService {
                     };
 
                     Ok(bytes)
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_component_metadata(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<ComponentDto, RegistryServiceError> {
+        let result: Result<ComponentDto, RegistryServiceClientError> = with_retries(
+            "components",
+            "get-component-metadata",
+            Some(format!("{component_id} - {component_revision}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_id.clone(),
+                component_revision,
+            ),
+            |(client, component_id, component_revision)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-component-metadata", move |client| {
+                            let request = GetComponentMetadataRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: component_revision.0,
+                                auth_ctx: Some(AuthCtx::System.into()),
+                            };
+
+                            Box::pin(client.get_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_component_metadata_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .component
+                                .ok_or("missing component field".to_string())?
+                                .try_into()?;
+                            Ok(converted)
+                        },
+                        Some(get_component_metadata_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_latest_component_metadata(
+        &self,
+        component_id: &ComponentId
+    ) -> Result<ComponentDto, RegistryServiceError> {
+        let result: Result<ComponentDto, RegistryServiceClientError> = with_retries(
+            "components",
+            "get-latest-component-metadata",
+            Some(format!("{component_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_id.clone()
+            ),
+            |(client, component_id)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-latest-component-metadata", move |client| {
+                            let request = GetLatestComponentRequest {
+                                component_id: Some(component_id.clone().into()),
+                                auth_ctx: Some(AuthCtx::System.into()),
+                            };
+
+                            Box::pin(client.get_latest_component_metadata(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_component_metadata_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .component
+                                .ok_or("missing component field".to_string())?
+                                .try_into()?;
+                            Ok(converted)
+                        },
+                        Some(get_component_metadata_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_all_agent_types(
+        &self,
+        environment_id: &EnvironmentId
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        let result: Result<Vec<RegisteredAgentType>, RegistryServiceClientError> = with_retries(
+            "agent-types",
+            "get-all-agent-types",
+            Some(format!("{environment_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                environment_id.clone()
+            ),
+            |(client, environment_id)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-all-agent-types", move |client| {
+                            let request = GetAllAgentTypesRequest {
+                                environment_id: Some(environment_id.clone().into()),
+                            };
+
+                            Box::pin(client.get_all_agent_types(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_all_agent_types_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .agent_types
+                                .into_iter()
+                                .map(RegisteredAgentType::try_from)
+                                .collect::<Result<_, _>>()?;
+                            Ok(converted)
+                        },
+                        Some(get_all_agent_types_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        name: &str,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        let result: Result<Option<RegisteredAgentType>, RegistryServiceClientError> = with_retries(
+            "agent-types",
+            "get-agent-type",
+            Some(format!("{environment_id} - {name}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                environment_id.clone(),
+                name.to_string()
+            ),
+            |(client, environment_id, name)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-all-agent-types", move |client| {
+                            let request = GetAgentTypeRequest {
+                                environment_id: Some(environment_id.clone().into()),
+                                agent_type: name.clone()
+                            };
+
+                            Box::pin(client.get_agent_type(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_agent_type_response::Result::Success(payload)) => Ok(Some(RegisteredAgentType::try_from(payload)?)),
+                        Some(get_agent_type_response::Result::Error(golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
+                            error: Some(golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error::NotFound(_))
+                        })) => Ok(None),
+                        Some(get_agent_type_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
                 })
             },
             RegistryServiceClientError::is_retriable,

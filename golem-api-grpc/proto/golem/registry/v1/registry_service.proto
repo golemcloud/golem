@@ -36,9 +36,8 @@ service RegistryService {
   // components api
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
-  rpc GetComponentMetadata(GetVersionedComponentRequest) returns (GetComponentMetadataResponse);
+  rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
   rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
-  rpc GetInstalledPlugins (GetInstalledPluginsRequest) returns (GetInstalledPluginsResponse);
 
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
@@ -129,7 +128,7 @@ message DownloadComponentResponse {
   }
 }
 
-message GetVersionedComponentRequest {
+message GetComponentMetadataRequest {
   golem.component.ComponentId componentId = 1;
   uint64 version = 2;
   golem.auth.AuthCtx auth_ctx = 3;
@@ -151,23 +150,6 @@ message GetComponentMetadataSuccessResponse {
   optional golem.component.Component component = 1;
 }
 
-message GetInstalledPluginsRequest {
-  golem.component.ComponentId componentId = 1;
-  optional uint64 version = 2;
-  golem.auth.AuthCtx auth_ctx = 3;
-}
-
-message GetInstalledPluginsResponse {
-  oneof result {
-    GetInstalledPluginsSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message GetInstalledPluginsSuccessResponse {
-  repeated golem.component.PluginInstallation installations = 1;
-}
-
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;
 }
@@ -175,7 +157,7 @@ message GetAllAgentTypesRequest {
 message GetAllAgentTypesResponse {
   oneof result {
     GetAllAgentTypesSuccessResponse success = 1;
-    golem.component.v1.ComponentError error = 2;
+    RegistryServiceError error = 2;
   }
 }
 
@@ -191,6 +173,6 @@ message GetAgentTypeRequest {
 message GetAgentTypeResponse {
   oneof result {
     RegisteredAgentType success = 1;
-    golem.component.v1.ComponentError error = 2;
+    RegistryServiceError error = 2;
   }
 }
