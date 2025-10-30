@@ -61,7 +61,7 @@ echo "   ... and $((MANIFEST_COUNT - 3)) more"
 echo ""
 
 # 6. Start MCP server (in background for demo)
-PORT=9090
+PORT=8088
 echo "6️⃣  Starting MCP server on port $PORT..."
 "$GOLEM_CLI" --serve $PORT > /tmp/mcp-server.log 2>&1 &
 MCP_PID=$!
@@ -92,7 +92,7 @@ echo "  ✅ MCP server implementation confirmed"
 echo "  ✅ $COMMAND_COUNT main command categories"
 echo "  ✅ ~96 total tools (all CLI commands as MCP tools)"
 echo "  ✅ $MANIFEST_COUNT manifest files as MCP resources"
-echo "  ✅ Server running on http://localhost:8082/mcp"
+echo "  ✅ Server running on http://localhost:8088/mcp"
 echo ""
 echo "Press Ctrl+C to stop server (PID: $MCP_PID)"
 echo ""
