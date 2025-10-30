@@ -31,7 +31,7 @@ service RegistryService {
   rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
 
   // plugins api
-  rpc GetPluginById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
+  rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
 
   // components api
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -90,12 +90,12 @@ message GetPluginRegistrationByIdRequest {
 
 message GetPluginRegistrationByIdResponse {
   oneof result {
-    GetPluginByIdSuccessResponse success = 1;
+    GetPluginRegistrationByIdSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
 }
 
-message GetPluginByIdSuccessResponse {
+message GetPluginRegistrationByIdSuccessResponse {
   golem.component.PluginRegistration plugin = 1;
 }
 

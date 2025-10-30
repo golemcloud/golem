@@ -13,11 +13,8 @@
 // limitations under the License.
 
 use super::RemoteServiceConfig;
-use super::authorised_request;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::ErrorBody;
-use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::RetryConfig;
 use golem_common::model::auth::TokenSecret;
@@ -26,23 +23,56 @@ use std::fmt::Display;
 use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use uuid::Uuid;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, AuthenticateTokenRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use crate::model::ResourceLimits;
+use golem_common::model::WorkerId;
+use golem_common::model::account::AccountId;
+use tracing::info;
+use golem_common::model::plugin_registration::{PluginRegistrationId};
+use crate::model::plugin_registration::PluginRegistration;
 
 #[async_trait]
+// mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
 pub trait RegistryService: Send + Sync {
+    // auth api
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, RegistryServiceError>;
+
+    // limits api
+    async fn get_resource_limits(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<ResourceLimits, RegistryServiceError>;
+
+    async fn update_worker_limit(
+        &self,
+        account_id: &AccountId,
+        worker_id: &WorkerId,
+        value: i32,
+    ) -> Result<(), RegistryServiceError>;
+
+    async fn update_worker_connection_limit(
+        &self,
+        account_id: &AccountId,
+        worker_id: &WorkerId,
+        value: i32,
+    ) -> Result<(), RegistryServiceError>;
+
+    // plugins api
+    async fn get_plugin_registration_by_id(
+        &self,
+        plugin_id: &PluginRegistrationId,
+    ) -> Result<PluginRegistration, RegistryServiceError>;
 }
 
 pub struct GrpcRegistryService {
-    auth_service_client: GrpcClient<RegistryServiceClient<Channel>>,
+    client: GrpcClient<RegistryServiceClient<Channel>>,
     retry_config: RetryConfig,
 }
 
 impl GrpcRegistryService {
     pub fn new(config: &RemoteServiceConfig) -> Self {
-        let auth_service_client: GrpcClient<RegistryServiceClient<Channel>> = GrpcClient::new(
+        let client: GrpcClient<RegistryServiceClient<Channel>> = GrpcClient::new(
             "registry",
             |channel| {
                 RegistryServiceClient::new(channel)
@@ -56,7 +86,7 @@ impl GrpcRegistryService {
             },
         );
         Self {
-            auth_service_client,
+            client,
             retry_config: config.retries.clone(),
         }
     }
@@ -70,7 +100,7 @@ impl RegistryService for GrpcRegistryService {
             "authenticate-token",
             None,
             &self.retry_config,
-            &(self.auth_service_client.clone(), token),
+            &(self.client.clone(), token),
             |(client, token)| {
                 Box::pin(async move {
                     let response = client
@@ -90,6 +120,190 @@ impl RegistryService for GrpcRegistryService {
                             Ok(AuthCtx::User(user_auth_ctx))
                         }
                         Some(authenticate_token_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_resource_limits(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<ResourceLimits, RegistryServiceError> {
+        info!(account_id = %account_id, "Getting resource limits");
+        let result: Result<ResourceLimits, RegistryServiceClientError> = with_retries(
+            "limit",
+            "get-resource-limits",
+            Some(account_id.to_string()),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                account_id.clone(),
+            ),
+            |(client, id)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-resource-limits", move |client| {
+                            let request = GetResourceLimitsRequest {
+                                account_id: Some(id.clone().into()),
+                            };
+                            Box::pin(client.get_resource_limits(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(get_resource_limits_response::Result::Success(response)) => {
+                            Ok(response.into())
+                        }
+                        Some(get_resource_limits_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn update_worker_limit(
+        &self,
+        account_id: &AccountId,
+        worker_id: &WorkerId,
+        value: i32,
+    ) -> Result<(), RegistryServiceError> {
+        let result: Result<(), RegistryServiceClientError> = with_retries(
+            "limit",
+            "update-worker-limit",
+            Some(format!("{account_id} - {worker_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                account_id.clone(),
+                worker_id.clone(),
+                value
+            ),
+            |(client, account_id, worker_id, value)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("update-worker-limit", move |client| {
+                            let request = UpdateWorkerLimitRequest {
+                                account_id: Some(account_id.clone().into()),
+                                worker_id: Some(worker_id.clone().into()),
+                                value: *value,
+                            };
+
+                            Box::pin(client.update_worker_limit(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
+                        Some(update_worker_limit_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn update_worker_connection_limit(
+        &self,
+        account_id: &AccountId,
+        worker_id: &WorkerId,
+        value: i32,
+    ) -> Result<(), RegistryServiceError> {
+        let result: Result<(), RegistryServiceClientError> = with_retries(
+            "limit",
+            "update-worker-connection-limit",
+            Some(format!("{account_id} - {worker_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                account_id.clone(),
+                worker_id.clone(),
+                value
+            ),
+            |(client, account_id, worker_id, value)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("update-worker-connection-limit", move |client| {
+                            let request = UpdateWorkerLimitRequest {
+                                account_id: Some(account_id.clone().into()),
+                                worker_id: Some(worker_id.clone().into()),
+                                value: *value,
+                            };
+
+                            Box::pin(client.update_worker_connection_limit(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
+                        Some(update_worker_limit_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn get_plugin_registration_by_id(
+        &self,
+        plugin_id: &PluginRegistrationId,
+    ) -> Result<PluginRegistration, RegistryServiceError> {
+        let result: Result<PluginRegistration, RegistryServiceClientError> = with_retries(
+            "plugins",
+            "get-plugin-registration-by-id",
+            Some(format!("{plugin_id}")),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                plugin_id.clone()
+            ),
+            |(client, plugin_id)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-plugin-registration-by-id", move |client| {
+                            let request = GetPluginRegistrationByIdRequest {
+                                id: Some(plugin_id.clone().into())
+                            };
+
+                            Box::pin(client.get_plugin_registration_by_id(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_plugin_registration_by_id_response::Result::Success(payload)) => {
+                            Ok(payload.plugin.ok_or("missing plugin field".to_string())?.try_into()?)
+                        },
+                        Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
