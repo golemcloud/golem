@@ -15,19 +15,18 @@
 use crate::context::Context;
 use anyhow::Result;
 use rmcp::{
-    schemars::JsonSchema,
-    InitializeResult, Implementation, ServerCapabilities, ServerCapabilitiesTools,
-    ServiceExt, transport::StdioTransport, TransportOptions,
+    schemars::JsonSchema, transport::StdioTransport, Implementation, InitializeResult,
+    ServerCapabilities, ServerCapabilitiesTools, ServiceExt, TransportOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-mod tools;
 mod resources;
+mod tools;
 
-use tools::GolemToolHandler;
 use resources::GolemResources;
+use tools::GolemToolHandler;
 
 pub struct GolemMcpServer {
     ctx: Arc<Context>,
@@ -40,7 +39,7 @@ impl GolemMcpServer {
 
     pub async fn start(&self) -> Result<()> {
         info!("Starting Golem MCP Server");
-        
+
         let server_details = InitializeResult {
             server_info: Implementation {
                 name: "Golem CLI MCP Server".to_string(),
@@ -48,22 +47,23 @@ impl GolemMcpServer {
                 title: Some("Golem CLI MCP Server".to_string()),
             },
             capabilities: ServerCapabilities {
-                tools: Some(ServerCapabilitiesTools {
-                    list_changed: None,
-                }),
+                tools: Some(ServerCapabilitiesTools { list_changed: None }),
                 ..Default::default()
             },
             meta: None,
-            instructions: Some("Golem CLI MCP Server provides access to Golem CLI commands and manifest files".to_string()),
+            instructions: Some(
+                "Golem CLI MCP Server provides access to Golem CLI commands and manifest files"
+                    .to_string(),
+            ),
             protocol_version: rmcp::LATEST_PROTOCOL_VERSION.to_string(),
         };
-        
+
         let transport = StdioTransport::new(TransportOptions::default())?;
-        
+
         let handler = GolemMcpHandler::new(self.ctx.clone());
-        
+
         let server = rmcp::server_runtime::create_server(server_details, transport, handler);
-        
+
         server.start().await
     }
 }
@@ -92,9 +92,9 @@ impl rmcp::ServerHandler for GolemMcpHandler {
         _runtime: Arc<dyn rmcp::McpServer>,
     ) -> Result<rmcp::ListToolsResult, rmcp::RpcError> {
         debug!("Handling list tools request");
-        
+
         let tools = self.tools.list_tools();
-        
+
         Ok(rmcp::ListToolsResult {
             tools,
             meta: None,
@@ -108,7 +108,7 @@ impl rmcp::ServerHandler for GolemMcpHandler {
         _runtime: Arc<dyn rmcp::McpServer>,
     ) -> Result<rmcp::CallToolResult, rmcp::CallToolError> {
         debug!("Handling call tool request: {}", request.name);
-        
+
         self.tools.handle_call_tool_request(&request).await
     }
 
@@ -118,9 +118,9 @@ impl rmcp::ServerHandler for GolemMcpHandler {
         _runtime: Arc<dyn rmcp::McpServer>,
     ) -> Result<rmcp::ListResourcesResult, rmcp::RpcError> {
         debug!("Handling list resources request");
-        
+
         let resources = self.resources.list_resources().await;
-        
+
         Ok(rmcp::ListResourcesResult {
             resources,
             meta: None,
@@ -134,7 +134,7 @@ impl rmcp::ServerHandler for GolemMcpHandler {
         _runtime: Arc<dyn rmcp::McpServer>,
     ) -> Result<rmcp::ReadResourceResult, rmcp::RpcError> {
         debug!("Handling read resource request: {}", request.uri);
-        
+
         self.resources.read_resource(&request.uri).await
     }
 }

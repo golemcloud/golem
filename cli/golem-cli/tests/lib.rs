@@ -18,9 +18,9 @@ use test_r::{tag_suite, test_dep};
 test_r::enable!();
 
 mod app;
-mod stubgen;
 #[cfg(feature = "mcp")]
 mod mcp_server;
+mod stubgen;
 
 tag_suite!(stubgen, group1);
 

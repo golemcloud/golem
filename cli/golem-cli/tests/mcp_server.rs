@@ -22,7 +22,7 @@ use tempfile::TempDir;
 fn test_mcp_server_starts_with_default_port() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Start the MCP server in the background
     let mut child = Command::new("cargo")
         .args([
@@ -66,7 +66,7 @@ fn test_mcp_server_starts_with_default_port() {
 fn test_mcp_server_starts_with_custom_port() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Start the MCP server with a custom port
     let mut child = Command::new("cargo")
         .args([
@@ -112,7 +112,7 @@ fn test_mcp_server_starts_with_custom_port() {
 fn test_mcp_server_requires_serve_flag() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Try to start with serve-port but without serve flag
     let output = Command::new("cargo")
         .args([
@@ -143,7 +143,7 @@ fn test_mcp_server_requires_serve_flag() {
 fn test_mcp_server_lists_tools() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Create a simple test manifest
     let manifest_content = r#"
 name: test-component
@@ -151,7 +151,7 @@ version: 0.1.0
 description: Test component for MCP server
 "#;
     std::fs::write(temp_path.join("golem.yaml"), manifest_content).unwrap();
-    
+
     // Start the MCP server
     let mut child = Command::new("cargo")
         .args([
@@ -195,7 +195,7 @@ description: Test component for MCP server
 fn test_mcp_server_lists_resources() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Create a simple test manifest
     let manifest_content = r#"
 name: test-component
@@ -203,7 +203,7 @@ version: 0.1.0
 description: Test component for MCP server
 "#;
     std::fs::write(temp_path.join("golem.yaml"), manifest_content).unwrap();
-    
+
     // Start the MCP server
     let mut child = Command::new("cargo")
         .args([
@@ -247,7 +247,7 @@ description: Test component for MCP server
 fn test_mcp_server_flags_not_available_without_feature() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
-    
+
     // Try to use --serve flag without mcp feature
     let output = Command::new("cargo")
         .args([

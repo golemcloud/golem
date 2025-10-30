@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::context::{collect_sources_and_switch_to_app_root, find_main_source};
 use crate::context::Context;
-use crate::app::context::{find_main_source, collect_sources_and_switch_to_app_root};
 use crate::model::app::DEFAULT_CONFIG_FILE_NAME;
 use crate::validation::ValidatedResult;
 use anyhow::{Context, Result};
@@ -75,7 +75,7 @@ impl GolemResources {
 
     fn discover_manifests(&self) -> Result<Vec<Resource>> {
         let mut resources = Vec::new();
-        
+
         if let Some(main_source) = find_main_source() {
             resources.push(Resource {
                 uri: format!("file://{}", main_source.display()),
@@ -83,7 +83,7 @@ impl GolemResources {
                 description: Some("Main Golem manifest discovered from app context".to_string()),
                 mime_type: Some("text/yaml".to_string()),
             });
-            
+
             if let Ok(sources_result) = collect_sources_and_switch_to_app_root(Some(&main_source)) {
                 match sources_result {
                     Ok((sources, _calling_working_dir)) => {
@@ -107,17 +107,21 @@ impl GolemResources {
             resources.push(Resource {
                 uri: "golem://no-manifest".to_string(),
                 name: Some("No Manifest Found".to_string()),
-                description: Some("No Golem manifest found in current directory or ancestors".to_string()),
+                description: Some(
+                    "No Golem manifest found in current directory or ancestors".to_string(),
+                ),
                 mime_type: Some("text/plain".to_string()),
             });
         }
-        
+
         Ok(resources)
     }
 
     fn extract_path_from_uri(&self, uri: &str) -> Option<std::path::PathBuf> {
         if uri.starts_with("file://") {
-            Some(std::path::PathBuf::from(uri.strip_prefix("file://").unwrap()))
+            Some(std::path::PathBuf::from(
+                uri.strip_prefix("file://").unwrap(),
+            ))
         } else if uri == "golem://no-manifest" {
             None
         } else if uri == "golem://current-manifest" {
