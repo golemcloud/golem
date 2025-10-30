@@ -83,3 +83,7 @@ tracing-test = { workspace = true }
 [build-dependencies]
 shadow-rs = { workspace = true }
 lenient_bool = { workspace = true }
+
+
+[package.metadata.golem_mcp]
+commands = ["component"]

@@ -39,3 +39,6 @@ wasmtime = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+
+[package.metadata.golem_mcp]
+commands = ["component"]

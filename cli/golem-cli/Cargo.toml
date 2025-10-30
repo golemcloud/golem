@@ -12,9 +12,7 @@ build = "build.rs"
 
 [features]
 default = []
-server-commands = []
-mcp-server = ["dep:axum", "dep:schemars", "dep:globwalk", "dep:mime_guess"]
-mcp-introspect-clap = []      # optional, when you wire up real clap allowlist
+server-commands = ["dep:axum", "dep:schemars", "dep:globwalk", "dep:mime_guess"]
 mcp-reuse-discovery = []   
 
 [lib]
