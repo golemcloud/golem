@@ -68,7 +68,7 @@ benchmarks:
   - name: durability-overhead
     iterations: 1
     clusterSize: [ 1 ]
-    size: [ 10, 50, 100, 500 ]
+    size: [ 10, 50, 100 ]
     length: [ 5000 ]
 
   - name: throughput-echo
