@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
+use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentFilePath, ComponentId};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use crate::service::limit::LimitServiceError;
-use crate::service::auth::AuthServiceError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
@@ -64,7 +64,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
-            Self::AuthError(inner) => inner.to_safe_string()
+            Self::AuthError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -112,8 +112,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             | WorkerServiceError::InternalCallError(_)
             | WorkerServiceError::LimitError(_)
             | WorkerServiceError::AuthError(_)
-            | WorkerServiceError::Component(ComponentServiceError::InternalError(_))
-            => {
+            | WorkerServiceError::Component(ComponentServiceError::InternalError(_)) => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {
                         details: error.to_safe_string(),

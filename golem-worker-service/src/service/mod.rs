@@ -18,8 +18,8 @@ pub mod auth;
 // pub mod api_security;
 pub mod component;
 // pub mod gateway;
-pub mod worker;
 pub mod limit;
+pub mod worker;
 
 // use crate::aws_config::AwsConfig;
 // use crate::config::GatewaySessionStorageConfig;
@@ -77,13 +77,13 @@ use golem_common::model::RetryConfig;
 // use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 // use golem_service_base::storage::blob::BlobStorage;
+use self::auth::{AuthService, RemoteAuthService};
 use self::component::{CachedComponentService, RemoteComponentService};
+use self::limit::{LimitService, RemoteLimitService};
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
-use self::auth::{AuthService, RemoteAuthService};
-use self::limit::{LimitService, RemoteLimitService};
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 // use tracing::error;
 
 #[derive(Clone)]
@@ -111,7 +111,8 @@ impl Services {
         // let project_service: Arc<dyn ProjectService> =
         //     Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let registry_service_client: Arc<dyn RegistryService> = Arc::new(GrpcRegistryService::new(&config.registry_service));
+        let registry_service_client: Arc<dyn RegistryService> =
+            Arc::new(GrpcRegistryService::new(&config.registry_service));
 
         let auth_service: Arc<dyn AuthService> =
             Arc::new(RemoteAuthService::new(registry_service_client.clone()));

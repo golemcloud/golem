@@ -22,13 +22,10 @@ use golem_common::SafeDisplay;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
 use std::path::PathBuf;
 use std::time::Duration;
-use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {

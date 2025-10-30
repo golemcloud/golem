@@ -640,9 +640,7 @@ impl From<DataValue> for golem_api_grpc::proto::golem::component::DataValue {
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentType>
-    for RegisteredAgentType
-{
+impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentType> for RegisteredAgentType {
     type Error = String;
 
     fn try_from(
@@ -661,8 +659,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::RegisteredAgentType>
     }
 }
 
-impl From<RegisteredAgentType> for golem_api_grpc::proto::golem::registry::RegisteredAgentType
-{
+impl From<RegisteredAgentType> for golem_api_grpc::proto::golem::registry::RegisteredAgentType {
     fn from(value: RegisteredAgentType) -> Self {
         Self {
             agent_type: Some(value.agent_type.into()),

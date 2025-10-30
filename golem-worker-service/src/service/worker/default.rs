@@ -16,6 +16,7 @@ use super::{
     AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
     RandomExecutor, ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
+use crate::service::limit::LimitService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -56,7 +57,6 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
-use crate::service::limit::LimitService;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 

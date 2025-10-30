@@ -27,13 +27,13 @@ use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_common::SafeDisplay;
 // use golem_service_base::clients::project::ProjectError;
+use crate::service::auth::AuthServiceError;
+use crate::service::limit::LimitServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::payload::Json;
 use poem_openapi::ApiResponse;
 use serde::{Deserialize, Serialize};
-use crate::service::limit::LimitServiceError;
-use crate::service::auth::AuthServiceError;
 
 /// Detail in case the error was caused by the worker failing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]

@@ -20,14 +20,10 @@ pub mod registry;
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::RetryConfig;
-use golem_common::model::auth::TokenSecret;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::str::FromStr;
-use tonic::metadata::MetadataMap;
 use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteServiceConfig {

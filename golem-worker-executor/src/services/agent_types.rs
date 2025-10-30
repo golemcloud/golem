@@ -18,12 +18,11 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::clients::registry::GrpcRegistryService;
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::time::Duration;
-use uuid::Uuid;
-use golem_service_base::clients::registry::GrpcRegistryService;
-use golem_service_base::clients::RemoteServiceConfig;
 
 #[async_trait]
 pub trait AgentTypesService: Send + Sync {
@@ -45,15 +44,13 @@ pub fn configured(
     match config {
         AgentTypesServiceConfig::Grpc(config) => {
             let client = CachedAgentTypes::new(
-                Arc::new(self::grpc::RemoteAgentTypesService::new(
-                    Arc::new(GrpcRegistryService::new(
-                        &RemoteServiceConfig {
-                            host: config.host.clone(),
-                            port: config.port,
-                            retries: config.retries.clone()
-                        }
-                    ))
-                )),
+                Arc::new(self::grpc::RemoteAgentTypesService::new(Arc::new(
+                    GrpcRegistryService::new(&RemoteServiceConfig {
+                        host: config.host.clone(),
+                        port: config.port,
+                        retries: config.retries.clone(),
+                    }),
+                ))),
                 config.cache_time_to_idle,
             );
             Arc::new(client)
@@ -128,25 +125,15 @@ impl AgentTypesService for CachedAgentTypes {
 mod grpc {
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
-    use golem_api_grpc::proto::golem::component::v1::agent_types_service_client::AgentTypesServiceClient;
-    use golem_api_grpc::proto::golem::component::v1::{
-        component_error, get_all_response, get_response, ComponentError, GetAllRequest,
-        GetAllSuccessResponse, GetRequest,
-    };
-    use golem_common::client::{GrpcClient, GrpcClientConfig};
+
     use golem_common::model::agent::RegisteredAgentType;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::RetryConfig;
+
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_service_base::grpc::authorised_grpc_request;
-    use http::Uri;
-    use std::time::Duration;
-    use tonic::codec::CompressionEncoding;
-    use tonic::transport::Channel;
-    use uuid::Uuid;
-    use std::sync::Arc;
+
     use golem_service_base::clients::registry::RegistryService;
     use golem_service_base::model::auth::AuthCtx;
+    use std::sync::Arc;
 
     #[derive(Clone)]
     pub struct RemoteAgentTypesService {
@@ -155,9 +142,7 @@ mod grpc {
 
     impl RemoteAgentTypesService {
         pub fn new(client: Arc<dyn RegistryService>) -> Self {
-            Self {
-                client
-            }
+            Self { client }
         }
     }
 
@@ -167,7 +152,12 @@ mod grpc {
             &self,
             owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
-            self.client.get_all_agent_types(owner_environment, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed to get agent types: {e}")))
+            self.client
+                .get_all_agent_types(owner_environment, &AuthCtx::System)
+                .await
+                .map_err(|e| {
+                    WorkerExecutorError::runtime(format!("Failed to get agent types: {e}"))
+                })
         }
 
         async fn get(
@@ -175,7 +165,10 @@ mod grpc {
             owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-            self.client.get_agent_type(owner_environment, name, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed to get agent type: {e}")))
+            self.client
+                .get_agent_type(owner_environment, name, &AuthCtx::System)
+                .await
+                .map_err(|e| WorkerExecutorError::runtime(format!("Failed to get agent type: {e}")))
         }
     }
 }

@@ -12,35 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::RetryConfig;
-use golem_common::model::auth::TokenSecret;
-use golem_common::retries::with_retries;
-use std::fmt::Display;
-use tonic::Status;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
-use golem_service_base::model::ResourceLimits;
-use golem_common::model::WorkerId;
-use golem_common::model::account::AccountId;
-use tracing::info;
-use golem_common::model::plugin_registration::{PluginRegistrationId};
-use golem_service_base::model::plugin_registration::PluginRegistration;
+use golem_common::cache::SimpleCache;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::agent::RegisteredAgentType;
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
-use golem_common::model::component::ComponentName;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::cache::SimpleCache;
-use anyhow::anyhow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentServiceError {
@@ -54,7 +35,7 @@ impl SafeDisplay for ComponentServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InternalError(_) => "Internal error".to_string(),
-            Self::ComponentNotFound => "Component not found".to_string()
+            Self::ComponentNotFound => "Component not found".to_string(),
         }
     }
 }
@@ -120,8 +101,12 @@ impl ComponentService for CachedComponentService {
             })
             .await
             .map_err(|e| match &*e {
-                ComponentServiceError::InternalError(inner) => ComponentServiceError::InternalError(anyhow!("Cached error: {inner}")),
-                ComponentServiceError::ComponentNotFound => ComponentServiceError::ComponentNotFound
+                ComponentServiceError::InternalError(inner) => {
+                    ComponentServiceError::InternalError(anyhow!("Cached error: {inner}"))
+                }
+                ComponentServiceError::ComponentNotFound => {
+                    ComponentServiceError::ComponentNotFound
+                }
             })
     }
 
@@ -143,14 +128,12 @@ impl ComponentService for CachedComponentService {
 }
 
 pub struct RemoteComponentService {
-    client: Arc<dyn RegistryService>
+    client: Arc<dyn RegistryService>,
 }
 
 impl RemoteComponentService {
     pub fn new(client: Arc<dyn RegistryService>) -> Self {
-        Self {
-            client
-        }
+        Self { client }
     }
 }
 
@@ -162,10 +145,13 @@ impl ComponentService for RemoteComponentService {
         version: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client.get_component_metadata(component_id, version, auth_ctx).await.map_err(|e| match e {
-            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-            other => other.into()
-        })
+        self.client
+            .get_component_metadata(component_id, version, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+                other => other.into(),
+            })
     }
 
     async fn get_latest_by_id(
@@ -173,10 +159,13 @@ impl ComponentService for RemoteComponentService {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client.get_latest_component_metadata(component_id, auth_ctx).await.map_err(|e| match e {
-            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-            other => other.into()
-        })
+        self.client
+            .get_latest_component_metadata(component_id, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+                other => other.into(),
+            })
     }
 
     async fn get_all_versions(
@@ -184,9 +173,12 @@ impl ComponentService for RemoteComponentService {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
-        self.client.get_all_component_versions(component_id, auth_ctx).await.map_err(|e| match e {
-            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-            other => other.into()
-        })
+        self.client
+            .get_all_component_versions(component_id, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+                other => other.into(),
+            })
     }
 }

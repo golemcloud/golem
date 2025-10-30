@@ -20,6 +20,7 @@ use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::StreamExt;
 use futures::TryStreamExt;
 // use golem_common::model::auth::{AuthCtx, Namespace};
+use crate::service::auth::AuthService;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, PluginPriority,
@@ -45,7 +46,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
-use crate::service::auth::AuthService;
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1537,10 +1537,7 @@ impl WorkerApi {
         // Fallback for previous versions
         let all_component_versions = self
             .component_service
-            .get_all_versions(
-                &component_id,
-                auth,
-            )
+            .get_all_versions(&component_id, auth)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
