@@ -75,27 +75,3 @@ impl HasConfigExamples<RemoteServiceConfig> for RemoteServiceConfig {
         vec![]
     }
 }
-
-// pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<T> {
-//     let mut req = tonic::Request::new(request);
-//     req.metadata_mut().insert(
-//         "authorization",
-//         format!("Bearer {access_token}").parse().unwrap(),
-//     );
-//     req
-// }
-
-// pub fn get_authorisation_token(metadata: MetadataMap) -> Option<TokenSecret> {
-//     let auth = metadata
-//         .get("authorization")
-//         .and_then(|v| v.to_str().ok())
-//         .map(|v| v.to_string());
-
-//     match auth {
-//         Some(a) if a.to_lowercase().starts_with("bearer ") => {
-//             let t = &a[7..a.len()];
-//             TokenSecret::from_str(t.trim()).ok()
-//         }
-//         _ => None,
-//     }
-// }
