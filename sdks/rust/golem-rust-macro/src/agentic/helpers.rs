@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
-
-pub trait Agent {
-    fn get_id(&self) -> String;
-    fn invoke(&mut self, method_name: String, input: DataValue) -> Result<DataValue, AgentError>;
-    fn get_definition(&self) -> AgentType;
+pub fn to_kebab_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i != 0 {
+                result.push('-');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }

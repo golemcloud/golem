@@ -1,4 +1,3 @@
-use once_cell::unsync::Lazy;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -8,32 +7,26 @@ use crate::{
 };
 
 thread_local! {
-    static AGENT_TYPE_REGISTRY: Lazy<RefCell<HashMap<AgentTypeName, AgentType>>> =
-    Lazy::new(|| RefCell::new(HashMap::new()));
+    static AGENT_TYPE_REGISTRY: RefCell<HashMap<AgentTypeName, AgentType>> = RefCell::new(HashMap::new());
 }
 
-// Agent instance at any point in time is only one
 thread_local! {
     static AGENT_INSTANCE: RefCell<Option<ResolvedAgent>> = RefCell::new(None);
 }
 
-// agent initiator registry is for each agent type name, we have an initiator instance
 thread_local! {
-    static AGENT_INITIATOR_REGISTRY: Lazy<RefCell<HashMap<AgentTypeName, Box<dyn AgentInitiator>>>> =
-    Lazy::new(|| RefCell::new(HashMap::new()));
+    static AGENT_INITIATOR_REGISTRY: RefCell<HashMap<AgentTypeName, Box<dyn AgentInitiator>>> = RefCell::new(HashMap::new());
 }
 
 pub fn get_all_agent_types() -> Vec<AgentType> {
     AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
 }
 
-pub fn get_agent_type_by_name(type_name: &str) -> Option<AgentType> {
-    let agent_type_name = AgentTypeName(type_name.to_string());
+pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
     AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().get(&agent_type_name).cloned())
 }
 
-pub fn register_agent_type(type_name: String, agent_type: AgentType) {
-    let agent_type_name = AgentTypeName(type_name);
+pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: AgentType) {
     AGENT_TYPE_REGISTRY.with(|registry| {
         registry.borrow_mut().insert(agent_type_name, agent_type);
         ()

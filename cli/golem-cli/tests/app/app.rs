@@ -159,9 +159,9 @@ async fn completion(_tracing: &Tracing) {
 }
 
 #[test]
-#[ignore] // RPC build
 async fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -341,9 +341,9 @@ async fn custom_app_subcommand_with_builtin_name() {
 }
 
 #[test]
-#[ignore]
 async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -472,9 +472,9 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 }
 
 #[test]
-#[ignore]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     // Setup app

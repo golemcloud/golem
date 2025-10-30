@@ -87,6 +87,7 @@ pub struct Context {
     server_no_limit_change: bool,
     should_colorize: bool,
     template_sdk_overrides: SdkOverrides,
+    template_group: ComposableAppGroupName,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -129,6 +130,11 @@ impl Context {
             ts_packages_path: global_flags.golem_ts_packages_path.clone(),
             ts_version: global_flags.golem_ts_version.clone(),
         };
+        let template_group = global_flags
+            .template_group
+            .clone()
+            .map(ComposableAppGroupName::from)
+            .unwrap_or_default();
 
         let mut yes = global_flags.yes;
         let dev_mode = global_flags.dev_mode;
@@ -242,6 +248,7 @@ impl Context {
             server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
             template_sdk_overrides,
+            template_group,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -506,6 +513,10 @@ impl Context {
 
     pub fn template_sdk_overrides(&self) -> &SdkOverrides {
         &self.template_sdk_overrides
+    }
+
+    pub fn template_group(&self) -> &ComposableAppGroupName {
+        &self.template_group
     }
 
     pub async fn select_account_by_email_or_error(

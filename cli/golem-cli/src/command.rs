@@ -138,6 +138,10 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 111)]
     pub dev_mode: bool,
 
+    /// Switch to experimental or development-only template groups
+    #[arg(long, global = true, display_order = 112)]
+    pub template_group: Option<String>,
+
     #[command(flatten)]
     pub verbosity: Verbosity,
 

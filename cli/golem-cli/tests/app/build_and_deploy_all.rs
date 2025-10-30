@@ -8,9 +8,20 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(Tracing);
 
 #[test]
-#[ignore] // TODO;
-async fn build_and_deploy_all_templates() {
+async fn build_and_deploy_all_templates_default() {
+    build_and_deploy_all_templates(None).await;
+}
+
+#[test]
+async fn build_and_deploy_all_templates_generic() {
+    build_and_deploy_all_templates(Some("generic")).await;
+}
+
+async fn build_and_deploy_all_templates(group: Option<&str>) {
     let mut ctx = TestContext::new();
+    if let Some(group) = group {
+        ctx.use_template_group(group);
+    }
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;

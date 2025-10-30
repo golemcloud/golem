@@ -16,6 +16,7 @@ pub use agent::*;
 pub use agent_arg_schema::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
+pub use agent_type_name::*;
 
 mod agent;
 mod agent_arg_schema;
