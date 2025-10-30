@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.registry;
+
+import public "golem/component/agent.proto";
+import public "golem/component/component_id.proto";
+
+message RegisteredAgentType {
+  golem.component.AgentType agent_type = 1;
+  golem.component.ComponentId implementedBy = 2;
+}

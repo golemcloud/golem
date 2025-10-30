@@ -16,8 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [
             "proto/golem/account/account.proto",
             "proto/golem/account/account_data.proto",
-            "proto/golem/account/v1/account_error.proto",
-            "proto/golem/account/v1/account_service.proto",
             "proto/golem/apidefinition/api_definition.proto",
             "proto/golem/auth/account_action.proto",
             "proto/golem/auth/project_action.proto",
@@ -49,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/limit/v1/batch_update_resource_limits.proto",
             "proto/golem/limit/v1/limits_error.proto",
             "proto/golem/limit/v1/limits_service.proto",
+            "proto/golem/registry/v1/registry_service.proto",
             "proto/golem/shardmanager/pod.proto",
             "proto/golem/shardmanager/routing_table.proto",
             "proto/golem/shardmanager/routing_table_entry.proto",
