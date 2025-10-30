@@ -384,141 +384,119 @@ impl Display for BenchmarkResultView {
         for (key, items) in self.results.iter().sorted_by_key(|(k, _)| (*k).clone()) {
             writeln!(f, "{} '{}':", "Results for".bold(), key)?;
 
-            if items.len() == 1 {
-                let item = items.first().unwrap();
+            let first_config = items
+                .first()
+                .expect("At lease one result expected")
+                .config
+                .as_ref()
+                .expect("Config expected for multiple results");
+            let show_cluster_size = first_config.cluster_size.is_some();
+            let show_size = first_config.size.is_some();
+            let show_length = first_config.length.is_some();
+            let show_duration = items.iter().any(|i| i.duration.is_some());
+            let show_count = items.iter().any(|i| i.count.is_some());
 
-                if let Some(duration_result) = &item.duration {
-                    writeln!(f, "Duration:")?;
-                    writeln!(f, "  Avg:    {:.2?}", duration_result.avg)?;
-                    writeln!(f, "  Min:    {:.2?}", duration_result.min)?;
-                    writeln!(f, "  Max:    {:.2?}", duration_result.max)?;
-                    writeln!(f, "  Median: {:.2?}", duration_result.median)?;
-                    writeln!(f, "  p90:    {:.2?}", duration_result.p90)?;
-                    writeln!(f, "  p95:    {:.2?}", duration_result.p95)?;
-                    writeln!(f, "  p99:    {:.2?}", duration_result.p99)?;
-                }
+            let mut title = Vec::new();
+            if show_cluster_size {
+                title.push("Cluster size".cell().bold(true));
+            }
+            if show_length {
+                title.push("Length".cell().bold(true));
+            }
+            if show_size {
+                title.push("Size".cell().bold(true));
+            }
+            if show_duration {
+                title.push("Duration Avg".cell().bold(true));
+                title.push("Duration Min".cell().bold(true));
+                title.push("Duration Max".cell().bold(true));
+                title.push("Duration Median".cell().bold(true));
+                title.push("Duration p90".cell().bold(true));
+                title.push("Duration p95".cell().bold(true));
+                title.push("Duration p99".cell().bold(true));
+            }
+            if show_count {
+                title.push("Count Avg".cell().bold(true));
+                title.push("Count Min".cell().bold(true));
+                title.push("Count Max".cell().bold(true));
+            }
 
-                if let Some(count_result) = &item.count {
-                    writeln!(f, "Count:")?;
-                    writeln!(f, "  Avg: {:?}", count_result.avg)?;
-                    writeln!(f, "  Min: {:?}", count_result.min)?;
-                    writeln!(f, "  Max: {:?}", count_result.max)?;
-                }
-            } else {
-                let first_config = items
-                    .first()
-                    .expect("At lease one result expected")
-                    .config
-                    .as_ref()
-                    .expect("Config expected for multiple results");
-                let show_cluster_size = first_config.cluster_size.is_some();
-                let show_size = first_config.size.is_some();
-                let show_length = first_config.length.is_some();
-                let show_duration = items.iter().any(|i| i.duration.is_some());
-                let show_count = items.iter().any(|i| i.count.is_some());
-
-                let mut title = Vec::new();
+            let tbl = items.iter().sorted_by_key(|i| &i.config).map(|item| {
+                let mut record = Vec::new();
                 if show_cluster_size {
-                    title.push("Cluster size".cell().bold(true));
+                    record.push(
+                        item.config
+                            .as_ref()
+                            .unwrap()
+                            .cluster_size
+                            .unwrap()
+                            .cell()
+                            .justify(Justify::Right),
+                    );
                 }
                 if show_length {
-                    title.push("Length".cell().bold(true));
+                    record.push(
+                        item.config
+                            .as_ref()
+                            .unwrap()
+                            .length
+                            .unwrap()
+                            .cell()
+                            .justify(Justify::Right),
+                    );
                 }
                 if show_size {
-                    title.push("Size".cell().bold(true));
+                    record.push(
+                        item.config
+                            .as_ref()
+                            .unwrap()
+                            .size
+                            .unwrap()
+                            .cell()
+                            .justify(Justify::Right),
+                    );
                 }
                 if show_duration {
-                    title.push("Duration Avg".cell().bold(true));
-                    title.push("Duration Min".cell().bold(true));
-                    title.push("Duration Max".cell().bold(true));
-                    title.push("Duration Median".cell().bold(true));
-                    title.push("Duration p90".cell().bold(true));
-                    title.push("Duration p95".cell().bold(true));
-                    title.push("Duration p99".cell().bold(true));
+                    fn duration_cell(d: Option<&Duration>) -> CellStruct {
+                        d.map(|d| format!("{d:.2?}"))
+                            .unwrap_or("".to_string())
+                            .cell()
+                            .justify(Justify::Right)
+                    }
+
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.avg)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.min)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.max)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.median)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.p90)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.p95)));
+                    record.push(duration_cell(item.duration.as_ref().map(|d| &d.p99)));
                 }
                 if show_count {
-                    title.push("Count Avg".cell().bold(true));
-                    title.push("Count Min".cell().bold(true));
-                    title.push("Count Max".cell().bold(true));
+                    fn count_cell(c: Option<u64>) -> CellStruct {
+                        c.map(|c| format!("{c}"))
+                            .unwrap_or("".to_string())
+                            .cell()
+                            .justify(Justify::Right)
+                    }
+
+                    record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
+                    record.push(count_cell(item.count.as_ref().map(|c| c.min)));
+                    record.push(count_cell(item.count.as_ref().map(|c| c.max)));
                 }
 
-                let tbl = items.iter().sorted_by_key(|i| &i.config).map(|item| {
-                    let mut record = Vec::new();
-                    if show_cluster_size {
-                        record.push(
-                            item.config
-                                .as_ref()
-                                .unwrap()
-                                .cluster_size
-                                .unwrap()
-                                .cell()
-                                .justify(Justify::Right),
-                        );
-                    }
-                    if show_length {
-                        record.push(
-                            item.config
-                                .as_ref()
-                                .unwrap()
-                                .length
-                                .unwrap()
-                                .cell()
-                                .justify(Justify::Right),
-                        );
-                    }
-                    if show_size {
-                        record.push(
-                            item.config
-                                .as_ref()
-                                .unwrap()
-                                .size
-                                .unwrap()
-                                .cell()
-                                .justify(Justify::Right),
-                        );
-                    }
-                    if show_duration {
-                        fn duration_cell(d: Option<&Duration>) -> CellStruct {
-                            d.map(|d| format!("{d:.2?}"))
-                                .unwrap_or("".to_string())
-                                .cell()
-                                .justify(Justify::Right)
-                        }
+                record
+            });
 
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.avg)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.min)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.max)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.median)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.p90)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.p95)));
-                        record.push(duration_cell(item.duration.as_ref().map(|d| &d.p99)));
-                    }
-                    if show_count {
-                        fn count_cell(c: Option<u64>) -> CellStruct {
-                            c.map(|c| format!("{c}"))
-                                .unwrap_or("".to_string())
-                                .cell()
-                                .justify(Justify::Right)
-                        }
+            let res = tbl
+                .table()
+                .title(title)
+                .separator(Separator::builder().build())
+                .border(Border::builder().build())
+                .display()
+                .unwrap();
 
-                        record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
-                        record.push(count_cell(item.count.as_ref().map(|c| c.min)));
-                        record.push(count_cell(item.count.as_ref().map(|c| c.max)));
-                    }
-
-                    record
-                });
-
-                let res = tbl
-                    .table()
-                    .title(title)
-                    .separator(Separator::builder().build())
-                    .border(Border::builder().build())
-                    .display()
-                    .unwrap();
-
-                writeln!(f, "{res}")?;
-            }
+            writeln!(f, "{res}")?;
         }
 
         Ok(())
@@ -672,7 +650,7 @@ impl BenchmarkResult {
         let show_cluster_size = self.runs.iter().map(|c| c.cluster_size).unique().count() > 1;
         let show_size = self.runs.iter().map(|c| c.size).unique().count() > 1;
         let show_length = self.runs.iter().map(|c| c.length).unique().count() > 1;
-        let show_config = show_cluster_size || show_size || show_length;
+        let show_config = true;
 
         let mut all_keys = Vec::new();
         for res in &self.results {

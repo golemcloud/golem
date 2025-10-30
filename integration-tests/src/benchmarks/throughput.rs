@@ -15,11 +15,16 @@
 use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
+use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_client::model::{
     ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
     GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
 };
-use golem_common::model::{RoutingTable, WorkerId};
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
+use golem_common::model::{ComponentType, RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -28,10 +33,9 @@ use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
+use std::collections::HashMap;
 use tracing::{info, Level};
 use uuid::Uuid;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 
 pub struct ThroughputEcho {
     config: RunConfig,
@@ -75,6 +79,7 @@ impl Benchmark for ThroughputEcho {
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{echo}",
             "benchmark:agent-ts/benchmark-agent.{echo}",
+            "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
             Box::new(|_| vec!["benchmark".into_value_and_type()]),
             Box::new(|port, idx, api_definition_id, _length| {
                 let url = Url::parse(&format!(
@@ -167,6 +172,7 @@ impl Benchmark for ThroughputLargeInput {
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{large-input}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{large-input}",
             "benchmark:agent-ts/benchmark-agent.{large-input}",
+            "benchmark:agent-ts/rpc-benchmark-agent.{large-input}",
             Box::new(|length| {
                 let bytes = vec![0u8; length];
                 vec![bytes.into_value_and_type()]
@@ -265,6 +271,7 @@ impl Benchmark for ThroughputCpuIntensive {
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{cpu-intensive}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{cpu-intensive}",
             "benchmark:agent-ts/benchmark-agent.{cpu-intensive}",
+            "benchmark:agent-ts/rpc-benchmark-agent.{cpu-intensive}",
             Box::new(|length| vec![(length as f64).into_value_and_type()]),
             Box::new(|port, idx, api_definition_id, length| {
                 let url = Url::parse(&format!(
@@ -392,13 +399,15 @@ pub struct IterationContext {
     length: usize,
     api_definition_id: String,
     direct_rust_rpc_worker_id_pairs: Vec<WorkerIdPair>,
-    routing_table: RoutingTable
+    routing_table: RoutingTable,
+    ts_rpc_agent_worker_id_pairs: Vec<WorkerIdPair>,
 }
 
 pub struct ThroughputBenchmark {
     rust_function_name: String,
     rust_rpc_function_name: String,
     ts_function_name: String,
+    ts_rpc_function_name: String,
     function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
     http_request: Box<dyn Fn(u16, usize, String, usize) -> Request + Send + Sync + 'static>,
     deps: BenchmarkTestDependencies,
@@ -410,6 +419,7 @@ impl ThroughputBenchmark {
         rust_function_name: &str,
         rust_rpc_function_name: &str,
         ts_function_name: &str,
+        ts_rpc_function_name: &str,
         function_params: Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
         http_request: Box<dyn Fn(u16, usize, String, usize) -> Request + Send + Sync + 'static>,
         mode: &TestMode,
@@ -423,6 +433,7 @@ impl ThroughputBenchmark {
             rust_function_name: rust_function_name.to_string(),
             rust_rpc_function_name: rust_rpc_function_name.to_string(),
             ts_function_name: ts_function_name.to_string(),
+            ts_rpc_function_name: ts_rpc_function_name.to_string(),
             function_params,
             http_request,
             deps: BenchmarkTestDependencies::new(
@@ -446,6 +457,7 @@ impl ThroughputBenchmark {
         let mut ts_agent_worker_ids = vec![];
         let mut ts_agent_worker_ids_for_rib = vec![];
         let mut direct_rust_rpc_worker_id_pairs = vec![];
+        let mut ts_rpc_agent_worker_id_pairs = vec![];
 
         info!("Registering components");
 
@@ -473,6 +485,20 @@ impl ThroughputBenchmark {
             .await
             .component("benchmark_direct_rust_rpc_parent")
             .name("benchmark:direct-rust-rpc-parent")
+            .with_dynamic_linking(&[(
+                "benchmark:direct-rust-rpc-child-client/benchmark-direct-rust-rpc-child-client",
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    targets: HashMap::from_iter(vec![(
+                        "benchmark-direct-rust-rpc-child-api".to_string(),
+                        WasmRpcTarget {
+                            interface_name: "benchmark:direct-rust-rpc-child-exports/benchmark-direct-rust-rpc-child-api"
+                                .to_string(),
+                            component_name: "benchmark:direct-rust-rpc-child".to_string(),
+                            component_type: ComponentType::Durable,
+                        },
+                    )]),
+                }),
+            )])
             .store()
             .await;
 
@@ -510,6 +536,18 @@ impl ThroughputBenchmark {
             direct_rust_rpc_worker_id_pairs.push(WorkerIdPair {
                 parent: direct_rust_rpc_parent,
                 child: direct_rust_rpc_child,
+            });
+            let ts_agent_rpc_parent = WorkerId {
+                component_id: ts_agent_component_id.clone(),
+                worker_name: format!("rpc-benchmark-agent(\"rpc-test-{n}\")"),
+            };
+            let ts_agent_rpc_child = WorkerId {
+                component_id: ts_agent_component_id.clone(),
+                worker_name: format!("benchmark-agent(\"rpc-test-{n}\")"),
+            };
+            ts_rpc_agent_worker_id_pairs.push(WorkerIdPair {
+                parent: ts_agent_rpc_parent,
+                child: ts_agent_rpc_child,
             });
         }
 
@@ -635,11 +673,10 @@ impl ThroughputBenchmark {
         let routing_table: RoutingTable = match routing_table.into_inner() {
             shardmanager::v1::GetRoutingTableResponse {
                 result:
-                Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
+                    Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
             } => routing_table.into(),
             _ => panic!("Unable to fetch the routing table from shard-manager-service"),
         };
-
 
         IterationContext {
             direct_rust_worker_ids,
@@ -648,7 +685,8 @@ impl ThroughputBenchmark {
             length: config.length,
             api_definition_id,
             direct_rust_rpc_worker_id_pairs,
-            routing_table
+            routing_table,
+            ts_rpc_agent_worker_id_pairs,
         }
     }
 
@@ -658,7 +696,7 @@ impl ThroughputBenchmark {
             length: usize,
             ids: &[WorkerId],
             function_name: &str,
-            params: &Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
+            params: &(dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static),
         ) {
             let result_futures = ids
                 .iter()
@@ -717,6 +755,21 @@ impl ThroughputBenchmark {
         )
         .await;
 
+        info!("Warming up TS RPC agents...");
+        warmup_workers(
+            &self.deps,
+            iteration.length,
+            &iteration
+                .ts_rpc_agent_worker_id_pairs
+                .iter()
+                .cloned()
+                .map(|pair| pair.parent)
+                .collect::<Vec<_>>(),
+            &self.ts_rpc_function_name,
+            &self.function_params,
+        )
+        .await;
+
         info!("Warmup completed");
     }
 
@@ -729,7 +782,7 @@ impl ThroughputBenchmark {
             call_count: usize,
             ids: &[WorkerIdOrPair],
             function_name: &str,
-            params: &Box<dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static>,
+            params: &(dyn Fn(usize) -> Vec<ValueAndType> + Send + Sync + 'static),
             prefix: &str,
         ) {
             let result_futures = ids
@@ -758,7 +811,7 @@ impl ThroughputBenchmark {
             for (idx, (results, id)) in results.iter().zip(ids).enumerate() {
                 let prefix = id.prefix(prefix, routing_table);
                 for result in results {
-                    result.record(&recorder, &prefix, idx.to_string().as_str());
+                    result.record(recorder, &prefix, idx.to_string().as_str());
                 }
             }
         }
@@ -852,7 +905,7 @@ impl ThroughputBenchmark {
                 .direct_rust_rpc_worker_id_pairs
                 .iter()
                 .cloned()
-                .map(|id| id.into())
+                .map(|pair| pair.into())
                 .collect::<Vec<_>>(),
             &self.rust_rpc_function_name,
             &self.function_params,
@@ -860,7 +913,24 @@ impl ThroughputBenchmark {
         )
         .await;
 
-        // TODO: agent RPC
+        info!("Measuring TS agent RPC throughput...");
+        measure_workers(
+            &self.deps,
+            &iteration.routing_table,
+            &recorder,
+            iteration.length,
+            self.call_count,
+            &iteration
+                .ts_rpc_agent_worker_id_pairs
+                .iter()
+                .cloned()
+                .map(|pair| pair.into())
+                .collect::<Vec<_>>(),
+            &self.ts_rpc_function_name,
+            &self.function_params,
+            "ts-agent-rpc-",
+        )
+        .await;
         // TODO: native rust
     }
 
