@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod benchmark;
+
 /// Individual components of an integration test such as services, databases etc.
 pub mod components;
 

@@ -1180,6 +1180,7 @@ async fn env_vars(
     verbosity: Level,
     private_rdb_connection: bool,
     cloud_service: &Arc<dyn CloudService>,
+    otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPONENT_STORE__TYPE", "Local")
@@ -1204,7 +1205,8 @@ async fn env_vars(
         )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .with_all(rdb.info().env("golem_component", private_rdb_connection));
+        .with_all(rdb.info().env("golem_component", private_rdb_connection))
+        .with_optional_otlp("component_service", otlp);
 
     match component_compilation_service {
         Some((host, port)) => {

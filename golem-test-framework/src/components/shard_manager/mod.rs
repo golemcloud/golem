@@ -70,6 +70,7 @@ async fn env_vars(
     grpc_port: u16,
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     verbosity: Level,
+    otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM_SHARD_MANAGER_PORT", grpc_port.to_string())
@@ -80,7 +81,8 @@ async fn env_vars(
             "GOLEM__PERSISTENCE__CONFIG__PORT",
             redis.private_port().to_string(),
         )
-        .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix());
+        .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix())
+        .with_optional_otlp("shard_manager", otlp);
 
     if let Some(number_of_shards) = number_of_shards_override {
         builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());

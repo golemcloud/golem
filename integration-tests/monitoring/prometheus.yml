@@ -1,0 +1,37 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 2s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'golem-shard-manager'
+    static_configs:
+      - targets: ['host.docker.internal:8080']
+
+  - job_name: 'golem-component-service'
+    static_configs:
+      - targets: ['host.docker.internal:8081']
+
+  - job_name: 'golem-component-compilation-service'
+    static_configs:
+      - targets: ['host.docker.internal:8082']
+
+  - job_name: 'golem-worker-service'
+    static_configs:
+      - targets: ['host.docker.internal:8083']
+
+  - job_name: 'golem-cloud-service'
+    static_configs:
+      - targets: ['host.docker.internal:8085']
+
+  - job_name: 'golem-worker-executor-0'
+    static_configs:
+      - targets: ['host.docker.internal:8100']
+
+  - job_name: 'golem-worker-executor-1'
+    static_configs:
+      - targets: ['host.docker.internal:8101']
+
+  - job_name: 'golem-worker-executor-2'
+    static_configs:
+      - targets: ['host.docker.internal:8102']
