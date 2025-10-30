@@ -29,3 +29,6 @@ export_oplog_processor = []
 export_save_snapshot = []
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
+
+[dev-dependencies]
+ctor = "0.4.3"
