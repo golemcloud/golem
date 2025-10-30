@@ -43,7 +43,6 @@ use golem_common::model::{
     ComponentFileSystemNode, FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_service_base::clients::limit::LimitService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex};
@@ -57,6 +56,7 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
+use crate::service::limit::LimitService;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 

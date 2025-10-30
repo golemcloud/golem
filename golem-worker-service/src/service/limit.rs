@@ -42,12 +42,15 @@ use std::sync::Arc;
 pub enum LimitServiceError {
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+    #[error("Limit exceeded: {0}")]
+    LimitExceeded(String),
 }
 
 impl SafeDisplay for LimitServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InternalError(_) => "Internal error".to_string(),
+            Self::LimitExceeded(_) => self.to_string()
         }
     }
 }
@@ -93,9 +96,8 @@ impl LimitService for RemoteLimitService {
     async fn get_resource_limits(
         &self,
         account_id: &AccountId,
-    ) -> anyhow::Result<ResourceLimits> {
-        let result = self.client.get_resource_limits(account_id).await?;
-        Ok(result)
+    ) -> Result<ResourceLimits, LimitServiceError> {
+        Ok(self.client.get_resource_limits(account_id, &AuthCtx::System).await?)
     }
 
     async fn update_worker_limit(
@@ -103,8 +105,11 @@ impl LimitService for RemoteLimitService {
         account_id: &AccountId,
         worker_id: &WorkerId,
         value: i32,
-    ) -> anyhow::Result<()> {
-        self.client.update_worker_limit(account_id, worker_id, value).await?;
+    ) -> Result<(), LimitServiceError> {
+        self.client.update_worker_limit(account_id, worker_id, value, &AuthCtx::System).await.map_err(|e| match e {
+            RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
+            other => other.into()
+        })?;
         Ok(())
     }
 
@@ -114,7 +119,10 @@ impl LimitService for RemoteLimitService {
         worker_id: &WorkerId,
         value: i32,
     ) -> anyhow::Result<()> {
-        self.client.update_worker_connection_limit(account_id, worker_id, value).await?;
+        self.client.update_worker_connection_limit(account_id, worker_id, value, &AuthCtx::System).await.map_err(|e| match e {
+            RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
+            other => other.into()
+        })?;
         Ok(())
     }
 }

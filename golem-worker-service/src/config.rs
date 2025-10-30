@@ -36,7 +36,6 @@ pub struct WorkerServiceConfig {
     pub tracing: TracingConfig,
     pub gateway_session_storage: GatewaySessionStorageConfig,
     pub db: DbConfig,
-    pub component_service: ComponentServiceConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
@@ -46,7 +45,7 @@ pub struct WorkerServiceConfig {
     // pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
-    pub cloud_service: RemoteServiceConfig,
+    pub registry_service: RemoteServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -70,12 +69,6 @@ impl SafeDisplay for WorkerServiceConfig {
         );
         let _ = writeln!(&mut result, "db:");
         let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
-        let _ = writeln!(&mut result, "component service:");
-        let _ = writeln!(
-            result,
-            "{}",
-            self.component_service.to_safe_string_indented()
-        );
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
         let _ = writeln!(
             &mut result,
@@ -114,11 +107,11 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.domain_records.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "cloud service:");
+        let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.cloud_service.to_safe_string_indented()
+            self.registry_service.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
 
@@ -136,7 +129,7 @@ impl Default for WorkerServiceConfig {
                 foreign_keys: false,
             }),
             gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
-            component_service: ComponentServiceConfig::default(),
+            registry_service: RemoteServiceConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
@@ -153,7 +146,6 @@ impl Default for WorkerServiceConfig {
             // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
-            cloud_service: RemoteServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }

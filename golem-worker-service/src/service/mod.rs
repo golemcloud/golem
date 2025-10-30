@@ -81,8 +81,9 @@ use self::component::{CachedComponentService, RemoteComponentService};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
-use self::auth::AuthService;
-use self::limit::LimitService;
+use self::auth::{AuthService, RemoteAuthService};
+use self::limit::{LimitService, RemoteLimitService};
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 // use tracing::error;
 
 #[derive(Clone)]
@@ -110,8 +111,10 @@ impl Services {
         // let project_service: Arc<dyn ProjectService> =
         //     Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
+        let registry_service_client: Arc<dyn RegistryService> = Arc::new(GrpcRegistryService::new(&config.registry_service));
+
         let auth_service: Arc<dyn AuthService> =
-            Arc::new(AuthServiceDefault::new(&config.cloud_service));
+            Arc::new(RemoteAuthService::new(registry_service_client.clone()));
 
         // let (
         //     api_definition_repo,
@@ -227,11 +230,7 @@ impl Services {
         // > = Arc::new(HttpApiDefinitionValidator {});
 
         let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
-            Arc::new(RemoteComponentService::new(
-                config.component_service.uri(),
-                config.component_service.retries.clone(),
-                config.component_service.connect_timeout,
-            )),
+            Arc::new(RemoteComponentService::new(registry_service_client.clone())),
             config.component_service.cache_capacity,
         ));
 
@@ -338,7 +337,7 @@ impl Services {
         //     ));
 
         let limit_service: Arc<dyn LimitService> =
-            Arc::new(LimitServiceDefault::new(&config.cloud_service));
+            Arc::new(RemoteLimitService::new(registry_service_client.clone()));
 
         let routing_table_service: Arc<dyn RoutingTableService> = Arc::new(
             RoutingTableServiceDefault::new(config.routing_table.clone()),

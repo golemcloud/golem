@@ -32,7 +32,6 @@ use golem_common::model::worker::{WorkerCreationRequest, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::clients::auth::AuthService;
 use golem_service_base::model::auth::{
     AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
 };
@@ -46,6 +45,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
+use crate::service::auth::AuthService;
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);

@@ -39,17 +39,21 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use std::sync::Arc;
 use golem_common::model::component::ComponentName;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::cache::SimpleCache;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ComponentServiceError {
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+    #[error("Component not found")]
+    ComponentNotFound,
 }
 
 impl SafeDisplay for ComponentServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InternalError(_) => "Internal error".to_string(),
+            Self::ComponentNotFound => "Component not found".to_string()
         }
     }
 }
@@ -70,20 +74,6 @@ pub trait ComponentService: Send + Sync {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
-
-    async fn get_latest_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError>;
-
-    async fn get_all_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Vec<ComponentDto>, ComponentServiceError>;
 }
 
 pub struct CachedComponentService {
@@ -130,28 +120,6 @@ impl ComponentService for CachedComponentService {
     ) -> Result<ComponentDto, ComponentServiceError> {
         self.inner.get_latest_by_id(component_id, auth_ctx).await
     }
-
-    async fn get_latest_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError> {
-        self.inner
-            .get_latest_by_name(component_id, environment_id, auth_ctx)
-            .await
-    }
-
-    async fn get_all_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
-        self.inner
-            .get_all_by_name(component_id, environment_id, auth_ctx)
-            .await
-    }
 }
 
 pub struct RemoteComponentService {
@@ -174,26 +142,20 @@ impl ComponentService for RemoteComponentService {
         version: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client.get_component_metadata(component_id, version)
+        self.client.get_component_metadata(component_id, version, auth_ctx).await.map_err(|e| match e {
+            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+            other => other.into()
+        })
     }
 
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError>;
-
-    async fn get_latest_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError>;
-
-    async fn get_all_by_name(
-        &self,
-        component_id: &ComponentName,
-        environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Vec<ComponentDto>, ComponentServiceError>;
+    ) -> Result<ComponentDto, ComponentServiceError> {
+        self.client.get_latest_component_metadata(component_id, auth_ctx).await.map_err(|e| match e {
+            RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+            other => other.into()
+        })
+    }
 }

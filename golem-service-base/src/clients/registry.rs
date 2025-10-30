@@ -35,8 +35,6 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::agent::RegisteredAgentType;
-use golem_api_grpc::proto::golem::auth::auth_ctx;
-
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
 pub trait RegistryService: Send + Sync {
