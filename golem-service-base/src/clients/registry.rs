@@ -13,14 +13,21 @@
 // limitations under the License.
 
 use super::RemoteServiceConfig;
-use golem_common::model::application::ApplicationId;
 use crate::model::ResourceLimits;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_limit_response, AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest
+    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
+    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest,
+    GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest,
+    GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response,
+    get_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, resolve_component_response, update_worker_limit_response,
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -28,20 +35,19 @@ use golem_common::model::RetryConfig;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::retries::with_retries;
+use std::collections::HashMap;
 use std::fmt::Display;
 use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::info;
-use golem_api_grpc::proto::golem::limit::v1::BatchUpdateResourceLimits;
-use std::collections::HashMap;
-use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -356,24 +362,26 @@ impl RegistryService for GrpcRegistryService {
         updates: HashMap<AccountId, i64>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
-        let payload: Vec<FuelUsageUpdate> = updates.into_iter().map(|(k, v)| FuelUsageUpdate { account_id: Some(k.into()), value: v }).collect();
+        let payload: Vec<FuelUsageUpdate> = updates
+            .into_iter()
+            .map(|(k, v)| FuelUsageUpdate {
+                account_id: Some(k.into()),
+                value: v,
+            })
+            .collect();
 
         let result: Result<(), RegistryServiceClientError> = with_retries(
             "limit",
             "batch-update-fuel-usage",
             None,
             &self.retry_config,
-            &(
-                self.client.clone(),
-                payload,
-                auth_ctx.clone(),
-            ),
+            &(self.client.clone(), payload, auth_ctx.clone()),
             |(client, payload, _auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("batch-update-fuel-usage", move |client| {
                             let request = BatchUpdateFuelUsageRequest {
-                                updates: payload.clone()
+                                updates: payload.clone(),
                             };
 
                             Box::pin(client.batch_update_fuel_usage(request))

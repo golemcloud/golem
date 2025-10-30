@@ -16,26 +16,18 @@ use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
-use golem_common::retries::with_retries;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::grpc::{is_grpc_retriable, GrpcError};
-use http::Uri;
-use prost::Message;
+use golem_service_base::model::auth::AuthCtx;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tonic::codec::CompressionEncoding;
-use tonic::Request;
 use tracing::error;
-use uuid::Uuid;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::clients::RemoteServiceConfig;
 
 #[async_trait]
 pub trait ResourceLimits: Send + Sync {
@@ -95,18 +87,30 @@ impl ResourceLimitsGrpc {
         &self,
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
-        self.client.batch_update_fuel_usage(updates, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed updating fuel usage: {e}")))
+        self.client
+            .batch_update_fuel_usage(updates, &AuthCtx::System)
+            .await
+            .map_err(|e| WorkerExecutorError::runtime(format!("Failed updating fuel usage: {e}")))
     }
 
     async fn fetch_resource_limits(
         &self,
         account_id: &AccountId,
     ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
-        let limits = self.client.get_resource_limits(account_id, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed fetching resource limits: {e}")))?;
+        let limits = self
+            .client
+            .get_resource_limits(account_id, &AuthCtx::System)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed fetching resource limits: {e}"))
+            })?;
         const _: () = {
             assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
         };
-        Ok(CurrentResourceLimits { fuel: limits.available_fuel, max_memory: limits.max_memory_per_worker as usize })
+        Ok(CurrentResourceLimits {
+            fuel: limits.available_fuel,
+            max_memory: limits.max_memory_per_worker as usize,
+        })
     }
 
     /// Takes all recorded fuel updates and resets them to 0
@@ -134,7 +138,7 @@ impl ResourceLimitsGrpc {
         let client = GrpcRegistryService::new(&RemoteServiceConfig {
             host,
             port,
-            retries: retry_config
+            retries: retry_config,
         });
         let svc = Self {
             client,
@@ -257,15 +261,6 @@ impl ResourceLimits for ResourceLimitsGrpc {
             }
         }
     }
-}
-
-fn authorised_request<T>(request: T, access_token: &Uuid) -> Request<T> {
-    let mut req = Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {access_token}").parse().unwrap(),
-    );
-    req
 }
 
 struct ResourceLimitsDisabled;

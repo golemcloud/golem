@@ -15,28 +15,18 @@
 use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
 use crate::metrics::record_compilation_time;
 use crate::model::*;
-use futures::TryStreamExt;
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::RetryConfig;
-use golem_common::retries::with_retries;
-use golem_service_base::grpc::is_grpc_retriable;
-use golem_service_base::grpc::GrpcError;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::spawn_blocking;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
 use tracing::{info, warn, Instrument};
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
 
 // Single worker that compiles WASM components.
 #[derive(Clone)]
@@ -125,7 +115,7 @@ impl CompileWorker {
         let client = GrpcRegistryService::new(&RemoteServiceConfig {
             host: config.host,
             port: config.port,
-            retries: self.config.retries.clone()
+            retries: self.config.retries.clone(),
         });
 
         self.client.lock().await.replace(client);
@@ -161,13 +151,14 @@ impl CompileWorker {
         };
 
         if let Some(client) = &*self.client.lock().await {
-            let bytes = client.download_component(
-                &component_with_version.id,
-                component_with_version.version,
-                &AuthCtx::System
-            )
-            .await
-            .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
+            let bytes = client
+                .download_component(
+                    &component_with_version.id,
+                    component_with_version.version,
+                    &AuthCtx::System,
+                )
+                .await
+                .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
             let start = Instant::now();
             let component = spawn_blocking({

@@ -15,24 +15,17 @@
 use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::component::{
     ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::model::RetryConfig;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::grpc::authorised_grpc_request;
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::plugin_registration::PluginRegistration;
-use http::Uri;
-use std::sync::Arc;
-use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use uuid::Uuid;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::plugin_registration::PluginRegistration;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait PluginsService: Send + Sync {
@@ -68,11 +61,7 @@ pub trait PluginsService: Send + Sync {
 
 pub fn configured(config: &PluginServiceConfig) -> Arc<dyn PluginsService> {
     let client = CachedPlugins::new(
-        PluginsGrpc::new(
-            config.host.clone(),
-            config.port,
-            config.retries.clone()
-        ),
+        PluginsGrpc::new(config.host.clone(), config.port, config.retries.clone()),
         config.plugin_cache_size,
     );
     Arc::new(client)
@@ -158,21 +147,17 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
 
 #[derive(Clone)]
 struct PluginsGrpc {
-    client: GrpcRegistryService
+    client: GrpcRegistryService,
 }
 
 impl PluginsGrpc {
-    pub fn new(
-        host: String,
-        port: u16,
-        retry_config: RetryConfig
-    ) -> Self {
+    pub fn new(host: String, port: u16, retry_config: RetryConfig) -> Self {
         Self {
             client: GrpcRegistryService::new(&RemoteServiceConfig {
                 host,
                 port,
-                retries: retry_config
-            })
+                retries: retry_config,
+            }),
         }
     }
 }
@@ -185,13 +170,29 @@ impl PluginsService for PluginsGrpc {
         component_version: ComponentRevision,
         plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
-        unimplemented!()
+        let component = self
+            .client
+            .get_component_metadata(component_id, component_version, &AuthCtx::System)
+            .await
+            .map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component: {e}")))?;
+        component
+            .installed_plugins
+            .into_iter()
+            .find(|ip| ip.priority == plugin_priority)
+            .ok_or(WorkerExecutorError::runtime(
+                "failed to find plugin with priority in component",
+            ))
     }
 
     async fn get_plugin_definition(
         &self,
         plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, WorkerExecutorError> {
-        self.client.get_plugin_registration_by_id(plugin_id, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed getting plugin registration: {e}")))
+        self.client
+            .get_plugin_registration_by_id(plugin_id, &AuthCtx::System)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed getting plugin registration: {e}"))
+            })
     }
 }

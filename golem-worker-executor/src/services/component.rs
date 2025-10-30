@@ -15,39 +15,28 @@
 use super::golem_config::{ComponentCacheConfig, ComponentServiceConfig};
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
-use futures::TryStreamExt;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
-use golem_common::retries::with_retries;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;
-use http::Uri;
-use prost::Message;
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
 use tracing::info;
 use tracing::{debug, warn};
-use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -95,21 +84,15 @@ pub fn configured(
         config.port,
         cache_config.max_capacity,
         cache_config.max_metadata_capacity,
-        cache_config.max_resolved_component_capacity,
         cache_config.time_to_idle,
         config.retries.clone(),
-        config.connect_timeout,
         compiled_component_service,
-        config.max_component_size,
     ))
 }
 
 pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
-    resolved_component_cache:
-        Cache<(EnvironmentId, String), (), Option<ComponentId>, WorkerExecutorError>,
-    retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     component_client: GrpcRegistryService,
 }
@@ -120,12 +103,9 @@ impl ComponentServiceDefault {
         component_port: u16,
         max_component_capacity: usize,
         max_metadata_capacity: usize,
-        max_resolved_component_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
-        connect_timeout: Duration,
         compiled_component_service: Arc<dyn CompiledComponentService>,
-        max_component_size: usize,
     ) -> Self {
         Self {
             component_cache: create_component_cache(max_component_capacity, time_to_idle),
@@ -133,17 +113,12 @@ impl ComponentServiceDefault {
                 max_metadata_capacity,
                 time_to_idle,
             ),
-            resolved_component_cache: create_resolved_component_cache(
-                max_resolved_component_capacity,
-                time_to_idle,
-            ),
-            retry_config: retry_config.clone(),
             compiled_component_service,
             component_client: GrpcRegistryService::new(&RemoteServiceConfig {
                 host: component_host,
                 port: component_port,
-                retries: retry_config
-            })
+                retries: retry_config,
+            }),
         }
     }
 }
@@ -192,13 +167,19 @@ impl ComponentService for ComponentServiceDefault {
                     match component {
                         Some(component) => Ok(component),
                         None => {
-                            let bytes = self.component_client.download_component(&component_id_clone, component_version, &AuthCtx::System).await.map_err(|e|
-                                WorkerExecutorError::ComponentDownloadFailed {
+                            let bytes = self
+                                .component_client
+                                .download_component(
+                                    &component_id_clone,
+                                    component_version,
+                                    &AuthCtx::System,
+                                )
+                                .await
+                                .map_err(|e| WorkerExecutorError::ComponentDownloadFailed {
                                     component_id: component_id_clone.clone(),
                                     component_version,
                                     reason: format!("{e}"),
-                                }
-                            )?;
+                                })?;
 
                             let start = Instant::now();
                             let component_id_clone2 = component_id_clone.clone();
@@ -258,7 +239,6 @@ impl ComponentService for ComponentServiceDefault {
         match forced_version {
             Some(version) => {
                 let client = self.component_client.clone();
-                let retry_config = self.retry_config.clone();
                 let component_id = component_id.clone();
                 self.component_metadata_cache
                     .get_or_insert_simple(
@@ -268,7 +248,18 @@ impl ComponentService for ComponentServiceDefault {
                         },
                         || {
                             Box::pin(async move {
-                                let metadata = client.get_component_metadata(&component_id, version, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}")))?;
+                                let metadata = client
+                                    .get_component_metadata(
+                                        &component_id,
+                                        version,
+                                        &AuthCtx::System,
+                                    )
+                                    .await
+                                    .map_err(|e| {
+                                        WorkerExecutorError::runtime(format!(
+                                            "Failed getting component metadata: {e}"
+                                        ))
+                                    })?;
                                 Ok(metadata)
                             })
                         },
@@ -276,7 +267,15 @@ impl ComponentService for ComponentServiceDefault {
                     .await
             }
             None => {
-                let metadata = self.component_client.get_latest_component_metadata(&component_id, &AuthCtx::System).await.map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}")))?;
+                let metadata = self
+                    .component_client
+                    .get_latest_component_metadata(component_id, &AuthCtx::System)
+                    .await
+                    .map_err(|e| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed getting component metadata: {e}"
+                        ))
+                    })?;
 
                 let metadata = self
                     .component_metadata_cache
@@ -301,15 +300,19 @@ impl ComponentService for ComponentServiceDefault {
         resolving_application: ApplicationId,
         resolving_account: AccountId,
     ) -> Result<Option<ComponentId>, WorkerExecutorError> {
-        let component = self.component_client.resolve_component(
-            &resolving_account,
-            &resolving_application,
-            &resolving_environment,
-            &component_slug,
-            &AuthCtx::System
-        )
-        .await
-        .map_err(|e| WorkerExecutorError::runtime(format!("Resolving component failed: {e}")))?;
+        let component = self
+            .component_client
+            .resolve_component(
+                &resolving_account,
+                &resolving_application,
+                &resolving_environment,
+                &component_slug,
+                &AuthCtx::System,
+            )
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Resolving component failed: {e}"))
+            })?;
 
         Ok(component.map(|c| c.id))
     }
@@ -342,21 +345,6 @@ fn create_component_metadata_cache(
             period: Duration::from_secs(60),
         },
         "component_metadata",
-    )
-}
-
-fn create_resolved_component_cache(
-    max_capacity: usize,
-    time_to_idle: Duration,
-) -> Cache<(EnvironmentId, String), (), Option<ComponentId>, WorkerExecutorError> {
-    Cache::new(
-        Some(max_capacity),
-        FullCacheEvictionMode::LeastRecentlyUsed(1),
-        BackgroundEvictionMode::OlderThan {
-            ttl: time_to_idle,
-            period: Duration::from_secs(60),
-        },
-        "resolved_component",
     )
 }
 
