@@ -198,19 +198,65 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let constructor_param_extraction = ctor_params.iter().enumerate().map(|(i, ident)| {
         quote! {
-            let element_value = match &params {
+            let element_value_result = match &params {
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                    values.get(#i).expect(format!("Missing arguments to construct the agent. Pos: {}", #i).as_str()).clone()
+                    let value = values.get(#i);
+
+                    match value {
+                        Some(v) => Ok(v.clone()),
+                        None => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                            golem_rust::wasm_rpc::ValueAndType::new(
+                                golem_rust::wasm_rpc::Value::String(format!(
+                                    "Missing arguments to construct the agent. Pos: {}",
+                                    #i
+                                )),
+                                golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                            )
+                            .into(),
+                        )),
+                    }
                 },
-                _ => panic!("expected tuple input"),
+                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!(
+                            "Only component types are supported now"
+                        )),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    )
+                    .into(),
+                )),
             };
 
-            let wit_value = match element_value {
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => wit_value,
-                _ => panic!("Currently only ComponentModel ElementValue is supported"),
+            let element_value = element_value_result?;
+
+            let wit_value_result = match element_value {
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!(
+                            "Only ComponentModel ElementValue is supported now"
+                        )),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    )
+                    .into(),
+                )),
             };
 
-            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).expect("internal error, failed to convert constructor argument");
+            let wit_value = wit_value_result?;
+
+            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).map_err(|e| {
+                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!(
+                            "Failed to parse constructor argument at position {}: {}",
+                            #i, e
+                        )),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    )
+                    .into(),
+                )
+            })?;
+            
         }
     });
 
@@ -220,7 +266,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         struct #initiator;
 
         impl golem_rust::agentic::AgentInitiator for #initiator {
-            fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue) {
+            fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue) -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
 
                 #(#constructor_param_extraction)*
 
@@ -233,6 +279,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 golem_rust::agentic::register_agent_instance(
                     resolved
                 );
+
+                Ok(())
             }
         }
     };

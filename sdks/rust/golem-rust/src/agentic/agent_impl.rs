@@ -54,8 +54,8 @@ impl Guest for Component {
                 agent_initiator.initiate(input)
             });
 
-        if let Some(_) = initiate_result {
-            Ok(())
+        if let Some(result) = initiate_result {
+            result
         } else {
             Err(AgentError::CustomError(
                 golem_wasm::ValueAndType::new(
