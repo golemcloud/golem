@@ -46,10 +46,8 @@ impl Benchmark for LatencySmall {
 
     fn description() -> &'static str {
         indoc! {
-            "
-            Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory.
-            This variant uses a small rust component.
+            "Benchmarks both the cold and hot latency of a invoking a component that can potentially
+            be swapped out of the executor's memory. This variant uses a small rust component.
             The `size` parameter is the number of workers to create. The `length` parameter is the number
             of hot invocations to be done per worker (the first one is separately recorded as cold).
             "
@@ -129,10 +127,8 @@ impl Benchmark for LatencyMedium {
 
     fn description() -> &'static str {
         indoc! {
-            "
-            Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory.
-            This variant uses a simple TypeScript agent.
+            "Benchmarks both the cold and hot latency of a invoking a component that can potentially
+            be swapped out of the executor's memory. This variant uses a simple TypeScript agent.
             The `size` parameter is the number of workers to create. The `length` parameter is the number
             of hot invocations to be done per worker (the first one is separately recorded as cold).
             "
@@ -212,10 +208,8 @@ impl Benchmark for LatencyLarge {
 
     fn description() -> &'static str {
         indoc! {
-            "
-            Benchmarks both the cold and hot latency of a invoking a component that can potentially
-            be swapped out of the executor's memory.
-            This variant uses a TypeScript agent with many AI dependencies.
+            "Benchmarks both the cold and hot latency of a invoking a component that can potentially
+            be swapped out of the executor's memory. This variant uses a TypeScript agent with many AI dependencies.
             The `size` parameter is the number of workers to create. The `length` parameter is the number
             of hot invocations to be done per worker (the first one is separately recorded as cold).
             "

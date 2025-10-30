@@ -51,7 +51,7 @@ impl Benchmark for DurabilityOverhead {
         indoc! {
             "Invokes oplog-heavy functions in parallel on `size` number of workers,
             using ephemeral components, and durable components with persistence on and off.
-            The invoked function gets the 'length' parameter to control the length of its inner loop.
+            The invoked function gets the `length` parameter to control the length of its inner loop.
             The benchmark can be used to compare the overhead caused by of persistence (using a low
             `size`) and also the effect of heavy persistence load caused by parallel running workers
             (using high `size`).

@@ -47,7 +47,7 @@ impl Benchmark for Sleep {
 
     fn description() -> &'static str {
         indoc! {
-            "Launch 'size' workers and invoke a function on each in parallel that sleeps for 'length' milliseconds.
+            "Launch `size` workers and invoke a function on each in parallel that sleeps for `length` milliseconds.
             The result is the measured invocation time, which is affected by the amount of workers fitting in memory
             and also the scheduler that wakes them up.
             "

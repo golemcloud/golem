@@ -48,8 +48,8 @@ impl Benchmark for ColdStartUnknownSmall {
         indoc! {
             "
             Benchmarks the first-time invocation of a component that have never been instantiated before.
-            This variant uses a relatively small Rust component. 'size' is the number of unique components,
-            and 'length' is the time in seconds _per component_ to wait for pre-compilation.
+            This variant uses a relatively small Rust component. The `size` parameter is the number of
+            unique components, and `length` is the time in seconds _per component_ to wait for pre-compilation.
             "
         }
     }
@@ -128,8 +128,8 @@ impl Benchmark for ColdStartUnknownMedium {
         indoc! {
             "
                 Benchmarks the first-time invocation of a component that have never been instantiated before.
-                This variant uses a basic TypeScript component. 'size' is the number of unique components,
-            and 'length' is the time in seconds _per component_ to wait for pre-compilation.
+                This variant uses a basic TypeScript component. The `size` parameter is the number of unique
+                components, and `length` is the time in seconds _per component_ to wait for pre-compilation.
                 "
         }
     }
@@ -206,11 +206,11 @@ impl Benchmark for ColdStartUnknownLarge {
 
     fn description() -> &'static str {
         indoc! {
-            "
-                Benchmarks the first-time invocation of a component that have never been instantiated before.
-                This variant uses a TypeScript component with a lot of linked AI libraries. 'size' is the number of unique components,
-                and 'length' is the time in seconds _per component_ to wait for pre-compilation.
-                "
+            "Benchmarks the first-time invocation of a component that have never been instantiated before.
+             This variant uses a TypeScript component with a lot of linked AI libraries. The `size` parameter
+             is the number of unique components, and `length` is the time in seconds _per component_
+             to wait for pre-compilation.
+             "
         }
     }
 
