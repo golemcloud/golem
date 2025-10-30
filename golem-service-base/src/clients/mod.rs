@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod limit;
+pub mod registry;
 // pub mod plugin;
 
 use golem_common::SafeDisplay;
