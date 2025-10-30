@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, WorkerId};
 use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
@@ -212,7 +212,7 @@ async fn dynamic_function_call<
             results[0] = Val::Resource(handle.try_into_resource_any(store)?);
         }
         DynamicRpcCall::GlobalCustomConstructor { .. } => {
-            // Simple stub interface constructor that takes a worker-id or component-id as a parameter
+            // Simple stub interface constructor that takes an agent-id as a parameter
 
             let worker_id = params[0].clone();
             let remote_worker_id = resolve_worker_id(&mut store, worker_id)?;
@@ -224,7 +224,7 @@ async fn dynamic_function_call<
         DynamicRpcCall::ResourceStubConstructor {
             target_constructor_name,
             component_name,
-            component_type,
+            ..
         } => {
             // Resource stub constructor
 
@@ -255,12 +255,7 @@ async fn dynamic_function_call<
                 .iter()
                 .map(|p| &p.typ)
                 .collect::<Vec<_>>();
-            match component_type {
-                ComponentType::Durable => {
-                    analysed_param_types.insert(0, &str());
-                }
-                ComponentType::Ephemeral => {}
-            }
+            analysed_param_types.insert(0, &str());
 
             let constructor_result = remote_invoke_and_await(
                 target_constructor_name,
@@ -307,11 +302,11 @@ async fn dynamic_function_call<
         }
         DynamicRpcCall::ResourceCustomConstructor {
             target_constructor_name,
-            component_type,
+            ..
         } => {
             // Resource stub custom constructor
 
-            // First parameter is the worker-id or component-id (for ephemeral)
+            // First parameter is the agent-id
             // Rest of the parameters must be sent to the remote constructor
 
             let worker_id = params[0].clone();
@@ -340,15 +335,7 @@ async fn dynamic_function_call<
                 .collect::<Vec<_>>();
 
             let worker_id_type = WorkerId::get_type();
-            let component_id_type = ComponentId::get_type();
-            match component_type {
-                ComponentType::Durable => {
-                    analysed_param_types.insert(0, &worker_id_type);
-                }
-                ComponentType::Ephemeral => {
-                    analysed_param_types.insert(0, &component_id_type);
-                }
-            }
+            analysed_param_types.insert(0, &worker_id_type);
 
             let constructor_result = remote_invoke_and_await(
                 target_constructor_name,
@@ -995,7 +982,7 @@ fn resolve_worker_id<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     worker_id: Val,
 ) -> anyhow::Result<OwnedWorkerId> {
-    let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
+    let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get an agent-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
         &store.data().owned_worker_id().project_id,
@@ -1041,11 +1028,9 @@ enum DynamicRpcCall {
     GlobalCustomConstructor {},
     ResourceStubConstructor {
         component_name: String,
-        component_type: ComponentType,
         target_constructor_name: ParsedFunctionName,
     },
     ResourceCustomConstructor {
-        component_type: ComponentType,
         target_constructor_name: ParsedFunctionName,
     },
     BlockingFunctionCall {
@@ -1116,7 +1101,6 @@ impl DynamicRpcCall {
                             },
                         },
                         component_name: target.component_name,
-                        component_type: target.component_type,
                     }))
                 }
                 _ => Ok(None),
@@ -1159,7 +1143,6 @@ impl DynamicRpcCall {
                                             resource: resource_name.to_string(),
                                         },
                                     },
-                                    component_type: target.component_type,
                                 }))
                             }
                             DynamicRpcResource::InvokeResult => {
