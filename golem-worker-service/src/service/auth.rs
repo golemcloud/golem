@@ -23,7 +23,7 @@ use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
-use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_component_metadata_response, get_components_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetComponentMetadataRequest, GetComponentsRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
+use golem_api_grpc::proto::golem::registry::v1::{authenticate_token_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, update_worker_limit_response, AuthenticateTokenRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, UpdateWorkerLimitRequest};
 use golem_service_base::model::ResourceLimits;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
