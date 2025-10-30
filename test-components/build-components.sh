@@ -4,11 +4,11 @@ IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
 "option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
-"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
+"update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
 
 rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc" "benchmarks")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
