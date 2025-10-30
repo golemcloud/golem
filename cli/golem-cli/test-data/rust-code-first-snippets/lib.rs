@@ -352,10 +352,50 @@ impl BarAgent for BarAgentImpl {
         string
     }
 
-    // fn fun_boolean(&self, boolean: bool) -> bool {
-    //     boolean
-    // }
-    //
+    fn fun_u8(&mut self, number: u8) -> u8 {
+        number
+    }
+
+    fn fun_i8(&mut self, number: i8) -> i8 {
+        number
+    }
+
+    fn fun_u16(&mut self, number: u16) -> u16 {
+        number
+    }
+
+    fn fun_i16(&mut self, number: i16) -> i16 {
+        number
+    }
+
+    fn fun_i32(&mut self, number: i32) -> i32 {
+        number
+    }
+
+    fn fun_u32(&mut self, number: u32) -> u32 {
+        number
+    }
+
+    fn fun_u64(&mut self, number: u64) -> u64 {
+        number
+    }
+
+    fn fun_i64(&mut self, number: i64) -> i64 {
+        number
+    }
+
+    fn fun_f32(&mut self, number: f32) -> f32 {
+        number
+    }
+
+    fn fun_f64(&mut self, number: f64) -> f64 {
+        number
+    }
+
+    fn fun_boolean(&self, boolean: bool) -> bool {
+        boolean
+    }
+
     // fn fun_map(&self, map: MapType) -> MapType {
     //     map
     // }

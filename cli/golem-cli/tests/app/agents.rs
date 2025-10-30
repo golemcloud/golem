@@ -94,13 +94,13 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         ctx.test_data_path_join("rust-code-first-snippets/lib.rs"),
         &component_source_code_lib_file,
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         ctx.test_data_path_join("rust-code-first-snippets/model.rs"),
         &component_source_code_model_file,
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
@@ -218,7 +218,6 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     //     &[r#"{ok: some("foo"), err: none}"#],
     // )
     // .await;
-
 
     // run_and_assert(
     //     &ctx,
