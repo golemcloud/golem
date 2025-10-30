@@ -61,9 +61,9 @@ echo "   ... and $((MANIFEST_COUNT - 3)) more"
 echo ""
 
 # 6. Start MCP server (in background for demo)
-PORT=8088
-echo "6️⃣  Starting MCP server on port $PORT..."
-"$GOLEM_CLI" --serve $PORT > /tmp/mcp-server.log 2>&1 &
+# Note: --serve uses default port 8088 (can override with --serve=PORT)
+echo "6️⃣  Starting MCP server (default port 8088)..."
+"$GOLEM_CLI" --serve > /tmp/mcp-server.log 2>&1 &
 MCP_PID=$!
 echo "✅ MCP Server started (PID: $MCP_PID)"
 sleep 3
@@ -71,7 +71,7 @@ sleep 3
 # Check if still running
 if kill -0 $MCP_PID 2>/dev/null; then
     echo "✅ Server confirmed running"
-    echo "   Endpoint: http://localhost:$PORT/mcp"
+    echo "   Endpoint: http://localhost:8088/mcp"
     echo "   Protocol: JSON-RPC 2.0 with Server-Sent Events"
     echo "   Logs: /tmp/mcp-server.log"
 else

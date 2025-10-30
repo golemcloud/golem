@@ -143,7 +143,8 @@ pub struct GolemCliGlobalFlags {
     pub template_group: Option<String>,
 
     /// Start MCP server on specified port (Model Context Protocol for AI agents)
-    #[arg(long, global = true, display_order = 113)]
+    /// Default port is 8088, following Golem service port pattern (8080-8087)
+    #[arg(long, global = true, display_order = 113, default_missing_value = "8088", num_args = 0..=1, require_equals = true)]
     pub serve: Option<u16>,
 
     #[command(flatten)]
