@@ -46,7 +46,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let ctor_ident = &constructor_method.sig.ident;
     let ctor_params = extract_param_idents(constructor_method);
-    let input_param_type = get_input_param_type(constructor_method);
+    let input_param_type = get_input_param_type(&constructor_method.sig);
 
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
@@ -73,7 +73,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &input_param_type,
     );
 
-    let initiator_ident = format_ident!("{}Initiator", trait_name_ident);
+    let initiator_ident = format_ident!("__{}Initiator", trait_name_ident);
+
     let base_initiator_impl =
         generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
     let register_initiator_fn =
@@ -152,9 +153,9 @@ fn build_match_arms(
 
             let ident = &method.sig.ident;
 
-            let input_param_type = get_input_param_type(method);
+            let input_param_type = get_input_param_type(&method.sig);
 
-            let output_param_type = get_output_param_type(method);
+            let output_param_type = get_output_param_type(&method.sig);
 
             let post_method_param_extraction_logic = match output_param_type {
                 OutputParamType::Tuple => quote! {
@@ -365,7 +366,7 @@ fn generate_register_initiator_fn(
     initiator_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
     let register_initiator_fn_name = format_ident!(
-        "register_agent_initiator_{}",
+        "__register_agent_initiator_{}",
         trait_name_str_raw.to_lowercase()
     );
 

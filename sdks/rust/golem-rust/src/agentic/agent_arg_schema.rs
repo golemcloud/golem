@@ -14,7 +14,6 @@
 
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 
-use crate::golem_agentic::golem::agent::common::DataValue;
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;

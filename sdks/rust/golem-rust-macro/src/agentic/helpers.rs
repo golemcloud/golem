@@ -22,9 +22,9 @@ pub enum OutputParamType {
     Multimodal,
 }
 
-pub fn get_input_param_type(method: &syn::ImplItemFn) -> InputParamType {
-    if method.sig.inputs.len() == 1 {
-        if let syn::FnArg::Typed(pat_ty) = &method.sig.inputs[0] {
+pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
+    if sig.inputs.len() == 1 {
+        if let syn::FnArg::Typed(pat_ty) = &sig.inputs[0] {
             if let syn::Type::Path(type_path) = &*pat_ty.ty {
                 if let Some(seg) = type_path.path.segments.last() {
                     if seg.ident == "Multimodal" {
@@ -38,8 +38,8 @@ pub fn get_input_param_type(method: &syn::ImplItemFn) -> InputParamType {
     InputParamType::Tuple
 }
 
-pub fn get_output_param_type(method: &syn::ImplItemFn) -> OutputParamType {
-    if let syn::ReturnType::Type(_, ty) = &method.sig.output {
+pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let syn::Type::Path(type_path) = &**ty {
             if let Some(seg) = type_path.path.segments.last() {
                 if seg.ident == "Multimodal" {
