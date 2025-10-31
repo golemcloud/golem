@@ -19,10 +19,9 @@ use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageT
 use crate::repo::model::datetime::SqlDateTime;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
-use std::sync::Arc;
-use tracing::error;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
+use std::sync::Arc;
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
@@ -99,10 +98,12 @@ impl AccountUsageService {
     pub async fn add_worker(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
+            .await?;
         self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
         self.account_usage_repo.add(&account_usage).await?;
         Ok(())
@@ -111,10 +112,12 @@ impl AccountUsageService {
     pub async fn remove_worker(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
+            .await?;
         self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
         self.account_usage_repo.add(&account_usage).await?;
         Ok(())
@@ -123,10 +126,12 @@ impl AccountUsageService {
     pub async fn add_worker_connection(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount)).await?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
+            .await?;
         self.add_checked(&mut account_usage, UsageType::TotalWorkerConnectionCount, 1)?;
         self.account_usage_repo.add(&account_usage).await?;
         Ok(())
@@ -135,11 +140,17 @@ impl AccountUsageService {
     pub async fn remove_worker_connection(
         &self,
         account_id: &AccountId,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<(), AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount)).await?;
-        self.add_checked(&mut account_usage, UsageType::TotalWorkerConnectionCount, -1)?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
+            .await?;
+        self.add_checked(
+            &mut account_usage,
+            UsageType::TotalWorkerConnectionCount,
+            -1,
+        )?;
         self.account_usage_repo.add(&account_usage).await?;
         Ok(())
     }
@@ -168,17 +179,26 @@ impl AccountUsageService {
         }
     }
 
-    pub async fn get_resouce_limits(&self, account_id: &AccountId, auth: &AuthCtx) -> Result<ResourceLimits, AccountUsageError> {
+    pub async fn get_resouce_limits(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<ResourceLimits, AccountUsageError> {
         auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
 
-        let record = self.get_account_usage(account_id, Some(UsageType::MonthlyGasLimit)).await?;
+        let record = self
+            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+            .await?;
 
         let available_fuel = record
             .plan
             .monthly_gas_limit
             .saturating_sub(record.usage(UsageType::MonthlyGasLimit));
 
-        Ok(ResourceLimits { available_fuel: available_fuel, max_memory_per_worker: record.plan.max_memory_per_worker as u64 })
+        Ok(ResourceLimits {
+            available_fuel,
+            max_memory_per_worker: record.plan.max_memory_per_worker as u64,
+        })
     }
 
     fn add_checked(

@@ -359,24 +359,23 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                 END,
                                 updated_at = $5;
                         "#})
-                            .bind(account_id)
-                            .bind(usage_type)
-                            .bind(
-                                match usage_type.grouping() {
-                                    UsageGrouping::Total => USAGE_KEY_TOTAL,
-                                    UsageGrouping::Monthly => &date_usage_key,
-                                }
-                            )
-                            .bind(change)
-                            .bind(SqlDateTime::now()),
-                    ).await?;
+                        .bind(account_id)
+                        .bind(usage_type)
+                        .bind(match usage_type.grouping() {
+                            UsageGrouping::Total => USAGE_KEY_TOTAL,
+                            UsageGrouping::Monthly => &date_usage_key,
+                        })
+                        .bind(change)
+                        .bind(SqlDateTime::now()),
+                    )
+                    .await?;
                 }
 
                 Ok(())
             }
-                .boxed()
+            .boxed()
         })
-            .await
+        .await
     }
 }
 
@@ -385,10 +384,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_plan(
-        &self,
-        account_id: &Uuid
-    ) -> RepoResult<Option<PlanRecord>>;
+    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -397,10 +393,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_plan(
-        &self,
-        account_id: &Uuid
-    ) -> RepoResult<Option<PlanRecord>> {
+    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
         let plan: Option<PlanRecord> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(

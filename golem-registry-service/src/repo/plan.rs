@@ -12,22 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+use futures::{FutureExt, StreamExt};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
+use golem_service_base::db::{LabelledPoolApi, Pool};
 use golem_service_base::repo::RepoResult;
 use indoc::indoc;
-use sqlx::{Database, Row};
-use std::collections::BTreeMap;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
-use crate::services::plan;
 
 #[async_trait]
 pub trait PlanRepo: Send + Sync {

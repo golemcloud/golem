@@ -13,14 +13,10 @@
 // limitations under the License.
 
 use crate::repo::model::account_usage::UsageType;
-use crate::repo::model::new_repo_uuid;
-use anyhow::anyhow;
 use golem_common::model::account::PlanId;
 use golem_common::model::account::{Plan, PlanName};
-use golem_service_base::repo::{RepoError, RepoResult};
+use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
-use std::collections::BTreeMap;
-use strum::IntoEnumIterator;
 use uuid::Uuid;
 
 #[derive(FromRow, Debug, Clone, PartialEq)]
@@ -42,14 +38,16 @@ pub struct PlanRecord {
 impl PlanRecord {
     pub fn limit(&self, usage_type: UsageType) -> i64 {
         match usage_type {
-            UsageType::MonthlyComponentUploadLimitBytes => self.monthly_component_upload_limit_bytes,
+            UsageType::MonthlyComponentUploadLimitBytes => {
+                self.monthly_component_upload_limit_bytes
+            }
             UsageType::MonthlyGasLimit => self.monthly_gas_limit,
             UsageType::TotalAppCount => self.total_app_count,
             UsageType::TotalEnvCount => self.total_env_count,
             UsageType::TotalComponentCount => self.total_component_count,
             UsageType::TotalComponentStorageBytes => self.total_component_storage_bytes,
             UsageType::TotalWorkerCount => self.total_worker_count,
-            UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count
+            UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count,
         }
     }
 }

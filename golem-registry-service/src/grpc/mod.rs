@@ -12,25 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod  api_impl;
+mod api_impl;
 mod error;
 
+use self::api_impl::RegistryServiceGrpcApi;
 use crate::bootstrap::Services;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
-use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
+use golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryServiceServer;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
-use tonic::metadata::MetadataMap;
 use tonic::transport::Server;
 use tracing::Instrument;
-use golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryServiceServer;
-use self::api_impl::RegistryServiceGrpcApi;
-use golem_common::model::account::AccountId;
 
 pub async fn start_grpc_server(
     addr: SocketAddr,

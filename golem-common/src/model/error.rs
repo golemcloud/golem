@@ -49,9 +49,7 @@ mod protobuf {
 
     impl From<ErrorBody> for golem_api_grpc::proto::golem::common::ErrorBody {
         fn from(value: ErrorBody) -> Self {
-            Self {
-                error: value.error,
-            }
+            Self { error: value.error }
         }
     }
 

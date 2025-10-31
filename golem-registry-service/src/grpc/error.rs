@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::metrics::api::ApiErrorDetails;
-use golem_service_base::model::auth::AuthorizationError;
+use crate::services::account_usage::error::AccountUsageError;
 use crate::services::auth::AuthError;
 use golem_common::SafeDisplay;
-use crate::services::account_usage::error::AccountUsageError;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_service_base::model::auth::AuthorizationError;
 
 #[derive(Debug)]
 pub enum GrpcApiError {
@@ -27,7 +27,7 @@ pub enum GrpcApiError {
     NotFound(ErrorBody),
     AlreadyExists(ErrorBody),
     InternalError(ErrorBody),
-    CouldNotAuthenticate(ErrorBody)
+    CouldNotAuthenticate(ErrorBody),
 }
 
 impl ApiErrorDetails for GrpcApiError {
@@ -112,14 +112,12 @@ impl From<AccountUsageError> for GrpcApiError {
         let error: String = value.to_safe_string();
         match value {
             AccountUsageError::Unauthorized(authorization_error) => Self::from(authorization_error),
-            AccountUsageError::AccountNotfound(_) => Self::NotFound(ErrorBody {
-                error,
-                cause: None,
-            }),
-            AccountUsageError::LimitExceeded { .. } => Self::LimitExceeded(ErrorBody {
-                error,
-                cause: None,
-            }),
+            AccountUsageError::AccountNotfound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+            AccountUsageError::LimitExceeded { .. } => {
+                Self::LimitExceeded(ErrorBody { error, cause: None })
+            }
             AccountUsageError::InternalError(inner) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(inner.context("AuthError")),
@@ -128,7 +126,9 @@ impl From<AccountUsageError> for GrpcApiError {
     }
 }
 
-impl From<GrpcApiError> for golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error {
+impl From<GrpcApiError>
+    for golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error
+{
     fn from(value: GrpcApiError) -> Self {
         match value {
             GrpcApiError::AlreadyExists(error) => Self::AlreadyExists(error.into()),
@@ -137,13 +137,15 @@ impl From<GrpcApiError> for golem_api_grpc::proto::golem::registry::v1::registry
             GrpcApiError::InternalError(error) => Self::InternalError(error.into()),
             GrpcApiError::LimitExceeded(error) => Self::LimitExceeded(error.into()),
             GrpcApiError::NotFound(error) => Self::NotFound(error.into()),
-            GrpcApiError::Unauthorized(error) => Self::Unauthorized(error.into())
+            GrpcApiError::Unauthorized(error) => Self::Unauthorized(error.into()),
         }
     }
 }
 
 impl From<GrpcApiError> for golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
     fn from(value: GrpcApiError) -> Self {
-        Self { error: Some(value.into()) }
+        Self {
+            error: Some(value.into()),
+        }
     }
 }

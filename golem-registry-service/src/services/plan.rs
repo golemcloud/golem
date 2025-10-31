@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::config::PlansConfig;
-use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
 use anyhow::anyhow;
@@ -23,7 +22,6 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::auth::{GlobalAction, PlanAction};
 use golem_service_base::repo::RepoError;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -107,7 +105,7 @@ impl PlanService {
                         storage_limit: plan.storage_limit,
                         monthly_gas_limit: plan.monthly_gas_limit,
                         monthly_upload_limit: plan.monthly_upload_limit,
-                        max_memory_per_worker: plan.max_memory_per_worker
+                        max_memory_per_worker: plan.max_memory_per_worker,
                     },
                     auth,
                 )
@@ -161,7 +159,7 @@ impl PlanService {
             total_worker_count: plan.worker_limit,
             total_worker_connection_count: plan.worker_connection_limit,
             monthly_component_upload_limit_bytes: plan.monthly_upload_limit,
-            monthly_gas_limit: plan.monthly_gas_limit
+            monthly_gas_limit: plan.monthly_gas_limit,
         };
 
         self.plan_repo.create_or_update(record).await?;

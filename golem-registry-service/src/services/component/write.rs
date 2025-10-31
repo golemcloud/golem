@@ -18,7 +18,7 @@ use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
-use crate::services::account_usage::{AccountUsage, AccountUsageService};
+use crate::services::account_usage::AccountUsageService;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::environment::EnvironmentError;
@@ -128,8 +128,7 @@ impl ComponentWriteService {
                 )))
             })?;
 
-        self
-            .account_usage_service
+        self.account_usage_service
             .ensure_new_component_within_limits(&environment.owner_account_id, wasm.len() as i64)
             .await?;
 
@@ -247,9 +246,11 @@ impl ComponentWriteService {
         info!(environment_id = %environment_id, "Update component");
 
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = new_wasm {
-            self
-                .account_usage_service
-                .ensure_updated_component_within_limits(&environment.owner_account_id, new_data.len() as i64)
+            self.account_usage_service
+                .ensure_updated_component_within_limits(
+                    &environment.owner_account_id,
+                    new_data.len() as i64,
+                )
                 .await?;
 
             let (wasm_hash, wasm_object_store_key) = self

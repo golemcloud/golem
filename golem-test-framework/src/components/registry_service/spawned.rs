@@ -24,12 +24,11 @@ use golem_registry_service::config::{
     AccountsConfig, PlansConfig, PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
 use std::collections::HashMap;
+use std::i64;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tracing::info;
-use uuid::uuid;
-use std::i64;
 
 const ADMIN_ACCOUNT_NAME: &str = "Admin";
 const ADMIN_ACCOUNT_EMAIL: &str = "admin@golem.cloud";
@@ -63,7 +62,7 @@ impl SpawnedRegistyService {
             admin_plan_id,
             admin_account_id.clone(),
             admin_account_token.clone(),
-            default_plan_id
+            default_plan_id,
         );
 
         let prometheus_registry = prometheus::Registry::new();
@@ -165,7 +164,7 @@ fn make_config(
                         storage_limit: i64::MAX,
                         monthly_gas_limit: i64::MAX,
                         monthly_upload_limit: i64::MAX,
-                        max_memory_per_worker: u64::MAX
+                        max_memory_per_worker: u64::MAX,
                     },
                 ),
                 (
@@ -180,7 +179,7 @@ fn make_config(
                         storage_limit: 500000000,
                         monthly_gas_limit: 1000000000000,
                         monthly_upload_limit: 1000000000,
-                        max_memory_per_worker: 1024 * 1024 * 1024
+                        max_memory_per_worker: 1024 * 1024 * 1024,
                     },
                 ),
             ]),

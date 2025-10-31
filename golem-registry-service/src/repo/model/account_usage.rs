@@ -56,8 +56,7 @@ impl UsageType {
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerCount
             | UsageType::TotalWorkerConnectionCount
-            | UsageType::TotalComponentStorageBytes
-            => UsageGrouping::Total,
+            | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit | UsageType::MonthlyComponentUploadLimitBytes => {
                 UsageGrouping::Monthly
             }

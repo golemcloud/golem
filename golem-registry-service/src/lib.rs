@@ -15,11 +15,11 @@
 pub mod api;
 pub mod bootstrap;
 pub mod config;
+pub mod grpc;
 pub mod metrics;
 pub mod model;
 pub mod repo;
 pub mod services;
-pub mod grpc;
 
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;

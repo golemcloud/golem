@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::RemoteServiceConfig;
+use crate::grpc::GrpcError;
 use crate::model::ResourceLimits;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
@@ -20,7 +21,16 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_connection_limit_response, update_worker_limit_response, AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest
+    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
+    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest,
+    GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest,
+    GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
+    UpdateWorkerLimitRequest, authenticate_token_response, batch_update_fuel_usage_response,
+    download_component_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_component_versions_response, get_component_metadata_response,
+    get_plugin_registration_by_id_response, get_resource_limits_response,
+    resolve_component_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -39,7 +49,6 @@ use std::collections::HashMap;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::info;
-use crate::grpc::GrpcError;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -190,8 +199,10 @@ impl RegistryService for GrpcRegistryService {
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
                         Some(authenticate_token_response::Result::Success(payload)) => {
-                            let user_auth_ctx: UserAuthCtx =
-                                payload.auth_ctx.ok_or("missing authctx field")?.try_into()?;
+                            let user_auth_ctx: UserAuthCtx = payload
+                                .auth_ctx
+                                .ok_or("missing authctx field")?
+                                .try_into()?;
                             Ok(AuthCtx::User(user_auth_ctx))
                         }
                         Some(authenticate_token_response::Result::Error(error)) => {
@@ -225,7 +236,7 @@ impl RegistryService for GrpcRegistryService {
                         .call("get-resource-limits", move |client| {
                             let request = GetResourceLimitsRequest {
                                 account_id: Some(id.clone().into()),
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_resource_limits(request))
                         })
@@ -277,7 +288,7 @@ impl RegistryService for GrpcRegistryService {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
                                 added: *added,
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.update_worker_limit(request))
@@ -328,7 +339,7 @@ impl RegistryService for GrpcRegistryService {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
                                 added: *added,
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.update_worker_connection_limit(request))
@@ -427,10 +438,7 @@ impl RegistryService for GrpcRegistryService {
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
                         Some(get_plugin_registration_by_id_response::Result::Success(payload)) => {
-                            Ok(payload
-                                .plugin
-                                .ok_or("missing plugin field")?
-                                .try_into()?)
+                            Ok(payload.plugin.ok_or("missing plugin field")?.try_into()?)
                         }
                         Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
                             Err(error.into())
@@ -837,7 +845,8 @@ impl IntoAnyhow for RegistryServiceError {
     }
 }
 
-type RegistryServiceClientError = GrpcError<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>;
+type RegistryServiceClientError =
+    GrpcError<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>;
 
 impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
     for RegistryServiceClientError

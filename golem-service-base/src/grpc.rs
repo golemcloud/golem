@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
-use golem_common::model::account::AccountId;
 
 pub fn proto_environment_id_string(
     id: &Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
@@ -41,7 +41,7 @@ pub enum GrpcError<E> {
     Unexpected(String),
 }
 
-impl <E> GrpcError<E> {
+impl<E> GrpcError<E> {
     pub fn empty_response() -> Self {
         Self::Unexpected("empty response".to_string())
     }
@@ -98,16 +98,16 @@ impl<E> From<String> for GrpcError<E> {
     }
 }
 
-
-impl<E>  From<&'static str> for GrpcError<E> {
+impl<E> From<&'static str> for GrpcError<E> {
     fn from(value: &'static str) -> Self {
         Self::from(value.to_string())
     }
 }
 
-pub fn proto_account_id_string(account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>) -> Option<String> {
-    account_id
-        .clone()
+pub fn proto_account_id_string(
+    account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>,
+) -> Option<String> {
+    (*account_id)
         .and_then(|v| TryInto::<AccountId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
