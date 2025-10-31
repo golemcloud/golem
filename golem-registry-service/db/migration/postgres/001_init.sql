@@ -8,6 +8,7 @@ CREATE TABLE plans
     total_env_count BIGINT NOT NULL,
     total_component_count BIGINT NOT NULL,
     total_worker_count BIGINT NOT NULL,
+    total_worker_connection_count BIGINT NOT NULL,
     total_component_storage_bytes BIGINT NOT NULL,
     monthly_gas_limit BIGINT NOT NULL,
     monthly_component_upload_limit_bytes BIGINT NOT NULL,
@@ -27,7 +28,7 @@ CREATE TABLE usage_types
 INSERT INTO usage_types (usage_type, name)
 VALUES
        (0, 'TOTAL_WORKER_COUNT'),
-       (1, 'TOTAL_COMPONENT_STORAGE_BYTES'),
+       (1, 'TOTAL_WORKER_CONNECTION_COUNT'),
        (2, 'MONTHLY_GAS_LIMIT'),
        (3, 'MONTHLY_COMPONENT_UPLOAD_LIMIT_BYTES');
 

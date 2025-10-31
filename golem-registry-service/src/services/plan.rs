@@ -103,6 +103,7 @@ impl PlanService {
                         env_limit: plan.env_limit,
                         component_limit: plan.component_limit,
                         worker_limit: plan.worker_limit,
+                        worker_connection_limit: plan.worker_connection_limit,
                         storage_limit: plan.storage_limit,
                         monthly_gas_limit: plan.monthly_gas_limit,
                         monthly_upload_limit: plan.monthly_upload_limit,
@@ -158,6 +159,7 @@ impl PlanService {
             total_component_count: plan.component_limit,
             total_component_storage_bytes: plan.storage_limit,
             total_worker_count: plan.worker_limit,
+            total_worker_connection_count: plan.worker_connection_limit,
             monthly_component_upload_limit_bytes: plan.monthly_upload_limit,
             monthly_gas_limit: plan.monthly_gas_limit
         };

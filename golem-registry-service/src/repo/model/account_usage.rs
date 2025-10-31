@@ -39,12 +39,13 @@ pub enum UsageTracking {
 #[sqlx(type_name = "integer")]
 pub enum UsageType {
     TotalWorkerCount = 0,
-    TotalComponentStorageBytes = 1,
+    TotalWorkerConnectionCount = 1,
     MonthlyGasLimit = 2,
     MonthlyComponentUploadLimitBytes = 3,
     TotalAppCount = 4,
     TotalEnvCount = 5,
     TotalComponentCount = 6,
+    TotalComponentStorageBytes = 7,
 }
 
 impl UsageType {
@@ -54,7 +55,9 @@ impl UsageType {
             | UsageType::TotalEnvCount
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerCount
-            | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
+            | UsageType::TotalWorkerConnectionCount
+            | UsageType::TotalComponentStorageBytes
+            => UsageGrouping::Total,
             UsageType::MonthlyGasLimit | UsageType::MonthlyComponentUploadLimitBytes => {
                 UsageGrouping::Monthly
             }
@@ -68,6 +71,7 @@ impl UsageType {
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
             UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
             UsageType::TotalWorkerCount
+            | UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes => UsageTracking::Stats,
         }
@@ -100,6 +104,10 @@ impl AccountUsage {
         self.usage.get(&usage_type).copied().unwrap_or(0)
     }
 
+    pub fn change(&self, usage_type: UsageType) -> i64 {
+        self.changes.get(&usage_type).copied().unwrap_or(0)
+    }
+
     pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> RepoResult<bool> {
         let limit = self.plan.limit(usage_type);
 
@@ -108,7 +116,7 @@ impl AccountUsage {
             .and_modify(|e| *e = e.saturating_add(change))
             .or_insert(change);
 
-        let change = self.changes.get(&usage_type).copied().unwrap_or(0);
+        let change = self.change(usage_type);
         let final_value = self.usage(usage_type).saturating_add(change);
 
         Ok(final_value >= 0 && final_value <= limit)

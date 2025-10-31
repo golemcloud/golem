@@ -117,20 +117,21 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     sqlx::query(indoc! { r#"
                         INSERT INTO plans (
                             plan_id, name, max_memory_per_worker, total_app_count,
-                            total_env_count, total_component_count, total_worker_count, total_component_storage_bytes,
-                            monthly_gas_limit, monthly_component_upload_limit_bytes
+                            total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                            total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
                         )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                        ON CONFLICT (plan_id)DO UPDATE SET
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
                             max_memory_per_worker = $3,
                             total_app_count = $4,
                             total_env_count = $5,
                             total_component_count = $6,
                             total_worker_count = $7,
-                            total_component_storage_bytes = $8,
-                            monthly_gas_limit = $9,
-                            monthly_component_upload_limit_bytes = $10
+                            total_worker_connection_count = $8,
+                            total_component_storage_bytes = $9,
+                            monthly_gas_limit = $10,
+                            monthly_component_upload_limit_bytes = $11
                     "#})
                     .bind(plan.plan_id)
                     .bind(plan.name)
@@ -139,6 +140,7 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                     .bind(plan.total_env_count)
                     .bind(plan.total_component_count)
                     .bind(plan.total_worker_count)
+                    .bind(plan.total_worker_connection_count)
                     .bind(plan.total_component_storage_bytes)
                     .bind(plan.monthly_gas_limit)
                     .bind(plan.monthly_component_upload_limit_bytes)
@@ -159,8 +161,8 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT
                         plan_id, name, max_memory_per_worker, total_app_count,
-                        total_env_count, total_component_count, total_worker_count, total_component_storage_bytes,
-                        monthly_gas_limit, monthly_component_upload_limit_bytes
+                        total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                        total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
                     FROM plans
                     WHERE plan_id = $1
                 "# })
@@ -180,8 +182,8 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT
                     plan_id, name, max_memory_per_worker, total_app_count,
-                    total_env_count, total_component_count, total_worker_count, total_component_storage_bytes,
-                    monthly_gas_limit, monthly_component_upload_limit_bytes
+                    total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                    total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
                 FROM plans
             "# }))
             .await?;

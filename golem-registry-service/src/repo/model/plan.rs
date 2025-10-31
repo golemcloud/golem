@@ -33,6 +33,7 @@ pub struct PlanRecord {
     pub total_env_count: i64,
     pub total_component_count: i64,
     pub total_worker_count: i64,
+    pub total_worker_connection_count: i64,
     pub total_component_storage_bytes: i64,
     pub monthly_gas_limit: i64,
     pub monthly_component_upload_limit_bytes: i64,
@@ -47,7 +48,8 @@ impl PlanRecord {
             UsageType::TotalEnvCount => self.total_env_count,
             UsageType::TotalComponentCount => self.total_component_count,
             UsageType::TotalComponentStorageBytes => self.total_component_storage_bytes,
-            UsageType::TotalWorkerCount => self.total_worker_count
+            UsageType::TotalWorkerCount => self.total_worker_count,
+            UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count
         }
     }
 }
@@ -62,6 +64,7 @@ impl TryFrom<PlanRecord> for Plan {
             env_limit: value.total_env_count,
             component_limit: value.total_component_count,
             worker_limit: value.total_worker_count,
+            worker_connection_limit: value.total_worker_connection_count,
             storage_limit: value.total_component_storage_bytes,
             monthly_gas_limit: value.monthly_gas_limit,
             monthly_upload_limit: value.monthly_component_upload_limit_bytes,

@@ -58,6 +58,7 @@ declare_structs! {
         pub env_limit: i64,
         pub component_limit: i64,
         pub worker_limit: i64,
+        pub worker_connection_limit: i64,
         pub storage_limit: i64,
         pub monthly_gas_limit: i64,
         pub monthly_upload_limit: i64,

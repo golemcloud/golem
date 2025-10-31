@@ -51,14 +51,14 @@ pub trait LimitService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
     ) -> Result<(), LimitServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
     ) -> Result<(), LimitServiceError>;
 }
 
@@ -88,10 +88,10 @@ impl LimitService for RemoteLimitService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_limit(account_id, worker_id, value, &AuthCtx::System)
+            .update_worker_limit(account_id, worker_id, added, &AuthCtx::System)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
@@ -104,10 +104,10 @@ impl LimitService for RemoteLimitService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
     ) -> Result<(), LimitServiceError> {
         self.client
-            .update_worker_connection_limit(account_id, worker_id, value, &AuthCtx::System)
+            .update_worker_connection_limit(account_id, worker_id, added, &AuthCtx::System)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),

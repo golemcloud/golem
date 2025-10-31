@@ -29,6 +29,7 @@ use tokio::sync::OnceCell;
 use tokio::task::JoinSet;
 use tracing::info;
 use uuid::uuid;
+use std::i64;
 
 const ADMIN_ACCOUNT_NAME: &str = "Admin";
 const ADMIN_ACCOUNT_EMAIL: &str = "admin@golem.cloud";
@@ -160,6 +161,7 @@ fn make_config(
                         env_limit: i64::MAX,
                         component_limit: i64::MAX,
                         worker_limit: i64::MAX,
+                        worker_connection_limit: i64::MAX,
                         storage_limit: i64::MAX,
                         monthly_gas_limit: i64::MAX,
                         monthly_upload_limit: i64::MAX,
@@ -174,6 +176,7 @@ fn make_config(
                         env_limit: 40,
                         component_limit: 100,
                         worker_limit: 10000,
+                        worker_connection_limit: 100,
                         storage_limit: 500000000,
                         monthly_gas_limit: 1000000000000,
                         monthly_upload_limit: 1000000000,

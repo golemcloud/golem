@@ -568,7 +568,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(&account_id, worker_id, 1)
+            .update_worker_limit(&account_id, worker_id, true)
             .await?;
 
         Ok(worker_id.clone())
@@ -611,7 +611,7 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
 
         self.limit_service
-            .update_worker_connection_limit(&account_id, worker_id, 1)
+            .update_worker_connection_limit(&account_id, worker_id, true)
             .await?;
 
         Ok(ConnectWorkerStream::new(
@@ -658,7 +658,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(account_id, worker_id, -1)
+            .update_worker_limit(account_id, worker_id, false)
             .await?;
 
         Ok(())

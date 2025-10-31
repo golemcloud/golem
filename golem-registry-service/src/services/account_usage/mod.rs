@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod error;
+
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
 use crate::repo::model::datetime::SqlDateTime;
@@ -21,20 +23,6 @@ use std::sync::Arc;
 use tracing::error;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
-
-pub mod error;
-
-pub struct AccountUsage {
-    account_usage: RepoAccountUsage,
-    account_usage_repo: Arc<dyn AccountUsageRepo>,
-}
-
-impl AccountUsage {
-    pub async fn persist(self) -> Result<(), AccountUsageError> {
-        self.account_usage_repo.add(&self.account_usage).await?;
-        Ok(())
-    }
-}
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
@@ -132,29 +120,29 @@ impl AccountUsageService {
         Ok(())
     }
 
-    // pub async fn add_worker_connection(
-    //     &self,
-    //     account_id: &AccountId,
-    //     auth: &AuthCtx
-    // ) -> Result<(), AccountUsageError> {
-    //     auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-    //     let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
-    //     self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
-    //     self.account_usage_repo.add(&account_usage).await?;
-    //     Ok(())
-    // }
+    pub async fn add_worker_connection(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount)).await?;
+        self.add_checked(&mut account_usage, UsageType::TotalWorkerConnectionCount, 1)?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
 
-    // pub async fn remove_worker_connection(
-    //     &self,
-    //     account_id: &AccountId,
-    //     auth: &AuthCtx
-    // ) -> Result<(), AccountUsageError> {
-    //     auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-    //     let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
-    //     self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
-    //     self.account_usage_repo.add(&account_usage).await?;
-    //     Ok(())
-    // }
+    pub async fn remove_worker_connection(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount)).await?;
+        self.add_checked(&mut account_usage, UsageType::TotalWorkerConnectionCount, -1)?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
 
     async fn get_account_usage(
         &self,
@@ -208,12 +196,5 @@ impl AccountUsageService {
         }
 
         Ok(())
-    }
-
-    fn wrapped_account_usage(&self, account_usage: RepoAccountUsage) -> AccountUsage {
-        AccountUsage {
-            account_usage,
-            account_usage_repo: self.account_usage_repo.clone()
-        }
     }
 }
