@@ -29,6 +29,7 @@ pub mod oauth2_github_client;
 pub mod plan;
 pub mod plugin_registration;
 pub mod reports;
+pub mod resource_limits;
 pub mod token;
 
 /// Run CPU-heavy work on the global Rayon pool, returning a Future

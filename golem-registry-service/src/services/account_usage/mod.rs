@@ -122,7 +122,7 @@ impl AccountUsageService {
         Ok(self.wrapped_account_usage(account_usage))
     }
 
-    async fn get_account_usage(
+    pub async fn get_account_usage(
         &self,
         account_id: &AccountId,
         usage_type: Option<UsageType>,

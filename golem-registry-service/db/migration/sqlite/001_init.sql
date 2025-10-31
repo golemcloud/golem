@@ -2,6 +2,7 @@ CREATE TABLE plans
 (
     plan_id UUID NOT NULL,
     name    TEXT NOT NULL,
+    max_memory_per_worker BIGINT NOT NULL,
     CONSTRAINT plans_pk
         PRIMARY KEY (plan_id)
 );
