@@ -199,7 +199,7 @@ impl RegistryService for GrpcRegistryService {
                         None => Err(RegistryServiceClientError::empty_response()),
                         Some(authenticate_token_response::Result::Success(payload)) => {
                             let user_auth_ctx: UserAuthCtx =
-                                payload.auth_ctx.unwrap().try_into()?;
+                                payload.auth_ctx.ok_or("missing authctx field".to_string())?.try_into()?;
                             Ok(AuthCtx::User(user_auth_ctx))
                         }
                         Some(authenticate_token_response::Result::Error(error)) => {
@@ -241,8 +241,8 @@ impl RegistryService for GrpcRegistryService {
 
                     match response.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(get_resource_limits_response::Result::Success(response)) => {
-                            Ok(response.into())
+                        Some(get_resource_limits_response::Result::Success(payload)) => {
+                            Ok(payload.limits.ok_or("missing limits field".to_string())?.into())
                         }
                         Some(get_resource_limits_response::Result::Error(error)) => {
                             Err(error.into())

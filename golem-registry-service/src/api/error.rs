@@ -68,36 +68,36 @@ impl ApiError {
 impl ApiErrorDetails for ApiError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
-            ApiError::BadRequest(_) => "BadRequest",
-            ApiError::NotFound(_) => "NotFound",
-            ApiError::Unauthorized(_) => "Unauthorized",
-            ApiError::InternalError(_) => "InternalError",
-            ApiError::Conflict(_) => "Conflict",
-            ApiError::Forbidden(_) => "Forbidden",
-            ApiError::LimitExceeded(_) => "LimitExceeded",
+            Self::BadRequest(_) => "BadRequest",
+            Self::NotFound(_) => "NotFound",
+            Self::Unauthorized(_) => "Unauthorized",
+            Self::InternalError(_) => "InternalError",
+            Self::Conflict(_) => "Conflict",
+            Self::Forbidden(_) => "Forbidden",
+            Self::LimitExceeded(_) => "LimitExceeded",
         }
     }
 
     fn is_expected(&self) -> bool {
         match &self {
-            ApiError::BadRequest(_) => true,
-            ApiError::NotFound(_) => true,
-            ApiError::Unauthorized(_) => true,
-            ApiError::InternalError(_) => false,
-            ApiError::Forbidden(_) => true,
-            ApiError::Conflict(_) => true,
-            ApiError::LimitExceeded(_) => true,
+            Self::BadRequest(_) => true,
+            Self::NotFound(_) => true,
+            Self::Unauthorized(_) => true,
+            Self::InternalError(_) => false,
+            Self::Forbidden(_) => true,
+            Self::Conflict(_) => true,
+            Self::LimitExceeded(_) => true,
         }
     }
 
     fn take_cause(&mut self) -> Option<anyhow::Error> {
         match self {
-            ApiError::BadRequest(inner) => inner.cause.take(),
-            ApiError::NotFound(inner) => inner.cause.take(),
-            ApiError::Unauthorized(inner) => inner.cause.take(),
-            ApiError::InternalError(inner) => inner.cause.take(),
-            ApiError::Forbidden(inner) => inner.cause.take(),
-            ApiError::Conflict(inner) => inner.cause.take(),
+            Self::BadRequest(inner) => inner.cause.take(),
+            Self::NotFound(inner) => inner.cause.take(),
+            Self::Unauthorized(inner) => inner.cause.take(),
+            Self::InternalError(inner) => inner.cause.take(),
+            Self::Forbidden(inner) => inner.cause.take(),
+            Self::Conflict(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
         }
     }

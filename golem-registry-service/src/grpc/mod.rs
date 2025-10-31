@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod  api_impl;
+mod error;
 
 use crate::bootstrap::Services;
 use futures::TryFutureExt;
@@ -54,7 +55,9 @@ pub async fn start_grpc_server(
             .add_service(reflection_service)
             .add_service(health_service)
             .add_service(
-                RegistryServiceServer::new(RegistryServiceGrpcApi {})
+                RegistryServiceServer::new(RegistryServiceGrpcApi::new(
+                    services.auth_service.clone()
+                ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
             )

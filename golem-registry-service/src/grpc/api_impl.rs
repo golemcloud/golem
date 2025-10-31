@@ -15,18 +15,61 @@
 use async_trait::async_trait;
 use tonic::{Request, Response};
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, AuthenticateTokenResponse, BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, DownloadComponentRequest, DownloadComponentResponse, GetAgentTypeRequest, GetAgentTypeResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse, GetAllComponentVersionsRequest, GetAllComponentVersionsResponse, GetComponentMetadataRequest, GetComponentMetadataResponse, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetPluginRegistrationByIdResponse, GetResourceLimitsRequest, GetResourceLimitsResponse, ResolveComponentRequest, ResolveComponentResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse
+    authenticate_token_response, AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse, BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, DownloadComponentRequest, DownloadComponentResponse, GetAgentTypeRequest, GetAgentTypeResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse, GetAllComponentVersionsRequest, GetAllComponentVersionsResponse, GetComponentMetadataRequest, GetComponentMetadataResponse, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetPluginRegistrationByIdResponse, GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, ResolveComponentRequest, ResolveComponentResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse
 };
 use futures::stream::BoxStream;
+use crate::services::auth::AuthService;
+use std::sync::Arc;
+use super::error::GrpcApiError;
+use golem_common::model::auth::TokenSecret;
+use golem_common::recorded_grpc_api_request;
+use tracing_futures::Instrument;
+use applying::Apply;
 
-pub struct RegistryServiceGrpcApi {}
+pub struct RegistryServiceGrpcApi {
+    auth: Arc<AuthService>,
+
+}
+
+impl RegistryServiceGrpcApi {
+    pub fn new(
+        auth: Arc<AuthService>
+    ) -> Self {
+        Self {
+            auth
+        }
+    }
+
+    async fn authenticate_token_internal(&self, request: AuthenticateTokenRequest) -> Result<AuthenticateTokenSuccessResponse, GrpcApiError> {
+        let auth_ctx = self.auth.authenticate_user(TokenSecret(request.secret.ok_or("missing secret field".to_string())?.into())).await?;
+        Ok(AuthenticateTokenSuccessResponse { auth_ctx: Some(auth_ctx.into()) })
+    }
+
+    async fn get_resource_limits(&self, request: GetResourceLimitsRequest) -> Result<GetResourceLimitsSuccessResponse, GrpcApiError> {
+        unimplemented!()
+    }
+
+}
 
 #[async_trait]
 impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryService for RegistryServiceGrpcApi {
     type DownloadComponentStream = BoxStream<'static, Result<DownloadComponentResponse, tonic::Status>>;
 
     async fn authenticate_token(&self, request: Request<AuthenticateTokenRequest>) -> Result<Response<AuthenticateTokenResponse>, tonic::Status> {
-        unimplemented!()
+        let record = recorded_grpc_api_request!("authenticate_token",);
+
+        let response = match self
+            .authenticate_token_internal(request.into_inner())
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r)) {
+                Ok(result) => authenticate_token_response::Result::Success(result),
+                Err(error) => authenticate_token_response::Result::Error(error.into())
+            };
+
+        Ok(Response::new(AuthenticateTokenResponse {
+            result: Some(response),
+        }))
     }
 
     async fn get_resource_limits(&self, request: Request<GetResourceLimitsRequest>) -> Result<Response<GetResourceLimitsResponse>, tonic::Status> {

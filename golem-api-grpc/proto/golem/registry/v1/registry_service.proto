@@ -70,9 +70,13 @@ message GetResourceLimitsRequest {
 
 message GetResourceLimitsResponse {
   oneof result {
-    golem.common.ResourceLimits success = 1;
+    GetResourceLimitsSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
+}
+
+message GetResourceLimitsSuccessResponse {
+  golem.common.ResourceLimits limits = 1;
 }
 
 message UpdateWorkerLimitRequest {

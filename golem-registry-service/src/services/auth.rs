@@ -51,7 +51,7 @@ impl AuthService {
         Self { account_repo }
     }
 
-    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
+    pub async fn authenticate_user(&self, token: TokenSecret) -> Result<UserAuthCtx, AuthError> {
         let record: AccountBySecretRecord = self
             .account_repo
             .get_by_secret(&token.0)
@@ -68,10 +68,15 @@ impl AuthService {
 
         let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
 
-        Ok(AuthCtx::User(UserAuthCtx {
+        Ok(UserAuthCtx {
             account_id: account.id,
             account_roles,
             account_plan_id: account.plan_id,
-        }))
+        })
+    }
+
+    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
+        let user = self.authenticate_user(token).await?;
+        Ok(AuthCtx::User(user))
     }
 }
