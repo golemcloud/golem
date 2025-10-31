@@ -145,9 +145,14 @@ fn build_match_arms(
                 #method_name => {
                     #(#method_param_extraction)*
                     let result = self.#ident(#(#param_idents),*);
-                    let wit_value = <_ as golem_rust::value_and_type::IntoValue>::into_value(result);
-                    let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
-                    Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
+                    <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                        golem_rust::agentic::custom_error(format!(
+                            "Failed serializing return value for method {}: {}",
+                            #method_name, e
+                        ))
+                    }).map(|element_value| {
+                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                    })
                 }
             });
         }
