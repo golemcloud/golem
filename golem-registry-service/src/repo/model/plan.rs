@@ -28,15 +28,18 @@ pub struct PlanRecord {
     pub plan_id: Uuid,
     pub name: String,
 
+    pub max_memory_per_worker: i64,
+
     #[sqlx(skip)]
     pub limits: BTreeMap<UsageType, Option<i64>>,
 }
 
 impl PlanRecord {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, max_memory_per_worker: i64) -> Self {
         Self {
             plan_id: new_repo_uuid(),
             name,
+            max_memory_per_worker,
             limits: BTreeMap::new(),
         }
     }
@@ -90,6 +93,7 @@ impl TryFrom<PlanRecord> for Plan {
             monthly_upload_limit: value
                 .limit(UsageType::MonthlyComponentUploadLimitBytes)?
                 .unwrap_or(1000000000),
+            max_memory_per_worker: value.max_memory_per_worker,
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         })

@@ -143,7 +143,7 @@ CREATE TABLE account_usage_stats
         PRIMARY KEY (account_id, usage_type, usage_key),
     CONSTRAINT account_usage_stats_accounts_fk
         FOREIGN KEY (account_id) REFERENCES accounts,
-    CONSTRAINT plan_usage_limits_usage_types
+    CONSTRAINT account_usage_stats_usage_types
         FOREIGN KEY (usage_type) REFERENCES usage_types
 );
 

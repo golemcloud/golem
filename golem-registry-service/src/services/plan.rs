@@ -78,7 +78,8 @@ impl PlanService {
                         || existing_plan.storage_limit != plan.storage_limit
                         || existing_plan.worker_limit != plan.worker_limit
                         || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
-                        || existing_plan.monthly_upload_limit != plan.app_limit;
+                        || existing_plan.monthly_upload_limit != plan.app_limit
+                        || existing_plan.max_memory_per_worker != plan.max_memory_per_worker;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -105,6 +106,7 @@ impl PlanService {
                         storage_limit: plan.storage_limit,
                         monthly_gas_limit: plan.monthly_gas_limit,
                         monthly_upload_limit: plan.monthly_upload_limit,
+                        max_memory_per_worker: plan.max_memory_per_worker
                     },
                     auth,
                 )
@@ -144,12 +146,13 @@ impl PlanService {
         Ok(result.try_into()?)
     }
 
-    pub async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
+    async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
         auth.authorize_plan_action(&plan.plan_id, PlanAction::CreateOrUpdatePlan)?;
 
         let record: PlanRecord = PlanRecord {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
+            max_memory_per_worker: plan.max_memory_per_worker,
             limits: BTreeMap::from_iter([
                 (UsageType::TotalAppCount, Some(plan.app_limit)),
                 (UsageType::TotalEnvCount, Some(plan.env_limit)),

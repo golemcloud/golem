@@ -279,6 +279,7 @@ impl Default for PlansConfig {
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000,
                 monthly_upload_limit: 1000000000,
+                max_memory_per_worker: 1024 * 1024 * 1024 // 1 GB
             },
         );
 
@@ -296,6 +297,7 @@ pub struct PrecreatedPlan {
     pub storage_limit: i64,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i64,
+    pub max_memory_per_worker: i64,
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
