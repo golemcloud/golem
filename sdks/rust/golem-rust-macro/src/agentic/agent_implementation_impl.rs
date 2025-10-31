@@ -27,11 +27,14 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     };
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
+
     let self_ty = &impl_block.self_ty;
+
     let (trait_name_ident, trait_name_str_raw) = extract_trait_name(&impl_block);
 
     let (match_arms, constructor_method) =
         build_match_arms(&impl_block, trait_name_str_raw.to_string());
+
     let constructor_method = match constructor_method {
         Some(m) => m,
         None => {
@@ -45,8 +48,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     };
 
     let ctor_ident = &constructor_method.sig.ident;
+
     let ctor_params = extract_param_idents(constructor_method);
-    let input_param_type = get_input_param_type(&constructor_method.sig);
 
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
@@ -56,6 +59,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &ty_generics,
         where_clause,
     );
+
+    let input_param_type = get_input_param_type(&constructor_method.sig);
 
     let post_constructor_param_extraction_logic = quote! {
         let instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
@@ -69,14 +74,17 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let constructor_param_extraction = generate_constructor_extraction(
         &ctor_params,
         &trait_name_str_raw,
-        &post_constructor_param_extraction_logic,
-        &input_param_type,
+        match input_param_type {
+            InputParamType::Tuple => Some(post_constructor_param_extraction_logic),
+            InputParamType::Multimodal => None,
+        },
     );
 
     let initiator_ident = format_ident!("__{}Initiator", trait_name_ident);
 
     let base_initiator_impl =
         generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
+
     let register_initiator_fn =
         generate_register_initiator_fn(&trait_name_str_raw, &initiator_ident);
 
@@ -153,12 +161,10 @@ fn build_match_arms(
 
             let ident = &method.sig.ident;
 
-            let input_param_type = get_input_param_type(&method.sig);
-
             let output_param_type = get_output_param_type(&method.sig);
 
             let post_method_param_extraction_logic = match output_param_type {
-                OutputParamType::Tuple => quote! {
+                OutputParamType::Tuple => Some(quote! {
                     let result = self.#ident(#(#param_idents),*);
                     <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
                         golem_rust::agentic::custom_error(format!(
@@ -168,25 +174,15 @@ fn build_match_arms(
                     }).map(|element_value| {
                         golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                     })
-                },
-                OutputParamType::Multimodal => quote! {
-                    // multimodal_result is assumed to be of type `Multimodal`. It cannot be wrapped in anything else because
-                    // DataValue::Tuple cannot hold multimodal
-                    // The actual representation of `Multimodal` is TBD
-                    let multimodal_result = self.#ident(#(#param_idents),*);
-
-                    // TODO; once Multimodal representation is decided, convert its elements to Vec<(String, ElementValue)>
-                    // using corresponding `Schema` implementations
-                    Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(vec![]))
-                },
+                }),
+                OutputParamType::Multimodal => None,
             };
 
             let method_param_extraction = generate_method_param_extraction(
                 &param_idents,
                 &agent_type_name,
                 method_name_str.as_str(),
-                &post_method_param_extraction_logic,
-                &input_param_type,
+                post_method_param_extraction_logic,
             );
 
             match_arms.push(quote! {
@@ -204,8 +200,7 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    call_back: &proc_macro2::TokenStream, // A call back is the logic that calls the method after the extraction of paramters and then converting to either DataValue::Tuple or DataValue::Multimodal
-    input_param_type: &InputParamType,
+    call_back_for_non_multimodal: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -245,13 +240,13 @@ fn generate_method_param_extraction(
         }
     }).collect();
 
-    match input_param_type {
-        InputParamType::Tuple => quote! {
+    match call_back_for_non_multimodal {
+        Some(call_back) => quote! {
             #(#extraction)*
             #call_back
         },
 
-        InputParamType::Multimodal => quote! {
+        None => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
         },
     }
@@ -281,7 +276,7 @@ fn generate_base_agent_impl(
             }
 
             fn get_definition(&self)
-                -> ::golem_rust::golem_agentic::golem::agent::common::AgentType {
+                -> golem_rust::golem_agentic::golem::agent::common::AgentType {
                 golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str.to_string()))
                     .expect("Agent definition not found")
             }
@@ -292,8 +287,7 @@ fn generate_base_agent_impl(
 fn generate_constructor_extraction(
     ctor_params: &[syn::Ident],
     agent_type_name: &str,
-    call_back: &proc_macro2::TokenStream, // A call back is the logic that instantiates the constructor after the extraction of paramters
-    input_param_type: &InputParamType,
+    call_back_for_non_multimodal: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -322,7 +316,7 @@ fn generate_constructor_extraction(
                     })
                 },
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
-                    // TODO; support multimodal and add call back logic here
+                    // TODO; support multimodal and add call back logic since the parameter names differ for multimodal
                     Err(golem_rust::agentic::internal_error("Multimodal input not supported currently"))
                 }
             };
@@ -331,13 +325,14 @@ fn generate_constructor_extraction(
         }
     }).collect::<Vec<_>>();
 
-    match input_param_type {
-        InputParamType::Tuple => quote! {
+    // For non multimodals, we have a call back to continue after extraction
+    match call_back_for_non_multimodal {
+        Some(call_back) => quote! {
             #(#extraction)*
             #call_back
         },
 
-        InputParamType::Multimodal => quote! {
+        None => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
         },
     }
