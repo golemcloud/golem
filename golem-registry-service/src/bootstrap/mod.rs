@@ -69,19 +69,20 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Clone)]
 pub struct Services {
     pub account_service: Arc<AccountService>,
+    pub account_usage_service: Arc<AccountUsageService>,
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
+    pub deployment_service: Arc<DeploymentService>,
+    pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
+    pub environment_share_service: Arc<EnvironmentShareService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
-    pub token_service: Arc<TokenService>,
-    pub environment_share_service: Arc<EnvironmentShareService>,
-    pub reports_service: Arc<ReportsService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
-    pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
-    pub deployment_service: Arc<DeploymentService>,
+    pub reports_service: Arc<ReportsService>,
+    pub token_service: Arc<TokenService>,
 }
 
 struct Repos {
@@ -187,7 +188,7 @@ impl Services {
             component_compilation_service,
             initial_component_files,
             plugin_wasm_files.clone(),
-            account_usage_service,
+            account_usage_service.clone(),
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
             plugin_registration_service.clone(),
@@ -211,19 +212,20 @@ impl Services {
 
         Ok(Self {
             account_service,
+            account_usage_service,
             application_service,
+            auth_service,
             component_service,
             component_write_service,
+            deployment_service,
+            environment_plugin_grant_service,
             environment_service,
-            token_service,
+            environment_share_service,
             login_system,
             plan_service,
-            environment_share_service,
-            auth_service,
-            reports_service,
             plugin_registration_service,
-            environment_plugin_grant_service,
-            deployment_service,
+            reports_service,
+            token_service,
         })
     }
 }

@@ -66,6 +66,7 @@ message AuthenticateTokenSuccessResponse {
 
 message GetResourceLimitsRequest {
   golem.common.AccountId accountId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetResourceLimitsResponse {

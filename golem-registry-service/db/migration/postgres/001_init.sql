@@ -5,7 +5,7 @@ CREATE TABLE plans
 
     max_memory_per_worker BIGINT NOT NULL,
     total_app_count BIGINT NOT NULL,
-    total_env_count BIGING NOT NULL,
+    total_env_count BIGINT NOT NULL,
     total_component_count BIGINT NOT NULL,
     total_worker_count BIGINT NOT NULL,
     total_component_storage_bytes BIGINT NOT NULL,

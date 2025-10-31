@@ -30,6 +30,7 @@ use tonic::transport::Server;
 use tracing::Instrument;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryServiceServer;
 use self::api_impl::RegistryServiceGrpcApi;
+use golem_common::model::account::AccountId;
 
 pub async fn start_grpc_server(
     addr: SocketAddr,
@@ -56,7 +57,8 @@ pub async fn start_grpc_server(
             .add_service(health_service)
             .add_service(
                 RegistryServiceServer::new(RegistryServiceGrpcApi::new(
-                    services.auth_service.clone()
+                    services.auth_service.clone(),
+                    services.account_usage_service.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),

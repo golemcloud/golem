@@ -1241,7 +1241,7 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
         };
-        let_assert!(Ok(Some(plan_limit)) = usage.plan.limit(usage_type));
+        let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
 
         check!(usage.usage(usage_type) == 0, "{usage_type:?}");

@@ -37,13 +37,13 @@ pub enum UsageTracking {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "integer")]
 pub enum UsageType {
-    TotalAppCount = 0,
-    TotalEnvCount = 1,
-    TotalComponentCount = 2,
-    TotalWorkerCount = 3,
-    TotalComponentStorageBytes = 4,
-    MonthlyGasLimit = 5,
-    MonthlyComponentUploadLimitBytes = 6,
+    TotalWorkerCount = 0,
+    TotalComponentStorageBytes = 1,
+    MonthlyGasLimit = 2,
+    MonthlyComponentUploadLimitBytes = 3,
+    TotalAppCount = 4,
+    TotalEnvCount = 5,
+    TotalComponentCount = 6,
 }
 
 impl UsageType {

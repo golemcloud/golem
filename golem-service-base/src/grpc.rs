@@ -15,6 +15,7 @@
 use golem_common::model::environment::EnvironmentId;
 use std::fmt::{Debug, Display, Formatter};
 use uuid::Uuid;
+use golem_common::model::account::AccountId;
 
 pub fn proto_environment_id_string(
     id: &Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
@@ -38,6 +39,21 @@ pub enum GrpcError<E> {
     Status(tonic::Status),
     Domain(E),
     Unexpected(String),
+}
+
+impl <E> GrpcError<E> {
+    pub fn empty_response() -> Self {
+        Self::Unexpected("empty response".to_string())
+    }
+
+    pub fn is_retriable(&self) -> bool {
+        match self {
+            GrpcError::Transport(_) => true,
+            GrpcError::Status(status) => status.code() == tonic::Code::Unavailable,
+            GrpcError::Domain(_) => false,
+            GrpcError::Unexpected(_) => false,
+        }
+    }
 }
 
 impl<E: Debug> Debug for GrpcError<E> {
@@ -82,11 +98,16 @@ impl<E> From<String> for GrpcError<E> {
     }
 }
 
-pub fn is_grpc_retriable<E>(error: &GrpcError<E>) -> bool {
-    match error {
-        GrpcError::Transport(_) => true,
-        GrpcError::Status(status) => status.code() == tonic::Code::Unavailable,
-        GrpcError::Domain(_) => false,
-        GrpcError::Unexpected(_) => false,
+
+impl<E>  From<&'static str> for GrpcError<E> {
+    fn from(value: &'static str) -> Self {
+        Self::from(value.to_string())
     }
+}
+
+pub fn proto_account_id_string(account_id: &Option<golem_api_grpc::proto::golem::common::AccountId>) -> Option<String> {
+    account_id
+        .clone()
+        .and_then(|v| TryInto::<AccountId>::try_into(v).ok())
+        .map(|v| v.to_string())
 }

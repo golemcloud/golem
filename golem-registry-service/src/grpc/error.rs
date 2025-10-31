@@ -17,6 +17,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_service_base::model::auth::AuthorizationError;
 use crate::services::auth::AuthError;
 use golem_common::SafeDisplay;
+use crate::services::account_usage::error::AccountUsageError;
 
 #[derive(Debug)]
 pub enum GrpcApiError {
@@ -70,9 +71,15 @@ impl ApiErrorDetails for GrpcApiError {
 impl From<String> for GrpcApiError {
     fn from(value: String) -> Self {
         Self::InternalError(ErrorBody {
-            error: value.to_string(),
+            error: value,
             cause: None,
         })
+    }
+}
+
+impl From<&'static str> for GrpcApiError {
+    fn from(value: &'static str) -> Self {
+        Self::from(value.to_string())
     }
 }
 
@@ -93,6 +100,27 @@ impl From<AuthError> for GrpcApiError {
                 Self::CouldNotAuthenticate(ErrorBody { error, cause: None })
             }
             AuthError::InternalError(inner) => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(inner.context("AuthError")),
+            }),
+        }
+    }
+}
+
+impl From<AccountUsageError> for GrpcApiError {
+    fn from(value: AccountUsageError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            AccountUsageError::Unauthorized(authorization_error) => Self::from(authorization_error),
+            AccountUsageError::AccountNotfound(_) => Self::NotFound(ErrorBody {
+                error,
+                cause: None,
+            }),
+            AccountUsageError::LimitExceeded { .. } => Self::LimitExceeded(ErrorBody {
+                error,
+                cause: None,
+            }),
+            AccountUsageError::InternalError(inner) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(inner.context("AuthError")),
             }),
