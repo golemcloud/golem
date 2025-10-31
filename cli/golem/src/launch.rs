@@ -35,7 +35,6 @@ use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
-use prometheus::Registry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -60,9 +59,10 @@ pub async fn launch_golem_services(
         .install_default()
         .expect("Failed to install crypto provider");
 
-    let exporter = opentelemetry_prometheus::exporter()
-        .with_registry(Registry::default())
-        .build()?;
+    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
+        .without_counter_suffixes()
+        .without_units()
+        .build();
 
     global::set_meter_provider(
         MeterProviderBuilder::default()
@@ -479,7 +479,7 @@ async fn run_worker_service(
     WorkerService::new(config, prometheus_registry)
         .instrument(span.clone())
         .await?
-        .start_endpoints(join_set)
+        .start_endpoints(join_set, None)
         .instrument(span)
         .await
 }

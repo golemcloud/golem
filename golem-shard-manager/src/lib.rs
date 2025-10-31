@@ -46,6 +46,8 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic::Response;
+use tonic_tracing_opentelemetry::middleware;
+use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
@@ -301,6 +303,10 @@ pub async fn run(
     join_set.spawn(
         async move {
             Server::builder()
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
                 .add_service(reflection_service)
                 .add_service(
                     service

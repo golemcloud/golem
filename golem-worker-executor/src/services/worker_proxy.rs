@@ -42,6 +42,7 @@ use std::fmt::{Display, Formatter};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -202,7 +203,7 @@ impl From<WorkerExecutorError> for WorkerProxyError {
 }
 
 pub struct RemoteWorkerProxy {
-    client: GrpcClient<WorkerServiceClient<Channel>>,
+    client: GrpcClient<WorkerServiceClient<OtelGrpcService<Channel>>>,
     access_token: Uuid,
 }
 

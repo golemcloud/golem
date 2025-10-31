@@ -92,6 +92,8 @@ use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
+use tonic_tracing_opentelemetry::middleware;
+use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Linker;
@@ -147,6 +149,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         join_set.spawn(
             async move {
                 Server::builder()
+                    .layer(
+                        middleware::server::OtelGrpcLayer::default()
+                            .filter(filters::reject_healthcheck),
+                    )
                     .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
                     .add_service(reflection_service)
                     .add_service(service)

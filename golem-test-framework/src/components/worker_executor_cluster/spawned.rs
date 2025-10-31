@@ -24,7 +24,9 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tracing::{info, Instrument, Level};
 
 pub struct SpawnedWorkerExecutorCluster {
@@ -76,9 +78,9 @@ impl SpawnedWorkerExecutorCluster {
         base_grpc_port: u16,
         executable: &Path,
         working_directory: &Path,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
-        shard_manager: Arc<dyn ShardManager + Send + Sync + 'static>,
+        redis: Arc<dyn Redis + 'static>,
+        component_service: Arc<dyn ComponentService + 'static>,
+        shard_manager: Arc<dyn ShardManager + 'static>,
         worker_service: Arc<dyn WorkerService + 'static>,
         verbosity: Level,
         out_level: Level,
@@ -121,6 +123,25 @@ impl SpawnedWorkerExecutorCluster {
 
         for join in worker_executors_joins {
             worker_executors.push(join.await.expect("Failed to join"));
+        }
+
+        info!("Waiting for shard manager to see all executors");
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(60);
+        loop {
+            let routing_table = shard_manager
+                .get_routing_table()
+                .await
+                .expect("Failed to get routing table while waiting for registration");
+            if routing_table.all().len() == size {
+                break;
+            } else {
+                if start.elapsed() > timeout {
+                    panic!("Failed to wait for all executors to be registered in shard manager");
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
 
         Self {

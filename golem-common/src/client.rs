@@ -23,6 +23,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Status};
+use tonic_tracing_opentelemetry::middleware::client::{OtelGrpcLayer, OtelGrpcService};
+use tower::ServiceBuilder;
 use tracing::{debug, debug_span, warn, Instrument};
 
 #[derive(Clone)]
@@ -30,14 +32,14 @@ pub struct GrpcClient<T: Clone> {
     endpoint: Uri,
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
-    client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync + 'static>,
+    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static>,
     target_name: String,
 }
 
 impl<T: Clone> GrpcClient<T> {
     pub fn new(
         target_name: impl AsRef<str>,
-        client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
+        client_factory: impl Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static,
         endpoint: Uri,
         config: GrpcClientConfig,
     ) -> Self {
@@ -103,6 +105,7 @@ impl<T: Clone> GrpcClient<T> {
                 let endpoint = Endpoint::new(self.endpoint.clone())?
                     .connect_timeout(self.config.connect_timeout);
                 let channel = endpoint.connect_lazy();
+                let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel);
                 let connection = GrpcClientConnection { client };
                 *entry = Some(connection.clone());
@@ -116,14 +119,14 @@ impl<T: Clone> GrpcClient<T> {
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
     clients: Arc<scc::HashMap<Uri, GrpcClientConnection<T>>>,
-    client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync>,
+    client_factory: Arc<dyn Fn(OtelGrpcService<Channel>) -> T + Send + Sync>,
     target_name: String,
 }
 
 impl<T: Clone> MultiTargetGrpcClient<T> {
     pub fn new(
         target_name: impl AsRef<str>,
-        client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
+        client_factory: impl Fn(OtelGrpcService<Channel>) -> T + Send + Sync + 'static,
         config: GrpcClientConfig,
     ) -> Self {
         Self {
@@ -192,6 +195,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             Entry::Vacant(entry) => {
                 let endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
                 let channel = endpoint.connect_lazy();
+                let channel = ServiceBuilder::new().layer(OtelGrpcLayer).service(channel);
                 let client = (self.client_factory)(channel);
                 let connection = GrpcClientConnection { client };
                 entry.insert_entry(connection.clone());

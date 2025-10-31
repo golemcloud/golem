@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -191,7 +192,7 @@ impl CachedComponentService {
 
 #[derive(Clone)]
 pub struct RemoteComponentService {
-    client: GrpcClient<ComponentServiceClient<Channel>>,
+    client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     retry_config: RetryConfig,
 }
 

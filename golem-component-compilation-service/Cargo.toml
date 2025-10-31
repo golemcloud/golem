@@ -32,6 +32,7 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 #tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

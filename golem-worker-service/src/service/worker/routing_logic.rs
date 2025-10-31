@@ -22,6 +22,7 @@ use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::{debug, error, info, trace, warn, Instrument};
 
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
@@ -52,7 +53,7 @@ pub trait RoutingLogic {
         R: Send,
         Target: CallOnExecutor<Out> + Send,
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send
@@ -75,7 +76,7 @@ pub trait CallOnExecutor<Out: Send + 'static> {
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send
@@ -98,7 +99,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send
@@ -151,7 +152,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send
@@ -204,7 +205,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
     where
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send
@@ -262,7 +263,9 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
 }
 
 pub trait HasWorkerExecutorClients {
-    fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>>;
+    fn worker_executor_clients(
+        &self,
+    ) -> &MultiTargetGrpcClient<WorkerExecutorClient<OtelGrpcService<Channel>>>;
     fn worker_executor_retry_config(&self) -> &RetryConfig;
 }
 
@@ -343,7 +346,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
         R: Send,
         Target: CallOnExecutor<Out> + Send,
         F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<Channel>,
+                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
                 -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
             + Send

@@ -34,6 +34,7 @@ use tokio::time::Instant;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[derive(Debug, Clone)]
 pub enum RoutingTableError {
@@ -154,7 +155,7 @@ pub struct RoutingTableServiceDefault {
     config: RoutingTableConfig,
     cache: Cache<(), (), RoutingTable, RoutingTableError>,
     last_invalidated_at: RwLock<Option<Instant>>,
-    client: GrpcClient<ShardManagerServiceClient<Channel>>,
+    client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl RoutingTableServiceDefault {

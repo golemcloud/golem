@@ -35,6 +35,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Component;
@@ -222,7 +223,7 @@ impl CompileWorker {
 }
 
 async fn download_via_grpc(
-    client: &GrpcClient<ComponentServiceClient<Channel>>,
+    client: &GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
@@ -285,6 +286,6 @@ async fn download_via_grpc(
 }
 
 struct ClientWithToken {
-    client: GrpcClient<ComponentServiceClient<Channel>>,
+    client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     access_token: Uuid,
 }

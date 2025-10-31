@@ -140,11 +140,12 @@ mod grpc {
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
+    use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
     use uuid::Uuid;
 
     #[derive(Clone)]
     pub struct AgentTypesServiceGrpc {
-        agent_types_client: GrpcClient<AgentTypesServiceClient<Channel>>,
+        agent_types_client: GrpcClient<AgentTypesServiceClient<OtelGrpcService<Channel>>>,
         access_token: Uuid,
     }
 

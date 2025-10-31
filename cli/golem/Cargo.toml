@@ -40,7 +40,7 @@ hyper = { workspace = true }
 futures = { workspace = true }
 include_dir = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-prometheus = { workspace = true }
+opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 prometheus = { workspace = true }

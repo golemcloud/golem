@@ -39,10 +39,11 @@ use golem_common::model::AccountId;
 use golem_service_base::db;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::{include_dir, Dir};
+use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
@@ -124,9 +125,10 @@ impl CloudService {
     pub async fn run(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        tracer: Option<SdkTracer>,
     ) -> Result<RunDetails, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let http_port = self.start_http_server(join_set).await?;
+        let http_port = self.start_http_server(join_set, tracer).await?;
 
         info!(
             "Started cloud service on ports: http: {}, grpc: {}",
@@ -173,6 +175,7 @@ impl CloudService {
     async fn start_http_server(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let prometheus_registry = self.prometheus_registry.clone();
 
@@ -192,7 +195,8 @@ impl CloudService {
             .nest("/specs", spec)
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
-            .with(cors);
+            .with(cors)
+            .with_if(tracer.is_some(), OpenTelemetryTracing::new(tracer.unwrap()));
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));

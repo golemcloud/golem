@@ -33,6 +33,7 @@ headers = { workspace = true }
 indoc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rlimit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -22,7 +22,7 @@ use golem_test_framework::config::{BenchmarkCliParameters, BenchmarkTestDependen
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
-use tracing::{info, Level};
+use tracing::{debug, info, Level};
 
 type RunFn = Box<
     dyn for<'a> Fn(
@@ -36,6 +36,12 @@ type RunFn = Box<
 
 #[tokio::main]
 async fn main() {
+    let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
+    debug!(
+        "File limit increase result: {:?}",
+        file_limit_increase_result
+    );
+
     let mut benchmarks_by_name: BTreeMap<&str, RunFn> = BTreeMap::new();
     benchmarks_by_name.insert(
         "cold-start-unknown-small",

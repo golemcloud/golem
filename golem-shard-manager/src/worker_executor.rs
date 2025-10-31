@@ -32,6 +32,7 @@ use tonic::Response;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::info;
 
 #[async_trait]
@@ -103,7 +104,7 @@ pub async fn assign_shards(
 
 pub struct WorkerExecutorServiceDefault {
     config: WorkerExecutorServiceConfig,
-    client: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
+    client: MultiTargetGrpcClient<WorkerExecutorClient<OtelGrpcService<Channel>>>,
 }
 
 #[async_trait]

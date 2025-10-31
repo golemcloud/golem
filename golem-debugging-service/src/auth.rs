@@ -29,6 +29,7 @@ use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::error;
 
 #[async_trait]
@@ -102,7 +103,7 @@ impl From<golem_api_grpc::proto::golem::component::v1::ComponentError>
 pub struct GrpcAuthService {
     common_auth: BaseAuthService,
     component_service_grpc_config: ComponentServiceGrpcConfig,
-    component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
+    component_service_client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
 
