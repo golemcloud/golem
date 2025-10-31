@@ -153,21 +153,13 @@ impl PlanService {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
             max_memory_per_worker: plan.max_memory_per_worker,
-            limits: BTreeMap::from_iter([
-                (UsageType::TotalAppCount, Some(plan.app_limit)),
-                (UsageType::TotalEnvCount, Some(plan.env_limit)),
-                (UsageType::TotalComponentCount, Some(plan.component_limit)),
-                (
-                    UsageType::TotalComponentStorageBytes,
-                    Some(plan.storage_limit),
-                ),
-                (UsageType::TotalWorkerCount, Some(plan.worker_limit)),
-                (UsageType::MonthlyGasLimit, Some(plan.monthly_gas_limit)),
-                (
-                    UsageType::MonthlyComponentUploadLimitBytes,
-                    Some(plan.monthly_upload_limit),
-                ),
-            ]),
+            total_app_count: plan.app_limit,
+            total_env_count: plan.env_limit,
+            total_component_count: plan.component_limit,
+            total_component_storage_bytes: plan.storage_limit,
+            total_worker_count: plan.worker_limit,
+            monthly_component_upload_limit_bytes: plan.monthly_upload_limit,
+            monthly_gas_limit: plan.monthly_gas_limit
         };
 
         self.plan_repo.create_or_update(record).await?;

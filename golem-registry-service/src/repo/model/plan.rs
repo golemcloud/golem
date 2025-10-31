@@ -29,49 +29,13 @@ pub struct PlanRecord {
     pub name: String,
 
     pub max_memory_per_worker: i64,
-
-    #[sqlx(skip)]
-    pub limits: BTreeMap<UsageType, Option<i64>>,
-}
-
-impl PlanRecord {
-    pub fn new(name: String, max_memory_per_worker: i64) -> Self {
-        Self {
-            plan_id: new_repo_uuid(),
-            name,
-            max_memory_per_worker,
-            limits: BTreeMap::new(),
-        }
-    }
-
-    pub fn limit(&self, usage_type: UsageType) -> RepoResult<Option<i64>> {
-        match self.limits.get(&usage_type) {
-            Some(limit) => Ok(*limit),
-            None => Err(anyhow!(
-                "illegal state error: missing limit for {usage_type:?}"
-            ))?,
-        }
-    }
-
-    pub fn set_limit(&mut self, usage_type: UsageType, value: i64) {
-        self.limits.insert(usage_type, Some(value));
-    }
-
-    pub fn with_limit(mut self, usage_type: UsageType, value: i64) -> Self {
-        self.limits.insert(usage_type, Some(value));
-        self
-    }
-
-    pub fn add_limit_placeholders(&mut self) {
-        for usage_type in UsageType::iter() {
-            self.limits.entry(usage_type).or_insert(None);
-        }
-    }
-
-    pub fn with_limit_placeholders(mut self) -> Self {
-        self.add_limit_placeholders();
-        self
-    }
+    pub total_app_count: i64,
+    pub total_env_count: i64,
+    pub total_component_count: i64,
+    pub total_worker_count: i64,
+    pub total_component_storage_bytes: i64,
+    pub monthly_gas_limit: i64,
+    pub monthly_component_upload_limit_bytes: i64,
 }
 
 impl TryFrom<PlanRecord> for Plan {
@@ -80,19 +44,13 @@ impl TryFrom<PlanRecord> for Plan {
     fn try_from(value: PlanRecord) -> Result<Self, Self::Error> {
         // apply defaults here to migrate old data when new limits are added.
         Ok(Self {
-            app_limit: value.limit(UsageType::TotalAppCount)?.unwrap_or(10),
-            env_limit: value.limit(UsageType::TotalEnvCount)?.unwrap_or(40),
-            component_limit: value.limit(UsageType::TotalComponentCount)?.unwrap_or(100),
-            worker_limit: value.limit(UsageType::TotalWorkerCount)?.unwrap_or(10000),
-            storage_limit: value
-                .limit(UsageType::TotalComponentStorageBytes)?
-                .unwrap_or(500000000),
-            monthly_gas_limit: value
-                .limit(UsageType::MonthlyGasLimit)?
-                .unwrap_or(1000000000000),
-            monthly_upload_limit: value
-                .limit(UsageType::MonthlyComponentUploadLimitBytes)?
-                .unwrap_or(1000000000),
+            app_limit: value.total_app_count,
+            env_limit: value.total_env_count,
+            component_limit: value.total_component_count,
+            worker_limit: value.total_worker_count,
+            storage_limit: value.total_component_storage_bytes,
+            monthly_gas_limit: value.monthly_gas_limit,
+            monthly_upload_limit: value.monthly_component_upload_limit_bytes,
             max_memory_per_worker: value.max_memory_per_worker,
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
