@@ -178,7 +178,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             plan,
-            increase: Default::default(),
+            changes: Default::default(),
         }))
     }
 
@@ -293,13 +293,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             plan,
-            increase: Default::default(),
+            changes: Default::default(),
         }))
     }
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
         let account_id = account_usage.account_id;
-        let changes = account_usage.increase.clone();
+        let changes = account_usage.changes.clone();
         let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
 
         self.with_tx("change_usage", |tx| {
@@ -313,7 +313,19 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         sqlx::query(indoc! { r#"
                             INSERT INTO account_usage_stats (account_id, usage_type, usage_key, value, updated_at)
                             VALUES ($1, $2, $3, $4, $5)
-                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE SET value = account_usage_stats.value + $4
+                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE SET
+                                SET value = CASE
+                                    -- positive overflow: value + delta > BIGINT MAX
+                                    WHEN EXCLUDED.value > 0
+                                        AND account_usage_stats.value > 9223372036854775807 - EXCLUDED.value
+                                        THEN 9223372036854775807
+                                    -- negative overflow: value + delta < BIGINT MIN
+                                    WHEN EXCLUDED.value < 0
+                                        AND account_usage_stats.value < -9223372036854775808 - EXCLUDED.value
+                                        THEN -9223372036854775808
+                                    ELSE account_usage_stats.value + EXCLUDED.value
+                                END,
+                                updated_at = $5
                         "#})
                             .bind(account_id)
                             .bind(usage_type)

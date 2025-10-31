@@ -83,7 +83,7 @@ message GetResourceLimitsSuccessResponse {
 message UpdateWorkerLimitRequest {
   golem.common.AccountId accountId = 1;
   golem.worker.WorkerId workerId = 2;
-  bool add_worker = 3;
+  bool added = 3;
   golem.auth.AuthCtx auth_ctx = 4;
 }
 
@@ -97,7 +97,7 @@ message UpdateWorkerLimitResponse {
 message UpdateWorkerConnectionLimitRequest {
   golem.common.AccountId accountId = 1;
   golem.worker.WorkerId workerId = 2;
-  int32 value = 3;
+  bool added = 3;
   golem.auth.AuthCtx auth_ctx = 4;
 }
 

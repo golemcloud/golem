@@ -47,54 +47,54 @@ impl AccountUsageService {
         Self { account_usage_repo }
     }
 
-    pub async fn add_application(
+    pub async fn ensure_application_within_limits(
         &self,
         account_id: &AccountId,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalAppCount))
             .await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalAppCount, 1)?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_environment(
+    pub async fn ensure_environment_within_limits(
         &self,
         account_id: &AccountId,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalEnvCount))
             .await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalEnvCount, 1)?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_component(
+    pub async fn ensure_new_component_within_limits(
         &self,
         account_id: &AccountId,
         component_size_bytes: i64,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
 
-        self.add_checked(&mut account_usage, UsageType::TotalAppCount, 1)?;
+        self.add_checked(&mut account_usage, UsageType::TotalComponentCount, 1)?;
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
             component_size_bytes,
         )?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_component_version(
+    pub async fn ensure_updated_component_within_limits(
         &self,
         account_id: &AccountId,
         component_size_bytes: i64,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalComponentStorageBytes))
             .await?;
@@ -105,7 +105,7 @@ impl AccountUsageService {
             component_size_bytes,
         )?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
     pub async fn add_worker(
@@ -116,6 +116,7 @@ impl AccountUsageService {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
         let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
         self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
+        self.account_usage_repo.add(&account_usage).await?;
         Ok(())
     }
 
@@ -127,10 +128,35 @@ impl AccountUsageService {
         auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
         let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
         self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
+        self.account_usage_repo.add(&account_usage).await?;
         Ok(())
     }
 
-    pub async fn get_account_usage(
+    // pub async fn add_worker_connection(
+    //     &self,
+    //     account_id: &AccountId,
+    //     auth: &AuthCtx
+    // ) -> Result<(), AccountUsageError> {
+    //     auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+    //     let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
+    //     self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
+    //     self.account_usage_repo.add(&account_usage).await?;
+    //     Ok(())
+    // }
+
+    // pub async fn remove_worker_connection(
+    //     &self,
+    //     account_id: &AccountId,
+    //     auth: &AuthCtx
+    // ) -> Result<(), AccountUsageError> {
+    //     auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+    //     let mut account_usage = self.get_account_usage(account_id, Some(UsageType::TotalWorkerCount)).await?;
+    //     self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
+    //     self.account_usage_repo.add(&account_usage).await?;
+    //     Ok(())
+    // }
+
+    async fn get_account_usage(
         &self,
         account_id: &AccountId,
         usage_type: Option<UsageType>,
@@ -162,8 +188,7 @@ impl AccountUsageService {
         let available_fuel = record
             .plan
             .monthly_gas_limit
-            .checked_sub(*record.usage.get(&UsageType::MonthlyGasLimit).unwrap_or(&0))
-            .unwrap_or(0);
+            .saturating_sub(record.usage(UsageType::MonthlyGasLimit));
 
         Ok(ResourceLimits { available_fuel: available_fuel, max_memory_per_worker: record.plan.max_memory_per_worker as u64 })
     }
@@ -174,7 +199,7 @@ impl AccountUsageService {
         usage_type: UsageType,
         value: i64,
     ) -> Result<(), AccountUsageError> {
-        if !account_usage.add_checked(usage_type, value)? {
+        if !account_usage.add_change(usage_type, value)? {
             return Err(AccountUsageError::LimitExceeded {
                 limit_name: format!("{usage_type:?}"),
                 limit_value: account_usage.plan.limit(usage_type),

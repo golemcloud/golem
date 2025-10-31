@@ -59,7 +59,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        add_worker: bool,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -67,7 +67,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -254,7 +254,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        add_worker: bool,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
@@ -266,17 +266,17 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                add_worker,
+                added,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, add_worker, auth_ctx)| {
+            |(client, account_id, worker_id, added, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-limit", move |client| {
                             let request = UpdateWorkerLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
-                                add_worker: *add_worker,
+                                added: *added,
                                 auth_ctx: Some(auth_ctx.clone().into())
                             };
 
@@ -305,7 +305,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
@@ -317,17 +317,17 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value,
+                added,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, value, auth_ctx)| {
+            |(client, account_id, worker_id, added, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-connection-limit", move |client| {
                             let request = UpdateWorkerConnectionLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
-                                value: *value,
+                                added: *added,
                                 auth_ctx: Some(auth_ctx.clone().into())
                             };
 

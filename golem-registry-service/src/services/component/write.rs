@@ -128,9 +128,9 @@ impl ComponentWriteService {
                 )))
             })?;
 
-        let mut account_usage = self
+        self
             .account_usage_service
-            .add_component(&environment.owner_account_id, wasm.len() as i64)
+            .ensure_new_component_within_limits(&environment.owner_account_id, wasm.len() as i64)
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -195,8 +195,6 @@ impl ComponentWriteService {
                 environment.roles_from_shares,
             )?;
 
-        account_usage.ack();
-
         self.component_compilation
             .enqueue_compilation(environment_id, &component_id, stored_component.revision)
             .await;
@@ -248,15 +246,11 @@ impl ComponentWriteService {
 
         info!(environment_id = %environment_id, "Update component");
 
-        let mut account_usage: Option<AccountUsage> = None;
-
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = new_wasm {
-            let actual_account_usage = self
+            self
                 .account_usage_service
-                .add_component(&environment.owner_account_id, new_data.len() as i64)
+                .ensure_updated_component_within_limits(&environment.owner_account_id, new_data.len() as i64)
                 .await?;
-
-            let _ = account_usage.insert(actual_account_usage);
 
             let (wasm_hash, wasm_object_store_key) = self
                 .upload_and_hash_component_wasm(&environment_id, new_data.clone())
@@ -330,10 +324,6 @@ impl ComponentWriteService {
                 environment.owner_account_id,
                 environment.roles_from_shares,
             )?;
-
-        if let Some(mut account_usage) = account_usage {
-            account_usage.ack();
-        };
 
         self.component_compilation
             .enqueue_compilation(&environment_id, &component_id, stored_component.revision)

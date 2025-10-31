@@ -92,7 +92,7 @@ pub struct AccountUsage {
     pub usage: BTreeMap<UsageType, i64>,
     pub plan: PlanRecord,
 
-    pub increase: BTreeMap<UsageType, i64>,
+    pub changes: BTreeMap<UsageType, i64>,
 }
 
 impl AccountUsage {
@@ -100,20 +100,17 @@ impl AccountUsage {
         self.usage.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn increase(&self, usage_type: UsageType) -> i64 {
-        self.increase.get(&usage_type).copied().unwrap_or(0)
-    }
-
-    pub fn add_checked(&mut self, usage_type: UsageType, increase: i64) -> RepoResult<bool> {
+    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> RepoResult<bool> {
         let limit = self.plan.limit(usage_type);
 
-        self.increase
+        self.changes
             .entry(usage_type)
-            .and_modify(|e| *e += increase)
-            .or_insert(increase);
+            .and_modify(|e| *e = e.saturating_add(change))
+            .or_insert(change);
 
-        let increase = self.increase.get(&usage_type).copied().unwrap_or(0);
+        let change = self.changes.get(&usage_type).copied().unwrap_or(0);
+        let final_value = self.usage(usage_type).saturating_add(change);
 
-        Ok(self.usage(usage_type) + increase <= limit)
+        Ok(final_value >= 0 && final_value <= limit)
     }
 }
