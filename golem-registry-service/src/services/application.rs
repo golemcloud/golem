@@ -253,6 +253,7 @@ impl ApplicationService {
         auth: &AuthCtx,
     ) -> Result<Vec<Application>, ApplicationError> {
         // TODO: fetch account information from db as part of query
+        // This is done this way to not leak existence of accounts
         self.account_service
             .get_optional(account_id, auth)
             .await?

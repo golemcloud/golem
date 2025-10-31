@@ -334,6 +334,7 @@ impl EnvironmentService {
         match (application_owner_id, authorized_environments.is_empty()) {
             (Some(_), false) => {
                 // checked above using the authorized environment actions -> only return authorized environments
+                Ok(authorized_environments)
             }
             (Some(application_owner_id), true) => {
                 // application exists but has no environments -> only leak existence if account-level permissions are present
@@ -341,15 +342,15 @@ impl EnvironmentService {
                     &application_owner_id,
                     AccountAction::ListAllApplicationEnvironments,
                 )?;
+
+                Ok(authorized_environments)
             }
             (None, _) => {
                 // parent application does not exist -> return notfound to prevent leakage
-                return Err(EnvironmentError::ParentApplicationNotFound(
+                Err(EnvironmentError::ParentApplicationNotFound(
                     application_id.clone(),
-                ));
+                ))
             }
         }
-
-        Ok(authorized_environments)
     }
 }

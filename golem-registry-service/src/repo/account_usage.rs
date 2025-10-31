@@ -247,7 +247,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     SELECT COUNT(*)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
-                                    WHERE a.account_id = $1 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
+                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
                                 ) as value
                             "#})
                                 .bind(UsageType::TotalEnvCount)
@@ -264,7 +264,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     JOIN components c ON c.environment_id = e.environment_id
-                                    WHERE a.account_id = $1 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND c.deleted_at IS NULL
+                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND c.deleted_at IS NULL
                                 ) as value
                             "#})
                                 .bind(UsageType::TotalAppCount)
@@ -299,7 +299,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                                 AND a.deleted_at IS NULL
                                                 AND e.deleted_at IS NULL
                                                 AND c.deleted_at IS NULL
-                                        )
+                                        ) AS t
                                     ) AS value;
                             "#})
                                 .bind(UsageType::TotalComponentStorageBytes)
