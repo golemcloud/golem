@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use tonic::{Request, Response};
 use golem_api_grpc::proto::golem::registry::v1::{
-    authenticate_token_response, get_resource_limits_response, AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse, BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, DownloadComponentRequest, DownloadComponentResponse, GetAgentTypeRequest, GetAgentTypeResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse, GetAllComponentVersionsRequest, GetAllComponentVersionsResponse, GetComponentMetadataRequest, GetComponentMetadataResponse, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetPluginRegistrationByIdResponse, GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, ResolveComponentRequest, ResolveComponentResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse
+    authenticate_token_response, get_resource_limits_response, AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse, BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, DownloadComponentRequest, DownloadComponentResponse, GetAgentTypeRequest, GetAgentTypeResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse, GetAllComponentVersionsRequest, GetAllComponentVersionsResponse, GetComponentMetadataRequest, GetComponentMetadataResponse, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetPluginRegistrationByIdResponse, GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse, ResolveComponentRequest, ResolveComponentResponse, UpdateWorkerConnectionLimitRequest, UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse
 };
 use futures::stream::BoxStream;
 use crate::services::auth::AuthService;
@@ -29,6 +29,7 @@ use crate::services::account_usage::AccountUsageService;
 use golem_service_base::model::auth::AuthCtx;
 use golem_common::model::account::AccountId;
 use golem_service_base::grpc::proto_account_id_string;
+use golem_common::model::WorkerId;
 
 pub struct RegistryServiceGrpcApi {
     auth: Arc<AuthService>,
@@ -55,6 +56,14 @@ impl RegistryServiceGrpcApi {
         let auth_ctx: AuthCtx = request.auth_ctx.ok_or("missing auth_ctx field")?.try_into()?;
         let account_id: AccountId = request.account_id.ok_or("missing account_id field")?.try_into()?;
         let limits = self.account_usage.get_resouce_limits(&account_id, &auth_ctx).await?;
+        Ok(GetResourceLimitsSuccessResponse { limits: Some(limits.into()) })
+    }
+
+    async fn update_worker_limit(&self, request: UpdateWorkerLimitRequest) -> Result<UpdateWorkerLimitResponse, GrpcApiError> {
+        let auth_ctx: AuthCtx = request.auth_ctx.ok_or("missing auth_ctx field")?.try_into()?;
+        let account_id: AccountId = request.account_id.ok_or("missing account_id field")?.try_into()?;
+        let worker_id: WorkerId = request.worker_id.ok_or("missing worker_id field")?.into()?;
+        let limits = self.account_usage.add_environment(&account_id, &auth_ctx).await?;
         Ok(GetResourceLimitsSuccessResponse { limits: Some(limits.into()) })
     }
 
@@ -106,7 +115,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         unimplemented!()
     }
 
-    async fn update_worker_connection_limit(&self, request: Request<UpdateWorkerLimitRequest>) -> Result<Response<UpdateWorkerLimitResponse>, tonic::Status> {
+    async fn update_worker_connection_limit(&self, request: Request<UpdateWorkerConnectionLimitRequest>) -> Result<Response<UpdateWorkerConnectionLimitResponse>, tonic::Status> {
         unimplemented!()
     }
 

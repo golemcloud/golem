@@ -20,14 +20,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest,
-    GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest,
-    GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response,
-    get_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, resolve_component_response, update_worker_limit_response,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response, get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response, get_component_metadata_response, get_plugin_registration_by_id_response, get_resource_limits_response, resolve_component_response, update_worker_connection_limit_response, update_worker_limit_response, AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest, GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -66,7 +59,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        add_worker: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -261,7 +254,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        add_worker: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
@@ -273,17 +266,18 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value,
+                add_worker,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, value, _auth_ctx)| {
+            |(client, account_id, worker_id, add_worker, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-limit", move |client| {
                             let request = UpdateWorkerLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
-                                value: *value,
+                                add_worker: *add_worker,
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
 
                             Box::pin(client.update_worker_limit(request))
@@ -326,14 +320,15 @@ impl RegistryService for GrpcRegistryService {
                 value,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, value, _auth_ctx)| {
+            |(client, account_id, worker_id, value, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-connection-limit", move |client| {
-                            let request = UpdateWorkerLimitRequest {
+                            let request = UpdateWorkerConnectionLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
                                 value: *value,
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
 
                             Box::pin(client.update_worker_connection_limit(request))
@@ -343,8 +338,8 @@ impl RegistryService for GrpcRegistryService {
 
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
-                        Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
-                        Some(update_worker_limit_response::Result::Error(error)) => {
+                        Some(update_worker_connection_limit_response::Result::Success(_)) => Ok(()),
+                        Some(update_worker_connection_limit_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
