@@ -20,11 +20,10 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
-use futures_concurrency::future::Join;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    IdempotencyKey, WorkerId, WorkerStatus,
+    IdempotencyKey, WorkerStatus,
 };
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::config::TestDependencies;

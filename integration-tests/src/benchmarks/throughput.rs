@@ -531,7 +531,6 @@ impl ThroughputBenchmark {
                 component_id: ts_agent_component_id.clone(),
                 worker_name: format!("benchmark-agent(\"test-{n}-rib\")"),
             });
-
             let direct_rust_rpc_parent = WorkerId {
                 component_id: rust_rpc_parent_component_id.clone(),
                 worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),

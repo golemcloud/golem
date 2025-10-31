@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, span, warn, Instrument, Level, Span};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -571,7 +571,11 @@ impl MultiLayerOplog {
                 multi_layer_oplog_service,
                 rx,
             )
-            .in_current_span(),
+            .instrument(
+                span!(parent: None, Level::INFO, "Oplog background transfer")
+                    .follows_from(Span::current())
+                    .clone(),
+            ),
         ));
 
         result

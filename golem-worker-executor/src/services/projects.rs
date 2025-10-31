@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use uuid::Uuid;
 
 #[async_trait]
@@ -63,7 +64,7 @@ pub fn configured(config: &ProjectServiceConfig) -> Arc<dyn ProjectService> {
 }
 
 struct ProjectServiceGrpc {
-    project_client: GrpcClient<CloudProjectServiceClient<Channel>>,
+    project_client: GrpcClient<CloudProjectServiceClient<OtelGrpcService<Channel>>>,
     retry_config: RetryConfig,
     access_token: Uuid,
     resolved_project_cache: Cache<(AccountId, String), (), Option<ProjectId>, WorkerExecutorError>,

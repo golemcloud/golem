@@ -65,7 +65,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, span, warn, Instrument, Level};
+use tracing::{debug, info, span, warn, Instrument, Level, Span};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
@@ -252,6 +252,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .iter()
                 .map(|inv| QueuedWorkerInvocation::External {
                     invocation: inv.clone(),
+                    span: Span::current(),
                     canceled: false,
                 }),
         )));
@@ -819,6 +820,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .push_back(QueuedWorkerInvocation::External {
                 invocation: timestamped_invocation,
+                span: Span::current(),
                 canceled: false,
             });
 
@@ -1315,6 +1317,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 QueuedWorkerInvocation::External {
                     invocation: inner,
                     canceled,
+                    ..
                 } => {
                     if !canceled {
                         if let Some(idempotency_key) = inner.invocation.idempotency_key() {
@@ -1735,6 +1738,7 @@ impl WaitingWorker {
         oom_retry_count: u32,
     ) -> Self {
         let span = span!(
+            parent: None,
             Level::INFO,
             "waiting-for-permits",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
@@ -1744,6 +1748,7 @@ impl WaitingWorker {
                 .map(|id| id.agent_type.clone())
                 .unwrap_or_else(|| "-".to_string()),
         );
+        span.follows_from(Span::current());
 
         let start_attempt = Uuid::new_v4();
 
@@ -1802,6 +1807,7 @@ impl RunningWorker {
         let waiting_for_command_clone = waiting_for_command.clone();
 
         let span = span!(
+            parent: None,
             Level::INFO,
             "invocation-loop",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
@@ -2140,6 +2146,7 @@ pub enum QueuedWorkerInvocation {
     /// All other cases here are used for concurrency control and should not be exposed to the user.
     External {
         invocation: TimestampedWorkerInvocation,
+        span: Span,
         canceled: bool,
     },
     GetFileSystemNode {
@@ -2153,7 +2160,7 @@ pub enum QueuedWorkerInvocation {
     },
     // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
     // The sender will be called with Ok if the worker is in a running state.
-    // If the worker initializaiton fails and will not recover without manual intervention it will be called with Err.
+    // If the worker initialization fails and will not recover without manual intervention it will be called with Err.
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },

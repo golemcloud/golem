@@ -180,7 +180,7 @@ impl SchedulerServiceDefault {
                         }
                     }
                 }
-                .in_current_span(),
+                .instrument(span!(parent: None, Level::INFO, "Scheduler loop")),
             )
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);

@@ -86,6 +86,7 @@ tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 try_match = { workspace = true }
 url = { workspace = true }
