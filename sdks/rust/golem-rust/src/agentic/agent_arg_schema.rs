@@ -14,6 +14,7 @@
 
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 
+use crate::golem_agentic::golem::agent::common::DataValue;
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
@@ -54,45 +55,6 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
                 };
 
                 T::from_value_and_type(value_and_type)
-            }
-            _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
-        }
-    }
-}
-
-impl Schema for &str {
-    fn get_type() -> ElementSchema {
-        let wit_type = <String as IntoValue>::get_type();
-        ElementSchema::ComponentModel(wit_type)
-    }
-
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        let string = self.to_string();
-        let wit_value = string.into_value();
-        Ok(ElementValue::ComponentModel(wit_value))
-    }
-
-    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        match value {
-            ElementValue::ComponentModel(wit_value) => {
-                let value_and_type = ValueAndType {
-                    value: wit_value,
-                    typ: match schema {
-                        ElementSchema::ComponentModel(wit_type) => wit_type,
-                        _ => {
-                            return Err(format!(
-                                "Expected ComponentModel schema, got: {:?}",
-                                schema
-                            ))
-                        }
-                    },
-                };
-
-                let string: String = FromValueAndType::from_value_and_type(value_and_type)?;
-                Ok(Box::leak(string.into_boxed_str()))
             }
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }

@@ -16,6 +16,10 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{ItemImpl, ReturnType, Type};
 
+use crate::agentic::helpers::{
+    get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
+};
+
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
@@ -84,16 +88,6 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     .into()
 }
 
-enum InputParamType {
-    Tuple,
-    Multimodal,
-}
-
-enum OutputParamType {
-    Tuple,
-    Multimodal,
-}
-
 fn parse_impl_block(item: &TokenStream) -> syn::Result<ItemImpl> {
     syn::parse::<ItemImpl>(item.clone())
 }
@@ -107,36 +101,6 @@ fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String) {
 
     let trait_name_str_raw = trait_name.to_string();
     (trait_name, trait_name_str_raw)
-}
-
-fn get_input_param_type(method: &syn::ImplItemFn) -> InputParamType {
-    if method.sig.inputs.len() == 1 {
-        if let syn::FnArg::Typed(pat_ty) = &method.sig.inputs[0] {
-            if let syn::Type::Path(type_path) = &*pat_ty.ty {
-                if let Some(seg) = type_path.path.segments.last() {
-                    if seg.ident == "Multimodal" {
-                        // Depends on how exactly multimodal is represented
-                        return InputParamType::Multimodal;
-                    }
-                }
-            }
-        }
-    }
-    InputParamType::Tuple
-}
-
-fn get_output_param_type(method: &syn::ImplItemFn) -> OutputParamType {
-    if let ReturnType::Type(_, ty) = &method.sig.output {
-        if let syn::Type::Path(type_path) = &**ty {
-            if let Some(seg) = type_path.path.segments.last() {
-                if seg.ident == "Multimodal" {
-                    // Depends on how exactly multimodal is represented
-                    return OutputParamType::Multimodal;
-                }
-            }
-        }
-    }
-    OutputParamType::Tuple
 }
 
 fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {

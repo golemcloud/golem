@@ -21,8 +21,8 @@ mod tests {
     #[agent_definition]
     trait Echo {
         fn new(init: UserId) -> Self;
-        fn echo_mut(&mut self, message: &str) -> String;
-        fn echo(&self, message: &str) -> String;
+        fn echo_mut(&mut self, message: String) -> String;
+        fn echo(&self, message: String) -> String;
     }
 
     struct EchoImpl {
@@ -34,11 +34,11 @@ mod tests {
         fn new(id: UserId) -> Self {
             EchoImpl { _id: id }
         }
-        fn echo_mut(&mut self, message: &str) -> String {
+        fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
         }
 
-        fn echo(&self, message: &str) -> String {
+        fn echo(&self, message: String) -> String {
             message.to_string()
         }
     }
