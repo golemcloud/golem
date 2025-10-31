@@ -249,12 +249,11 @@ fn generate_method_param_extraction(
         InputParamType::Tuple => quote! {
             #(#extraction)*
             #call_back
-        }
-        .into(),
+        },
+
         InputParamType::Multimodal => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
-        }
-        .into(),
+        },
     }
 }
 
@@ -336,12 +335,11 @@ fn generate_constructor_extraction(
         InputParamType::Tuple => quote! {
             #(#extraction)*
             #call_back
-        }
-        .into(),
+        },
+
         InputParamType::Multimodal => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
-        }
-        .into(),
+        },
     }
 }
 
