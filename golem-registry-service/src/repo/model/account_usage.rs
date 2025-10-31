@@ -104,9 +104,7 @@ impl AccountUsage {
     }
 
     pub fn add_checked(&mut self, usage_type: UsageType, increase: i64) -> RepoResult<bool> {
-        let Some(limit) = self.plan.limit(usage_type)? else {
-            return Ok(true);
-        };
+        let limit = self.plan.limit(usage_type);
 
         self.increase
             .entry(usage_type)

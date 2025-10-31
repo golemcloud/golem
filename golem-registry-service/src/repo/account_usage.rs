@@ -137,7 +137,7 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
     async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id, None).await? else {
+        let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -194,7 +194,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id, Some(usage_type)).await? else {
+        let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -297,8 +297,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
 
     async fn get_plan(
         &self,
-        account_id: &Uuid,
-        usage_type: Option<UsageType>,
+        account_id: &Uuid
     ) -> RepoResult<Option<PlanRecord>>;
 
     async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()>;
@@ -312,14 +311,16 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
 
     async fn get_plan(
         &self,
-        account_id: &Uuid,
-        usage_type: Option<UsageType>,
+        account_id: &Uuid
     ) -> RepoResult<Option<PlanRecord>> {
         let plan: Option<PlanRecord> = self
             .with_ro("get_plan - plan")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                SELECT p.plan_id, p.name
+                SELECT
+                    p.plan_id, p.name, p.max_memory_per_worker, p.total_app_count,
+                    p.total_env_count, p.total_component_count, p.total_worker_count, p.total_component_storage_bytes,
+                    p.monthly_gas_limit, p.monthly_component_upload_limit_bytes
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id
@@ -329,40 +330,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
             )
             .await?;
 
-        let Some(mut plan) = plan else {
-            return Ok(None);
-        };
-
-        let limit_rows = self
-            .with_ro("get_plan - limits")
-            .fetch_all(match usage_type {
-                Some(usage_type) =>
-                //
-                {
-                    sqlx::query(indoc! { r#"
-                        SELECT usage_type, value FROM plan_usage_limits
-                        WHERE plan_id = $1 AND usage_type = $2
-                     "#})
-                    .bind(plan.plan_id)
-                    .bind(usage_type)
-                }
-                None =>
-                //
-                {
-                    sqlx::query(indoc! { r#"
-                        SELECT usage_type, value FROM plan_usage_limits WHERE plan_id = $1
-                    "#})
-                    .bind(plan.plan_id)
-                }
-            })
-            .await?;
-        for row in limit_rows {
-            plan.limits
-                .insert(row.try_get("usage_type")?, row.try_get("value")?);
-        }
-        plan.add_limit_placeholders();
-
-        Ok(Some(plan))
+        Ok(plan)
     }
 
     async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()> {

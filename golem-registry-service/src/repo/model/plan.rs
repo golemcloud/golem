@@ -38,6 +38,20 @@ pub struct PlanRecord {
     pub monthly_component_upload_limit_bytes: i64,
 }
 
+impl PlanRecord {
+    pub fn limit(&self, usage_type: UsageType) -> i64 {
+        match usage_type {
+            UsageType::MonthlyComponentUploadLimitBytes => self.monthly_component_upload_limit_bytes,
+            UsageType::MonthlyGasLimit => self.monthly_gas_limit,
+            UsageType::TotalAppCount => self.total_app_count,
+            UsageType::TotalEnvCount => self.total_env_count,
+            UsageType::TotalComponentCount => self.total_component_count,
+            UsageType::TotalComponentStorageBytes => self.total_component_storage_bytes,
+            UsageType::TotalWorkerCount => self.total_worker_count
+        }
+    }
+}
+
 impl TryFrom<PlanRecord> for Plan {
     type Error = RepoError;
 
@@ -51,7 +65,7 @@ impl TryFrom<PlanRecord> for Plan {
             storage_limit: value.total_component_storage_bytes,
             monthly_gas_limit: value.monthly_gas_limit,
             monthly_upload_limit: value.monthly_component_upload_limit_bytes,
-            max_memory_per_worker: value.max_memory_per_worker,
+            max_memory_per_worker: value.max_memory_per_worker as u64,
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         })

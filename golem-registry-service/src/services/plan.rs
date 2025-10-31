@@ -152,7 +152,7 @@ impl PlanService {
         let record: PlanRecord = PlanRecord {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
-            max_memory_per_worker: plan.max_memory_per_worker,
+            max_memory_per_worker: plan.max_memory_per_worker as i64,
             total_app_count: plan.app_limit,
             total_env_count: plan.env_limit,
             total_component_count: plan.component_limit,

@@ -297,7 +297,7 @@ pub struct PrecreatedPlan {
     pub storage_limit: i64,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i64,
-    pub max_memory_per_worker: i64,
+    pub max_memory_per_worker: u64,
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

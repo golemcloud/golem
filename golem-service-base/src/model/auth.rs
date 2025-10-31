@@ -177,6 +177,7 @@ pub enum AccountAction {
     ViewApplications,
     ViewPlugin,
     ViewToken,
+    ViewUsage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]

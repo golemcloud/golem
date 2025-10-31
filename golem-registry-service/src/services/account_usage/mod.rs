@@ -19,6 +19,8 @@ use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
 use std::sync::Arc;
 use tracing::error;
+use golem_service_base::model::ResourceLimits;
+use golem_service_base::model::auth::{AccountAction, AuthCtx};
 
 pub mod error;
 
@@ -146,6 +148,20 @@ impl AccountUsageService {
         }
     }
 
+    pub async fn get_resouce_limits(&self, account_id: &AccountId, auth: &AuthCtx) -> Result<ResourceLimits, AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
+
+        let record = self.get_account_usage(account_id, Some(UsageType::MonthlyGasLimit)).await?;
+
+        let available_fuel = record
+            .plan
+            .monthly_gas_limit
+            .checked_sub(*record.usage.get(&UsageType::MonthlyGasLimit).unwrap_or(&0))
+            .unwrap_or(0);
+
+        Ok(ResourceLimits { available_fuel: available_fuel, max_memory_per_worker: record.plan.max_memory_per_worker as u64 })
+    }
+
     fn add_checked(
         &self,
         account_usage: &mut RepoAccountUsage,
@@ -155,7 +171,7 @@ impl AccountUsageService {
         if !account_usage.add_checked(usage_type, value)? {
             return Err(AccountUsageError::LimitExceeded {
                 limit_name: format!("{usage_type:?}"),
-                limit_value: account_usage.plan.limit(usage_type)?.unwrap_or(-1),
+                limit_value: account_usage.plan.limit(usage_type),
                 current_value: account_usage.usage(usage_type),
             });
         }

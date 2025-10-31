@@ -2,7 +2,16 @@ CREATE TABLE plans
 (
     plan_id UUID NOT NULL,
     name    TEXT NOT NULL,
+
     max_memory_per_worker BIGINT NOT NULL,
+    total_app_count BIGINT NOT NULL,
+    total_env_count BIGING NOT NULL,
+    total_component_count BIGINT NOT NULL,
+    total_worker_count BIGINT NOT NULL,
+    total_component_storage_bytes BIGINT NOT NULL,
+    monthly_gas_limit BIGINT NOT NULL,
+    monthly_component_upload_limit_bytes BIGINT NOT NULL,
+
     CONSTRAINT plans_pk
         PRIMARY KEY (plan_id)
 );
@@ -16,29 +25,11 @@ CREATE TABLE usage_types
 );
 
 INSERT INTO usage_types (usage_type, name)
-VALUES (0, 'TOTAL_APP_COUNT'),
-       (1, 'TOTAL_ENV_COUNT'),
-       (2, 'TOTAL_COMPONENT_COUNT'),
-       (3, 'TOTAL_WORKER_COUNT'),
-       (4, 'TOTAL_COMPONENT_STORAGE_BYTES'),
-       (5, 'MONTHLY_GAS_LIMIT'),
-       (6, 'MONTHLY_COMPONENT_UPLOAD_LIMIT_BYTES');
-
-CREATE TABLE plan_usage_limits
-(
-    plan_id    UUID   NOT NULL,
-    usage_type INT    NOT NULL,
-    value      BIGINT NOT NULL,
-    CONSTRAINT plan_usage_limits_pk
-        PRIMARY KEY (plan_id, usage_type),
-    CONSTRAINT plan_usage_limits_plans
-        FOREIGN KEY (plan_id) REFERENCES plans,
-    CONSTRAINT plan_usage_limits_usage_types
-        FOREIGN KEY (usage_type) REFERENCES usage_types
-);
-
-CREATE INDEX plan_usage_limits_usage_type_idx
-    ON plan_usage_limits (usage_type);
+VALUES
+       (0, 'TOTAL_WORKER_COUNT'),
+       (1, 'TOTAL_COMPONENT_STORAGE_BYTES'),
+       (2, 'MONTHLY_GAS_LIMIT'),
+       (3, 'MONTHLY_COMPONENT_UPLOAD_LIMIT_BYTES');
 
 CREATE TABLE accounts
 (

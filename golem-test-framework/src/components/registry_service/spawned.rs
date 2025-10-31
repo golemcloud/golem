@@ -54,6 +54,7 @@ impl SpawnedRegistyService {
         let admin_plan_id = PlanId::new_v4();
         let admin_account_id = AccountId::new_v4();
         let admin_account_token = TokenSecret::new_v4();
+        let default_plan_id = PlanId::new_v4();
 
         let config = make_config(
             db_info,
@@ -61,6 +62,7 @@ impl SpawnedRegistyService {
             admin_plan_id,
             admin_account_id.clone(),
             admin_account_token.clone(),
+            default_plan_id
         );
 
         let prometheus_registry = prometheus::Registry::new();
@@ -141,6 +143,7 @@ fn make_config(
     admin_plan_id: PlanId,
     admin_account_id: AccountId,
     admin_token: TokenSecret,
+    default_plan_id: PlanId,
 ) -> RegistryServiceConfig {
     RegistryServiceConfig {
         db: db_info.config("golem_component", false),
@@ -160,12 +163,13 @@ fn make_config(
                         storage_limit: i64::MAX,
                         monthly_gas_limit: i64::MAX,
                         monthly_upload_limit: i64::MAX,
+                        max_memory_per_worker: u64::MAX
                     },
                 ),
                 (
                     "default".to_string(),
                     PrecreatedPlan {
-                        plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
+                        plan_id: default_plan_id.0,
                         app_limit: 10,
                         env_limit: 40,
                         component_limit: 100,
@@ -173,6 +177,7 @@ fn make_config(
                         storage_limit: 500000000,
                         monthly_gas_limit: 1000000000000,
                         monthly_upload_limit: 1000000000,
+                        max_memory_per_worker: 1024 * 1024 * 1024
                     },
                 ),
             ]),
