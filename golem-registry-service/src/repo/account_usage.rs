@@ -43,8 +43,6 @@ pub trait AccountUsageRepo: Send + Sync {
     ) -> RepoResult<Option<AccountUsage>>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()>;
-
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()>;
 }
 
 pub struct LoggedAccountUsageRepo<Repo: AccountUsageRepo> {
@@ -87,13 +85,6 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
         self.repo
             .add(account_usage)
-            .instrument(Self::span_account_id(&account_usage.account_id))
-            .await
-    }
-
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.repo
-            .rollback(account_usage)
             .instrument(Self::span_account_id(&account_usage.account_id))
             .await
     }
@@ -147,29 +138,32 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     WITH counts AS (
                         SELECT
-                            COUNT(*) as total_apps,
+                            COUNT(DISTINCT a.application_id) as total_apps,
                             COUNT(DISTINCT e.environment_id) as total_envs,
-                            COUNT(DISTINCT c.component_id) as total_components
+                            COUNT(DISTINCT c.component_id) as total_components,
+                            SUM(cr.size::bigint) as total_component_size
                         FROM applications a
                         LEFT JOIN environments e ON e.application_id = a.application_id
                             AND e.deleted_at IS NULL
                         LEFT JOIN components c ON c.environment_id = e.environment_id
                             AND c.deleted_at IS NULL
-                        WHERE a.account_id = $1
-                            AND a.deleted_at IS NULL
+                        LEFT JOIN component_revisions cr ON c.component_id = cr.component_id
+                        WHERE a.account_id = $1 AND a.deleted_at IS NULL
                     )
                     SELECT usage_type, value FROM account_usage_stats
                     WHERE account_id = $1 AND usage_key IN ($2, $3)
                     UNION ALL SELECT $4 as usage_type, total_apps as value from counts
                     UNION ALL SELECT $5 as usage_type, total_envs as value from counts
                     UNION ALL SELECT $6 as usage_type, total_components as value from counts
+                    UNION ALL SELECT $7 as usage_type, total_component_size as value from counts
                 "#})
                 .bind(account_id)
                 .bind(date_to_usage_key(date))
                 .bind(USAGE_KEY_TOTAL)
                 .bind(UsageType::TotalAppCount)
                 .bind(UsageType::TotalEnvCount)
-                .bind(UsageType::TotalComponentCount),
+                .bind(UsageType::TotalComponentCount)
+                .bind(UsageType::TotalComponentStorageBytes)
             )
             .await?;
 
@@ -264,6 +258,28 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         )
                         .await?
                 }
+                UsageTracking::SelectTotalComponentSize => {
+                    self.with_ro("get_for_type - total component size")
+                        .fetch_all(
+                            sqlx::query(indoc! { r#"
+                                SELECT $1 as usage_type, (
+                                    SELECT SUM(cr.size::bigint)
+                                    FROM applications a
+                                    JOIN environments e ON e.application_id = a.application_id
+                                    JOIN components c ON c.environment_id = e.environment_id
+                                    JOIN component_revisions cr ON c.component_id = cr.component_id
+                                    WHERE
+                                        a.account_id = $1
+                                        AND a.deleted_at IS NULL
+                                        AND e.deleted_at IS NULL
+                                        AND c.deleted_at IS NULL
+                                ) as value
+                            "#})
+                                .bind(UsageType::TotalComponentStorageBytes)
+                                .bind(account_id),
+                        )
+                        .await?
+                }
             }
         };
         let mut usage = BTreeMap::new();
@@ -282,11 +298,41 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
     }
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.change_usage(account_usage, false).await
-    }
+        let account_id = account_usage.account_id;
+        let changes = account_usage.increase.clone();
+        let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
 
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.change_usage(account_usage, true).await
+        self.with_tx("change_usage", |tx| {
+            async move {
+                for (usage_type, change) in changes {
+                    if usage_type.tracking() != UsageTracking::Stats || change == 0 {
+                        continue;
+                    }
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            INSERT INTO account_usage_stats (account_id, usage_type, usage_key, value, updated_at)
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE SET value = account_usage_stats.value + $4
+                        "#})
+                            .bind(account_id)
+                            .bind(usage_type)
+                            .bind(
+                                match usage_type.grouping() {
+                                    UsageGrouping::Total => USAGE_KEY_TOTAL,
+                                    UsageGrouping::Monthly => &date_usage_key,
+                                }
+                            )
+                            .bind(change)
+                            .bind(SqlDateTime::now()),
+                    ).await?;
+                }
+
+                Ok(())
+            }
+                .boxed()
+        })
+            .await
     }
 }
 
@@ -299,8 +345,6 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
         &self,
         account_id: &Uuid
     ) -> RepoResult<Option<PlanRecord>>;
-
-    async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -331,44 +375,6 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
             .await?;
 
         Ok(plan)
-    }
-
-    async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()> {
-        let account_id = account_usage.account_id;
-        let changes = account_usage.increase.clone();
-        let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
-
-        self.with_tx("change_usage", |tx| {
-            async move {
-                for (usage_type, change) in changes {
-                    if usage_type.tracking() != UsageTracking::Stats || change == 0 {
-                        continue;
-                    }
-
-                    tx.execute(
-                        sqlx::query(indoc! { r#"
-                            INSERT INTO account_usage_stats (account_id, usage_type, usage_key, value, updated_at)
-                            VALUES ($1, $2, $3, $4, $5)
-                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE SET value = account_usage_stats.value + $4
-                        "#})
-                            .bind(account_id)
-                            .bind(usage_type)
-                            .bind(
-                                match usage_type.grouping() {
-                                    UsageGrouping::Total => USAGE_KEY_TOTAL,
-                                    UsageGrouping::Monthly => &date_usage_key,
-                                }
-                            )
-                            .bind(if rollback { -change } else { change })
-                            .bind(SqlDateTime::now()),
-                    ).await?;
-                }
-
-                Ok(())
-            }
-                .boxed()
-        })
-            .await
     }
 }
 

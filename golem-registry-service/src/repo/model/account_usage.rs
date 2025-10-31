@@ -31,6 +31,7 @@ pub enum UsageTracking {
     SelectTotalAppCount,
     SelectTotalEnvCount,
     SelectTotalComponentCount,
+    SelectTotalComponentSize,
 }
 
 #[repr(i32)]
@@ -65,8 +66,8 @@ impl UsageType {
             UsageType::TotalAppCount => UsageTracking::SelectTotalAppCount,
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
+            UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
             UsageType::TotalWorkerCount
-            | UsageType::TotalComponentStorageBytes
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes => UsageTracking::Stats,
         }

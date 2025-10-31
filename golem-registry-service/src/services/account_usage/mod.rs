@@ -27,28 +27,12 @@ pub mod error;
 pub struct AccountUsage {
     account_usage: RepoAccountUsage,
     account_usage_repo: Arc<dyn AccountUsageRepo>,
-    acked: bool,
 }
 
 impl AccountUsage {
-    pub fn ack(&mut self) {
-        self.acked = true;
-    }
-}
-
-impl Drop for AccountUsage {
-    fn drop(&mut self) {
-        if self.acked {
-            return;
-        }
-
-        let account_usage = self.account_usage.clone();
-        let account_usage_repo = self.account_usage_repo.clone();
-        tokio::spawn(async move {
-            if let Err(err) = account_usage_repo.rollback(&account_usage).await {
-                error!("Failed to rollback account usage: {account_usage:?}, {err}");
-            }
-        });
+    pub async fn persist(self) -> Result<(), AccountUsageError> {
+        self.account_usage_repo.add(&self.account_usage).await?;
+        Ok(())
     }
 }
 
@@ -204,8 +188,7 @@ impl AccountUsageService {
     fn wrapped_account_usage(&self, account_usage: RepoAccountUsage) -> AccountUsage {
         AccountUsage {
             account_usage,
-            account_usage_repo: self.account_usage_repo.clone(),
-            acked: false,
+            account_usage_repo: self.account_usage_repo.clone()
         }
     }
 }
