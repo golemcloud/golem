@@ -117,7 +117,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                         };
                         let ty = &pat_type.ty;
                         parameter_types.push(quote! {
-                            (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
+                            (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::value_and_type::IntoValue>::get_type()))
                         });
                     }
                 }
@@ -127,7 +127,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                     syn::ReturnType::Default => (),
                     syn::ReturnType::Type(_, ty) => {
                         result_type.push(quote! {
-                            ("return-value".to_string(),   golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
+                            ("return-value".to_string(),   golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::value_and_type::IntoValue>::get_type()))
                         });
                     }
                 };
@@ -163,7 +163,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
 
                 let ty = &pat_type.ty;
                 constructor_parameter_types.push(quote! {
-                    (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
+                    (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::value_and_type::IntoValue>::get_type()))
                 });
             }
         }

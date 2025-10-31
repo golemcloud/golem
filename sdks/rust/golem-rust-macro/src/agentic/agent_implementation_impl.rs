@@ -26,7 +26,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let self_ty = &impl_block.self_ty;
     let (trait_name_ident, trait_name_str_raw) = extract_trait_name(&impl_block);
 
-    let (match_arms, constructor_method) = build_match_arms(&impl_block);
+    let (match_arms, constructor_method) =
+        build_match_arms(&impl_block, trait_name_str_raw.to_string());
     let constructor_method = match constructor_method {
         Some(m) => m,
         None => {
@@ -50,7 +51,9 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &ty_generics,
         where_clause,
     );
-    let constructor_param_extraction = generate_constructor_extraction(&ctor_params);
+    let constructor_param_extraction =
+        generate_constructor_extraction(&ctor_params, &trait_name_str_raw);
+
     let initiator_ident = format_ident!("{}Initiator", trait_name_ident);
     let base_initiator_impl = generate_initiator_impl(
         &initiator_ident,
@@ -107,6 +110,7 @@ fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
 
 fn build_match_arms(
     impl_block: &syn::ItemImpl,
+    agent_type_name: String,
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
     let mut constructor_method = None;
@@ -121,13 +125,19 @@ fn build_match_arms(
                 _ => false,
             };
 
+            let method_name_str = method.sig.ident.to_string();
+
             if returns_self {
                 constructor_method = Some(method);
                 continue;
             }
 
             let param_idents = extract_param_idents(method);
-            let method_param_extraction = generate_method_param_extraction(&param_idents);
+            let method_param_extraction = generate_method_param_extraction(
+                &param_idents,
+                &agent_type_name,
+                method_name_str.as_str(),
+            );
             let method_name = &method.sig.ident.to_string();
             let ident = &method.sig.ident;
 
@@ -135,7 +145,7 @@ fn build_match_arms(
                 #method_name => {
                     #(#method_param_extraction)*
                     let result = self.#ident(#(#param_idents),*);
-                    let wit_value = <_ as golem_rust::agentic::Schema>::to_wit_value(result);
+                    let wit_value = <_ as golem_rust::value_and_type::IntoValue>::into_value(result);
                     let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
                     Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value]))
                 }
@@ -146,7 +156,11 @@ fn build_match_arms(
     (match_arms, constructor_method)
 }
 
-fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_macro2::TokenStream> {
+fn generate_method_param_extraction(
+    param_idents: &[syn::Ident],
+    agent_type_name: &str,
+    method_name: &str,
+) -> Vec<proc_macro2::TokenStream> {
     param_idents.iter().enumerate().map(|(i, ident)| {
         quote! {
             let element_value_result = match &input {
@@ -185,7 +199,42 @@ fn generate_method_param_extraction(param_idents: &[syn::Ident]) -> Vec<proc_mac
 
             let wit_value = wit_value_result?;
 
-            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).map_err(|e| {
+            let element_schema = golem_rust::agentic::get_method_parameter_type(
+                &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                #method_name,
+                #i,
+            ).ok_or_else(|| {
+                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!(
+                            "Parameter schema not found for agent: {}, method: {}, parameter index: {}",
+                            #agent_type_name, #method_name, #i
+                        )),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    ).into(),
+                )
+            })?;
+
+            let wit_type_result = match element_schema {
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
+                _ => {
+                    Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                        golem_rust::wasm_rpc::ValueAndType::new(
+                            golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementSchema is currently supported".into()),
+                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                        ).into(),
+                    ))
+                }
+            };
+
+            let wit_type = wit_type_result?;
+
+            let value_and_type = golem_rust::wasm_rpc::types::ValueAndType {
+                value: wit_value,
+                typ: wit_type,
+            };
+
+            let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
                 golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
                     golem_rust::wasm_rpc::ValueAndType::new(
                         golem_rust::wasm_rpc::Value::String(format!("Failed parsing arg {}: {}", #i, e)),
@@ -234,7 +283,10 @@ fn generate_base_agent_impl(
     }
 }
 
-fn generate_constructor_extraction(ctor_params: &[syn::Ident]) -> Vec<proc_macro2::TokenStream> {
+fn generate_constructor_extraction(
+    ctor_params: &[syn::Ident],
+    agent_type_name: &str,
+) -> Vec<proc_macro2::TokenStream> {
     ctor_params.iter().enumerate().map(|(i, ident)| {
         quote! {
             let element_value_result = match &params {
@@ -270,8 +322,36 @@ fn generate_constructor_extraction(ctor_params: &[syn::Ident]) -> Vec<proc_macro
             };
 
             let wit_value = wit_value_result?;
+            let element_schema = golem_rust::agentic::get_constructor_parameter_type(
+                &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                #i,
+            ).ok_or_else(|| {
+                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                    golem_rust::wasm_rpc::ValueAndType::new(
+                        golem_rust::wasm_rpc::Value::String(format!(
+                            "Constructor parameter schema not found for agent: {}, parameter index: {}",
+                            #agent_type_name, #i
+                        )),
+                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                    ).into(),
+                )
+            })?;
 
-            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).map_err(|e| {
+            let wit_type_result = match element_schema {
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
+                _ => {
+                    Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
+                        golem_rust::wasm_rpc::ValueAndType::new(
+                            golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementSchema is currently supported".into()),
+                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
+                        ).into(),
+                    ))
+                }
+            };
+
+            let wit_type = wit_type_result?;
+
+            let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
                 golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
                     golem_rust::wasm_rpc::ValueAndType::new(
                         golem_rust::wasm_rpc::Value::String(format!("Failed parsing ctor arg {}: {}", #i, e)),

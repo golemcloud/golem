@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
+use syn::DeriveInput;
 
 use crate::transaction::golem_operation_impl;
 
@@ -22,12 +23,15 @@ mod value;
 
 #[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
-    value::derive_into_value(input)
+    let ast: DeriveInput = syn::parse(input).expect("derive input");
+
+    value::derive_into_value(&ast)
 }
 
 #[proc_macro_derive(FromValueAndType, attributes(flatten_value, unit_case))]
 pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
-    value::derive_from_value_and_type(input)
+    let ast: DeriveInput = syn::parse(input).expect("derive input");
+    value::derive_from_value_and_type(&ast)
 }
 
 #[proc_macro_derive(Schema)]
