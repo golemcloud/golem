@@ -89,6 +89,11 @@ enum InputParamType {
     Multimodal,
 }
 
+enum OutputParamType {
+    Tuple,
+    Multimodal,
+}
+
 fn parse_impl_block(item: &TokenStream) -> syn::Result<ItemImpl> {
     syn::parse::<ItemImpl>(item.clone())
 }
@@ -118,6 +123,20 @@ fn get_input_param_type(method: &syn::ImplItemFn) -> InputParamType {
         }
     }
     InputParamType::Tuple
+}
+
+fn get_output_param_type(method: &syn::ImplItemFn) -> OutputParamType {
+    if let ReturnType::Type(_, ty) = &method.sig.output {
+        if let syn::Type::Path(type_path) = &**ty {
+            if let Some(seg) = type_path.path.segments.last() {
+                if seg.ident == "Multimodal" {
+                    // Depends on how exactly multimodal is represented
+                    return OutputParamType::Multimodal;
+                }
+            }
+        }
+    }
+    OutputParamType::Tuple
 }
 
 fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
@@ -171,18 +190,30 @@ fn build_match_arms(
 
             let input_param_type = get_input_param_type(method);
 
-            // This logic actually depends on whether the output is multimodal or not
-            // For now we assume its always tuple
-            let post_method_param_extraction_logic = quote! {
-                let result = self.#ident(#(#param_idents),*);
-                <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
-                    golem_rust::agentic::custom_error(format!(
-                        "Failed serializing return value for method {}: {}",
-                        #method_name, e
-                    ))
-                }).map(|element_value| {
-                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
-                })
+            let output_param_type = get_output_param_type(method);
+
+            let post_method_param_extraction_logic = match output_param_type {
+                OutputParamType::Tuple => quote! {
+                    let result = self.#ident(#(#param_idents),*);
+                    <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                        golem_rust::agentic::custom_error(format!(
+                            "Failed serializing return value for method {}: {}",
+                            #method_name, e
+                        ))
+                    }).map(|element_value| {
+                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                    })
+                },
+                OutputParamType::Multimodal => quote! {
+                    // multimodal_result is assumed to be of type `Multimodal`. It cannot be wrapped in anything else because
+                    // DataValue::Tuple cannot hold multimodal
+                    // The actual representation of `Multimodal` is TBD
+                    let multimodal_result = self.#ident(#(#param_idents),*);
+
+                    // TODO; once Multimodal representation is decided, convert its elements to Vec<(String, ElementValue)>
+                    // using corresponding `Schema` implementations
+                    Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(vec![]))
+                },
             };
 
             let method_param_extraction = generate_method_param_extraction(
