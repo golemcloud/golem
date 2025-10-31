@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::account_usage::error::AccountUsageError;
+use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::auth::AuthError;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -92,6 +92,15 @@ impl From<AuthorizationError> for GrpcApiError {
     }
 }
 
+impl From<LimitExceededError> for GrpcApiError {
+    fn from(value: LimitExceededError) -> Self {
+        Self::LimitExceeded(ErrorBody {
+            error: value.to_string(),
+            cause: None,
+        })
+    }
+}
+
 impl From<AuthError> for GrpcApiError {
     fn from(value: AuthError) -> Self {
         let error: String = value.to_safe_string();
@@ -111,13 +120,11 @@ impl From<AccountUsageError> for GrpcApiError {
     fn from(value: AccountUsageError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            AccountUsageError::Unauthorized(authorization_error) => Self::from(authorization_error),
             AccountUsageError::AccountNotfound(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
-            AccountUsageError::LimitExceeded { .. } => {
-                Self::LimitExceeded(ErrorBody { error, cause: None })
-            }
+            AccountUsageError::Unauthorized(inner) => inner.into(),
+            AccountUsageError::LimitExceeded(inner) => inner.into(),
             AccountUsageError::InternalError(inner) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(inner.context("AuthError")),

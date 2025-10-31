@@ -146,11 +146,13 @@ impl Services {
         let application_service = Arc::new(ApplicationService::new(
             repos.application_repo.clone(),
             account_service.clone(),
+            account_usage_service.clone()
         ));
 
         let environment_service = Arc::new(EnvironmentService::new(
             repos.environment_repo.clone(),
             application_service.clone(),
+            account_usage_service.clone()
         ));
 
         let environment_share_service = Arc::new(EnvironmentShareService::new(

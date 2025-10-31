@@ -21,13 +21,15 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{error_forwarding, IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
+use super::account_usage::AccountUsageService;
+use super::account_usage::error::{AccountUsageError, LimitExceededError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentError {
@@ -42,6 +44,8 @@ pub enum EnvironmentError {
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
+    LimitExceeded(LimitExceededError),
+    #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -55,6 +59,7 @@ impl SafeDisplay for EnvironmentError {
             Self::EnvironmentByNameNotFound(_) => self.to_string(),
             Self::ParentApplicationNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
+            Self::LimitExceeded(inner) => inner.to_safe_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -68,19 +73,31 @@ error_forwarding!(
     EnvironmentRepoError
 );
 
+impl From<AccountUsageError> for EnvironmentError {
+    fn from(value: AccountUsageError) -> Self {
+        match value {
+            AccountUsageError::LimitExceeded(inner) => EnvironmentError::LimitExceeded(inner),
+            other => Self::InternalError(other.into_anyhow())
+        }
+    }
+}
+
 pub struct EnvironmentService {
     environment_repo: Arc<dyn EnvironmentRepo>,
     application_service: Arc<ApplicationService>,
+    account_usage_service: Arc<AccountUsageService>,
 }
 
 impl EnvironmentService {
     pub fn new(
         environment_repo: Arc<dyn EnvironmentRepo>,
         application_service: Arc<ApplicationService>,
+        account_usage_service: Arc<AccountUsageService>,
     ) -> Self {
         Self {
             environment_repo,
             application_service,
+            account_usage_service
         }
     }
 
@@ -102,6 +119,10 @@ impl EnvironmentService {
             })?;
 
         auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
+
+        self.account_usage_service
+            .ensure_environment_within_limits(&application.account_id)
+            .await?;
 
         let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id().clone());
 

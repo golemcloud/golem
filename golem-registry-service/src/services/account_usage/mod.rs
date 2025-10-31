@@ -22,6 +22,7 @@ use golem_common::model::account::AccountId;
 use golem_service_base::model::ResourceLimits;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
 use std::sync::Arc;
+use self::error::LimitExceededError;
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
@@ -208,11 +209,11 @@ impl AccountUsageService {
         value: i64,
     ) -> Result<(), AccountUsageError> {
         if !account_usage.add_change(usage_type, value)? {
-            return Err(AccountUsageError::LimitExceeded {
+            return Err(AccountUsageError::LimitExceeded(LimitExceededError {
                 limit_name: format!("{usage_type:?}"),
                 limit_value: account_usage.plan.limit(usage_type),
                 current_value: account_usage.usage(usage_type),
-            });
+            }));
         }
 
         Ok(())

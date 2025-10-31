@@ -31,6 +31,7 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use crate::services::account_usage::error::LimitExceededError;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -112,6 +113,15 @@ impl From<AuthorizationError> for ApiError {
     }
 }
 
+impl From<LimitExceededError> for ApiError {
+    fn from(value: LimitExceededError) -> Self {
+        Self::LimitExceeded(Json(ErrorBody {
+            error: value.to_string(),
+            cause: None,
+        }))
+    }
+}
+
 impl From<std::io::Error> for ApiError {
     fn from(value: std::io::Error) -> Self {
         Self::InternalError(Json(ErrorBody {
@@ -175,6 +185,8 @@ impl From<ApplicationError> for ApiError {
 
             ApplicationError::Unauthorized(inner) => inner.into(),
 
+            ApplicationError::LimitExceeded(inner) => inner.into(),
+
             ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("ApplicationError")),
@@ -199,6 +211,8 @@ impl From<EnvironmentError> for ApiError {
             }
 
             EnvironmentError::Unauthorized(inner) => inner.into(),
+
+            EnvironmentError::LimitExceeded(inner) => inner.into(),
 
             EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -228,11 +242,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
-
             ComponentError::AlreadyExists(_) => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
@@ -270,6 +279,8 @@ impl From<ComponentError> for ApiError {
             }
 
             ComponentError::Unauthorized(inner) => inner.into(),
+
+            ComponentError::LimitExceeded(inner) => inner.into(),
 
             ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,

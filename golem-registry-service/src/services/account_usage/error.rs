@@ -18,13 +18,23 @@ use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
+#[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
+pub struct LimitExceededError {
+    pub limit_name: String,
+    pub limit_value: i64,
+    pub current_value: i64,
+}
+
+impl SafeDisplay for LimitExceededError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum AccountUsageError {
-    #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
-    LimitExceeded {
-        limit_name: String,
-        limit_value: i64,
-        current_value: i64,
-    },
+    #[error(transparent)]
+    LimitExceeded(LimitExceededError),
     #[error("Account {0} not found")]
     AccountNotfound(AccountId),
     #[error(transparent)]

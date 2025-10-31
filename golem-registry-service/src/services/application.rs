@@ -21,12 +21,14 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{error_forwarding, IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AccountAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
+use super::account_usage::AccountUsageService;
+use super::account_usage::error::{AccountUsageError, LimitExceededError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApplicationError {
@@ -41,6 +43,8 @@ pub enum ApplicationError {
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
+    LimitExceeded(LimitExceededError),
+    #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -54,7 +58,8 @@ impl SafeDisplay for ApplicationError {
             Self::ApplicationByNameNotFound(_) => self.to_string(),
             Self::ParentAccountNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
-            Self::Unauthorized(_) => self.to_string(),
+            Self::LimitExceeded(inner) => inner.to_safe_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -62,19 +67,31 @@ impl SafeDisplay for ApplicationError {
 
 error_forwarding!(ApplicationError, ApplicationRepoError, AccountError);
 
+impl From<AccountUsageError> for ApplicationError {
+    fn from(value: AccountUsageError) -> Self {
+        match value {
+            AccountUsageError::LimitExceeded(inner) => ApplicationError::LimitExceeded(inner),
+            other => Self::InternalError(other.into_anyhow())
+        }
+    }
+}
+
 pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,
     account_service: Arc<AccountService>,
+    account_usage_service: Arc<AccountUsageService>
 }
 
 impl ApplicationService {
     pub fn new(
         application_repo: Arc<dyn ApplicationRepo>,
         account_service: Arc<AccountService>,
+        account_usage_service: Arc<AccountUsageService>
     ) -> Self {
         Self {
             application_repo,
             account_service,
+            account_usage_service
         }
     }
 
@@ -95,6 +112,10 @@ impl ApplicationService {
             })?;
 
         auth.authorize_account_action(&account_id, AccountAction::CreateApplication)?;
+
+        self.account_usage_service
+            .ensure_application_within_limits(&account_id)
+            .await?;
 
         let application = Application {
             id: ApplicationId::new_v4(),
@@ -235,9 +256,7 @@ impl ApplicationService {
         self.account_service
             .get_optional(account_id, auth)
             .await?
-            .ok_or(ApplicationError::Unauthorized(
-                AuthorizationError::AccountActionNotAllowed(AccountAction::ViewApplications),
-            ))?;
+            .ok_or(ApplicationError::Unauthorized(AuthorizationError::AccountActionNotAllowed(AccountAction::ViewApplications)))?;
 
         auth.authorize_account_action(account_id, AccountAction::ViewApplications)?;
 
