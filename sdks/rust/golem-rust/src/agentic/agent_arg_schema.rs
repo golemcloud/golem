@@ -12,23 +12,89 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+
+use crate::golem_agentic::golem::agent::common::ElementSchema;
+use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::golem_rpc_0_2_x::types::WitType;
-use golem_wasm::golem_rpc_0_2_x::types::WitValue;
 
-pub trait Schema: IntoValue + FromValueAndType {
-    fn from_wit_value_and_type(wit_value: WitValue, wit_type: WitType) -> Result<Self, String>
+pub trait Schema {
+    fn get_type() -> ElementSchema;
+    fn to_element_value(self) -> Result<ElementValue, String>;
+    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
     where
-        Self: Sized,
-    {
-        let value_and_type = ValueAndType {
-            value: wit_value,
-            typ: wit_type,
-        };
-        Self::from_value_and_type(value_and_type)
+        Self: Sized;
+}
+
+impl<T: IntoValue + FromValueAndType> Schema for T {
+    fn get_type() -> ElementSchema {
+        ElementSchema::ComponentModel(T::get_type())
+    }
+
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        let wit_value = self.into_value();
+        Ok(ElementValue::ComponentModel(wit_value))
+    }
+
+    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String> {
+        match value {
+            ElementValue::ComponentModel(wit_value) => {
+                let value_and_type = ValueAndType {
+                    value: wit_value,
+                    typ: match schema {
+                        ElementSchema::ComponentModel(wit_type) => wit_type,
+                        _ => {
+                            return Err(format!(
+                                "Expected ComponentModel schema, got: {:?}",
+                                schema
+                            ))
+                        }
+                    },
+                };
+
+                T::from_value_and_type(value_and_type)
+            }
+            _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
+        }
     }
 }
 
-impl<T: IntoValue + FromValueAndType> Schema for T {}
+impl Schema for &str {
+    fn get_type() -> ElementSchema {
+        let wit_type = <String as IntoValue>::get_type();
+        ElementSchema::ComponentModel(wit_type)
+    }
+
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        let string = self.to_string();
+        let wit_value = string.into_value();
+        Ok(ElementValue::ComponentModel(wit_value))
+    }
+
+    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match value {
+            ElementValue::ComponentModel(wit_value) => {
+                let value_and_type = ValueAndType {
+                    value: wit_value,
+                    typ: match schema {
+                        ElementSchema::ComponentModel(wit_type) => wit_type,
+                        _ => {
+                            return Err(format!(
+                                "Expected ComponentModel schema, got: {:?}",
+                                schema
+                            ))
+                        }
+                    },
+                };
+
+                let string: String = FromValueAndType::from_value_and_type(value_and_type)?;
+                Ok(Box::leak(string.into_boxed_str()))
+            }
+            _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
+        }
+    }
+}

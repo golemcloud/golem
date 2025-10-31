@@ -179,14 +179,6 @@ fn generate_method_param_extraction(
 
             let element_value = element_value_result?;
 
-            let wit_value_result = match element_value {
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
-            };
-
-            let wit_value = wit_value_result?;
-
             let element_schema = golem_rust::agentic::get_method_parameter_type(
                 &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
                 #method_name,
@@ -198,20 +190,8 @@ fn generate_method_param_extraction(
                 ))
             })?;
 
-            let wit_type_result = match element_schema {
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
-            };
-
-            let wit_type = wit_type_result?;
-
-            let value_and_type = golem_rust::wasm_rpc::types::ValueAndType {
-                value: wit_value,
-                typ: wit_type,
-            };
-
-            let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
+        
+            let #ident = golem_rust::agentic::Schema::from_element_value(element_value, element_schema).map_err(|e| {
                 golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
             })?;
         }
@@ -269,15 +249,7 @@ fn generate_constructor_extraction(
             };
 
             let element_value = element_value_result?;
-
-            let wit_value_result = match element_value {
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
-                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
-
-            };
-
-            let wit_value = wit_value_result?;
+            
             let element_schema = golem_rust::agentic::get_constructor_parameter_type(
                 &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
                 #i,
@@ -288,15 +260,7 @@ fn generate_constructor_extraction(
                 ))
             })?;
 
-            let wit_type_result = match element_schema {
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
-                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
-            };
-
-            let wit_type = wit_type_result?;
-
-            let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
+            let #ident = golem_rust::agentic::Schema::from_element_value(element_value, element_schema).map_err(|e| {
                 golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #i, e))
             })?;
         }

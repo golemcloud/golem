@@ -19,29 +19,32 @@ mod tests {
     use golem_rust::{agent_definition, agent_implementation, Schema};
 
     #[agent_definition]
-    trait Counter {
-        fn new(init: CounterId) -> Self;
-        fn increment(&mut self) -> i32;
+    trait Echo {
+        fn new(init: UserId) -> Self;
+        fn echo_mut(&mut self, message: &str) -> String;
+        fn echo(&self, message: &str) -> String;
     }
 
-    struct CounterImpl {
-        count: i32,
-        _id: CounterId,
+    struct EchoImpl {
+        _id: UserId,
     }
 
     #[agent_implementation]
-    impl Counter for CounterImpl {
-        fn new(id: CounterId) -> Self {
-            CounterImpl { _id: id, count: 0 }
+    impl Echo for EchoImpl {
+        fn new(id: UserId) -> Self {
+            EchoImpl { _id: id }
         }
-        fn increment(&mut self) -> i32 {
-            self.count += 1;
-            self.count
+        fn echo_mut(&mut self, message: &str) -> String {
+            format!("Echo: {}", message)
+        }
+
+        fn echo(&self, message: &str) -> String {
+            message.to_string()
         }
     }
 
     #[derive(Schema)]
-    struct CounterId {
+    struct UserId {
         id: String,
     }
 
