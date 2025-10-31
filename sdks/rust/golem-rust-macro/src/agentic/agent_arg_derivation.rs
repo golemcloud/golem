@@ -23,7 +23,6 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     let from_value_tokens: proc_macro2::TokenStream =
         crate::value::derive_from_value_and_type(&ast).into();
 
-    // Merge the generated impls
     quote! {
         #into_value_tokens
         #from_value_tokens
