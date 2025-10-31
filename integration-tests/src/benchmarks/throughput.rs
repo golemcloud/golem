@@ -15,8 +15,6 @@
 use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_client::model::{
     ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
     GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
@@ -459,6 +457,15 @@ impl ThroughputBenchmark {
         let mut direct_rust_rpc_worker_id_pairs = vec![];
         let mut ts_rpc_agent_worker_id_pairs = vec![];
 
+        let routing_table = self
+            .deps
+            .shard_manager()
+            .get_routing_table()
+            .await
+            .expect("Failed to get routing table");
+
+        info!("Fetched routing table: {routing_table}");
+
         info!("Registering components");
 
         let rust_direct_component_id = self
@@ -661,22 +668,6 @@ impl ThroughputBenchmark {
             .create_or_update_api_deployment(&admin.token, request)
             .await
             .expect("Failed to create API deployment");
-
-        let shard_manager = self.deps.shard_manager();
-        let mut shard_manager_client = shard_manager.client().await;
-
-        let routing_table = shard_manager_client
-            .get_routing_table(GetRoutingTableRequest {})
-            .await
-            .expect("Unable to fetch the routing table from shard-manager-service");
-
-        let routing_table: RoutingTable = match routing_table.into_inner() {
-            shardmanager::v1::GetRoutingTableResponse {
-                result:
-                    Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
-            } => routing_table.into(),
-            _ => panic!("Unable to fetch the routing table from shard-manager-service"),
-        };
 
         IterationContext {
             direct_rust_worker_ids,

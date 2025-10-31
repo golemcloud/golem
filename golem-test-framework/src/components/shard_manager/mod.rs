@@ -14,8 +14,12 @@
 
 use crate::components::redis::Redis;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::shardmanager;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
+use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
+use golem_common::model::RoutingTable;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,6 +54,26 @@ pub trait ShardManager: Send + Sync {
 
     async fn kill(&self);
     async fn restart(&self, number_of_shards_override: Option<usize>);
+
+    async fn get_routing_table(&self) -> crate::Result<RoutingTable> {
+        let routing_table = self
+            .client()
+            .await
+            .get_routing_table(GetRoutingTableRequest {})
+            .await
+            .expect("Unable to fetch the routing table from shard-manager-service");
+
+        match routing_table.into_inner() {
+            shardmanager::v1::GetRoutingTableResponse {
+                result:
+                    Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
+            } => Ok(routing_table.into()),
+            shardmanager::v1::GetRoutingTableResponse {
+                result: Some(shardmanager::v1::get_routing_table_response::Result::Failure(err)),
+            } => Err(anyhow!("Failed to get routing table: {err:?}")),
+            _ => Err(anyhow!("Failed to get routing table")),
+        }
+    }
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {
