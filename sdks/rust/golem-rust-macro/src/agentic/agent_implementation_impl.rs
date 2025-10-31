@@ -169,32 +169,20 @@ fn generate_method_param_extraction(
 
                     match value {
                         Some(v) => Ok(v.clone()),
-                        None => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                            golem_rust::wasm_rpc::ValueAndType::new(
-                                golem_rust::wasm_rpc::Value::String(format!("Missing arguments at pos {}", #i)),
-                                golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                            ).into(),
-                        )),
+                        None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
                     }
                 },
-                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String("Only component types supported".into()),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                ))
+                golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
+                    Err(golem_rust::agentic::internal_error("Multimodal input not supported currently"))
+                }
             };
 
             let element_value = element_value_result?;
 
             let wit_value_result = match element_value {
                 golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementValue supported".into()),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                ))
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
             };
 
             let wit_value = wit_value_result?;
@@ -204,27 +192,16 @@ fn generate_method_param_extraction(
                 #method_name,
                 #i,
             ).ok_or_else(|| {
-                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String(format!(
-                            "Parameter schema not found for agent: {}, method: {}, parameter index: {}",
-                            #agent_type_name, #method_name, #i
-                        )),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )
+                golem_rust::agentic::custom_error(format!(
+                    "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
+                    #agent_type_name, #method_name, #i
+                ))
             })?;
 
             let wit_type_result = match element_schema {
                 golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
-                _ => {
-                    Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                        golem_rust::wasm_rpc::ValueAndType::new(
-                            golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementSchema is currently supported".into()),
-                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                        ).into(),
-                    ))
-                }
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
             };
 
             let wit_type = wit_type_result?;
@@ -235,12 +212,7 @@ fn generate_method_param_extraction(
             };
 
             let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
-                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String(format!("Failed parsing arg {}: {}", #i, e)),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )
+                golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
             })?;
         }
     }).collect()
@@ -265,12 +237,7 @@ fn generate_base_agent_impl(
                 -> Result<golem_rust::golem_agentic::golem::agent::common::DataValue, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 match method_name.as_str() {
                     #(#match_arms,)*
-                    _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                        golem_rust::wasm_rpc::ValueAndType::new(
-                            golem_rust::wasm_rpc::Value::String(format!("Method not found: {}", method_name)),
-                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                        ).into(),
-                    )),
+                    _ => Err(golem_rust::agentic::invalid_method_error(method_name)),
                 }
             }
 
@@ -293,32 +260,21 @@ fn generate_constructor_extraction(
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
                     match values.get(#i) {
                         Some(v) => Ok(v.clone()),
-                        None => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                            golem_rust::wasm_rpc::ValueAndType::new(
-                                golem_rust::wasm_rpc::Value::String(format!("Missing arguments at pos {}", #i)),
-                                golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                            ).into(),
-                        )),
+                        None => Err(golem_rust::agentic::invalid_input_error(format!("Missing constructor arguments for agent {}", #agent_type_name))),
                     }
                 },
-                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String("Only component types supported".into()),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )),
+                golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
+                    Err(golem_rust::agentic::internal_error("Multimodal input not supported currently"))
+                }
             };
 
             let element_value = element_value_result?;
 
             let wit_value_result = match element_value {
                 golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-                _ => Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementValue supported".into()),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )),
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
+
             };
 
             let wit_value = wit_value_result?;
@@ -326,38 +282,22 @@ fn generate_constructor_extraction(
                 &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
                 #i,
             ).ok_or_else(|| {
-                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String(format!(
-                            "Constructor parameter schema not found for agent: {}, parameter index: {}",
-                            #agent_type_name, #i
-                        )),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )
+                golem_rust::agentic::internal_error(format!(
+                    "Constructor parameter schema not found for agent: {}, parameter index: {}",
+                    #agent_type_name, #i
+                ))
             })?;
 
             let wit_type_result = match element_schema {
                 golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(wit_type) => Ok(wit_type.clone()),
-                _ => {
-                    Err(golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                        golem_rust::wasm_rpc::ValueAndType::new(
-                            golem_rust::wasm_rpc::Value::String("Only ComponentModel ElementSchema is currently supported".into()),
-                            golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                        ).into(),
-                    ))
-                }
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredBinary(_) => Err(golem_rust::agentic::internal_error("Unstructured binary type is not supported currently")),
+                golem_rust::golem_agentic::golem::agent::common::ElementSchema::UnstructuredText(_) => Err(golem_rust::agentic::internal_error("Unstructured text type is not supported currently")),
             };
 
             let wit_type = wit_type_result?;
 
             let #ident = golem_rust::agentic::Schema::from_wit_value_and_type(wit_value, wit_type).map_err(|e| {
-                golem_rust::golem_agentic::golem::agent::common::AgentError::CustomError(
-                    golem_rust::wasm_rpc::ValueAndType::new(
-                        golem_rust::wasm_rpc::Value::String(format!("Failed parsing ctor arg {}: {}", #i, e)),
-                        golem_rust::wasm_rpc::analysis::analysed_type::str(),
-                    ).into(),
-                )
+                golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #i, e))
             })?;
         }
     }).collect()
