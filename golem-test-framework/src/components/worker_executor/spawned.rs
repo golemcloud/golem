@@ -45,6 +45,7 @@ pub struct SpawnedWorkerExecutor {
     err_level: Level,
     client: Option<WorkerExecutorClient<Channel>>,
     cloud_service: Arc<dyn CloudService>,
+    otlp: bool,
 }
 
 impl SpawnedWorkerExecutor {
@@ -62,6 +63,7 @@ impl SpawnedWorkerExecutor {
         err_level: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
 
@@ -82,6 +84,7 @@ impl SpawnedWorkerExecutor {
             out_level,
             err_level,
             &cloud_service,
+            otlp,
         )
         .await;
 
@@ -109,6 +112,7 @@ impl SpawnedWorkerExecutor {
                 None
             },
             cloud_service,
+            otlp,
         }
     }
 
@@ -125,6 +129,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         cloud_service: &Arc<dyn CloudService>,
+        otlp: bool,
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -138,6 +143,7 @@ impl SpawnedWorkerExecutor {
                     redis,
                     cloud_service,
                     verbosity,
+                    otlp,
                 )
                 .await,
             )
@@ -209,6 +215,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.out_level,
             self.err_level,
             &self.cloud_service,
+            self.otlp,
         )
         .await;
 

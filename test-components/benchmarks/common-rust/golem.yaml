@@ -1,0 +1,50 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
+
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
+
+templates:
+  rust:
+    profiles:
+      debug:
+        build:
+        - command: cargo component build
+          sources:
+          - src
+          - wit-generated
+          - ../../common-rust
+          - Cargo.toml
+          targets:
+          - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
+        clean:
+        - src/bindings.rs
+      release:
+        build:
+        - command: cargo component build --release
+          sources:
+          - src
+          - wit-generated
+          - ../../common-rust
+          - Cargo.toml
+          targets:
+          - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        sourceWit: wit
+        generatedWit: wit-generated
+        componentWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+        linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
+        clean:
+        - src/bindings.rs
+    defaultProfile: release
+    customCommands:
+      copy:
+        - command: cp ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm ../../../{{ component_name | to_snake_case }}.wasm
+customCommands:
+  cargo-clean:
+  - command: cargo clean

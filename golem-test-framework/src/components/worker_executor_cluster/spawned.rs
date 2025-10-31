@@ -47,6 +47,7 @@ impl SpawnedWorkerExecutorCluster {
         err_level: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
+        otlp: bool,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
             SpawnedWorkerExecutor::new(
@@ -63,6 +64,7 @@ impl SpawnedWorkerExecutorCluster {
                 err_level,
                 shared_client,
                 cloud_service,
+                otlp,
             )
             .await,
         )
@@ -83,6 +85,7 @@ impl SpawnedWorkerExecutorCluster {
         err_level: Level,
         shared_client: bool,
         cloud_service: Arc<dyn CloudService>,
+        otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -106,6 +109,7 @@ impl SpawnedWorkerExecutorCluster {
                     err_level,
                     shared_client,
                     cloud_service.clone(),
+                    otlp,
                 )
                 .in_current_span(),
             );
