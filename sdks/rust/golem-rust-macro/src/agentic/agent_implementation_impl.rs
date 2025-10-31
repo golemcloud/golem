@@ -42,7 +42,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let ctor_ident = &constructor_method.sig.ident;
     let ctor_params = extract_param_idents(constructor_method);
-    let param_extraction_mode = get_param_extraction_mode(constructor_method);
+    let input_param_type = get_input_param_type(constructor_method);
 
     let base_agent_impl = generate_base_agent_impl(
         &impl_block,
@@ -66,7 +66,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &ctor_params,
         &trait_name_str_raw,
         &post_constructor_param_extraction_logic,
-        &param_extraction_mode,
+        &input_param_type,
     );
 
     let initiator_ident = format_ident!("{}Initiator", trait_name_ident);
@@ -84,7 +84,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     .into()
 }
 
-enum ParamExtractionMode {
+enum InputParamType {
     Tuple,
     Multimodal,
 }
@@ -104,20 +104,20 @@ fn extract_trait_name(impl_block: &syn::ItemImpl) -> (syn::Ident, String) {
     (trait_name, trait_name_str_raw)
 }
 
-fn get_param_extraction_mode(method: &syn::ImplItemFn) -> ParamExtractionMode {
+fn get_input_param_type(method: &syn::ImplItemFn) -> InputParamType {
     if method.sig.inputs.len() == 1 {
         if let syn::FnArg::Typed(pat_ty) = &method.sig.inputs[0] {
             if let syn::Type::Path(type_path) = &*pat_ty.ty {
                 if let Some(seg) = type_path.path.segments.last() {
                     if seg.ident == "Multimodal" {
                         // Depends on how exactly multimodal is represented
-                        return ParamExtractionMode::Multimodal;
+                        return InputParamType::Multimodal;
                     }
                 }
             }
         }
     }
-    ParamExtractionMode::Tuple
+    InputParamType::Tuple
 }
 
 fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
@@ -169,7 +169,7 @@ fn build_match_arms(
 
             let ident = &method.sig.ident;
 
-            let param_extraction_mode = get_param_extraction_mode(method);
+            let input_param_type = get_input_param_type(method);
 
             // This logic actually depends on whether the output is multimodal or not
             // For now we assume its always tuple
@@ -190,7 +190,7 @@ fn build_match_arms(
                 &agent_type_name,
                 method_name_str.as_str(),
                 &post_method_param_extraction_logic,
-                &param_extraction_mode,
+                &input_param_type,
             );
 
             match_arms.push(quote! {
@@ -209,7 +209,7 @@ fn generate_method_param_extraction(
     agent_type_name: &str,
     method_name: &str,
     call_back: &proc_macro2::TokenStream, // A call back is the logic that calls the method after the extraction of paramters and then converting to either DataValue::Tuple or DataValue::Multimodal
-    param_extraction_mode: &ParamExtractionMode,
+    input_param_type: &InputParamType,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -249,13 +249,13 @@ fn generate_method_param_extraction(
         }
     }).collect();
 
-    match param_extraction_mode {
-        ParamExtractionMode::Tuple => quote! {
+    match input_param_type {
+        InputParamType::Tuple => quote! {
             #(#extraction)*
             #call_back
         }
         .into(),
-        ParamExtractionMode::Multimodal => quote! {
+        InputParamType::Multimodal => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
         }
         .into(),
@@ -297,8 +297,8 @@ fn generate_base_agent_impl(
 fn generate_constructor_extraction(
     ctor_params: &[syn::Ident],
     agent_type_name: &str,
-    call_back: &proc_macro2::TokenStream, //  // A call back is the logic that instantiates the constructor after the extraction of paramters
-    param_extraction_mode: &ParamExtractionMode,
+    call_back: &proc_macro2::TokenStream, // A call back is the logic that instantiates the constructor after the extraction of paramters
+    input_param_type: &InputParamType,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = ctor_params.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -336,13 +336,13 @@ fn generate_constructor_extraction(
         }
     }).collect::<Vec<_>>();
 
-    match param_extraction_mode {
-        ParamExtractionMode::Tuple => quote! {
+    match input_param_type {
+        InputParamType::Tuple => quote! {
             #(#extraction)*
             #call_back
         }
         .into(),
-        ParamExtractionMode::Multimodal => quote! {
+        InputParamType::Multimodal => quote! {
            extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
         }
         .into(),
