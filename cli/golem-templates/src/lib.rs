@@ -637,11 +637,14 @@ fn parse_template(
         wit_deps.push(PathBuf::from("golem-1.x"));
         wit_deps.push(PathBuf::from("golem-rpc"));
         wit_deps.push(PathBuf::from("golem-rdbms"));
+        wit_deps.push(PathBuf::from("golem-agent"));
+        wit_deps.push(PathBuf::from("golem-durability"));
     }
     if metadata.requires_wasi.unwrap_or(false) {
         wit_deps.push(PathBuf::from("blobstore"));
         wit_deps.push(PathBuf::from("cli"));
         wit_deps.push(PathBuf::from("clocks"));
+        wit_deps.push(PathBuf::from("config"));
         wit_deps.push(PathBuf::from("filesystem"));
         wit_deps.push(PathBuf::from("http"));
         wit_deps.push(PathBuf::from("io"));

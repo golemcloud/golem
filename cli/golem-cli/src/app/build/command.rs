@@ -575,19 +575,6 @@ pub async fn ensure_common_deps_for_tool(
             })
             .await
         }
-        // TODO: this is intentionally not "cargo", rather abusing "ensure once" to do a "prebuild" for now;
-        //       this also means that extraction now actually does a whole app build for rust components,
-        //       we should clean this up (e.g. add an option in the manifest for specifically building
-        //       or getting the source_wit wasm, or reorder somehow extractions / build steps).
-        "cargo-prebuild" => {
-            ctx.ensure_common_deps_for_tool_once("cargo-prebuild", || async {
-                Command::new("cargo")
-                    .args(["component", "build"])
-                    .stream_and_run("cargo")
-                    .await
-            })
-            .await
-        }
         _ => Ok(()),
     }
 }
