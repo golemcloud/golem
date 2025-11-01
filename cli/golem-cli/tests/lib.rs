@@ -21,6 +21,7 @@ test_r::enable!();
 
 mod app;
 mod stubgen;
+mod mcp_server_integration;
 
 tag_suite!(stubgen, group1);
 

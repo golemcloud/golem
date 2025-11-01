@@ -76,6 +76,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_is_sensitive_command_filters_profile() {
+        assert!(is_sensitive_command("profile"));
+        assert!(is_sensitive_command("profile add"));
+        assert!(is_sensitive_command("profile delete"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_filters_cloud_account() {
+        assert!(is_sensitive_command("cloud account"));
+        assert!(is_sensitive_command("cloud account get"));
+        assert!(is_sensitive_command("cloud account grant"));
+        assert!(is_sensitive_command("cloud account grant list"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_filters_cloud_token() {
+        assert!(is_sensitive_command("cloud token"));
+        assert!(is_sensitive_command("cloud token get"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_filters_cloud_grants() {
+        assert!(is_sensitive_command("cloud project grant"));
+        assert!(is_sensitive_command("cloud project grant list"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_filters_cloud_policy() {
+        assert!(is_sensitive_command("cloud project policy"));
+        assert!(is_sensitive_command("cloud project policy get"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_allows_safe_commands() {
+        // Component commands should be allowed
+        assert!(!is_sensitive_command("component list"));
+        assert!(!is_sensitive_command("component add"));
+        assert!(!is_sensitive_command("component get"));
+
+        // Agent commands should be allowed
+        assert!(!is_sensitive_command("agent list"));
+        assert!(!is_sensitive_command("agent invoke"));
+
+        // Safe cloud commands should be allowed
+        assert!(!is_sensitive_command("cloud project list"));
+        assert!(!is_sensitive_command("cloud project get"));
+    }
+
+    #[test]
+    fn test_is_sensitive_command_prefix_matching() {
+        // Should match by prefix, not exact match
+        assert!(is_sensitive_command("profile some subcommand"));
+
+        // Should not match if prefix is in middle
+        assert!(!is_sensitive_command("get profile data"));
+    }
+
+    #[test]
     fn test_validate_component_name() {
         assert!(validate_component_name("valid-name").is_ok());
         assert!(validate_component_name("valid_name_123").is_ok());

@@ -3,7 +3,6 @@
 
 use rmcp::model::*;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::fs;
 
 const MANIFEST_FILENAME: &str = "golem.yaml";
