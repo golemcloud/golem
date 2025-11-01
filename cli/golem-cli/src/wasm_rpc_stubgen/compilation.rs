@@ -21,36 +21,39 @@ pub async fn compile(root: &Path, offline: bool) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     std::env::set_current_dir(root)?;
 
-    let cargo_args = CargoArguments {
-        release: true,
-        manifest_path: Some(root.join("Cargo.toml")),
-        offline,
-        ..Default::default()
-    };
+    let result = async {
+        let cargo_args = CargoArguments {
+            release: true,
+            manifest_path: Some(root.join("Cargo.toml")),
+            offline,
+            ..Default::default()
+        };
 
-    let config = Config::new(Terminal::new(Verbosity::Verbose, Color::Auto), None).await?;
-    let client = config.client(None, offline).await?;
+        let config = Config::new(Terminal::new(Verbosity::Verbose, Color::Auto), None).await?;
+        let client = config.client(None, offline).await?;
 
-    let metadata = load_metadata(cargo_args.manifest_path.as_deref())?;
-    let packages =
-        load_component_metadata(&metadata, cargo_args.packages.iter(), cargo_args.workspace)?;
+        let metadata = load_metadata(cargo_args.manifest_path.as_deref())?;
+        let packages =
+            load_component_metadata(&metadata, cargo_args.packages.iter(), cargo_args.workspace)?;
 
-    let mut spawn_args = vec!["build".to_string(), "--release".to_string()];
-    if offline {
-        spawn_args.push("--offline".to_string());
+        let mut spawn_args = vec!["build".to_string(), "--release".to_string()];
+        if offline {
+            spawn_args.push("--offline".to_string());
+        }
+
+        run_cargo_command(
+            client,
+            &config,
+            &metadata,
+            &packages,
+            Some("build"),
+            &cargo_args,
+            &spawn_args,
+        )
+        .await
     }
-
-    run_cargo_command(
-        client,
-        &config,
-        &metadata,
-        &packages,
-        Some("build"),
-        &cargo_args,
-        &spawn_args,
-    )
-    .await?;
+    .await;
 
     std::env::set_current_dir(current_dir)?;
-    Ok(())
+    result.map(|_| ())
 }

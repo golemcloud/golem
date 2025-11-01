@@ -412,6 +412,9 @@ async fn circular_resources() {
     let source = test_data_path().join("wit/circular-resources");
     let source_wit_root = tempdir().unwrap();
 
+    println!("source: {:?}", source);
+    println!("source_wit_root: {:?}", source_wit_root);
+
     fs_extra::dir::copy(
         source,
         source_wit_root.path(),
