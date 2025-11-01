@@ -63,7 +63,7 @@ use std::sync::Arc;
 use tracing::{debug, Level};
 
 mod api;
-mod app;
+pub mod app;
 mod cloud;
 mod component;
 pub(crate) mod interactive;
@@ -187,18 +187,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         let result = match GolemCliCommand::try_parse_from_lenient(args_iterator, true) {
             GolemCliCommandParseResult::FullMatch(command) => {
                 #[cfg(feature = "server-commands")]
-                let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
-                    Hooks::override_verbosity(command.global_flags.verbosity())
-                } else {
-                    command.global_flags.verbosity()
-                };
+                let verbosity =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_verbosity(command.global_flags.verbosity())
+                    } else {
+                        command.global_flags.verbosity()
+                    };
                 #[cfg(feature = "server-commands")]
-                let pretty_mode = if matches!(command.subcommand, GolemCliSubcommand::Server { .. })
-                {
-                    Hooks::override_pretty_mode()
-                } else {
-                    false
-                };
+                let pretty_mode =
+                    if matches!(command.subcommand, Some(GolemCliSubcommand::Server { .. })) {
+                        Hooks::override_pretty_mode()
+                    } else {
+                        false
+                    };
                 #[cfg(not(feature = "server-commands"))]
                 let verbosity = command.global_flags.verbosity();
                 #[cfg(not(feature = "server-commands"))]
@@ -311,58 +312,76 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 
     async fn handle_command(&self, command: GolemCliCommand) -> anyhow::Result<()> {
+        // Check for MCP SERVE mode first
+        if command.global_flags.serve {
+            let port = command.global_flags.serve_port.unwrap_or(1232);
+            println!("Starting MCP server on port {}", port);
+            crate::mcp::start_mcp_server(self.ctx.clone(), port)
+                .await
+                .map_err(|e| anyhow!("Failed to start MCP server: {}", e))?;
+            return Ok(());
+        }
         match command.subcommand {
-            GolemCliSubcommand::App { subcommand } => {
-                self.ctx.app_handler().handle_command(subcommand).await
+            Some(subcommand) => match subcommand {
+                GolemCliSubcommand::App { subcommand } => {
+                    self.ctx.app_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::Component { subcommand } => {
+                    self.ctx
+                        .component_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
+                GolemCliSubcommand::Agent { subcommand } => {
+                    self.ctx.worker_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::Api { subcommand } => {
+                    self.ctx.api_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::Plugin { subcommand } => {
+                    self.ctx.plugin_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::Profile { subcommand } => {
+                    self.ctx.profile_handler().handle_command(subcommand).await
+                }
+                #[cfg(feature = "server-commands")]
+                GolemCliSubcommand::Server { subcommand } => {
+                    self.hooks
+                        .handler_server_commands(self.ctx.clone(), subcommand)
+                        .await
+                }
+                GolemCliSubcommand::Cloud { subcommand } => {
+                    self.ctx.cloud_handler().handle_command(subcommand).await
+                }
+                GolemCliSubcommand::Repl {
+                    component_name,
+                    version,
+                    deploy_args,
+                    script,
+                    script_file,
+                    disable_stream,
+                } => {
+                    self.ctx
+                        .rib_repl_handler()
+                        .cmd_repl(
+                            component_name.component_name,
+                            version,
+                            deploy_args.as_ref(),
+                            script,
+                            script_file,
+                            !disable_stream,
+                        )
+                        .await
+                }
+                GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
+                _ => {
+                    anyhow::bail!("No subcommand provided. Use --help to see available commands.")
+                }
+            },
+
+            None => {
+                anyhow::bail!("No subcommand provided. Use --help to see available commands.")
             }
-            GolemCliSubcommand::Component { subcommand } => {
-                self.ctx
-                    .component_handler()
-                    .handle_command(subcommand)
-                    .await
-            }
-            GolemCliSubcommand::Agent { subcommand } => {
-                self.ctx.worker_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Api { subcommand } => {
-                self.ctx.api_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Plugin { subcommand } => {
-                self.ctx.plugin_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Profile { subcommand } => {
-                self.ctx.profile_handler().handle_command(subcommand).await
-            }
-            #[cfg(feature = "server-commands")]
-            GolemCliSubcommand::Server { subcommand } => {
-                self.hooks
-                    .handler_server_commands(self.ctx.clone(), subcommand)
-                    .await
-            }
-            GolemCliSubcommand::Cloud { subcommand } => {
-                self.ctx.cloud_handler().handle_command(subcommand).await
-            }
-            GolemCliSubcommand::Repl {
-                component_name,
-                version,
-                deploy_args,
-                script,
-                script_file,
-                disable_stream,
-            } => {
-                self.ctx
-                    .rib_repl_handler()
-                    .cmd_repl(
-                        component_name.component_name,
-                        version,
-                        deploy_args.as_ref(),
-                        script,
-                        script_file,
-                        !disable_stream,
-                    )
-                    .await
-            }
-            GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
         }
     }
 

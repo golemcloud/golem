@@ -49,7 +49,7 @@ pub struct GolemCliCommand {
     pub global_flags: GolemCliGlobalFlags,
 
     #[clap(subcommand)]
-    pub subcommand: GolemCliSubcommand,
+    pub subcommand: Option<GolemCliSubcommand>,
 }
 
 // NOTE: inlined from clap-verbosity-flag, so we can override display order,
@@ -137,6 +137,14 @@ pub struct GolemCliGlobalFlags {
     /// Enable experimental, development-only features
     #[arg(long, global = true, display_order = 111)]
     pub dev_mode: bool,
+
+    /// Start MCP Server instead of running commands
+    #[arg(long, global = true, display_order = 112)]
+    pub serve: bool,
+
+    /// MCP server Port (Only valid with --serve)
+    #[arg(long, global = true, display_order = 113, requires = "serve")]
+    pub serve_port: Option<u16>,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
