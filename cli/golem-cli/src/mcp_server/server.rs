@@ -18,7 +18,9 @@ use tokio::sync::Mutex;
 /// Main Golem MCP Server structure
 #[derive(Clone)]
 pub struct GolemMcpServer {
+    #[allow(dead_code)]
     context: Arc<Context>,
+    #[allow(dead_code)]
     client_id: Arc<Mutex<Option<String>>>,
 }
 

@@ -171,7 +171,6 @@ fn build_command_args(tool_name: &str, arguments: &Option<Value>) -> anyhow::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_build_command_args_simple() {
