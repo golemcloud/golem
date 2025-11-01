@@ -158,7 +158,7 @@ pub async fn serve(
     context: Arc<Context>,
     port: u16,
 ) -> anyhow::Result<()> {
-    if port == 0 || port > 65535 {
+    if port == 0 {
         anyhow::bail!("Invalid port number: {}", port);
     }
 
@@ -190,7 +190,7 @@ pub async fn serve_with_shutdown(
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
-    if port == 0 || port > 65535 {
+    if port == 0 {
         anyhow::bail!("Invalid port number: {}", port);
     }
 
