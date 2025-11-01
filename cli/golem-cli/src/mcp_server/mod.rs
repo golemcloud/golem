@@ -3,6 +3,7 @@
 
 pub mod server;
 pub mod tools;
+pub mod tool_generator;
 pub mod resources;
 pub mod security;
 pub mod executor;

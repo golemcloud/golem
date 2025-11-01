@@ -4,6 +4,23 @@
 use rmcp::ErrorData as McpError;
 use std::path::PathBuf;
 
+/// List of command prefixes that should not be exposed via MCP
+const SENSITIVE_COMMAND_PREFIXES: &[&str] = &[
+    "profile",           // Profile management (credentials)
+    "cloud account grant", // Grant management (security)
+    "cloud token",       // Token management (credentials)
+    "cloud account",     // Account management (sensitive)
+    "cloud project grant", // Project grants (security)
+    "cloud project policy", // Policy management (security)
+];
+
+/// Check if a command should be filtered from MCP exposure
+pub fn is_sensitive_command(command: &str) -> bool {
+    SENSITIVE_COMMAND_PREFIXES
+        .iter()
+        .any(|prefix| command.starts_with(prefix))
+}
+
 /// Validate component name to prevent path traversal
 pub fn validate_component_name(name: &str) -> Result<(), McpError> {
     if name.contains("..") || name.contains("/") || name.contains("\\") {
