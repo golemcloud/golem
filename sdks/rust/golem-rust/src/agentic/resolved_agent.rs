@@ -12,5 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Eq, Hash, PartialEq)]
-pub struct AgentTypeName(pub String);
+use crate::{agentic::Agent, golem_agentic::golem::api::host::AgentId};
+
+pub struct ResolvedAgent {
+    pub agent: Box<dyn Agent>,
+    pub agent_id: AgentId,
+}

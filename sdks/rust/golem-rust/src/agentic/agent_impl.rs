@@ -13,14 +13,13 @@
 // limitations under the License.
 
 use crate::{
-    agentic::agent_type_name::AgentTypeName,
+    agentic::AgentTypeName,
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
+use crate::agentic::agent_registry;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-
-use crate::agentic::agent_registry;
 
 use golem_wasm::analysis::analysed_type::str;
 
@@ -54,7 +53,7 @@ impl Guest for Component {
             });
 
         if let Some(result) = initiate_result {
-            result
+            result.map(|_| ())
         } else {
             Err(AgentError::CustomError(
                 golem_wasm::ValueAndType::new(

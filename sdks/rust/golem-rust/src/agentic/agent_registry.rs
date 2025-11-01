@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::{
-    agentic::{agent_initiator::AgentInitiator, agent_type_name::AgentTypeName, ResolvedAgent},
+    agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
 
@@ -122,3 +122,6 @@ where
             .map(|initiator| f(initiator))
     })
 }
+
+#[derive(Eq, Hash, PartialEq)]
+pub struct AgentTypeName(pub String);

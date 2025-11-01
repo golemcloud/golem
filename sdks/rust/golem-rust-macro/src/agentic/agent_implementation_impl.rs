@@ -62,11 +62,13 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let input_param_type = get_input_param_type(&constructor_method.sig);
 
-    let post_constructor_param_extraction_logic = quote! {
-        let instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+    let constructor_param_extraction_call_back = quote! {
+        let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+
+        let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
 
         golem_rust::agentic::register_agent_instance(
-            golem_rust::agentic::ResolvedAgent { agent: instance }
+            golem_rust::agentic::ResolvedAgent { agent: agent_instance, agent_id: agent_id }
         );
         Ok(())
     };
@@ -75,7 +77,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         &ctor_params,
         &trait_name_str_raw,
         match input_param_type {
-            InputParamType::Tuple => Some(post_constructor_param_extraction_logic),
+            InputParamType::Tuple => Some(constructor_param_extraction_call_back),
             InputParamType::Multimodal => None,
         },
     );
@@ -264,7 +266,9 @@ fn generate_base_agent_impl(
     quote! {
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
             fn get_id(&self) -> String {
-                todo!("Unimplemented get_id method")
+                golem_rust::agentic::with_agent_instance(|resolved_agent| {
+                    resolved_agent.agent_id.to_string()
+                }).expect("Internal Error:  Invoke on agentic method without initialisation") // It's guaranteed to have an instance by this time
             }
 
             fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
