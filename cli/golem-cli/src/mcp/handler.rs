@@ -8,7 +8,7 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{mcp_server::ServerHandler, McpServer};
 use std::sync::Arc;
 
-pub struct GolemMcpServerHandler{
+pub struct GolemMcpServerHandler {
     pub ctx: Arc<Context>,
 }
 
@@ -35,13 +35,22 @@ impl ServerHandler for GolemMcpServerHandler {
             AppTools::try_from(request.params).map_err(CallToolError::new)?;
 
         match tool_params {
-              AppTools::BuildAppTool(build_app) => {
+            AppTools::BuildAppTool(build_app) => {
                 let ctx = self.ctx.clone();
+                let project_root = build_app.project_root.clone();
                 let res = tokio::task::spawn_blocking(move || {
                     // This runs in a dedicated blocking thread pool
                     // Convert any non-Send error into a String so the closure's return
                     // type is Send across threads.
-                    match tokio::runtime::Handle::current().block_on(build_app.call_tool(ctx)) {
+
+                    let prev = std::env::current_dir().ok();
+                    let _ = std::env::set_current_dir(&project_root);
+                    let result =
+                        tokio::runtime::Handle::current().block_on(build_app.call_tool(ctx));
+                    if let Some(prev_dir) = prev {
+                        let _ = std::env::set_current_dir(prev_dir);
+                    }
+                    match result {
                         Ok(v) => Ok(v),
                         Err(e) => Err(format!("{}", e)),
                     }
@@ -51,7 +60,10 @@ impl ServerHandler for GolemMcpServerHandler {
 
                 match res {
                     Ok(v) => Ok(v),
-                    Err(s) => Err(CallToolError::new(std::io::Error::new(std::io::ErrorKind::Other, s))),
+                    Err(s) => Err(CallToolError::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        s,
+                    ))),
                 }
             }
             AppTools::DeployAppTool(deploy_app) => deploy_app.call_tool(),

@@ -1,13 +1,13 @@
+use crate::command::app::AppSubcommand;
+use crate::command::shared_args::{AppOptionalComponentNames, BuildArgs, ForceBuildArg};
+use crate::command_handler::Handlers;
+use crate::context::Context;
+use crate::model::app::AppBuildStep;
 use crate::model::ComponentName;
 use rust_mcp_sdk::macros::{mcp_tool, JsonSchema};
 use rust_mcp_sdk::schema::{schema_utils::CallToolError, CallToolResult, TextContent};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::context::Context;
-use crate::command::app::AppSubcommand;
-use crate::command::shared_args::{AppOptionalComponentNames, BuildArgs, ForceBuildArg};
-use crate::model::app::AppBuildStep;
-use crate::command_handler::Handlers;
 
 //*********************//
 //  BuildAppTool      //
@@ -18,6 +18,9 @@ use crate::command_handler::Handlers;
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 pub struct BuildAppTool {
+    /// Project root directory (required)
+    pub project_root: String,
+
     /// Component names to build (empty = all components)
     #[serde(default)]
     pub components: Vec<String>,
@@ -33,44 +36,53 @@ pub struct BuildAppTool {
 
 impl BuildAppTool {
     pub async fn call_tool(&self, ctx: Arc<Context>) -> Result<CallToolResult, CallToolError> {
-        
-        let component_names: Vec<ComponentName> = self.components.iter().map(|name| ComponentName::from(name.as_str())).collect();
+        let component_names: Vec<ComponentName> = self
+            .components
+            .iter()
+            .map(|name| ComponentName::from(name.as_str()))
+            .collect();
 
-        let build_steps: Vec<AppBuildStep> = self.steps.iter().filter_map(|step| Self::parse_build_step(step)).collect();
+        let build_steps: Vec<AppBuildStep> = self
+            .steps
+            .iter()
+            .filter_map(|step| Self::parse_build_step(step))
+            .collect();
 
         if !self.steps.is_empty() && build_steps.is_empty() {
             return Err(CallToolError::from_message(
-                "Invalid build steps. Valid options: gen-rpc, componentize, link, add-metadata"
+                "Invalid build steps. Valid options: gen-rpc, componentize, link, add-metadata",
             ));
         }
 
-        let subcommand = AppSubcommand::Build { component_name: AppOptionalComponentNames {
-            component_name: component_names,
-        }, 
-        build:BuildArgs{
-            step: build_steps,
-            force_build: ForceBuildArg {
-                force_build: self.force_build,
+        let subcommand = AppSubcommand::Build {
+            component_name: AppOptionalComponentNames {
+                component_name: component_names,
             },
-        }, };
+            build: BuildArgs {
+                step: build_steps,
+                force_build: ForceBuildArg {
+                    force_build: self.force_build,
+                },
+            },
+        };
 
         let result = ctx.app_handler().handle_command(subcommand).await;
 
         match result {
             Ok(_) => {
                 let response = "Build completed successfully".to_string();
-                Ok(CallToolResult::text_content(vec![TextContent::from(response)]))
+                Ok(CallToolResult::text_content(vec![TextContent::from(
+                    response,
+                )]))
             }
-            Err(e) =>{
-                let response = format!(
-                    "Build failed: {}", e
-                );
+            Err(e) => {
+                let response = format!("Build failed: {}", e);
                 Err(CallToolError::from_message(response))
             }
         }
     }
 
-     fn parse_build_step(step: &str) -> Option<AppBuildStep> {
+    fn parse_build_step(step: &str) -> Option<AppBuildStep> {
         match step.to_lowercase().as_str() {
             "gen-rpc" | "genrpc" | "gen_rpc" => Some(AppBuildStep::GenRpc),
             "componentize" => Some(AppBuildStep::Componentize),
