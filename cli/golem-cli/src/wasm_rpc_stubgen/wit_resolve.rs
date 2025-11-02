@@ -576,14 +576,6 @@ impl ResolvedWitApplication {
                 .any(|c| c.as_os_str() == OsStr::new("node_modules"))
             {
                 ensure_common_deps_for_tool(tools_with_ensured_common_deps, "node").await?;
-            } else if source_wasm_path
-                .components()
-                .any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1"))
-            {
-                // TODO: see comment in `ensure_common_deps_for_tool`, and the above
-                //       comment about "initialization step"
-                ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo-prebuild")
-                    .await?;
             }
         }
 
