@@ -18,10 +18,10 @@ use serde_json::json;
 use tokio::fs as aiofs;
 use anyhow::{ anyhow, Context, Result };
 
-use axum::{ extract::State, routing::get, Json, Router };
+use axum::{ extract::State, routing::{ get, post }, Json, Router };
 use axum::response::{ IntoResponse, Response };
 use axum::extract::rejection::JsonRejection;
-
+use axum::{ extract::Request, http::{ StatusCode, header::AUTHORIZATION }, middleware::Next };
 use serde::{ Deserialize, Serialize };
 use serde_json::Value;
 use tokio::io::{ AsyncBufReadExt, BufReader };
@@ -105,6 +105,15 @@ pub fn rpc_err(
     })
 }
 
+#[derive(serde::Serialize)]
+struct ResultBody {
+    available_methods: [&'static str; 2],
+    input_schema: ToolInputSchema,
+    authentication: &'static str,
+    message: &'static str,
+    golem_server: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct ToolInputSchema {
     #[serde(rename = "type")]
@@ -174,7 +183,6 @@ pub struct ToolDescriptor {
 pub struct ToolsListResult {
     pub tools: Vec<ToolDescriptor>,
 }
-
 
 #[derive(Deserialize)]
 struct CargoPackage {
@@ -281,6 +289,52 @@ const NEXTRA_URL: &str = "https://learn.golem.cloud/_next/static/chunks/nextra-d
 const NEXTRA_CACHE_FILE: &str = ".cache/nextra-data-en-US.json";
 const NEXTRA_CACHE_TTL_SECS: u64 = 6 * 60 * 60; // 6h
 
+/// Simple Bearer-token auth. Return 401 if header missing/invalid.
+async fn auth_middleware(req: Request, next: Next) -> Response {
+    // If you still want to *require* the env var, keep `expect` (will panic on startup if missing)
+    let expected = std::env
+        ::var("AUTH_TOKEN")
+        .expect("Environment variable MCP_BEARER is required but not set");
+
+    let header_val = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let Some(header_val) = header_val else {
+        return unauthorized_rpc("Missing Authorization header");
+    };
+
+    const PREFIX: &str = "Bearer ";
+    if !header_val.starts_with(PREFIX) {
+        return unauthorized_rpc("Authorization header must be Bearer");
+    }
+    let token = &header_val[PREFIX.len()..];
+
+    if token != expected {
+        return unauthorized_rpc("Invalid token");
+    }
+
+    next.run(req).await
+}
+
+// Helper that returns: HTTP 401 + {"jsonrpc":"2.0","id":null,"error":{...}}
+fn unauthorized_rpc(reason: &str) -> axum::response::Response {
+    // Your rpc_err helper is already defined like this:
+    // pub fn rpc_err(id: Value, code: i32, message: impl Into<String>, data: Option<Value>) -> Json<RpcResponse<()>>
+    // :contentReference[oaicite:0]{index=0}
+    let json = rpc_err(
+        serde_json::Value::Null, // id is null (auth happens before we can parse the request)
+        -32001, // custom code in JSON-RPC server error range
+        "Unauthorized",
+        Some(json!({ "reason": reason }))
+    ).into_response();
+
+    // Set HTTP status to 401
+    let mut resp = json;
+    *resp.status_mut() = StatusCode::UNAUTHORIZED;
+    resp
+}
+
 // ---------- Public entry ---------------------------------------------------------
 
 pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
@@ -296,7 +350,10 @@ pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
     let state = AppState { cwd, docs_index };
 
     let app = Router::new()
-        .route("/mcp", get(get_default).post(handle))
+        // Public GET /mcp (no auth)
+        .route("/mcp", get(get_default))
+        // Protected POST /mcp (auth middleware)
+        .route("/mcp", post(handle).layer(axum::middleware::from_fn(auth_middleware)))
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -305,25 +362,19 @@ pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
     Ok(())
 }
 
-
-
 // --------------- Default GET /mcp handler -----------------
-async fn get_default() -> impl IntoResponse {
-    // Check if a process like: `golem server run` is present in the cmdline
-    let golem_server_status = match Command::new("pgrep")
-        .arg("-f")
-        .arg("golem server run")
-        .output()
-        .await
+pub async fn get_default() -> impl IntoResponse {
+    use tokio::process::Command;
+
+    // 1) compute status
+    let golem_server_status = match
+        Command::new("pgrep").arg("-f").arg("golem server run").output().await
     {
-        Ok(output) if output.status.success() && !output.stdout.is_empty() => {
-            "running".to_string()
-        }
+        Ok(output) if output.status.success() && !output.stdout.is_empty() => "running...".to_string(),
         _ => "offline (consider using call_tool with server run)".to_string(),
     };
 
-
-    // Shared input schema for tool calls
+    // 2) build schema with fields in the order you want to see serialized
     let input_schema = ToolInputSchema {
         type_tag: "object",
         properties: ToolInputProperties {
@@ -340,17 +391,18 @@ async fn get_default() -> impl IntoResponse {
         required: vec!["args"],
     };
 
-    let result = json!({
-        "available_methods": ["list_tools", "call_tool"],
-        "inputSchema": input_schema,
-        "message": "MCP server is running. Use POST /mcp with JSON-RPC 2.0.",
-        "golem_server": golem_server_status
-    });
+    // 3) build *only* the result payload
+    let result = ResultBody {
+        available_methods: ["list_tools", "call_tool"],
+        input_schema,
+        authentication: "Bearer Token Authentication",
+        message: "MCP server is running. Use POST /mcp with JSON-RPC 2.0.",
+        golem_server: golem_server_status,
+    };
 
-    // Wrap in same RpcResponse envelope structure (id = null)
-    rpc_ok(serde_json::Value::Null, result)
+    // 4) hand the payload to rpc_ok so it envelopes it once
+    rpc_ok(serde_json::Value::Null, serde_json::to_value(result).unwrap())
 }
-
 // ---------- Handler --------------------------------------------------------------
 
 async fn handle(
@@ -369,7 +421,6 @@ async fn handle(
                     let cmd_index = build_command_index();
                     let docs_idx = state.docs_index.as_ref();
 
-                    
                     // 3. Convert each (name, desc) into a ToolDescriptor (sequential),
                     //    and compute `available` by running the corresponding `list` command.
                     let mut tools: Vec<ToolDescriptor> = Vec::new();
