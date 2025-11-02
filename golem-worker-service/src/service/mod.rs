@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod auth;
 // pub mod api_certificate;
 // pub mod api_domain;
 // pub mod api_security;
 pub mod component;
 // pub mod gateway;
+pub mod limit;
 pub mod worker;
 
 // use crate::aws_config::AwsConfig;
@@ -54,7 +56,6 @@ use crate::config::WorkerServiceConfig;
 // use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 // use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
 use crate::service::component::ComponentService;
-use golem_service_base::clients::auth::{AuthService, AuthServiceDefault};
 // use crate::service::component::{CachedComponentService, ComponentService, RemoteComponentService};
 // use crate::service::gateway::api_definition::{
 //     ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
@@ -70,14 +71,16 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 // use golem_common::model::auth::{TokenSecret};
 use golem_common::model::RetryConfig;
 // use golem_common::redis::RedisPool;
-use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
 // use golem_service_base::config::BlobStorageConfig;
 // use golem_service_base::db::postgres::PostgresPool;
 // use golem_service_base::db::sqlite::SqlitePool;
 // use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 // use golem_service_base::storage::blob::BlobStorage;
+use self::auth::{AuthService, RemoteAuthService};
 use self::component::{CachedComponentService, RemoteComponentService};
+use self::limit::{LimitService, RemoteLimitService};
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -85,7 +88,7 @@ use tonic::codec::CompressionEncoding;
 
 #[derive(Clone)]
 pub struct Services {
-    pub worker_auth_service: Arc<dyn AuthService>,
+    pub auth_service: Arc<dyn AuthService>,
     // pub project_service: Arc<dyn ProjectService>,
     pub limit_service: Arc<dyn LimitService>,
     // pub definition_service: Arc<dyn ApiDefinitionService>,
@@ -108,8 +111,11 @@ impl Services {
         // let project_service: Arc<dyn ProjectService> =
         //     Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
+        let registry_service_client: Arc<dyn RegistryService> =
+            Arc::new(GrpcRegistryService::new(&config.registry_service));
+
         let auth_service: Arc<dyn AuthService> =
-            Arc::new(AuthServiceDefault::new(&config.cloud_service));
+            Arc::new(RemoteAuthService::new(registry_service_client.clone()));
 
         // let (
         //     api_definition_repo,
@@ -225,11 +231,7 @@ impl Services {
         // > = Arc::new(HttpApiDefinitionValidator {});
 
         let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
-            Arc::new(RemoteComponentService::new(
-                config.component_service.uri(),
-                config.component_service.retries.clone(),
-                config.component_service.connect_timeout,
-            )),
+            Arc::new(RemoteComponentService::new(registry_service_client.clone())),
             config.component_service.cache_capacity,
         ));
 
@@ -336,7 +338,7 @@ impl Services {
         //     ));
 
         let limit_service: Arc<dyn LimitService> =
-            Arc::new(LimitServiceDefault::new(&config.cloud_service));
+            Arc::new(RemoteLimitService::new(registry_service_client.clone()));
 
         let routing_table_service: Arc<dyn RoutingTableService> = Arc::new(
             RoutingTableServiceDefault::new(config.routing_table.clone()),
@@ -393,7 +395,7 @@ impl Services {
         // );
 
         Ok(Self {
-            worker_auth_service: auth_service,
+            auth_service,
             limit_service,
             // project_service,
             // definition_service,

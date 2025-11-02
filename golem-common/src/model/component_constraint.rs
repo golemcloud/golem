@@ -239,110 +239,110 @@ impl FunctionUsageConstraint {
     }
 }
 
-mod protobuf {
-    use crate::model::component_constraint::{
-        FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
-    };
-    use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
-    use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_wasm::analysis::AnalysedType;
-    use rib::FunctionName;
+// mod protobuf {
+//     use crate::model::component_constraint::{
+//         FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
+//     };
+//     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
+//     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
+//     use golem_wasm::analysis::AnalysedType;
+//     use rib::FunctionName;
 
-    impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
-        for FunctionConstraints
-    {
-        type Error = String;
+//     impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
+//         for FunctionConstraints
+//     {
+//         type Error = String;
 
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
-        ) -> Result<Self, Self::Error> {
-            let collection = FunctionConstraints {
-                constraints: value
-                    .constraints
-                    .iter()
-                    .map(|constraint_proto| {
-                        FunctionUsageConstraint::try_from(constraint_proto.clone())
-                    })
-                    .collect::<Result<_, _>>()?,
-            };
+//         fn try_from(
+//             value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
+//         ) -> Result<Self, Self::Error> {
+//             let collection = FunctionConstraints {
+//                 constraints: value
+//                     .constraints
+//                     .iter()
+//                     .map(|constraint_proto| {
+//                         FunctionUsageConstraint::try_from(constraint_proto.clone())
+//                     })
+//                     .collect::<Result<_, _>>()?,
+//             };
 
-            Ok(collection)
-        }
-    }
+//             Ok(collection)
+//         }
+//     }
 
-    impl From<FunctionConstraints> for FunctionConstraintCollectionProto {
-        fn from(value: FunctionConstraints) -> Self {
-            FunctionConstraintCollectionProto {
-                constraints: value
-                    .constraints
-                    .iter()
-                    .map(|function_constraint| {
-                        FunctionConstraintProto::from(function_constraint.clone())
-                    })
-                    .collect(),
-            }
-        }
-    }
+//     impl From<FunctionConstraints> for FunctionConstraintCollectionProto {
+//         fn from(value: FunctionConstraints) -> Self {
+//             FunctionConstraintCollectionProto {
+//                 constraints: value
+//                     .constraints
+//                     .iter()
+//                     .map(|function_constraint| {
+//                         FunctionConstraintProto::from(function_constraint.clone())
+//                     })
+//                     .collect(),
+//             }
+//         }
+//     }
 
-    impl TryFrom<FunctionConstraintProto> for FunctionUsageConstraint {
-        type Error = String;
+//     impl TryFrom<FunctionConstraintProto> for FunctionUsageConstraint {
+//         type Error = String;
 
-        fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
-            let return_type = value
-                .return_type
-                .as_ref()
-                .map(AnalysedType::try_from)
-                .transpose()?;
+//         fn try_from(value: FunctionConstraintProto) -> Result<Self, Self::Error> {
+//             let return_type = value
+//                 .return_type
+//                 .as_ref()
+//                 .map(AnalysedType::try_from)
+//                 .transpose()?;
 
-            let parameter_types = value
-                .parameter_types
-                .iter()
-                .map(AnalysedType::try_from)
-                .collect::<Result<_, _>>()?;
+//             let parameter_types = value
+//                 .parameter_types
+//                 .iter()
+//                 .map(AnalysedType::try_from)
+//                 .collect::<Result<_, _>>()?;
 
-            let function_name_proto = value
-                .function_key
-                .and_then(|x| x.function_name)
-                .ok_or("Function key missing")?;
+//             let function_name_proto = value
+//                 .function_key
+//                 .and_then(|x| x.function_name)
+//                 .ok_or("Function key missing")?;
 
-            let function_key = FunctionName::try_from(function_name_proto)?;
+//             let function_key = FunctionName::try_from(function_name_proto)?;
 
-            let usage_count = value.usage_count;
+//             let usage_count = value.usage_count;
 
-            Ok(Self {
-                function_signature: FunctionSignature {
-                    function_name: function_key,
-                    parameter_types,
-                    return_type,
-                },
-                usage_count,
-            })
-        }
-    }
+//             Ok(Self {
+//                 function_signature: FunctionSignature {
+//                     function_name: function_key,
+//                     parameter_types,
+//                     return_type,
+//                 },
+//                 usage_count,
+//             })
+//         }
+//     }
 
-    impl From<FunctionUsageConstraint> for FunctionConstraintProto {
-        fn from(value: FunctionUsageConstraint) -> Self {
-            let function_name = rib::proto::golem::rib::function_name_type::FunctionName::from(
-                value.function_signature.clone().function_name,
-            );
+//     impl From<FunctionUsageConstraint> for FunctionConstraintProto {
+//         fn from(value: FunctionUsageConstraint) -> Self {
+//             let function_name = rib::proto::golem::rib::function_name_type::FunctionName::from(
+//                 value.function_signature.clone().function_name,
+//             );
 
-            let function_name_type = rib::proto::golem::rib::FunctionNameType {
-                function_name: Some(function_name),
-            };
+//             let function_name_type = rib::proto::golem::rib::FunctionNameType {
+//                 function_name: Some(function_name),
+//             };
 
-            FunctionConstraintProto {
-                function_key: Some(function_name_type),
-                parameter_types: value
-                    .parameter_types()
-                    .iter()
-                    .map(|analysed_type| analysed_type.into())
-                    .collect(),
-                return_type: value
-                    .return_type()
-                    .as_ref()
-                    .map(|analysed_type| analysed_type.into()),
-                usage_count: value.usage_count,
-            }
-        }
-    }
-}
+//             FunctionConstraintProto {
+//                 function_key: Some(function_name_type),
+//                 parameter_types: value
+//                     .parameter_types()
+//                     .iter()
+//                     .map(|analysed_type| analysed_type.into())
+//                     .collect(),
+//                 return_type: value
+//                     .return_type()
+//                     .as_ref()
+//                     .map(|analysed_type| analysed_type.into()),
+//                 usage_count: value.usage_count,
+//             }
+//         }
+//     }
+// }

@@ -16,8 +16,6 @@ pub mod spawned;
 pub mod stub;
 
 use async_trait::async_trait;
-pub use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
-pub use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient as PluginServiceGrpcClient;
 use golem_client::api::RegistryServiceClientLive;
 use golem_client::{Context, Security};
 use golem_common::model::account::AccountId;

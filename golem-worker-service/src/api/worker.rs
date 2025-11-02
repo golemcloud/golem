@@ -20,6 +20,7 @@ use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::StreamExt;
 use futures::TryStreamExt;
 // use golem_common::model::auth::{AuthCtx, Namespace};
+use crate::service::auth::AuthService;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, PluginPriority,
@@ -32,7 +33,6 @@ use golem_common::model::worker::{WorkerCreationRequest, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::clients::auth::AuthService;
 use golem_service_base::model::auth::{
     AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema,
 };
@@ -1537,11 +1537,7 @@ impl WorkerApi {
         // Fallback for previous versions
         let all_component_versions = self
             .component_service
-            .get_all_by_name(
-                &latest_component_version.component_name,
-                &latest_component_version.environment_id,
-                auth,
-            )
+            .get_all_versions(&component_id, auth)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
