@@ -57,3 +57,18 @@ coordination/orchestration/*
 claude-flow
 # Removed Windows wrapper files per user request
 hive-mind-prompt-*.txt
+
+# MCP Server development artifacts
+/mcp-interaction-commands.sh
+/test-dynamic-tools.sh
+/mcp_server_demo.ipynb
+/CODE-QUALITY-ANALYSIS.md
+/TEST-COVERAGE-ANALYSIS.md
+/BOUNTY-STATUS-ANALYSIS.md
+/MCP-SERVER-IMPLEMENTATION-PLAN.md
+/RMCP-RESEARCH-FINDINGS.md
+/TDD-IMPLEMENTATION-PLAN.md
+/TDD-PROGRESS.md
+cli/golem-cli/src/mcp_server/test_tool_gen.rs
+cli/golem-cli/src/mcp_server/tools_old.rs.backup
+
