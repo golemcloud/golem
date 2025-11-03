@@ -29,7 +29,7 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PersistenceLevel};
 use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
@@ -724,6 +724,10 @@ impl Oplog for ForwardingOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.inner.download_payload(payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.inner.switch_persistence_level(mode).await;
     }
 }
 

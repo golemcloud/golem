@@ -19,7 +19,9 @@ use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, Indexed
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel,
+};
 use golem_common::model::{
     ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
@@ -43,6 +45,7 @@ pub struct PrimaryOplogService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
+    max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     oplogs: OpenOplogs,
 }
@@ -52,6 +55,7 @@ impl PrimaryOplogService {
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         max_operations_before_commit: u64,
+        max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
     ) -> Self {
         let replicas = indexed_storage
@@ -66,6 +70,7 @@ impl PrimaryOplogService {
             blob_storage,
             replicas,
             max_operations_before_commit,
+            max_operations_before_commit_in_persist_nothing,
             max_payload_size,
             oplogs: OpenOplogs::new("primary oplog"),
         }
@@ -218,6 +223,7 @@ impl OplogService for PrimaryOplogService {
                     self.blob_storage.clone(),
                     self.replicas,
                     self.max_operations_before_commit,
+                    self.max_operations_before_commit_in_persist_nothing,
                     self.max_payload_size,
                     key,
                     last_oplog_index,
@@ -363,6 +369,7 @@ struct CreateOplogConstructor {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
+    max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     key: String,
     last_oplog_idx: OplogIndex,
@@ -375,6 +382,7 @@ impl CreateOplogConstructor {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
         max_operations_before_commit: u64,
+        max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
         key: String,
         last_oplog_idx: OplogIndex,
@@ -385,6 +393,7 @@ impl CreateOplogConstructor {
             blob_storage,
             replicas,
             max_operations_before_commit,
+            max_operations_before_commit_in_persist_nothing,
             max_payload_size,
             key,
             last_oplog_idx,
@@ -401,6 +410,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.blob_storage,
             self.replicas,
             self.max_operations_before_commit,
+            self.max_operations_before_commit_in_persist_nothing,
             self.max_payload_size,
             self.key,
             self.last_oplog_idx,
@@ -430,6 +440,7 @@ impl PrimaryOplog {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
         max_operations_before_commit: u64,
+        max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
         key: String,
         last_oplog_idx: OplogIndex,
@@ -442,6 +453,7 @@ impl PrimaryOplog {
                 blob_storage,
                 replicas,
                 max_operations_before_commit,
+                max_operations_before_commit_in_persist_nothing,
                 max_payload_size,
                 key: key.clone(),
                 buffer: VecDeque::new(),
@@ -449,6 +461,7 @@ impl PrimaryOplog {
                 last_oplog_idx,
                 owned_worker_id,
                 last_added_non_hint_entry: None,
+                persistence_level: PersistenceLevel::Smart,
             })),
             key,
             close: Some(close),
@@ -461,6 +474,7 @@ struct PrimaryOplogState {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     replicas: u8,
     max_operations_before_commit: u64,
+    max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
     key: String,
     buffer: VecDeque<OplogEntry>,
@@ -468,43 +482,56 @@ struct PrimaryOplogState {
     last_committed_idx: OplogIndex,
     owned_worker_id: OwnedWorkerId,
     last_added_non_hint_entry: Option<OplogIndex>,
+    persistence_level: PersistenceLevel,
 }
 
 impl PrimaryOplogState {
     async fn append(&mut self, entries: Vec<OplogEntry>) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("append");
 
-        let mut result = BTreeMap::new();
+        let mut pairs = Vec::with_capacity(entries.len());
+        let mut last_idx = self.last_committed_idx;
         for entry in entries {
-            let oplog_idx = self.last_committed_idx.next();
-            self.indexed_storage
-                .with_entity("oplog", "append", "entry")
-                .append(
-                    IndexedStorageNamespace::OpLog,
-                    &self.key,
-                    oplog_idx.into(),
-                    &entry,
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to append oplog entry for {} in indexed storage: {err}",
-                        self.key
-                    )
-                });
-            result.insert(oplog_idx, entry);
-            self.last_committed_idx = oplog_idx;
+            let oplog_idx = last_idx.next();
+            pairs.push((oplog_idx.into(), entry));
+            last_idx = oplog_idx;
         }
-        result
+        let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
+        self.indexed_storage
+            .with_entity("oplog", "append", "entry")
+            .append_many(IndexedStorageNamespace::OpLog, &self.key, &pairs_ref)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to append oplog entry for {} in indexed storage: {err}",
+                    self.key
+                )
+            });
+        drop(pairs_ref);
+
+        self.last_committed_idx = last_idx;
+        BTreeMap::from_iter(
+            pairs
+                .into_iter()
+                .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry)),
+        )
     }
 
     async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
 
         let is_hint = entry.is_hint();
+        let limit = match &self.persistence_level {
+            PersistenceLevel::PersistNothing => {
+                self.max_operations_before_commit_in_persist_nothing
+            }
+            PersistenceLevel::PersistRemoteSideEffects | PersistenceLevel::Smart => {
+                self.max_operations_before_commit
+            }
+        };
         self.buffer.push_back(entry);
-        if self.buffer.len() > self.max_operations_before_commit as usize {
-            self.commit().await;
+        if self.buffer.len() > limit as usize {
+            self.commit(CommitLevel::Always).await;
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
         if !is_hint {
@@ -513,11 +540,17 @@ impl PrimaryOplogState {
         self.last_oplog_idx
     }
 
-    async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(&mut self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
 
-        let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
-        self.append(entries).await
+        if level == CommitLevel::Always
+            || self.persistence_level != PersistenceLevel::PersistNothing
+        {
+            let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
+            self.append(entries).await
+        } else {
+            BTreeMap::new()
+        }
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
@@ -618,6 +651,10 @@ impl PrimaryOplogState {
                 )
             });
     }
+
+    fn switch_persistence_level(&mut self, level: PersistenceLevel) {
+        self.persistence_level = level;
+    }
 }
 
 impl Debug for PrimaryOplog {
@@ -644,9 +681,9 @@ impl Oplog for PrimaryOplog {
         before - remaining
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
-        state.commit().await
+        state.commit(level).await
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -661,7 +698,7 @@ impl Oplog for PrimaryOplog {
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         let mut state = self.state.lock().await;
-        state.commit().await;
+        state.commit(CommitLevel::Always).await;
         state.wait_for_replicas(replicas, timeout).await
     }
 
@@ -693,5 +730,10 @@ impl Oplog for PrimaryOplog {
             (state.blob_storage.clone(), state.owned_worker_id.clone())
         };
         PrimaryOplogService::download_payload(blob_storage, &owned_worker_id, payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        let mut state = self.state.lock().await;
+        state.switch_persistence_level(mode)
     }
 }

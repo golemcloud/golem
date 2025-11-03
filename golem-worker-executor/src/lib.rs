@@ -436,6 +436,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                 indexed_storage.clone(),
                 blob_storage.clone(),
                 golem_config.oplog.max_operations_before_commit,
+                golem_config.oplog.max_operations_before_commit_ephemeral,
                 golem_config.oplog.max_payload_size,
             )
             .await,
@@ -446,6 +447,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
                     indexed_storage.clone(),
                     blob_storage.clone(),
                     golem_config.oplog.max_operations_before_commit,
+                    golem_config.oplog.max_operations_before_commit_ephemeral,
                     golem_config.oplog.max_payload_size,
                 )
                 .await,

@@ -18,7 +18,7 @@ use crate::services::oplog::{CommitLevel, Oplog};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PersistenceLevel};
 use golem_common::model::OwnedWorkerId;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -184,4 +184,6 @@ impl Oplog for EphemeralOplog {
         // Downloading oplog payloads through the primary layer
         self.primary.download_payload(payload).await
     }
+
+    async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 }

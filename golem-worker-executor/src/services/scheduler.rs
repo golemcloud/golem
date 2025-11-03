@@ -530,6 +530,7 @@ mod tests {
                 Arc::new(InMemoryIndexedStorage::new()),
                 Arc::new(InMemoryBlobStorage::new()),
                 1,
+                1,
                 1024,
             )
             .await,

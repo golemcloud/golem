@@ -847,7 +847,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -874,7 +874,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -901,7 +901,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::committed_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -928,7 +928,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::rolled_back_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1718,6 +1718,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
+            warn!("COMMIT FINISH SPAN");
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))

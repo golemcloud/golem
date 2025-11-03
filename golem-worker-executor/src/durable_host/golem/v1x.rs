@@ -44,7 +44,7 @@ use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorEr
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{subscribe, IoView};
@@ -313,6 +313,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
 
+                    warn!("COMMIT JUMP");
                     self.public_state
                         .worker()
                         .add_and_commit_oplog(OplogEntry::jump(deleted_region))
@@ -428,6 +429,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            self.state
+                .oplog
+                .switch_persistence_level(new_persistence_level)
+                .await;
             self.state.persistence_level = new_persistence_level;
             debug!(
                 "Worker's oplog persistence level is set to {:?}",

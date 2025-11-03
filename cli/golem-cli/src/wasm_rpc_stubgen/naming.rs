@@ -118,7 +118,7 @@ pub mod wit {
                 .strip_suffix("-client")
                 .ok_or_else(|| anyhow!(
                     "Expected \"-client\" suffix in client package name: {}",
-                    client_package.to_string()
+                    client_package
                 ))?
         ))
     }
