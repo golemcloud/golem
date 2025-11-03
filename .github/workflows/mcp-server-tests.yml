@@ -167,34 +167,32 @@ jobs:
           fi
           echo "✅ Demo script validation passed"
 
-  mcp-coverage:
-    name: MCP Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate coverage for MCP code
-        run: |
-          cargo tarpaulin \
-            --package golem-cli \
-            --lib \
-            --test integration \
-            --out xml \
-            --output-dir coverage \
-            -- mcp_server
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage/cobertura.xml
-          flags: mcp-server
-          name: mcp-coverage
+  # Note: mcp-coverage disabled - causes disk space issues in GitHub Actions
+  # Coverage can be generated locally with: cargo tarpaulin --package golem-cli --lib
+  # mcp-coverage:
+  #   name: MCP Code Coverage
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #     - name: Install cargo-tarpaulin
+  #       run: cargo install cargo-tarpaulin
+  #     - name: Generate coverage for MCP code
+  #       run: |
+  #         cargo tarpaulin \
+  #           --package golem-cli \
+  #           --lib \
+  #           --test integration \
+  #           --out xml \
+  #           --output-dir coverage \
+  #           -- mcp_server
+  #     - name: Upload coverage to Codecov
+  #       uses: codecov/codecov-action@v4
+  #       with:
+  #         files: coverage/cobertura.xml
+  #         flags: mcp-server
+  #         name: mcp-coverage
 
   bounty-validation:
     name: Bounty Requirement Validation
