@@ -1,7 +1,8 @@
 # golem-app-manifest-header
 
 includes:
-  - common-*/golem.yaml
-  - components-*/*/golem.yaml
+- common-*/golem.yaml
+- components-*/*/golem.yaml
+
 witDeps:
-  - golem-temp/wit/deps
+- golem-temp/wit/deps
