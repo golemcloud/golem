@@ -402,7 +402,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // let current_size = self.update_worker_status();
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                .add_to_oplog(OplogEntry::grow_memory(delta))
                 .await;
 
             self.public_state.worker().increase_memory(delta).await?;
@@ -1684,7 +1684,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if is_live {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::start_span(
+                .add_to_oplog(OplogEntry::start_span(
                     span.start().unwrap_or(Timestamp::now_utc()),
                     span.span_id().clone(),
                     Some(parent.clone()),
@@ -1720,7 +1720,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if self.is_live() {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))
+                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
                 .await;
         } else {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
