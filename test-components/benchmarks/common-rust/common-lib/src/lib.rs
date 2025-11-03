@@ -32,7 +32,7 @@ pub fn large_input(input: Vec<u8>) -> u32 {
     input.len() as u32
 }
 
-pub fn oplog_heavy(length: u32, persistence_on: bool) -> u32 {
+pub fn oplog_heavy(length: u32, persistence_on: bool, commit: bool) -> u32 {
     let level = if persistence_on {
         PersistenceLevel::Smart
     } else {
@@ -44,6 +44,10 @@ pub fn oplog_heavy(length: u32, persistence_on: bool) -> u32 {
         for _i in 0..length {
             let nanos = now().nanoseconds;
             result ^= nanos;
+
+            if commit {
+                golem_rust::oplog_commit(1);
+            }
         }
 
         result
