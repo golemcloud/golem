@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::store::Layer;
+use serde::Serialize;
+use std::fmt::Debug;
+use std::hash::Hash;
 
-pub mod map;
-pub mod optional;
-pub mod vec;
+pub trait Layer {
+    type Id: Debug + Eq + Hash + Clone + Serialize;
+    type Value: Debug + Default + Clone + Serialize;
+    type Selector: Debug + Eq + Hash + Clone;
+    type AppliedSelection: Debug + Clone + Serialize;
+    type ApplyError;
 
-pub trait Property<L: Layer> {
-    type Value;
-    type PropertyLayer;
-    type TraceElem;
+    fn id(&self) -> &Self::Id;
 
-    fn value(&self) -> &Self::Value;
-    fn trace(&self) -> &[Self::TraceElem];
+    fn parent_layers(&self) -> &[Self::Id];
 
-    fn apply_layer(
-        &mut self,
-        id: &L::Id,
-        selection: Option<&L::AppliedSelection>,
-        layer: Self::PropertyLayer,
-    );
+    fn apply_onto_parent(
+        &self,
+        selector: &Self::Selector,
+        value: &mut Self::Value,
+    ) -> Result<(), Self::ApplyError>;
 }

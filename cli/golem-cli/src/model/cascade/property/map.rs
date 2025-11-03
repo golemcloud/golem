@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
-use crate::model::cascade::{Layer, Selector};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -82,7 +82,7 @@ impl<L: Layer, K: Serialize, V: Serialize> From<HashMap<K, V>> for MapProperty<L
 }
 
 impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<L>
-for MapProperty<L, K, V>
+    for MapProperty<L, K, V>
 {
     type Value = HashMap<K, V>;
     type PropertyLayer = (MapMergeMode, HashMap<K, V>);

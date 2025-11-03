@@ -12,127 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod error;
+pub mod layer;
+pub mod property;
+pub mod selector;
+pub mod store;
+
 use serde::Serialize;
-use std::cell::{Ref, RefCell};
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
-
-mod property;
-
-pub trait Selector: Clone + Eq + Hash {}
-
-pub struct Store<L: Layer> {
-    layers: HashMap<L::Id, L>,
-    value_cache: RefCell<HashMap<L::Id, HashMap<L::Selector, L::Value>>>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StoreGetValueError<L: Layer> {
-    #[error("requested layer not found: {0}")]
-    LayerNotFound(L::Id),
-    #[error("layer ({0}) apply error: {1}")]
-    LayerApplyError(L::Id, L::ApplyError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StoreAddLayerError<L: Layer> {
-    #[error("layer already exists: {0}")]
-    LayerAlreadyExists(L::Id),
-}
-
-// TODO: check for circular parents (either on add or on get, or have a separate validation step)
-impl<L: Layer> Store<L> {
-    pub fn new() -> Store<L> {
-        Self {
-            layers: HashMap::new(),
-            value_cache: RefCell::new(HashMap::new()),
-        }
-    }
-
-    pub fn add_layer(&mut self, layer: L) -> Result<(), StoreAddLayerError<L>> {
-        if self.layers.contains_key(&layer.id()) {
-            return Err(StoreAddLayerError::LayerAlreadyExists(layer.id().clone()));
-        }
-        self.layers.insert(layer.id().clone(), layer);
-        Ok(())
-    }
-
-    pub fn value(
-        &self,
-        id: &L::Id,
-        selector: &L::Selector,
-    ) -> Result<Ref<L::Value>, StoreGetValueError<L>> {
-        {
-            let value_cache = self.value_cache.borrow();
-            if value_cache
-                .get(id)
-                .map(|v| v.contains_key(selector))
-                .unwrap_or(false)
-            {
-                return Ok(Ref::map(value_cache, |value_cache| {
-                    value_cache.get(id).unwrap().get(selector).unwrap()
-                }));
-            }
-        }
-
-        let Some(layer) = self.layers.get(id) else {
-            return Err(StoreGetValueError::LayerNotFound(id.clone()));
-        };
-
-        fn apply_layer<L: Layer>(
-            store: &Store<L>,
-            selector: &L::Selector,
-            layer: &L,
-            value: &mut L::Value,
-        ) -> Result<(), StoreGetValueError<L>> {
-            for layer_id in layer.parent_layers() {
-                let Some(layer) = store.layers.get(layer_id) else {
-                    return Err(StoreGetValueError::LayerNotFound(layer_id.clone()));
-                };
-                apply_layer(store, selector, layer, value)?;
-            }
-            if let Some(err) = layer.apply_onto_parent(selector, value).err() {
-                return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
-            };
-            Ok(())
-        }
-        let mut value = L::Value::default();
-        apply_layer(self, selector, layer, &mut value)?;
-
-        {
-            let mut value_cache = self.value_cache.borrow_mut();
-            let value_cache = match value_cache.get_mut(id) {
-                Some(value_cache) => value_cache,
-                None => {
-                    value_cache.insert(id.clone(), HashMap::new());
-                    value_cache.get_mut(id).unwrap()
-                }
-            };
-            value_cache.insert(selector.clone(), value);
-        }
-
-        Ok(Ref::map(self.value_cache.borrow(), |value_cache| {
-            value_cache.get(id).unwrap().get(selector).unwrap()
-        }))
-    }
-}
-
-pub trait Layer {
-    type Id: Debug + Eq + Hash + Clone + Serialize;
-    type Value: Debug + Default + Clone + Serialize;
-    type Selector: Debug + Eq + Hash + Clone;
-    type AppliedSelection: Debug + Clone + Serialize;
-    type ApplyError;
-
-    fn id(&self) -> &Self::Id;
-    fn parent_layers(&self) -> &[Self::Id];
-    fn apply_onto_parent(
-        &self,
-        selector: &Self::Selector,
-        value: &mut Self::Value,
-    ) -> Result<(), Self::ApplyError>;
-}
 
 #[cfg(test)]
 mod test {
@@ -143,7 +31,9 @@ mod test {
         use crate::model::cascade::test::example_component_properties::ComponentLayerId::{
             BaseDefinition, BaseTemplate, DefinitionPresets, TemplatePresets,
         };
-        use crate::model::cascade::{Layer, Store};
+
+        use crate::model::cascade::layer::Layer;
+        use crate::model::cascade::store::Store;
         use crate::model::deploy_diff::ToYamlValueWithoutNulls;
         use serde_derive::Serialize;
         use std::collections::HashMap;

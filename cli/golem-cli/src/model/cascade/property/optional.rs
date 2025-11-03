@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::cascade::property::Property;
-use crate::model::cascade::Layer;
+use crate::model::cascade::store::Layer;
 use serde_derive::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

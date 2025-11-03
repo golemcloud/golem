@@ -12,24 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::store::Layer;
+use crate::model::cascade::layer::Layer;
 
-pub mod map;
-pub mod optional;
-pub mod vec;
+#[derive(Debug, thiserror::Error)]
+pub enum StoreGetValueError<L: Layer> {
+    #[error("requested layer not found: {0}")]
+    LayerNotFound(L::Id),
+    #[error("layer ({0}) apply error: {1}")]
+    LayerApplyError(L::Id, L::ApplyError),
+}
 
-pub trait Property<L: Layer> {
-    type Value;
-    type PropertyLayer;
-    type TraceElem;
-
-    fn value(&self) -> &Self::Value;
-    fn trace(&self) -> &[Self::TraceElem];
-
-    fn apply_layer(
-        &mut self,
-        id: &L::Id,
-        selection: Option<&L::AppliedSelection>,
-        layer: Self::PropertyLayer,
-    );
+#[derive(Debug, thiserror::Error)]
+pub enum StoreAddLayerError<L: Layer> {
+    #[error("layer already exists: {0}")]
+    LayerAlreadyExists(L::Id),
 }

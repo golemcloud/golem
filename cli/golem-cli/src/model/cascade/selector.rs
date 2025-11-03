@@ -12,24 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::store::Layer;
+use std::hash::Hash;
 
-pub mod map;
-pub mod optional;
-pub mod vec;
-
-pub trait Property<L: Layer> {
-    type Value;
-    type PropertyLayer;
-    type TraceElem;
-
-    fn value(&self) -> &Self::Value;
-    fn trace(&self) -> &[Self::TraceElem];
-
-    fn apply_layer(
-        &mut self,
-        id: &L::Id,
-        selection: Option<&L::AppliedSelection>,
-        layer: Self::PropertyLayer,
-    );
-}
+pub trait Selector: Clone + Eq + Hash {}
