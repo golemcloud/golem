@@ -146,7 +146,7 @@ impl ComponentService for CachedComponentService {
         let mut keys = self.cache.keys().await;
         keys.retain(|id| &id.component_id == component_id);
         keys.sort_by_key(|id| id.version);
-        for idx in keys.len() - 1..=0 {
+        for idx in (0..keys.len()).rev() {
             let key = &keys[idx];
             let metadata = self.cache.try_get(key).await;
             if metadata.is_some() {
