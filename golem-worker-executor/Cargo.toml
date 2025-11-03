@@ -21,10 +21,10 @@ path = "src/server.rs"
 harness = false
 test = false
 
-# [[test]]
-# name = "integration"
-# path = "tests/lib.rs"
-# harness = false
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
 
 [features]
 
@@ -47,6 +47,7 @@ async-trait = { workspace = true }
 bincode = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime

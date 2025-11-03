@@ -50,7 +50,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             WorkerApi::new(
                 services.component_service.clone(),
                 services.worker_service.clone(),
-                services.worker_auth_service.clone(),
+                services.auth_service.clone(),
             ),
             // ApiDefinitionApi::new(
             //     services.definition_service.clone(),

@@ -19,6 +19,7 @@ use golem_client::model::DeploymentCreation;
 use golem_common::model::component::ComponentUpdate;
 use golem_common::model::diff::Hash;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 
@@ -42,7 +43,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_deployment_revision: None,
                 expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "903581d8b48b4f606a425cdeff2723992248c87dce721fd293279533efe6a840",
+                    "fb88e6c907d17d0dc23a10fa776b22d6d9228145f3783d52537889725f27cbc3",
                 )?),
                 version: "0.0.1".to_string(),
             },
@@ -119,7 +120,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_deployment_revision: None,
                 expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "903581d8b48b4f606a425cdeff2723992248c87dce721fd293279533efe6a840",
+                    "fb88e6c907d17d0dc23a10fa776b22d6d9228145f3783d52537889725f27cbc3",
                 )?),
                 version: "0.0.1".to_string(),
             },
@@ -153,7 +154,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_deployment_revision: Some(deployment_1.revision),
                 expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "62ee3a42df1879a27c4e91423533feac3c182827b72fd52c4badb4bb07c3890c",
+                    "1390786f147c3f8b89db5a70acec59dcd5a3289828b280e28af4010fa8709253",
                 )?),
                 version: "0.0.2".to_string(),
             },

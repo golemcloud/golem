@@ -20,20 +20,21 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
-    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    IdempotencyKey, WorkerStatus,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, IdempotencyKey, WorkerStatus,
 };
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
-    worker_error_underlying_error, TestDslUnsafe,
+    worker_error_underlying_error, TestDsl,
 };
+use golem_test_framework::model::IFSEntry;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -54,20 +55,23 @@ async fn write_stdout(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("write-stdout").store().await;
-    let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "write-stdout")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "write-stdout-1")
+        .await?;
 
-    let mut rx = executor.capture_output(&worker_id).await;
+    let mut rx = executor.capture_output(&worker_id).await?;
 
-    let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+    executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await??;
 
     let mut events = vec![];
     let start_time = Instant::now();
@@ -79,11 +83,10 @@ async fn write_stdout(
         }
     }
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
+    Ok(())
 }
 
 #[test]
@@ -92,20 +95,23 @@ async fn write_stderr(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("write-stderr").store().await;
-    let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "write-stderr")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "write-stderr-1")
+        .await?;
 
-    let mut rx = executor.capture_output(&worker_id).await;
+    let mut rx = executor.capture_output(&worker_id).await?;
 
-    let _result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+    executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await??;
 
     let mut events = vec![];
     let start_time = Instant::now();
@@ -117,11 +123,11 @@ async fn write_stderr(
         }
     }
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
+
+    Ok(())
 }
 
 #[test]
@@ -130,24 +136,22 @@ async fn read_stdin(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("read-stdin").store().await;
-    let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "read-stdin")
+        .store()
+        .await?;
+    let worker_id = executor.start_worker(&component.id, "read-stdin-1").await?;
 
-    let result = executor.invoke_and_await(&worker_id, "run", vec![]).await;
+    let result = executor.invoke_and_await(&worker_id, "run", vec![]).await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(result.is_err()); // stdin is disabled
+    Ok(())
 }
 
 #[test]
@@ -156,25 +160,21 @@ async fn clocks(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("clocks").store().await;
-    let worker_id = executor.start_worker(&component_id, "clocks-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "clocks")
+        .store()
+        .await?;
+    let worker_id = executor.start_worker(&component.id, "clocks-1").await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result.len() == 1);
     let Value::Tuple(tuple) = &result[0] else {
@@ -204,6 +204,8 @@ async fn clocks(
     check!(*elapsed2 >= 2.0);
     check!(*elapsed2 < 3.0);
     check!(odt_diff < 5.0);
+
+    Ok(())
 }
 
 #[test]
@@ -212,35 +214,31 @@ async fn file_write_read_delete(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-write-read-delete").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "file-write-read-delete")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "file-write-read-delete-1",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -250,6 +248,8 @@ async fn file_write_read_delete(
                 Value::Option(None)
             ])]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -258,55 +258,45 @@ async fn initial_file_read_write(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_files = executor
-        .add_initial_component_files(&[
-            (
-                "initial-file-read-write/files/foo.txt",
-                "foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            ),
-            (
-                "initial-file-read-write/files/baz.txt",
-                "/bar/baz.txt",
-                ComponentFilePermissions::ReadWrite,
-            ),
-        ])
-        .await;
-
-    let component_id = executor
-        .component("initial-file-read-write")
+    let component = executor
+        .component(&context.default_environment_id, "initial-file-read-write")
         .unique()
-        .with_files(&component_files)
+        .with_files(&[
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadOnly,
+            },
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadWrite,
+            },
+        ])
         .store()
-        .await;
+        .await?;
+
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "initial-file-read-write-1",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         result
@@ -318,6 +308,8 @@ async fn initial_file_read_write(
                 Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
             ])]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -326,46 +318,38 @@ async fn initial_file_listing_through_api(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_files = executor
-        .add_initial_component_files(&[
-            (
-                "initial-file-read-write/files/foo.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            ),
-            (
-                "initial-file-read-write/files/baz.txt",
-                "/bar/baz.txt",
-                ComponentFilePermissions::ReadWrite,
-            ),
-            (
-                "initial-file-read-write/files/baz.txt",
-                "/baz.txt",
-                ComponentFilePermissions::ReadWrite,
-            ),
-        ])
-        .await;
-
-    let component_id = executor
-        .component("initial-file-read-write")
+    let component = executor
+        .component(&context.default_environment_id, "initial-file-read-write")
         .unique()
-        .with_files(&component_files)
+        .with_files(&[
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadOnly,
+            },
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadWrite,
+            },
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadWrite,
+            },
+        ])
         .store()
-        .await;
+        .await?;
 
     let worker_id = executor
-        .start_worker(&component_id, "initial-file-read-write-1")
-        .await;
+        .start_worker(&component.id, "initial-file-read-write-1")
+        .await?;
 
-    let result = executor.get_file_system_node(&worker_id, "/").await;
+    let result = executor.get_file_system_node(&worker_id, "/").await?;
 
     let mut result = result
         .into_iter()
@@ -404,7 +388,7 @@ async fn initial_file_listing_through_api(
             ]
     );
 
-    let result = executor.get_file_system_node(&worker_id, "/bar").await;
+    let result = executor.get_file_system_node(&worker_id, "/bar").await?;
 
     let mut result = result
         .into_iter()
@@ -428,7 +412,9 @@ async fn initial_file_listing_through_api(
             },]
     );
 
-    let result = executor.get_file_system_node(&worker_id, "/baz.txt").await;
+    let result = executor
+        .get_file_system_node(&worker_id, "/baz.txt")
+        .await?;
 
     let mut result = result
         .into_iter()
@@ -452,9 +438,9 @@ async fn initial_file_listing_through_api(
             },]
     );
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    drop(executor);
+    Ok(())
 }
 
 #[test]
@@ -463,65 +449,59 @@ async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_files = executor
-        .add_initial_component_files(&[
-            (
-                "initial-file-read-write/files/foo.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            ),
-            (
-                "initial-file-read-write/files/baz.txt",
-                "/bar/baz.txt",
-                ComponentFilePermissions::ReadWrite,
-            ),
-        ])
-        .await;
-
-    let component_id = executor
-        .component("initial-file-read-write")
+    let component = executor
+        .component(&context.default_environment_id, "initial-file-read-write")
         .unique()
-        .with_files(&component_files)
+        .with_files(&[
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/foo.txt"),
+                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadOnly,
+            },
+            IFSEntry {
+                source_path: PathBuf::from("initial-file-read-write/files/baz.txt"),
+                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: ComponentFilePermissions::ReadWrite,
+            },
+        ])
         .store()
-        .await;
+        .await?;
+
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "initial-file-read-write-3",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     // run the worker so it can update the files.
     executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await;
+    let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await?;
     let result1 = std::str::from_utf8(&result1).unwrap();
 
-    let result2 = executor.get_file_contents(&worker_id, "/bar/baz.txt").await;
+    let result2 = executor
+        .get_file_contents(&worker_id, "/bar/baz.txt")
+        .await?;
     let result2 = std::str::from_utf8(&result2).unwrap();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result1 == "foo\n");
     check!(result2 == "hello world");
+
+    Ok(())
 }
 
 #[test]
@@ -530,25 +510,23 @@ async fn directories(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("directories").store().await;
-    let worker_id = executor.start_worker(&component_id, "directories-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "directories")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "directories-1")
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     let Value::Tuple(tuple) = &result[0] else {
         panic!("expected tuple")
@@ -586,6 +564,8 @@ async fn directories(
             ]
     );
     check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+
+    Ok(())
 }
 
 #[test]
@@ -594,38 +574,34 @@ async fn directories_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("directories").store().await;
-    let worker_id = executor.start_worker(&component_id, "directories-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "directories")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "directories-1")
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "run", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
     let metadata = executor
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(5))
-        .await;
+        .await?;
 
-    check!(metadata.last_known_status.status == WorkerStatus::Idle);
+    check!(metadata.status == WorkerStatus::Idle);
 
     let Value::Tuple(tuple) = &result[0] else {
         panic!("expected tuple")
@@ -663,6 +639,8 @@ async fn directories_replay(
             ]
     );
     check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
+
+    Ok(())
 }
 
 #[test]
@@ -671,18 +649,19 @@ async fn file_write_read(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-1").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-1")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file}",
@@ -691,17 +670,12 @@ async fn file_write_read(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result = executor
         .invoke_and_await(
@@ -709,8 +683,7 @@ async fn file_write_read(
             "golem:it/api.{read-file}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(
         result
@@ -718,6 +691,8 @@ async fn file_write_read(
                 "hello world".to_string()
             )))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -726,32 +701,22 @@ async fn file_update_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = {
-        let component_files = executor
-            .add_initial_component_files(&[(
-                "ifs-update/files/foo.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            )])
-            .await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_ifs_update")
+        .unique()
+        .with_files(&[IFSEntry {
+            source_path: PathBuf::from("ifs-update/files/foo.txt"),
+            target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
+        }])
+        .store()
+        .await?;
 
-        executor
-            .component("golem_it_ifs_update")
-            .unique()
-            .with_files(&component_files)
-            .store()
-            .await
-    };
-
-    let worker_id = executor.start_worker(&component_id, "ifs-update-1").await;
+    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
 
     executor
         .invoke_and_await(
@@ -759,8 +724,7 @@ async fn file_update_1(
             "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
 
     {
         let content_before_update = executor
@@ -769,32 +733,27 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_before_update[0] == Value::String("foo\n".to_string()));
     }
 
     {
-        let component_files = executor
-            .add_initial_component_files(&[(
-                "ifs-update/files/bar.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            )])
-            .await;
-
-        let target_version = executor
+        let updated_component = executor
             .update_component_with_files(
-                &component_id,
+                &component.id,
                 "golem_it_ifs_update",
-                Some(&component_files),
+                vec![IFSEntry {
+                    source_path: PathBuf::from("ifs-update/files/bar.txt"),
+                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: ComponentFilePermissions::ReadOnly,
+                }],
             )
-            .await;
+            .await?;
 
         executor
-            .auto_update_worker(&worker_id, target_version)
-            .await;
+            .auto_update_worker(&worker_id, updated_component.revision)
+            .await?;
     };
 
     {
@@ -804,13 +763,12 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_update[0] == Value::String("foo\n".to_string()));
     }
 
-    executor.simulated_crash(&worker_id).await;
+    executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
@@ -819,8 +777,7 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_crash[0] == Value::String("foo\n".to_string()));
     }
@@ -831,8 +788,7 @@ async fn file_update_1(
             "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
 
     {
         let content_after_reload = executor
@@ -841,13 +797,12 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_reload[0] == Value::String("bar\n".to_string()));
     }
 
-    executor.simulated_crash(&worker_id).await;
+    executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
@@ -856,32 +811,27 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_crash[0] == Value::String("bar\n".to_string()));
     }
 
     {
-        let component_files = executor
-            .add_initial_component_files(&[(
-                "ifs-update/files/baz.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            )])
-            .await;
-
-        let target_version = executor
+        let updated_component = executor
             .update_component_with_files(
-                &component_id,
+                &component.id,
                 "golem_it_ifs_update",
-                Some(&component_files),
+                vec![IFSEntry {
+                    source_path: PathBuf::from("ifs-update/files/baz.txt"),
+                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: ComponentFilePermissions::ReadOnly,
+                }],
             )
-            .await;
+            .await?;
 
         executor
-            .manual_update_worker(&worker_id, target_version)
-            .await;
+            .manual_update_worker(&worker_id, updated_component.revision)
+            .await?;
     };
 
     {
@@ -891,8 +841,7 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_manual_update[0] == Value::String("restored".to_string()));
     }
@@ -903,8 +852,7 @@ async fn file_update_1(
             "golem-it:ifs-update-exports/golem-it-ifs-update-api.{load-file}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
 
     {
         let content_after_reload = executor
@@ -913,13 +861,12 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_reload[0] == Value::String("baz\n".to_string()));
     }
 
-    executor.simulated_crash(&worker_id).await;
+    executor.simulated_crash(&worker_id).await?;
 
     {
         let content_after_crash = executor
@@ -928,13 +875,14 @@ async fn file_update_1(
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(content_after_crash[0] == Value::String("baz\n".to_string()));
     }
 
-    executor.delete_worker(&worker_id).await;
+    executor.delete_worker(&worker_id).await?;
+
+    Ok(())
 }
 
 #[test]
@@ -943,13 +891,9 @@ async fn file_update_in_the_middle_of_exported_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (sender, mut latch) = tokio::sync::mpsc::channel::<()>(1);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -978,30 +922,25 @@ async fn file_update_in_the_middle_of_exported_function(
         spawn(start_server.in_current_span())
     };
 
-    let component_id = {
-        let component_files = executor
-            .add_initial_component_files(&[(
-                "ifs-update-inside-exported-function/files/foo.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            )])
-            .await;
-
-        let env = vec![
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_ifs_update_inside_exported_function",
+        )
+        .unique()
+        .with_files(&[IFSEntry {
+            source_path: PathBuf::from("ifs-update-inside-exported-function/files/foo.txt"),
+            target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
+        }])
+        .with_env(vec![
             ("PORT".to_string(), host_http_port.to_string()),
             ("RUST_BACKTRACE".to_string(), "full".to_string()),
-        ];
+        ])
+        .store()
+        .await?;
 
-        executor
-            .component("golem_it_ifs_update_inside_exported_function")
-            .unique()
-            .with_files(&component_files)
-            .with_env(env)
-            .store()
-            .await
-    };
-
-    let worker_id = executor.start_worker(&component_id, "ifs-update-1").await;
+    let worker_id = executor.start_worker(&component.id, "ifs-update-1").await?;
 
     let idempotency_key = IdempotencyKey::fresh();
 
@@ -1012,31 +951,26 @@ async fn file_update_in_the_middle_of_exported_function(
             "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
 
     latch.recv().await.expect("channel should produce value");
 
     {
-        let component_files = executor
-            .add_initial_component_files(&[(
-                "ifs-update-inside-exported-function/files/bar.txt",
-                "/foo.txt",
-                ComponentFilePermissions::ReadOnly,
-            )])
-            .await;
-
-        let target_version = executor
+        let updated_component = executor
             .update_component_with_files(
-                &component_id,
+                &component.id,
                 "golem_it_ifs_update_inside_exported_function",
-                Some(&component_files),
+                vec![IFSEntry {
+                    source_path: PathBuf::from("ifs-update-inside-exported-function/files/bar.txt"),
+                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: ComponentFilePermissions::ReadOnly,
+                }],
             )
-            .await;
+            .await?;
 
         executor
-            .auto_update_worker(&worker_id, target_version)
-            .await;
+            .auto_update_worker(&worker_id, updated_component.revision)
+            .await?;
     };
 
     {
@@ -1047,8 +981,7 @@ async fn file_update_in_the_middle_of_exported_function(
                 "golem-it:ifs-update-inside-exported-function-exports/golem-it-ifs-update-inside-exported-function-api.{run}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         check!(
             result[0]
@@ -1060,6 +993,7 @@ async fn file_update_in_the_middle_of_exported_function(
     }
 
     http_server.abort();
+    Ok(())
 }
 
 #[test]
@@ -1068,35 +1002,30 @@ async fn environment_service(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("environment-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "environment-service")
+        .store()
+        .await?;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "environment-service-1", args, env, vec![])
-        .await;
+        .start_worker_with(&component.id, "environment-service-1", args, env, vec![])
+        .await?;
 
     let args_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     let env_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(
         args_result
@@ -1121,7 +1050,7 @@ async fn environment_service(
                 ]),
                 Value::Tuple(vec![
                     Value::String("GOLEM_COMPONENT_ID".to_string()),
-                    Value::String(component_id.to_string())
+                    Value::String(component.id.to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("GOLEM_COMPONENT_VERSION".to_string()),
@@ -1129,6 +1058,8 @@ async fn environment_service(
                 ]),
             ])))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -1137,13 +1068,9 @@ async fn http_client_response_persisted_between_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1170,35 +1097,32 @@ async fn http_client_response_persisted_between_invocations(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
+        .start_worker_with(&component.id, "http-client-2", vec![], env, vec![])
+        .await?;
+    let rx = executor.capture_output(&worker_id).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(&worker_id, "golem:it/api.{send-request}", vec![])
-        .await
-        .expect("first send-request failed");
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     drop(rx);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
-    let _rx = executor.capture_output(&worker_id).await;
+    let executor = start(deps, &context).await?;
+    let _rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{process-response}", vec![])
-        .await;
+        .await?;
 
     http_server.abort();
 
@@ -1208,6 +1132,8 @@ async fn http_client_response_persisted_between_invocations(
                 "200 response is test-header test-body".to_string()
             )])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -1216,13 +1142,9 @@ async fn http_client_interrupting_response_stream(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1265,14 +1187,17 @@ async fn http_client_interrupting_response_stream(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-2").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-2")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output_with_termination(&worker_id).await;
+        .start_worker_with(&component.id, "http-client-2", vec![], env, vec![])
+        .await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
@@ -1295,25 +1220,25 @@ async fn http_client_interrupting_response_stream(
 
     signal_rx.recv().await.unwrap();
 
-    executor.interrupt(&worker_id).await; // Potential "body stream was interrupted" error
+    executor.interrupt(&worker_id).await?; // Potential "body stream was interrupted" error
 
-    let _ = drain_connection(rx).await;
+    drain_connection(rx).await;
 
-    executor.resume(&worker_id, false).await;
+    executor.resume(&worker_id, false).await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
-        .await;
-    executor.log_output(&worker_id).await;
+        .await?;
+
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-
     http_server.abort();
 
     check!(result == Ok(vec![Value::U64(100 * 1024)]));
@@ -1321,6 +1246,8 @@ async fn http_client_interrupting_response_stream(
     let idempotency_keys = idempotency_keys.lock().unwrap();
     check!(idempotency_keys.len() == 2);
     check!(idempotency_keys[0] == idempotency_keys[1]);
+
+    Ok(())
 }
 
 #[test]
@@ -1329,13 +1256,9 @@ async fn http_client_interrupting_response_stream_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1378,14 +1301,17 @@ async fn http_client_interrupting_response_stream_async(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-3").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-3")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2-async", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output_with_termination(&worker_id).await;
+        .start_worker_with(&component.id, "http-client-2-async", vec![], env, vec![])
+        .await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
@@ -1408,25 +1334,24 @@ async fn http_client_interrupting_response_stream_async(
 
     signal_rx.recv().await.unwrap();
 
-    executor.interrupt(&worker_id).await; // Potential "body stream was interrupted" error
+    executor.interrupt(&worker_id).await?; // Potential "body stream was interrupted" error
 
-    let _ = drain_connection(rx).await;
+    drain_connection(rx).await;
 
-    executor.resume(&worker_id, false).await;
+    executor.resume(&worker_id, false).await?;
 
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(5))
-        .await;
-    executor.log_output(&worker_id).await;
+        .await?;
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{slow-body-stream}", vec![])
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-
     http_server.abort();
 
     check!(result == Ok(vec![Value::U64(100 * 1024)]));
@@ -1434,6 +1359,8 @@ async fn http_client_interrupting_response_stream_async(
     let idempotency_keys = idempotency_keys.lock().unwrap();
     check!(idempotency_keys.len() == 2);
     check!(idempotency_keys[0] == idempotency_keys[1]);
+
+    Ok(())
 }
 
 #[test]
@@ -1442,49 +1369,43 @@ async fn sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "clock-service-1")
-        .await;
+        .start_worker(&component.id, "clock-service-1")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{sleep}",
             vec![10u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let start = Instant::now();
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{sleep}",
             vec![0u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
     let duration = start.elapsed();
 
     check!(duration.as_secs() < 2);
+    Ok(())
 }
 
 #[test]
@@ -1493,43 +1414,39 @@ async fn sleep_less_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "clock-service-2")
-        .await;
+        .start_worker(&component.id, "clock-service-2")
+        .await?;
 
     let start = Instant::now();
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{sleep}",
             vec![1u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
     check!(duration.as_secs() >= 1);
     check!(result == vec![Value::Bool(true)]);
+    Ok(())
 }
 
 #[test]
@@ -1538,43 +1455,40 @@ async fn sleep_longer_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "clock-service-3")
-        .await;
+        .start_worker(&component.id, "clock-service-3")
+        .await?;
 
     let start = Instant::now();
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{sleep}",
             vec![12u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
     check!(duration.as_secs() >= 12);
     check!(result == vec![Value::Bool(true)]);
+
+    Ok(())
 }
 
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
@@ -1605,22 +1519,21 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(10)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-4", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-4", vec![], env, vec![])
+        .await?;
 
     let start = Instant::now();
     let result = executor
@@ -1629,10 +1542,9 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
             "golem:it/api.{sleep-during-request}",
             vec![2u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
     drop(executor);
@@ -1643,6 +1555,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     check!(duration.as_secs() >= 2);
     check!(duration.as_secs() < 10);
     check!(result == vec![Value::String("Timeout".to_string())]);
+    Ok(())
 }
 
 #[test]
@@ -1651,22 +1564,21 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(5)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-5", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-5", vec![], env, vec![])
+        .await?;
 
     let start = Instant::now();
     let result = executor
@@ -1675,10 +1587,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
             "golem:it/api.{sleep-during-request}",
             vec![30u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
     drop(executor);
@@ -1689,6 +1600,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     check!(duration.as_secs() >= 5);
     check!(duration.as_secs() < 30);
     check!(result == vec![Value::String("slow response".to_string())]);
+    Ok(())
 }
 
 #[test]
@@ -1697,22 +1609,21 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(30)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-6", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-6", vec![], env, vec![])
+        .await?;
 
     let start = Instant::now();
     let result = executor
@@ -1721,10 +1632,9 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
             "golem:it/api.{sleep-during-request}",
             vec![15u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
     drop(executor);
@@ -1735,6 +1645,8 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     check!(duration.as_secs() >= 15);
     check!(duration.as_secs() < 30);
     check!(result == vec![Value::String("Timeout".to_string())]);
+
+    Ok(())
 }
 
 #[test]
@@ -1743,22 +1655,21 @@ async fn sleep_and_awaiting_parallel_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(2)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-7", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-7", vec![], env, vec![])
+        .await?;
 
     let start = Instant::now();
     let result = executor
@@ -1767,10 +1678,9 @@ async fn sleep_and_awaiting_parallel_responses(
             "golem:it/api.{sleep-during-parallel-requests}",
             vec![20u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     server.abort();
@@ -1779,17 +1689,12 @@ async fn sleep_and_awaiting_parallel_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+    let executor = crate::common::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     // server.abort();
 
@@ -1797,6 +1702,8 @@ async fn sleep_and_awaiting_parallel_responses(
     check!(duration.as_secs() < 20);
     check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
     check!(healthcheck_result == vec![Value::Bool(true)]);
+
+    Ok(())
 }
 
 #[test]
@@ -1805,24 +1712,23 @@ async fn sleep_below_threshold_between_http_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-8", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-8", vec![], env, vec![])
+        .await?;
 
-    let _ = executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let start = Instant::now();
     let result = executor
@@ -1831,10 +1737,9 @@ async fn sleep_below_threshold_between_http_responses(
             "golem:it/api.{sleep-between-requests}",
             vec![1u64.into_value_and_type(), 5u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
     drop(executor);
@@ -1842,21 +1747,17 @@ async fn sleep_below_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+    let executor = crate::common::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     check!(duration.as_secs() >= 10);
     check!(result == vec![Value::String("Ok(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\nOk(\"slow response\")\n".to_string())]);
     check!(healthcheck_result == vec![Value::Bool(true)]);
+    Ok(())
 }
 
 #[test]
@@ -1865,22 +1766,21 @@ async fn sleep_above_threshold_between_http_responses(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let (port, server) = simulated_slow_request_server(Duration::from_secs(1)).await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker_with(&component_id, "clock-service-9", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "clock-service-9", vec![], env, vec![])
+        .await?;
 
     let start = Instant::now();
     let result = executor
@@ -1889,10 +1789,9 @@ async fn sleep_above_threshold_between_http_responses(
             "golem:it/api.{sleep-between-requests}",
             vec![12u64.into_value_and_type(), 2u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     server.abort();
     drop(executor);
@@ -1900,17 +1799,12 @@ async fn sleep_above_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+    let executor = crate::common::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     check!(duration.as_secs() >= 14);
     check!(
@@ -1920,6 +1814,8 @@ async fn sleep_above_threshold_between_http_responses(
             )]
     );
     check!(healthcheck_result == vec![Value::Bool(true)]);
+
+    Ok(())
 }
 
 #[test]
@@ -1928,18 +1824,17 @@ async fn resuming_sleep(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("clock-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "clock-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "clock-service-2")
-        .await;
+        .start_worker(&component.id, "clock-service-2")
+        .await?;
 
     let executor_clone = executor.clone();
     let worker_id_clone = worker_id.clone();
@@ -1952,41 +1847,37 @@ async fn resuming_sleep(
                     vec![10u64.into_value_and_type()],
                 )
                 .await
-                .unwrap();
         }
         .in_current_span(),
     );
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let _ = fiber.await;
+    fiber.await???;
 
     info!("Restarting worker...");
 
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     info!("Worker restarted");
 
     let start = Instant::now();
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{sleep}",
             vec![10u64.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
     let duration = start.elapsed();
 
     check!(duration.as_secs() < 20);
     check!(duration.as_secs() >= 10);
+
+    Ok(())
 }
 
 #[test]
@@ -1995,18 +1886,17 @@ async fn failing_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("failing-component").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "failing-component")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "failing-worker-1")
-        .await;
+        .start_worker(&component.id, "failing-worker-1")
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -2014,7 +1904,7 @@ async fn failing_worker(
             "golem:component/api.{add}",
             vec![5u64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
     let result2 = executor
         .invoke_and_await(
@@ -2022,15 +1912,13 @@ async fn failing_worker(
             "golem:component/api.{add}",
             vec![50u64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
     let result3 = executor
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result1.is_ok());
     check!(result2.is_err());
@@ -2051,6 +1939,8 @@ async fn failing_worker(
         matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
     );
     assert_eq!(worker_error_logs(&result3_err), Some("error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+
+    Ok(())
 }
 
 #[test]
@@ -2059,18 +1949,19 @@ async fn file_service_write_direct(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-2").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-2")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file-direct}",
@@ -2079,17 +1970,12 @@ async fn file_service_write_direct(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result = executor
         .invoke_and_await(
@@ -2097,8 +1983,7 @@ async fn file_service_write_direct(
             "golem:it/api.{read-file}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(
         result
@@ -2106,6 +1991,8 @@ async fn file_service_write_direct(
                 "hello world".to_string()
             )))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -2114,18 +2001,19 @@ async fn filesystem_write_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-3")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file-direct}",
@@ -2134,25 +2022,20 @@ async fn filesystem_write_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times2 = executor
         .invoke_and_await(
@@ -2160,10 +2043,11 @@ async fn filesystem_write_replay_restores_file_times(
             "golem:it/api.{get-file-info}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(times1 == times2);
+
+    Ok(())
 }
 
 #[test]
@@ -2172,42 +2056,38 @@ async fn filesystem_create_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-4").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-4")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times2 = executor
         .invoke_and_await(
@@ -2215,10 +2095,11 @@ async fn filesystem_create_dir_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(times1 == times2);
+
+    Ok(())
 }
 
 #[test]
@@ -2227,18 +2108,19 @@ async fn file_hard_link(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-5").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-5")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file}",
@@ -2247,10 +2129,9 @@ async fn file_hard_link(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-link}",
@@ -2259,8 +2140,7 @@ async fn file_hard_link(
                 "/link.txt".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result = executor
         .invoke_and_await(
@@ -2268,8 +2148,7 @@ async fn file_hard_link(
             "golem:it/api.{read-file}",
             vec!["/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(
         result
@@ -2277,6 +2156,8 @@ async fn file_hard_link(
                 "hello world".to_string()
             )))))]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -2285,34 +2166,35 @@ async fn filesystem_link_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-6").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-6")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file}",
@@ -2321,9 +2203,9 @@ async fn filesystem_link_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-link}",
@@ -2332,8 +2214,7 @@ async fn filesystem_link_replay_restores_file_times(
                 "/test2/link.txt".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let times_file_1 = executor
         .invoke_and_await(
@@ -2341,25 +2222,20 @@ async fn filesystem_link_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_dir_1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -2367,19 +2243,20 @@ async fn filesystem_link_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(times_dir_1 == times_dir_2);
     check!(times_file_1 == times_file_2);
+
+    Ok(())
 }
 
 #[test]
@@ -2388,58 +2265,54 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-7").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-7")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test/a".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-directory}",
             vec!["/test/a".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times2 = executor
         .invoke_and_await(
@@ -2447,10 +2320,11 @@ async fn filesystem_remove_dir_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     check!(times1 == times2);
+
+    Ok(())
 }
 
 #[test]
@@ -2459,34 +2333,35 @@ async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-8").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-8")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file-direct}",
@@ -2495,9 +2370,9 @@ async fn filesystem_symlink_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-sym-link}",
@@ -2506,8 +2381,7 @@ async fn filesystem_symlink_replay_restores_file_times(
                 "/test2/link.txt".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let times_file_1 = executor
         .invoke_and_await(
@@ -2515,24 +2389,18 @@ async fn filesystem_symlink_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_dir_1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -2540,23 +2408,22 @@ async fn filesystem_symlink_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(times_dir_1 == times_dir_2);
     check!(times_file_1 == times_file_2);
+
+    Ok(())
 }
 
 #[test]
@@ -2565,34 +2432,35 @@ async fn filesystem_rename_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-9").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-9")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file}",
@@ -2601,9 +2469,9 @@ async fn filesystem_rename_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{rename-file}",
@@ -2612,8 +2480,7 @@ async fn filesystem_rename_replay_restores_file_times(
                 "/test2/link.txt".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let times_srcdir_1 = executor
         .invoke_and_await(
@@ -2621,31 +2488,26 @@ async fn filesystem_rename_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_destdir_1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_file_1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times_srcdir_2 = executor
         .invoke_and_await(
@@ -2653,31 +2515,31 @@ async fn filesystem_rename_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_destdir_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times_file_2 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test2/link.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(times_srcdir_1 == times_srcdir_2);
     check!(times_destdir_1 == times_destdir_2);
     check!(times_file_1 == times_file_2);
+
+    Ok(())
 }
 
 #[test]
@@ -2686,28 +2548,27 @@ async fn filesystem_remove_file_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "file-service-10")
-        .await;
+        .start_worker(&component.id, "file-service-10")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{create-directory}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file}",
@@ -2716,47 +2577,42 @@ async fn filesystem_remove_file_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
-    let info1 = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let _ = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
-    let info2 = executor
+        .await??;
+
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times2 = executor
         .invoke_and_await(
@@ -2764,16 +2620,13 @@ async fn filesystem_remove_file_replay_restores_file_times(
             "golem:it/api.{get-info}",
             vec!["/test".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-    drop(executor);
-
-    println!("{:?}", info1);
-    println!("{:?}", info2);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(times1 == times2);
+
+    Ok(())
 }
 
 #[test]
@@ -2782,16 +2635,17 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-3")
+        .await?;
 
     let _ = executor
         .invoke_and_await(
@@ -2802,23 +2656,18 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let times1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{get-file-info}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let times2 = executor
         .invoke_and_await(
@@ -2826,14 +2675,13 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
             "golem:it/api.{get-file-info}",
             vec!["/testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(times1 == times2);
+
+    Ok(())
 }
 
 #[test]
@@ -2842,18 +2690,19 @@ async fn filesystem_metadata_hash(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("file-service").store().await;
-    let worker_id = executor.start_worker(&component_id, "file-service-3").await;
+    let component = executor
+        .component(&context.default_environment_id, "file-service")
+        .store()
+        .await?;
+    let worker_id = executor
+        .start_worker(&component.id, "file-service-3")
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{write-file-direct}",
@@ -2862,23 +2711,18 @@ async fn filesystem_metadata_hash(
                 "hello world".into_value_and_type(),
             ],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let hash1 = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{hash}",
             vec!["testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let hash2 = executor
         .invoke_and_await(
@@ -2886,14 +2730,13 @@ async fn filesystem_metadata_hash(
             "golem:it/api.{hash}",
             vec!["testfile.txt".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(hash1 == hash2);
+
+    Ok(())
 }
 
 #[test]
@@ -2902,46 +2745,39 @@ async fn ip_address_resolve(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("networking").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "networking")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "ip-address-resolve-1")
-        .await;
+        .start_worker(&component.id, "ip-address-resolve-1")
+        .await?;
 
     let result1 = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
     let result2 = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     // Result 2 is a fresh resolution which is not guaranteed to return the same addresses (or the same order) but we can expect
     // that it could resolve golem.cloud to at least one address.
     check!(result1.len() > 0);
     check!(result2.len() > 0);
+
+    Ok(())
 }
 
 #[test]
@@ -2950,21 +2786,21 @@ async fn wasi_incoming_request_handler(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("wasi-http-incoming-request-handler")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "wasi-http-incoming-request-handler",
+        )
         .store()
-        .await;
+        .await?;
+
     let worker_id = executor
-        .start_worker(&component_id, "wasi-http-incoming-request-handler-1")
-        .await;
+        .start_worker(&component.id, "wasi-http-incoming-request-handler-1")
+        .await?;
 
     let args = ValueAndType {
         value: Value::Record(vec![
@@ -2990,12 +2826,9 @@ async fn wasi_incoming_request_handler(
             "golem:http/incoming-handler.{handle}",
             vec![args],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result.len() == 1);
     check!(
@@ -3006,6 +2839,8 @@ async fn wasi_incoming_request_handler(
                 Value::Option(None)
             ])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -3014,22 +2849,21 @@ async fn wasi_incoming_request_handler_echo(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("wasi-http-incoming-request-handler-echo")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "wasi-http-incoming-request-handler-echo",
+        )
         .store()
-        .await;
+        .await?;
 
     let worker_id = executor
-        .start_worker(&component_id, "wasi-http-incoming-request-handler-echo-1")
-        .await;
+        .start_worker(&component.id, "wasi-http-incoming-request-handler-echo-1")
+        .await?;
 
     let args = ValueAndType {
         value: Value::Record(vec![
@@ -3085,12 +2919,9 @@ async fn wasi_incoming_request_handler_echo(
             "golem:http/incoming-handler.{handle}",
             vec![args],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result.len() == 1);
     check!(
@@ -3155,6 +2986,7 @@ async fn wasi_incoming_request_handler_echo(
                 ]))))
             ])
     );
+    Ok(())
 }
 
 #[test]
@@ -3163,22 +2995,21 @@ async fn wasi_incoming_request_handler_state(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("wasi-http-incoming-request-handler-state")
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "wasi-http-incoming-request-handler-state",
+        )
         .store()
-        .await;
+        .await?;
 
     let worker_id = executor
-        .start_worker(&component_id, "wasi-http-incoming-request-handler-state-1")
-        .await;
+        .start_worker(&component.id, "wasi-http-incoming-request-handler-state-1")
+        .await?;
 
     let args_put = ValueAndType {
         value: Value::Record(vec![
@@ -3231,8 +3062,7 @@ async fn wasi_incoming_request_handler_state(
             "golem:http/incoming-handler.{handle}",
             vec![args_put],
         )
-        .await
-        .unwrap();
+        .await??;
 
     let result2 = executor
         .invoke_and_await(
@@ -3240,10 +3070,7 @@ async fn wasi_incoming_request_handler_state(
             "golem:http/incoming-handler.{handle}",
             vec![args_get.clone()],
         )
-        .await
-        .unwrap();
-
-    drop(executor);
+        .await??;
 
     check!(result1.len() == 1);
     check!(
@@ -3275,11 +3102,8 @@ async fn wasi_incoming_request_handler_state(
     );
 
     // restart executor and check whether we are restoring the state
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    drop(executor);
+    let executor = start(deps, &context).await?;
 
     let result3 = executor
         .invoke_and_await(
@@ -3287,12 +3111,9 @@ async fn wasi_incoming_request_handler_state(
             "golem:http/incoming-handler.{handle}",
             vec![args_get.clone()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result3.len() == 1);
     check!(
@@ -3312,6 +3133,8 @@ async fn wasi_incoming_request_handler_state(
                 ]))))
             ])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -3320,19 +3143,18 @@ async fn wasi_config_initial_worker_config(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("golem_it_wasi_config").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_wasi_config")
+        .store()
+        .await?;
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "worker-1",
             Vec::new(),
             HashMap::new(),
@@ -3341,7 +3163,7 @@ async fn wasi_config_initial_worker_config(
                 ("k2".to_string(), "v2".to_string()),
             ],
         )
-        .await;
+        .await?;
 
     {
         // get existing key
@@ -3352,8 +3174,7 @@ async fn wasi_config_initial_worker_config(
                 "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
                 vec!["k1".into_value_and_type()],
             )
-            .await
-            .unwrap();
+            .await??;
 
         assert_eq!(
             result,
@@ -3372,8 +3193,7 @@ async fn wasi_config_initial_worker_config(
                 "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
                 vec!["k3".into_value_and_type()],
             )
-            .await
-            .unwrap();
+            .await??;
 
         assert_eq!(result, vec![Value::Option(None)])
     }
@@ -3387,8 +3207,7 @@ async fn wasi_config_initial_worker_config(
                 "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get-all}",
                 vec![],
             )
-            .await
-            .unwrap();
+            .await??;
 
         assert_eq!(
             result,
@@ -3404,4 +3223,6 @@ async fn wasi_config_initial_worker_config(
             ])]
         )
     }
+
+    Ok(())
 }

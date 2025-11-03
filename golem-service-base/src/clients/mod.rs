@@ -12,27 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod auth;
-pub mod limit;
+// pub mod auth;
+// pub mod limit;
+pub mod registry;
 // pub mod plugin;
 
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::RetryConfig;
-use golem_common::model::auth::TokenSecret;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::str::FromStr;
-use tonic::metadata::MetadataMap;
 use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteServiceConfig {
     pub host: String,
     pub port: u16,
-    pub access_token: Uuid,
     pub retries: RetryConfig,
 }
 
@@ -69,8 +65,6 @@ impl Default for RemoteServiceConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
             retries: RetryConfig::default(),
         }
     }
@@ -79,29 +73,5 @@ impl Default for RemoteServiceConfig {
 impl HasConfigExamples<RemoteServiceConfig> for RemoteServiceConfig {
     fn examples() -> Vec<ConfigExample<RemoteServiceConfig>> {
         vec![]
-    }
-}
-
-pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<T> {
-    let mut req = tonic::Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {access_token}").parse().unwrap(),
-    );
-    req
-}
-
-pub fn get_authorisation_token(metadata: MetadataMap) -> Option<TokenSecret> {
-    let auth = metadata
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-
-    match auth {
-        Some(a) if a.to_lowercase().starts_with("bearer ") => {
-            let t = &a[7..a.len()];
-            TokenSecret::from_str(t.trim()).ok()
-        }
-        _ => None,
     }
 }

@@ -590,7 +590,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    worker.set_interrupting(InterruptKind::Interrupt).await;
+                    if let Some(mut await_interruption) =
+                        worker.set_interrupting(InterruptKind::Restart).await
+                    {
+                        await_interruption.recv().await.unwrap();
+                    };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                     self.active_workers()
                         .remove(&owned_worker_id.worker_id)
@@ -610,7 +614,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    worker.set_interrupting(InterruptKind::Interrupt).await;
+                    if let Some(mut await_interruption) =
+                        worker.set_interrupting(InterruptKind::Restart).await
+                    {
+                        await_interruption.recv().await.unwrap();
+                    };
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                     self.active_workers()
                         .remove(&owned_worker_id.worker_id)
@@ -629,13 +637,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    worker
+                    if let Some(mut await_interruption) = worker
                         .set_interrupting(if request.recover_immediately {
                             InterruptKind::Restart
                         } else {
                             InterruptKind::Interrupt
                         })
-                        .await;
+                        .await
+                    {
+                        await_interruption.recv().await.unwrap();
+                    };
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                     self.active_workers()

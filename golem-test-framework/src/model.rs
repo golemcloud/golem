@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IFSEntry {
     pub source_path: PathBuf,
     pub target_path: ComponentFilePath,

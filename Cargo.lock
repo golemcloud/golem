@@ -4591,6 +4591,7 @@ dependencies = [
  "bigdecimal",
  "bincode",
  "bit-vec 0.6.3",
+ "blake3",
  "bytes 1.10.1",
  "cap-std",
  "cap-time-ext",

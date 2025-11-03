@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package golem.registry.v1;
+
+import "golem/auth/auth_ctx.proto";
+import "golem/common/account_id.proto";
+import "golem/common/application.proto";
+import "golem/common/empty.proto";
+import "golem/common/environment.proto";
+import "golem/common/resource_limits.proto";
+import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
+import "golem/component/component.proto";
+import "golem/component/component_files.proto";
+import "golem/component/component_id.proto";
+import "golem/component/component_type.proto";
+import "golem/component/dynamic_linked_instance.proto";
+import "golem/component/plugin_installation.proto";
+import "golem/component/plugin_registration.proto";
+import "golem/component/v1/component_error.proto";
+import "golem/limit/v1/batch_update_resource_limits.proto";
+import "golem/registry/fuel_usage_update.proto";
+import "golem/registry/registered_agent_type.proto";
+import "golem/registry/v1/registry_service_error.proto";
+import "golem/worker/worker_id.proto";
+
+service RegistryService {
+  // auth api
+  rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+
+  // limits api
+  rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
+  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc UpdateWorkerConnectionLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
+  rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
+
+  // plugins api
+  rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
+
+  // components api
+  rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
+  rpc GetComponentMetadata(GetComponentMetadataRequest) returns (GetComponentMetadataResponse);
+  rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
+  rpc GetAllComponentVersions (GetAllComponentVersionsRequest) returns (GetAllComponentVersionsResponse);
+  rpc ResolveComponent (ResolveComponentRequest) returns (ResolveComponentResponse);
+
+  // agent types api
+  rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
+  rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
+}
+
+message AuthenticateTokenRequest {
+  golem.common.UUID secret = 1;
+}
+
+message AuthenticateTokenResponse {
+  oneof result {
+      AuthenticateTokenSuccessResponse success = 1;
+      RegistryServiceError error = 2;
+  }
+}
+
+message AuthenticateTokenSuccessResponse {
+    golem.auth.UserAuthCtx auth_ctx = 1;
+}
+
+message GetResourceLimitsRequest {
+  golem.common.AccountId accountId = 1;
+}
+
+message GetResourceLimitsResponse {
+  oneof result {
+    golem.common.ResourceLimits success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message UpdateWorkerLimitRequest {
+  golem.common.AccountId accountId = 1;
+  golem.worker.WorkerId workerId = 2;
+  int32 value = 3;
+}
+
+message UpdateWorkerLimitResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message BatchUpdateFuelUsageRequest {
+  repeated golem.registry.FuelUsageUpdate updates = 1;
+}
+
+message BatchUpdateFuelUsageResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetPluginRegistrationByIdRequest {
+  golem.component.PluginRegistrationId id = 1;
+}
+
+message GetPluginRegistrationByIdResponse {
+  oneof result {
+    GetPluginRegistrationByIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetPluginRegistrationByIdSuccessResponse {
+  golem.component.PluginRegistration plugin = 1;
+}
+
+message DownloadComponentRequest {
+  golem.component.ComponentId componentId = 1;
+  optional uint64 version = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message DownloadComponentResponse {
+  oneof result {
+    bytes successChunk = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetComponentMetadataRequest {
+  golem.component.ComponentId componentId = 1;
+  uint64 version = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message GetLatestComponentRequest {
+  golem.component.ComponentId componentId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message GetComponentMetadataResponse {
+  oneof result {
+    GetComponentMetadataSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetComponentMetadataSuccessResponse {
+  optional golem.component.Component component = 1;
+}
+
+message GetAllComponentVersionsRequest {
+  golem.component.ComponentId componentId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message GetAllComponentVersionsResponse {
+  oneof result {
+    GetAllComponentVersionsSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAllComponentVersionsSuccessResponse {
+  repeated golem.component.Component components = 1;
+}
+
+message ResolveComponentRequest {
+  golem.common.AccountId resolving_account_id = 1;
+  golem.common.ApplicationId resolving_application_id = 2;
+  golem.common.EnvironmentId resolving_environment_id = 3;
+  string component_slug = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
+}
+
+message ResolveComponentResponse {
+  oneof result {
+    ResolveComponentSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveComponentSuccessResponse {
+  optional golem.component.Component component = 1;
+}
+
+message GetAllAgentTypesRequest {
+  golem.common.EnvironmentId environment_id = 1;
+}
+
+message GetAllAgentTypesResponse {
+  oneof result {
+    GetAllAgentTypesSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetAllAgentTypesSuccessResponse {
+  repeated RegisteredAgentType agent_types = 1;
+}
+
+message GetAgentTypeRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string agentType = 2;
+}
+
+message GetAgentTypeResponse {
+  oneof result {
+    RegisteredAgentType success = 1;
+    RegistryServiceError error = 2;
+  }
+}

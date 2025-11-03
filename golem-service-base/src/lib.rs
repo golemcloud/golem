@@ -30,7 +30,6 @@ pub mod repo;
 pub mod service;
 pub mod storage;
 pub mod stream;
-pub mod testing;
 
 #[cfg(test)]
 test_r::enable!();

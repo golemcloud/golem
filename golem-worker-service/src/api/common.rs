@@ -26,9 +26,9 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::auth::AuthServiceError;
-use golem_service_base::clients::limit::LimitError;
 // use golem_service_base::clients::project::ProjectError;
+use crate::service::auth::AuthServiceError;
+use crate::service::limit::LimitServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::payload::Json;
@@ -178,6 +178,7 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::Component(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
             WorkerServiceError::LimitError(inner) => inner.into(),
+            WorkerServiceError::AuthError(inner) => inner.into(),
         }
     }
 }
@@ -185,25 +186,17 @@ impl From<WorkerServiceError> for ApiEndpointError {
 impl From<ComponentServiceError> for ApiEndpointError {
     fn from(error: ComponentServiceError) -> Self {
         match error {
-            ComponentServiceError::BadRequest(_) => Self::bad_request(error),
-            ComponentServiceError::AlreadyExists(_) => Self::already_exists(error),
-            ComponentServiceError::NotFound(_) => Self::not_found(error),
-            ComponentServiceError::Unauthorized(_) => Self::unauthorized(error),
-            ComponentServiceError::Forbidden(_) => Self::forbidden(error),
-
-            ComponentServiceError::Internal(_)
-            | ComponentServiceError::FailedGrpcStatus(_)
-            | ComponentServiceError::FailedTransport(_) => Self::internal(error),
+            ComponentServiceError::ComponentNotFound => Self::not_found(error),
+            ComponentServiceError::InternalError(_) => Self::internal(error),
         }
     }
 }
 
-impl From<LimitError> for ApiEndpointError {
-    fn from(error: LimitError) -> Self {
+impl From<LimitServiceError> for ApiEndpointError {
+    fn from(error: LimitServiceError) -> Self {
         match error {
-            LimitError::Unauthorized(_) => Self::unauthorized(error),
-            LimitError::LimitExceeded(_) => Self::limit_exceeded(error),
-            LimitError::InternalClientError(_) => Self::internal(error),
+            LimitServiceError::LimitExceeded(_) => Self::limit_exceeded(error),
+            LimitServiceError::InternalError(_) => Self::internal(error),
         }
     }
 }
@@ -435,9 +428,8 @@ impl From<AuthorizationError> for ApiEndpointError {
 impl From<AuthServiceError> for ApiEndpointError {
     fn from(error: AuthServiceError) -> Self {
         match error {
-            AuthServiceError::Unauthorized(_) => Self::unauthorized(error),
-            AuthServiceError::Forbidden(_) => Self::forbidden(error),
-            AuthServiceError::InternalClientError(_) => Self::internal(error),
+            AuthServiceError::CouldNotAuthenticate => Self::unauthorized(error),
+            AuthServiceError::InternalError(_) => Self::internal(error),
         }
     }
 }

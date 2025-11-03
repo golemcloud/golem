@@ -16,7 +16,7 @@ use super::{
     AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
     RandomExecutor, ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
-use crate::model::WorkerMetadata;
+use crate::service::limit::LimitService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -38,12 +38,12 @@ use golem_common::model::component::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     ComponentFileSystemNode, FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_service_base::clients::limit::LimitService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex};
@@ -241,7 +241,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<WorkerMetadata>;
+    ) -> WorkerResult<WorkerMetadataDto>;
 
     async fn find_metadata(
         &self,
@@ -252,7 +252,7 @@ pub trait WorkerService: Send + Sync {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)>;
 
     async fn resume(
         &self,
@@ -388,7 +388,7 @@ impl WorkerServiceDefault {
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Vec<WorkerMetadata>> {
+    ) -> WorkerResult<Vec<WorkerMetadataDto>> {
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
             AllExecutors,
@@ -416,7 +416,7 @@ impl WorkerServiceDefault {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<WorkerMetadata> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
+                            let workers: Vec<WorkerMetadataDto> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -444,7 +444,7 @@ impl WorkerServiceDefault {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
         let component_id = component_id.clone();
         let result = self
             .call_worker_executor(
@@ -1068,7 +1068,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<WorkerMetadata> {
+    ) -> WorkerResult<WorkerMetadataDto> {
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
             worker_id.clone(),
@@ -1117,7 +1117,7 @@ impl WorkerService for WorkerServiceDefault {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)

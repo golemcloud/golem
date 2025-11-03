@@ -21,6 +21,7 @@ use golem_client::api::{
 };
 use golem_common::model::application::{ApplicationCreation, ApplicationUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslExtended;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 

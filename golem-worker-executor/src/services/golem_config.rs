@@ -18,7 +18,6 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
@@ -28,7 +27,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use url::Url;
 
@@ -55,7 +54,6 @@ pub struct GolemConfig {
     pub resource_limits: ResourceLimitsConfig,
     pub component_service: ComponentServiceConfig,
     pub component_cache: ComponentCacheConfig,
-    pub project_service: ProjectServiceConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub engine: EngineConfig,
     pub grpc_address: String,
@@ -158,11 +156,6 @@ impl SafeDisplay for GolemConfig {
             self.component_cache.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "project service:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.project_service.to_safe_string_indented()
-        );
         let _ = writeln!(&mut result, "agent types service:");
         let _ = writeln!(
             &mut result,
@@ -241,31 +234,7 @@ impl SafeDisplay for Limits {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum PluginServiceConfig {
-    Grpc(PluginServiceGrpcConfig),
-    Local(PluginServiceLocalConfig),
-}
-
-impl SafeDisplay for PluginServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            PluginServiceConfig::Grpc(grpc) => {
-                let _ = writeln!(&mut result, "grpc:");
-                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
-            }
-            PluginServiceConfig::Local(local) => {
-                let _ = writeln!(&mut result, "local:");
-                let _ = writeln!(&mut result, "{}", local.to_safe_string_indented());
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginServiceGrpcConfig {
+pub struct PluginServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: String,
@@ -275,7 +244,17 @@ pub struct PluginServiceGrpcConfig {
     pub connect_timeout: Duration,
 }
 
-impl SafeDisplay for PluginServiceGrpcConfig {
+impl PluginServiceConfig {
+    pub fn url(&self) -> Url {
+        build_url("plugin", &self.host, self.port)
+    }
+
+    pub fn uri(&self) -> Uri {
+        build_uri("plugin", &self.host, self.port)
+    }
+}
+
+impl SafeDisplay for PluginServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
@@ -286,17 +265,6 @@ impl SafeDisplay for PluginServiceGrpcConfig {
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginServiceLocalConfig {
-    pub root: PathBuf,
-}
-
-impl SafeDisplay for PluginServiceLocalConfig {
-    fn to_safe_string(&self) -> String {
-        format!("root: {:?}", self.root)
     }
 }
 
@@ -403,16 +371,6 @@ impl GolemConfig {
                 }
             }
         }
-    }
-}
-
-impl PluginServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("plugin", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("plugin", &self.host, self.port)
     }
 }
 
@@ -831,89 +789,6 @@ impl SafeDisplay for ComponentCacheConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum ProjectServiceConfig {
-    Grpc(ProjectServiceGrpcConfig),
-    Disabled(ProjectServiceDisabledConfig),
-}
-
-impl SafeDisplay for ProjectServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            ProjectServiceConfig::Grpc(grpc) => {
-                let _ = writeln!(&mut result, "grpc:");
-                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
-            }
-            ProjectServiceConfig::Disabled(disabled) => {
-                let _ = writeln!(&mut result, "disabled:");
-                let _ = writeln!(&mut result, "{}", disabled.to_safe_string_indented());
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProjectServiceGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-    pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
-    pub max_resolved_project_cache_capacity: usize,
-    #[serde(with = "humantime_serde")]
-    pub cache_time_to_idle: Duration,
-}
-
-impl ProjectServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("project", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("project", &self.host, self.port)
-    }
-}
-
-impl SafeDisplay for ProjectServiceGrpcConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(
-            &mut result,
-            "max resolved project cache capacity: {}",
-            self.max_resolved_project_cache_capacity
-        );
-        let _ = writeln!(
-            &mut result,
-            "cache time to idle: {:?}",
-            self.cache_time_to_idle
-        );
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProjectServiceDisabledConfig {
-    pub account_id: AccountId,
-}
-
-impl SafeDisplay for ProjectServiceDisabledConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "account_id: {}", self.account_id);
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
 pub enum AgentTypesServiceConfig {
     Grpc(AgentTypesServiceGrpcConfig),
     Local(AgentTypesServiceLocalConfig),
@@ -979,44 +854,7 @@ impl SafeDisplay for AgentTypesServiceGrpcConfig {
 pub struct AgentTypesServiceLocalConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum ComponentServiceConfig {
-    Local(ComponentServiceLocalConfig),
-    Grpc(ComponentServiceGrpcConfig),
-}
-
-impl SafeDisplay for ComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            ComponentServiceConfig::Local(local) => {
-                let _ = writeln!(&mut result, "local:");
-                let _ = writeln!(&mut result, "{}", local.to_safe_string_indented());
-            }
-            ComponentServiceConfig::Grpc(grpc) => {
-                let _ = writeln!(&mut result, "grpc:");
-                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceLocalConfig {
-    pub root: PathBuf,
-}
-
-impl SafeDisplay for ComponentServiceLocalConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "root: {:?}", self.root);
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceGrpcConfig {
+pub struct ComponentServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: String,
@@ -1026,7 +864,7 @@ pub struct ComponentServiceGrpcConfig {
     pub connect_timeout: Duration,
 }
 
-impl ComponentServiceGrpcConfig {
+impl ComponentServiceConfig {
     pub fn url(&self) -> Url {
         build_url("component service", &self.host, self.port)
     }
@@ -1036,7 +874,7 @@ impl ComponentServiceGrpcConfig {
     }
 }
 
-impl SafeDisplay for ComponentServiceGrpcConfig {
+impl SafeDisplay for ComponentServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
@@ -1089,7 +927,6 @@ impl Default for GolemConfig {
             resource_limits: ResourceLimitsConfig::default(),
             component_service: ComponentServiceConfig::default(),
             component_cache: ComponentCacheConfig::default(),
-            project_service: ProjectServiceConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
             engine: EngineConfig::default(),
             grpc_address: "0.0.0.0".to_string(),
@@ -1151,12 +988,6 @@ impl Default for Limits {
 }
 
 impl Default for PluginServiceConfig {
-    fn default() -> Self {
-        Self::Grpc(PluginServiceGrpcConfig::default())
-    }
-}
-
-impl Default for PluginServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
@@ -1314,12 +1145,6 @@ impl Default for ComponentCacheConfig {
 
 impl Default for ComponentServiceConfig {
     fn default() -> Self {
-        Self::Grpc(ComponentServiceGrpcConfig::default())
-    }
-}
-
-impl Default for ComponentServiceGrpcConfig {
-    fn default() -> Self {
         Self {
             host: "localhost".to_string(),
             port: 9090,
@@ -1327,26 +1152,6 @@ impl Default for ComponentServiceGrpcConfig {
             retries: RetryConfig::max_attempts_3(),
             max_component_size: 50 * 1024 * 1024,
             connect_timeout: Duration::from_secs(30),
-        }
-    }
-}
-
-impl Default for ProjectServiceConfig {
-    fn default() -> Self {
-        Self::Grpc(ProjectServiceGrpcConfig::default())
-    }
-}
-
-impl Default for ProjectServiceGrpcConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9091,
-            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
-            retries: RetryConfig::max_attempts_3(),
-            connect_timeout: Duration::from_secs(30),
-            max_resolved_project_cache_capacity: 1024,
-            cache_time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }
 }

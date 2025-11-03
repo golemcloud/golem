@@ -193,7 +193,9 @@ declare_enums! {
         Ephemeral = 1,
     }
 
+    #[derive(Default)]
     pub enum ComponentFilePermissions {
+        #[default]
         ReadOnly,
         ReadWrite,
     }
@@ -234,12 +236,6 @@ impl ComponentFilePermissions {
             "rw" => Ok(ComponentFilePermissions::ReadWrite),
             _ => Err(format!("Unknown permissions: {s}")),
         }
-    }
-}
-
-impl Default for ComponentFilePermissions {
-    fn default() -> Self {
-        Self::ReadOnly
     }
 }
 

@@ -61,8 +61,8 @@ impl oplog_processor::Guest for Component {
                         );
 
                         state.invocations.push(format!(
-                            "{}/{:?}/{}/{}",
-                            account_info.account_id.value,
+                            "{:?}/{:?}/{}/{}",
+                            account_info.account_id,
                             component_id,
                             worker_id.agent_id,
                             invocation.function_name
