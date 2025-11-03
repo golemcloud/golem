@@ -117,6 +117,9 @@ TOOL_CALL_RESPONSE=$(curl -s -X POST "http://localhost:$PORT/mcp" \
         }
     }')
 
+# Write response to log file for CI verification
+echo "$TOOL_CALL_RESPONSE" >> /tmp/mcp-execution-test.log
+
 echo "   Tool execution response (first 500 chars):"
 echo "   $TOOL_CALL_RESPONSE" | head -c 500
 echo ""
