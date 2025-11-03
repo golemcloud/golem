@@ -4079,6 +4079,7 @@ dependencies = [
  "terminal_size",
  "test-r",
  "textwrap",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite 0.25.0",
