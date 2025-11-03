@@ -32,7 +32,7 @@ use crate::model::component::{
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::fmt::{log_error, log_warn};
+use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
@@ -561,6 +561,8 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
+    // TODO: atomic
+    /*
     async fn components_for_update_or_redeploy(
         &self,
         component_name: Option<ComponentName>,
@@ -592,6 +594,7 @@ impl ComponentCommandHandler {
         }
         Ok(components)
     }
+    */
 
     pub async fn update_workers_by_components(
         &self,

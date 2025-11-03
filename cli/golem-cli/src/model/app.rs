@@ -1,7 +1,7 @@
 use crate::config::ProfileName;
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::app::app_builder::{build_application, build_profiles};
+use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
 use crate::model::component::AppComponentType;
 use crate::model::template::Template;
@@ -10,7 +10,9 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::environment::EnvironmentName;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -82,9 +84,9 @@ impl ApplicationComponentSelectMode {
     }
 }
 
+// TODO: atomic: environments
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
-    profile: Option<ProfileName>,
     components: bool,
     custom_commands: bool,
     builtin_commands: BTreeSet<String>,
@@ -93,9 +95,8 @@ pub struct DynamicHelpSections {
 }
 
 impl DynamicHelpSections {
-    pub fn show_all(profile: ProfileName, builtin_commands: BTreeSet<String>) -> Self {
+    pub fn show_all(builtin_commands: BTreeSet<String>) -> Self {
         Self {
-            profile: Some(profile),
             components: true,
             custom_commands: true,
             builtin_commands,
@@ -106,7 +107,6 @@ impl DynamicHelpSections {
 
     pub fn show_components() -> Self {
         Self {
-            profile: None,
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -117,7 +117,6 @@ impl DynamicHelpSections {
 
     pub fn show_custom_commands(builtin_commands: BTreeSet<String>) -> Self {
         Self {
-            profile: None,
             components: false,
             custom_commands: true,
             builtin_commands,
@@ -128,7 +127,6 @@ impl DynamicHelpSections {
 
     pub fn show_api_definitions() -> Self {
         Self {
-            profile: None,
             components: false,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -137,9 +135,8 @@ impl DynamicHelpSections {
         }
     }
 
-    pub fn show_api_deployments(profile: ProfileName) -> Self {
+    pub fn show_api_deployments() -> Self {
         Self {
-            profile: Some(profile),
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -165,9 +162,13 @@ impl DynamicHelpSections {
     }
 
     pub fn api_deployments_profile(&self) -> Option<&ProfileName> {
+        // TODO: atomic
+        /*
         (self.api_deployments)
             .then_some(self.profile.as_ref())
             .flatten()
+        */
+        None
     }
 }
 
@@ -536,6 +537,7 @@ pub type MultiSourceHttpApiDefinitionNames = Vec<WithSource<Vec<HttpApiDefinitio
 #[derive(Clone, Debug)]
 pub struct Application {
     all_sources: BTreeSet<PathBuf>,
+    application_name: WithSource<ApplicationName>,
     temp_dir: Option<WithSource<String>>,
     wit_deps: WithSource<Vec<String>>,
     components: BTreeMap<AppComponentName, Component>,
@@ -550,10 +552,14 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn profiles_from_raw_apps(
+    pub fn environments_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
-        build_profiles(apps)
+    ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
+        build_environments(apps)
+    }
+
+    pub fn application_name(&self) -> &ApplicationName {
+        &self.application_name.value
     }
 
     pub fn from_raw_apps(
@@ -1305,10 +1311,13 @@ mod app_builder {
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use colored::Colorize;
     use golem_common::model::api_definition::RouteMethod;
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::environment::EnvironmentName;
     use heck::{
         ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
         ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
     };
+    use indoc::formatdoc;
     use itertools::Itertools;
     use serde::Serialize;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1317,7 +1326,7 @@ mod app_builder {
     use std::str::FromStr;
     use url::Url;
 
-    // Load full manifest EXCEPT profiles
+    // Load full manifest EXCEPT environments
     pub fn build_application(
         available_profiles: &BTreeSet<ProfileName>,
         apps: Vec<app_raw::ApplicationWithSource>,
@@ -1325,15 +1334,16 @@ mod app_builder {
         AppBuilder::build_app(available_profiles, apps)
     }
 
-    // Load only profiles
-    pub fn build_profiles(
+    // Load only environments
+    pub fn build_environments(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
-        AppBuilder::build_profiles(apps)
+    ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
+        AppBuilder::build_environments(apps)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     enum UniqueSourceCheckedEntityKey {
+        App,
         Include,
         TempDir,
         WitDeps,
@@ -1352,13 +1362,14 @@ mod app_builder {
             site: HttpApiDeploymentSite,
             definition: HttpApiDefinitionName,
         },
-        Profile(ProfileName),
+        Environment(EnvironmentName),
     }
 
     impl UniqueSourceCheckedEntityKey {
         fn entity_kind(&self) -> &'static str {
             let property = "Property";
             match self {
+                UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::WitDeps => property,
@@ -1371,12 +1382,13 @@ mod app_builder {
                     "HTTP API Definition Route"
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment { .. } => "HTTP API Deployment",
-                UniqueSourceCheckedEntityKey::Profile(_) => "Profile",
+                UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
             }
         }
 
         fn entity_name(self) -> String {
             match self {
+                UniqueSourceCheckedEntityKey::App => "app".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Include => {
                     "include".log_color_highlight().to_string()
                 }
@@ -1437,8 +1449,8 @@ mod app_builder {
                         definition.as_str().log_color_highlight(),
                     )
                 }
-                UniqueSourceCheckedEntityKey::Profile(profile_name) => {
-                    profile_name.0.log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::Environment(environment_name) => {
+                    environment_name.0.log_color_highlight().to_string()
                 }
             }
         }
@@ -1446,6 +1458,7 @@ mod app_builder {
 
     #[derive(Default)]
     struct AppBuilder {
+        app: Option<WithSource<ApplicationName>>,
         include: Vec<String>,
         temp_dir: Option<WithSource<String>>,
         wit_deps: WithSource<Vec<String>>,
@@ -1466,14 +1479,14 @@ mod app_builder {
         raw_components: HashMap<AppComponentName, (PathBuf, app_raw::Component)>,
         resolved_components: BTreeMap<AppComponentName, Component>,
 
-        profiles: BTreeMap<ProfileName, app_raw::Profile>,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
 
     impl AppBuilder {
-        // NOTE: build_app DOES NOT include profiles, those are preloaded with build_profiles, so
+        // NOTE: build_app DOES NOT include environments, those are preloaded with build_environments, so
         //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
@@ -1519,7 +1532,25 @@ mod app_builder {
                 dependency_sources
             };
 
+            let application_name = match builder.app {
+                Some(application_name) => application_name,
+                None => {
+                    validation.add_error(
+                        format!(
+                            "Application name not found. Please specify it in you root {} application manifest with the `{}` property!",
+                            "golem.yaml".log_color_highlight(),
+                            "app".log_color_highlight(),
+                        ),
+                    );
+                    WithSource::new(
+                        "<unknown>".into(),
+                        ApplicationName("<undefined>".to_string()),
+                    )
+                }
+            };
+
             validation.build(Application {
+                application_name,
                 all_sources: builder.all_sources,
                 temp_dir: builder.temp_dir,
                 wit_deps: builder.wit_deps,
@@ -1536,19 +1567,17 @@ mod app_builder {
 
         // NOTE: Unlike build_app, here we do not consume the source apps, so they can be
         //       used for build_app. For more info on this separation, see build_app.
-        //
-        //       Ironically build_profiles does not build BuildProfiles, only regular ones.
-        fn build_profiles(
+        fn build_environments(
             apps: &[app_raw::ApplicationWithSource],
-        ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
+        ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
             let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
 
             for app in apps {
-                builder.add_raw_app_profiles_only(&mut validation, app);
+                builder.add_raw_app_environments_only(&mut validation, app);
             }
 
-            validation.build(builder.profiles)
+            validation.build(builder.environments)
         }
 
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
@@ -1569,6 +1598,25 @@ mod app_builder {
                     let app_source = PathExtra::new(&app.source);
                     let app_source_dir = app_source.parent().unwrap();
                     self.all_sources.insert(app_source.to_path_buf());
+
+                    if let Some(app_name) = app.application.app {
+                        if self.add_entity_source(UniqueSourceCheckedEntityKey::App, &app.source) {
+                            let app_name = match app_name.parse::<ApplicationName>() {
+                                Ok(app_name) => app_name,
+                                Err(err) => {
+                                    validation.add_error(format!(
+                                        "Invalid application name: {}, {}",
+                                        app_name.log_color_highlight(),
+                                        err.log_color_error_highlight()
+                                    ));
+                                    ApplicationName(app_name)
+                                }
+                            };
+
+                            self.app =
+                                Some(WithSource::new(app_source_dir.to_path_buf(), app_name));
+                        }
+                    }
 
                     if let Some(dir) = app.application.temp_dir {
                         if self
@@ -1726,88 +1774,43 @@ mod app_builder {
             );
         }
 
-        fn add_raw_app_profiles_only(
+        fn add_raw_app_environments_only(
             &mut self,
             validation: &mut ValidationBuilder,
             app: &app_raw::ApplicationWithSource,
         ) {
-            fn check_not_allowed_for_profile<T>(
-                message_suffix: &str,
-                validation: &mut ValidationBuilder,
-                property_name: &str,
-                value: &Option<T>,
-            ) {
-                if value.is_some() {
-                    validation.add_error(format!(
-                        "Property {} is not allowed for {}",
-                        property_name.log_color_highlight(),
-                        message_suffix
-                    ))
-                }
-            }
-
-            let mut default_profile_names = BTreeSet::<ProfileName>::new();
+            let mut default_environment_names = BTreeSet::<EnvironmentName>::new();
 
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
-                    for (profile_name, profile) in &app.application.profiles {
+                    for (environment_name, environment) in &app.application.environments {
+                        let environment_name = match environment_name.parse::<EnvironmentName>() {
+                            Ok(environment_name) => environment_name,
+                            Err(err) => {
+                                validation.add_error(format!(
+                                    "Invalid environment name: {}, {}",
+                                    environment_name.log_color_highlight(),
+                                    err.log_color_error_highlight()
+                                ));
+                                EnvironmentName(environment_name.clone())
+                            }
+                        };
+
                         if self.add_entity_source(
-                            UniqueSourceCheckedEntityKey::Profile(profile_name.clone()),
+                            UniqueSourceCheckedEntityKey::Environment(environment_name.clone()),
                             &app.source,
                         ) {
-                            if profile.default == Some(true) {
-                                default_profile_names.insert(profile_name.clone());
+                            if environment.default == Some(true) {
+                                default_environment_names.insert(environment_name.clone());
                             };
 
-                            self.profiles.insert(profile_name.clone(), profile.clone());
+                            self.environments
+                                .insert(environment_name.clone(), environment.clone());
                             validation.with_context(
-                                vec![("profile", profile_name.to_string())],
-                                |validation| {
-                                    let is_builtin_local = profile_name.is_builtin_local();
-                                    let is_cloud = profile_name.is_builtin_cloud();
-                                    if is_builtin_local || is_cloud {
-                                        check_not_allowed_for_profile(
-                                            &format!("{} profiles", "Cloud".log_color_highlight()),
-                                            validation,
-                                            "url",
-                                            &profile.url,
-                                        );
-
-                                        check_not_allowed_for_profile(
-                                            &format!(
-                                                "builtin {} profiles",
-                                                "local".log_color_highlight()
-                                            ),
-                                            validation,
-                                            "worker_url",
-                                            &profile.worker_url,
-                                        );
-                                    }
-                                    if is_builtin_local && is_cloud {
-                                        validation.add_error(format!(
-                                            "Builtin profile '{}' cannot be used as Cloud profile, using 'cloud:true' or project are not allowed!",
-                                            profile_name.0.log_color_highlight(),
-                                        ))
-                                    }
-
-                                    if profile.reset.unwrap_or_default() {
-                                        if profile.redeploy_all.unwrap_or_default() {
-                                            validation.add_error(format!(
-                                                "Property '{}' and '{}' cannot be set to true at the same time!",
-                                                "reset".log_color_highlight(),
-                                                "redeploy".log_color_highlight()
-                                            ));
-                                        }
-
-                                        if profile.redeploy_agents.unwrap_or_default() {
-                                            validation.add_error(format!(
-                                                "Property '{}' and '{}' cannot be set to true at the same time!",
-                                                "reset".log_color_highlight(),
-                                                "redeploy_agents".log_color_highlight()
-                                            ));
-                                        }
-                                    }
+                                vec![("environment", environment_name.0)],
+                                |_validation| {
+                                    // TODO: atomic: validate environment
                                 },
                             );
                         }
@@ -1815,14 +1818,50 @@ mod app_builder {
                 },
             );
 
-            if default_profile_names.len() > 1 {
+            if default_environment_names.len() > 1 {
                 validation.add_error(format!(
-                    "Only one profile can be used as default! Profiles marked as default: {}",
-                    default_profile_names
+                    "Only one environment can be marked as default! Environments marked as default: {}",
+                    default_environment_names
                         .iter()
                         .map(|pn| pn.0.log_color_highlight())
                         .join(", ")
                 ));
+            } else if default_environment_names.is_empty() {
+                match self.environments.len() {
+                    0 => {
+                        validation
+                            .add_error("At least one environment has to be defined!".to_string());
+                    }
+                    1 => {
+                        let (environment_name, environment) =
+                            self.environments.iter_mut().next().unwrap();
+                        match &environment.default {
+                            Some(true) => {
+                                // NOP
+                            }
+                            Some(false) => {
+                                validation.add_error(formatdoc! {"
+                                  Environment `{}` is the only defined environment, but it explicitly marked as not default!
+                                  Either mark it as default or add another default environment.
+                                  ",
+                                  environment_name.0.log_color_highlight()
+                                })
+                            }
+                            None => {
+                                // if there is only one environment without a default property,
+                                // then mark it implicitly as default
+                                environment.default = Some(true);
+                            }
+                        }
+                        self.environments.iter_mut().next().unwrap().1.default = Some(true);
+                    }
+                    _ => {
+                        validation.add_error(format!(
+                            "At least one environment must be marked as default! Use `{}` to mark an environment as default.",
+                            "default: true".log_color_highlight()
+                        ));
+                    }
+                }
             }
         }
 

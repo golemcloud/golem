@@ -15,7 +15,9 @@
 use crate::command::shared_args::StreamArgs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
-use crate::model::environment::{EnvironmentReference, ResolvedEnvironmentIdentity};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
+};
 use chrono::{DateTime, Utc};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
@@ -237,9 +239,10 @@ pub struct WorkerNameMatch {
 
 impl WorkerNameMatch {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
-        self.environment
-            .as_ref()
-            .and_then(|env| env.resolved_from.as_ref())
+        self.environment.as_ref().and_then(|env| match &env.source {
+            ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
+            ResolvedEnvironmentIdentitySource::DefaultFromManifest => None,
+        })
     }
 }
 

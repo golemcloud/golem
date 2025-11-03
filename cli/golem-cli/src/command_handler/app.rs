@@ -28,6 +28,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
@@ -418,7 +419,7 @@ impl AppCommandHandler {
         let _environment = self
             .ctx
             .environment_handler()
-            .select_environment(None)
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
         // TODO: atomic
@@ -514,7 +515,7 @@ impl AppCommandHandler {
         let environment = self
             .ctx
             .environment_handler()
-            .select_environment(None)
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
         let mut components = Vec::with_capacity(selected_component_names.len());

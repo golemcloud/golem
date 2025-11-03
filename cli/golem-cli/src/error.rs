@@ -1,4 +1,4 @@
-use crate::config::ProfileName;
+use golem_common::model::environment::EnvironmentName;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use strum_macros::{Display, EnumIter};
@@ -37,9 +37,12 @@ impl Error for HintError {}
 
 #[derive(Debug, Display)]
 pub enum ContextInitHintError {
-    ProfileNotFound {
-        profile_name: ProfileName,
-        manifest_profile_names: Vec<ProfileName>,
+    CannotSelectEnvironmentWithoutManifest {
+        requested_environment_name: EnvironmentName,
+    },
+    EnvironmentNotFound {
+        requested_environment_name: EnvironmentName,
+        manifest_environment_names: Vec<EnvironmentName>,
     },
 }
 

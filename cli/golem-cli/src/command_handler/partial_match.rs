@@ -17,7 +17,6 @@ use crate::command::{
     GolemCliGlobalFlags,
 };
 use crate::command_handler::Handlers;
-use crate::config::{Config, ProfileName};
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
@@ -28,8 +27,7 @@ use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
 use colored::Colorize;
-use std::collections::BTreeSet;
-use std::path::Path;
+use indoc::indoc;
 use std::sync::Arc;
 
 pub struct ErrorHandler {
@@ -47,8 +45,6 @@ impl ErrorHandler {
     ) -> anyhow::Result<()> {
         match partial_match {
             GolemCliCommandPartialMatch::AppHelp => {
-                let profile = self.ctx.profile_name().clone();
-
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
@@ -59,7 +55,6 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        profile,
                         builtin_app_subcommands(),
                     ))?
                 }
@@ -67,8 +62,6 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::AppMissingSubcommandHelp => {
-                let profile = self.ctx.profile_name().clone();
-
                 self.ctx.silence_app_context_init().await;
                 self.ctx
                     .app_handler()
@@ -79,7 +72,6 @@ impl ErrorHandler {
                 if let Some(app_ctx) = app_ctx.opt()? {
                     logln("");
                     app_ctx.log_dynamic_help(&DynamicHelpSections::show_all(
-                        profile,
                         builtin_app_subcommands(),
                     ))?
                 }
@@ -116,8 +108,8 @@ impl ErrorHandler {
 
                 Ok(())
             }
-            GolemCliCommandPartialMatch::WorkerHelp => {
-                // TODO
+            GolemCliCommandPartialMatch::AgentHelp => {
+                // TODO: atomic: show agents
                 Ok(())
             }
             GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName { worker_name } => {
@@ -208,7 +200,7 @@ impl ErrorHandler {
                 Ok(())
             }
             GolemCliCommandPartialMatch::ProfileSwitchMissingProfileName => {
-                show_available_profiles_help(self.ctx.config_dir(), vec![].as_slice());
+                // TODO: atomic: show available profiles
 
                 Ok(())
             }
@@ -266,41 +258,47 @@ impl ErrorHandler {
     }
 
     pub fn handle_context_init_hint_errors(
-        global_flags: &GolemCliGlobalFlags,
+        _global_flags: &GolemCliGlobalFlags,
         hint_error: &ContextInitHintError,
     ) -> anyhow::Result<()> {
         match hint_error {
-            ContextInitHintError::ProfileNotFound {
-                profile_name,
-                manifest_profile_names,
+            ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
+                requested_environment_name,
             } => {
                 log_error(format!(
-                    "Profile '{}' not found!",
-                    profile_name.0.log_color_highlight()
+                    "Environment '{}' not found!",
+                    requested_environment_name.0.log_color_highlight()
                 ));
 
-                show_available_profiles_help(&global_flags.config_dir(), manifest_profile_names);
+                logln("");
+
+                logln(indoc! { "
+                    No application manifests were detected!
+
+                    Switch to a directory that contains an application manifest (golem.yaml),
+                    or use the --app_manifest_path flag.
+                "});
+
+                Ok(())
+            }
+            ContextInitHintError::EnvironmentNotFound {
+                requested_environment_name,
+                manifest_environment_names,
+            } => {
+                log_error(format!(
+                    "Environment '{}' not found!",
+                    requested_environment_name.0.log_color_highlight()
+                ));
+
+                logln("");
+
+                logln("Available environments:".log_color_help_group().to_string());
+                for environment_name in manifest_environment_names {
+                    logln(format!("- {}", environment_name.0));
+                }
 
                 Ok(())
             }
         }
-    }
-}
-
-fn show_available_profiles_help(config_dir: &Path, manifest_profile_names: &[ProfileName]) {
-    let Ok(config) = Config::from_dir(config_dir) else {
-        return;
-    };
-
-    let profile_names = {
-        let mut profile_names = BTreeSet::from_iter(manifest_profile_names.iter().cloned());
-        profile_names.extend(config.profiles.keys().cloned());
-        profile_names
-    };
-
-    logln("");
-    logln("Available profiles:".log_color_help_group().to_string());
-    for profile_name in profile_names {
-        logln(format!("- {profile_name}"));
     }
 }

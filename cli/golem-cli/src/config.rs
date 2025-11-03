@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app_raw::{BuiltinServer, Server};
 use crate::model::format::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
@@ -29,7 +30,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
-pub const DEFAULT_OSS_URL: &str = "http://localhost:9881";
+pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
 pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
@@ -41,6 +42,7 @@ pub struct Config {
     pub default_profile: Option<ProfileName>,
 }
 
+// TODO: atomic: drop?
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
 
@@ -128,7 +130,7 @@ pub struct Profile {
 
 impl Profile {
     pub fn default_local_profile() -> Self {
-        let url = Url::parse(DEFAULT_OSS_URL).unwrap();
+        let url = Url::parse(BUILTIN_LOCAL_URL).unwrap();
         Self {
             custom_url: Some(url),
             custom_worker_url: None,
@@ -322,6 +324,57 @@ impl From<&Profile> for ClientConfig {
             .unwrap_or_else(|| registry_url.clone());
 
         let allow_insecure = profile.allow_insecure;
+
+        ClientConfig {
+            registry_url,
+            worker_url,
+            service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
+            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
+            file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                allow_insecure,
+            ),
+        }
+    }
+}
+
+impl From<&Server> for ClientConfig {
+    fn from(server: &Server) -> Self {
+        struct BaseConfig {
+            registry_url: Url,
+            worker_url: Url,
+            allow_insecure: bool,
+        }
+
+        let BaseConfig {
+            registry_url,
+            worker_url,
+            allow_insecure,
+        } = match server {
+            Server::Builtin(builtin) => match builtin {
+                BuiltinServer::Local => {
+                    let local_url =
+                        Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse DEFAULT_OSS_URL");
+                    BaseConfig {
+                        registry_url: local_url.clone(),
+                        worker_url: local_url.clone(),
+                        allow_insecure: false,
+                    }
+                }
+                BuiltinServer::Cloud => {
+                    let cloud_url = Url::parse(CLOUD_URL).expect("Failed to parse CLOUD_URL");
+                    BaseConfig {
+                        registry_url: cloud_url.clone(),
+                        worker_url: cloud_url.clone(),
+                        allow_insecure: false,
+                    }
+                }
+            },
+            Server::Custom(_custom) => {
+                // TODO: atomic
+                todo!()
+            }
+        };
 
         ClientConfig {
             registry_url,

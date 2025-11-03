@@ -33,6 +33,7 @@ use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolv
 use anyhow::{anyhow, bail, Context};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
+use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -98,28 +99,28 @@ impl ToolsWithEnsuredCommonDeps {
 pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
-    pub profiles: Option<BTreeMap<ProfileName, app_raw::Profile>>,
+    pub environments: Option<BTreeMap<EnvironmentName, app_raw::Environment>>,
 }
 
 impl ApplicationContext {
-    pub fn preload_sources_and_get_profiles(
+    pub fn preload_sources_and_get_environments(
         source_mode: ApplicationSourceMode,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match load_profiles(source_mode) {
-            Some(profiles) => to_anyhow(
-                "Failed to load application manifest profiles, see problems above",
-                profiles,
-                Some(|mut profiles| {
-                    profiles.loaded_with_warnings = true;
-                    profiles
+        match load_environments(source_mode) {
+            Some(environments) => to_anyhow(
+                "Failed to load application manifest environments, see problems above",
+                environments,
+                Some(|mut preload_result| {
+                    preload_result.loaded_with_warnings = true;
+                    preload_result
                 }),
             ),
             None => Ok(ApplicationPreloadResult {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
-                profiles: None,
+                environments: None,
             }),
         }
     }
@@ -731,19 +732,19 @@ fn load_app(
     })
 }
 
-fn load_profiles(
+fn load_environments(
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::profiles_from_raw_apps(raw_apps.as_slice()).map(|profiles| {
+            Application::environments_from_raw_apps(raw_apps.as_slice()).map(|environments| {
                 ApplicationPreloadResult {
                     source_mode: ApplicationSourceMode::Preloaded {
                         raw_apps,
                         calling_working_dir,
                     },
                     loaded_with_warnings: false,
-                    profiles: Some(profiles),
+                    environments: Some(environments),
                 }
             })
         })

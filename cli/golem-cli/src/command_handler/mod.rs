@@ -44,8 +44,6 @@ use clap::CommandFactory;
 use clap_complete::Shell;
 #[cfg(feature = "server-commands")]
 use clap_verbosity_flag::Verbosity;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
 use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -103,51 +101,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         log_output_for_help: Option<Output>,
         hooks: Arc<Hooks>,
     ) -> anyhow::Result<Self> {
-        let start_local_server_yes = Arc::new(tokio::sync::RwLock::new(global_flags.yes));
         Ok(Self {
-            ctx: Arc::new(
-                Context::new(
-                    global_flags,
-                    log_output_for_help,
-                    start_local_server_yes.clone(),
-                    Self::start_local_server_hook(start_local_server_yes),
-                )
-                .await?,
-            ),
+            ctx: Arc::new(Context::new(global_flags, log_output_for_help).await?),
             hooks,
         })
-    }
-
-    #[cfg(feature = "server-commands")]
-    fn start_local_server_hook(
-        yes: Arc<tokio::sync::RwLock<bool>>,
-    ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
-        Box::new(move || {
-            let yes = yes.clone();
-            async move {
-                if !InteractiveHandler::confirm_auto_start_local_server(*yes.read().await)? {
-                    return Ok(());
-                }
-
-                // NOTE: using full path, so we can avoid unused imports for default features
-                crate::log::log_warn_action("Starting", "local server");
-
-                Hooks::run_server().await?;
-
-                // NOTE: using full path, so we can avoid unused imports for default features
-                crate::log::log_action("Started", "local server");
-
-                Ok(())
-            }
-            .boxed()
-        })
-    }
-
-    #[cfg(not(feature = "server-commands"))]
-    fn start_local_server_hook(
-        _yes: Arc<tokio::sync::RwLock<bool>>,
-    ) -> Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync> {
-        Box::new(|| async { Ok(()) }.boxed())
     }
 
     async fn new_with_init_hint_error_handler(

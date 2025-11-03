@@ -37,6 +37,8 @@ impl ApplicationWithSource {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,7 +58,7 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_api: Option<HttpApi>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub profiles: HashMap<ProfileName, Profile>,
+    pub environments: HashMap<String, Environment>,
 }
 
 impl Application {
@@ -211,33 +213,6 @@ pub struct HttpApiDeployment {
     pub definitions: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Profile {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub default: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub project: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub worker_url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub format: Option<Format>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub build_profile: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auto_confirm: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_agents: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_http_api: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_all: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub reset: Option<bool>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Environment {
@@ -257,7 +232,7 @@ pub struct Environment {
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
 pub enum Server {
     Builtin(BuiltinServer),
-    Custom(),
+    Custom(CustomServer),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -270,9 +245,11 @@ pub enum BuiltinServer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CustomServer {
-    account: Option<String>,
-    url: Url,
-    http_api_gateway_proxy_url: Option<String>,
+    pub account: Option<String>,
+    pub url: Url,
+    pub worker_url: Option<Url>,
+    pub allow_insecure: Option<bool>,
+    // TODO: atomic: auth
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -283,7 +260,13 @@ pub struct CliOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_confirm: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub auto_redeploy: Option<bool>,
+    pub redeploy_agents: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub redeploy_http_api: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub redeploy_all: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reset: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
