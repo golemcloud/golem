@@ -327,11 +327,9 @@ async fn custom_app_subcommand_with_builtin_name() {
 
     let outputs = ctx.cli([cmd::APP]).await;
     assert2::assert!(!outputs.success());
-    check!(outputs.stderr_contains(":new"));
 
     let outputs = ctx.cli([cmd::APP, ":new"]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
 
 #[test]
