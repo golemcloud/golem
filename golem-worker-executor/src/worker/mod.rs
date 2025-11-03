@@ -1636,7 +1636,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             if let Some(updated_status) = updated_status {
                 if updated_status != old_status {
-                    tracing::debug!("Updating worker status to {:?}", updated_status);
                     *self.last_known_status.write().await = updated_status.clone();
                     // TODO: We should do this in the background on a timer instead of on every commit.
                     self.worker_service()
