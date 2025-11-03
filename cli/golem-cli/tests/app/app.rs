@@ -318,6 +318,7 @@ async fn custom_app_subcommand_with_builtin_name() {
     fs::append_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+
             customCommands:
               new:
                 - command: cargo tree
