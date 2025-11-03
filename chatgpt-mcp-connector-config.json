@@ -1,0 +1,7 @@
+{
+  "name": "golem-cli-mcp",
+  "description": "Golem CLI MCP Server - 96 CLI tools for cloud computing",
+  "transport": "http",
+  "url": "http://localhost:8088/mcp",
+  "timeout_ms": 300000
+}
