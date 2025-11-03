@@ -303,7 +303,6 @@ impl GolemCliFallbackCommand {
         });
 
         if with_env_overrides {
-            // TODO: atomic
             cmd.global_flags = cmd.global_flags.with_env_overrides()?;
         }
 

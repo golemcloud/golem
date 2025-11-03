@@ -21,7 +21,7 @@ use crate::model::environment::{
 use chrono::{DateTime, Utc};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::{ExportedResourceInstanceDescription, UpdateRecord};
+use golem_client::model::{UpdateRecord, WorkerResourceDescription};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentId;
@@ -33,7 +33,6 @@ use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct WorkerName(pub String);
@@ -108,7 +107,7 @@ pub struct WorkerMetadataView {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl TrimDateTime for WorkerMetadataView {
@@ -160,16 +159,19 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl WorkerMetadata {
-    pub fn from(component_name: ComponentName, value: golem_client::model::WorkerMetadata) -> Self {
+    pub fn from(
+        component_name: ComponentName,
+        value: golem_client::model::WorkerMetadataDto,
+    ) -> Self {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            created_by: Uuid::nil().into(), // TODO: atomic: value.created_by
-            environment_id: value.project_id.into(), // TODO: atomic: value.environment_id
+            created_by: value.created_by.into(),
+            environment_id: value.environment_id.into(),
             args: value.args,
             env: value.env,
             status: value.status,
@@ -185,7 +187,7 @@ impl WorkerMetadata {
                 value
                     .exported_resource_instances
                     .into_iter()
-                    .map(|desc| (desc.key.resource_id.to_string(), desc.description)),
+                    .map(|desc| (desc.key.to_string(), desc.description)),
             ),
         }
     }
