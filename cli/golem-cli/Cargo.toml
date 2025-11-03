@@ -87,7 +87,7 @@ prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 regex = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
