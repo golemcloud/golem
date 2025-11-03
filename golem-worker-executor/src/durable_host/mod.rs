@@ -1718,7 +1718,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
-            warn!("COMMIT FINISH SPAN");
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))
