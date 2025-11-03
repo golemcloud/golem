@@ -31,6 +31,7 @@ use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::info;
 use uuid::Uuid;
 
@@ -65,14 +66,14 @@ pub trait LimitService: Send + Sync {
 }
 
 pub struct LimitServiceDefault {
-    limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>>,
+    limit_service_client: GrpcClient<CloudLimitsServiceClient<OtelGrpcService<Channel>>>,
     access_token: Uuid,
     retry_config: RetryConfig,
 }
 
 impl LimitServiceDefault {
     pub fn new(config: &RemoteServiceConfig) -> Self {
-        let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
+        let limit_service_client = GrpcClient::new(
             "limit",
             |channel| {
                 CloudLimitsServiceClient::new(channel)

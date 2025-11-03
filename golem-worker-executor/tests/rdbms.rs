@@ -42,7 +42,7 @@ inherit_test_dep!(Tracing);
 #[test_dep]
 async fn postgres() -> DockerPostgresRdb {
     let unique_network_id = Uuid::new_v4().to_string();
-    DockerPostgresRdb::new(&unique_network_id).await
+    DockerPostgresRdb::new(&unique_network_id, false).await
 }
 
 #[test_dep]

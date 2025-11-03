@@ -35,7 +35,7 @@ pub type ScanCursor = u64;
 /// contiguous.
 ///
 #[async_trait]
-pub trait IndexedStorage: Debug {
+pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
     async fn number_of_replicas(
         &self,
@@ -85,6 +85,31 @@ pub trait IndexedStorage: Debug {
         id: u64,
         value: &[u8],
     ) -> Result<(), String>;
+
+    /// Appends multiple entries to the given key with the given id
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: &[(u64, Bytes)],
+    ) -> Result<(), String> {
+        for (id, value) in pairs {
+            self.append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace.clone(),
+                key,
+                *id,
+                value,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 
     /// Gets the number of entries in the index of the given key
     async fn length(
@@ -344,6 +369,29 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 value,
+            )
+            .await
+    }
+
+    /// Appends multiple entries to the given key with the given id, serializing the value first
+    pub async fn append_many<V: Encode>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: &[(u64, &V)],
+    ) -> Result<(), String> {
+        let mut serialized_pairs = Vec::with_capacity(pairs.len());
+        for (id, value) in pairs {
+            serialized_pairs.push((*id, serialize(value)?));
+        }
+        self.storage
+            .append_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                &serialized_pairs,
             )
             .await
     }

@@ -180,7 +180,7 @@ impl SchedulerServiceDefault {
                         }
                     }
                 }
-                .in_current_span(),
+                .instrument(span!(parent: None, Level::INFO, "Scheduler loop")),
             )
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
@@ -529,6 +529,7 @@ mod tests {
             PrimaryOplogService::new(
                 Arc::new(InMemoryIndexedStorage::new()),
                 Arc::new(InMemoryBlobStorage::new()),
+                1,
                 1,
                 1024,
             )

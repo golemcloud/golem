@@ -357,6 +357,14 @@ impl RoutingTable {
     }
 }
 
+impl Display for RoutingTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Number of shards: {}", self.number_of_shards.value)?;
+        writeln!(f, "Pods used: {:?}", self.all())?;
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 pub struct RoutingTableEntry {
     shard_id: ShardId,

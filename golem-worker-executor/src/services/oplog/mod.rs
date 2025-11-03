@@ -21,7 +21,7 @@ pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, Comp
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
+    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel, UpdateDescription,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
@@ -168,7 +168,8 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
     async fn add(&self, entry: OplogEntry) -> OplogIndex;
 
-    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+    /// A variant of add that can inject failures in tests. TO BE REMOVED
+    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.add(entry).await;
         Ok(())
     }
@@ -204,9 +205,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        self.add(entry).await;
+        let index = self.add(entry).await;
         self.commit(CommitLevel::Always).await;
-        self.current_oplog_index().await
+        index
     }
 
     /// Uploads a big oplog payload and returns a reference to it
@@ -214,6 +215,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Downloads a big oplog payload by its reference
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
+
+    /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
+    async fn switch_persistence_level(&self, mode: PersistenceLevel);
 }
 
 pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {

@@ -404,7 +404,7 @@ pub mod api {
     macro_rules! recorded_grpc_api_request {
         ($api_name:expr,  $($fields:tt)*) => {
             {
-                let span = tracing::span!(tracing::Level::INFO, "api_request", api = $api_name,  api_type = "grpc", $($fields)*);
+                let span = tracing::span!(tracing::Level::INFO, concat!("gRPC ", $api_name), api = $api_name,  api_type = "grpc", $($fields)*);
                 $crate::metrics::api::RecordedApiRequest::new($api_name, "grpc", span)
             }
         };
@@ -414,7 +414,7 @@ pub mod api {
     macro_rules! recorded_http_api_request {
         ($api_name:expr,  $($fields:tt)*) => {
             {
-                let span = tracing::span!(tracing::Level::INFO, "api_request", api = $api_name,  api_type = "http", $($fields)*);
+                let span = tracing::span!(tracing::Level::INFO, concat!("HTTP ", $api_name), api = $api_name,  api_type = "http", $($fields)*);
                 $crate::metrics::api::RecordedApiRequest::new($api_name, "http", span)
             }
         };

@@ -27,6 +27,7 @@ pub mod metrics;
 pub mod model;
 pub mod newtype;
 pub mod one_shot;
+pub mod poem;
 pub mod read_only_lock;
 pub mod redis;
 pub mod repo;

@@ -40,13 +40,15 @@ use crate::config::WorkerServiceConfig;
 use crate::service::Services;
 use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
+use golem_common::poem::LazyEndpointExt;
 use golem_service_base::db;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::{include_dir, Dir};
+use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -111,10 +113,11 @@ impl WorkerService {
     pub async fn run(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
+        tracer: Option<SdkTracer>,
     ) -> anyhow::Result<RunDetails> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let http_port = self.start_http_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set).await?;
+        let http_port = self.start_http_server(join_set, tracer.clone()).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
 
         info!(
             "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
@@ -132,9 +135,10 @@ impl WorkerService {
     pub async fn start_endpoints(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
         Ok(TrafficReadyEndpoints {
             grpc_port,
@@ -159,6 +163,7 @@ impl WorkerService {
     async fn start_http_server(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
+        tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let api_service = api::make_open_api_service(&self.services);
 
@@ -176,7 +181,10 @@ impl WorkerService {
             .nest("/specs", spec)
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
-            .with(cors);
+            .with(cors)
+            .with_if_lazy(tracer.is_some(), || {
+                OpenTelemetryTracing::new(tracer.unwrap())
+            });
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.port));
@@ -203,11 +211,14 @@ impl WorkerService {
     async fn start_api_gateway_server(
         &self,
         join_set: &mut JoinSet<anyhow::Result<()>>,
+        tracer: Option<SdkTracer>,
     ) -> Result<u16, anyhow::Error> {
         let route = Route::new()
             .nest("/", api::custom_http_request_api(&self.services))
             .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+            .with_if_lazy(tracer.is_some(), || {
+                OpenTelemetryTracing::new(tracer.unwrap())
+            });
 
         let poem_listener = poem::listener::TcpListener::bind(format!(
             "0.0.0.0:{}",
