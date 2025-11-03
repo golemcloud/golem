@@ -18,10 +18,9 @@ use serde_json::json;
 use tokio::fs as aiofs;
 use anyhow::{ anyhow, Context, Result };
 
-use axum::{ extract::State, routing::{ get, post }, Json, Router };
+use axum::{ extract::State, routing::post, Json, Router };
 use axum::response::{ IntoResponse, Response };
 use axum::extract::rejection::JsonRejection;
-use axum::{ extract::Request, http::{ StatusCode, header::AUTHORIZATION }, middleware::Next };
 use serde::{ Deserialize, Serialize };
 use serde_json::Value;
 use tokio::io::{ AsyncBufReadExt, BufReader };
@@ -103,15 +102,6 @@ pub fn rpc_err(
             data,
         }),
     })
-}
-
-#[derive(serde::Serialize)]
-struct ResultBody {
-    available_methods: [&'static str; 2],
-    input_schema: ToolInputSchema,
-    authentication: &'static str,
-    message: &'static str,
-    golem_server: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -272,6 +262,29 @@ pub struct SubcommandDescriptor {
     pub subcommands: Vec<SubcommandDescriptor>,
 }
 
+#[derive(serde::Serialize)]
+struct ResourceNode {
+    pub name: String,
+
+    // When this node is just a container (e.g. "api"), omit the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available: Option<serde_json::Value>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ResourceNode>,
+}
+
+#[derive(serde::Serialize)]
+struct ListResourcesResult {
+    pub resources: Vec<ResourceNode>,
+}
+
+struct NodeBuilder {
+    name: String,
+    available: Option<serde_json::Value>,
+    children: BTreeMap<String, NodeBuilder>,
+}
+
 // ---------- App state ------------------------------------------------------------
 
 #[derive(Clone)]
@@ -289,52 +302,6 @@ const NEXTRA_URL: &str = "https://learn.golem.cloud/_next/static/chunks/nextra-d
 const NEXTRA_CACHE_FILE: &str = ".cache/nextra-data-en-US.json";
 const NEXTRA_CACHE_TTL_SECS: u64 = 6 * 60 * 60; // 6h
 
-/// Simple Bearer-token auth. Return 401 if header missing/invalid.
-async fn auth_middleware(req: Request, next: Next) -> Response {
-    // If you still want to *require* the env var, keep `expect` (will panic on startup if missing)
-    let expected = std::env
-        ::var("AUTH_TOKEN")
-        .expect("Environment variable MCP_BEARER is required but not set");
-
-    let header_val = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    let Some(header_val) = header_val else {
-        return unauthorized_rpc("Missing Authorization header");
-    };
-
-    const PREFIX: &str = "Bearer ";
-    if !header_val.starts_with(PREFIX) {
-        return unauthorized_rpc("Authorization header must be Bearer");
-    }
-    let token = &header_val[PREFIX.len()..];
-
-    if token != expected {
-        return unauthorized_rpc("Invalid token");
-    }
-
-    next.run(req).await
-}
-
-// Helper that returns: HTTP 401 + {"jsonrpc":"2.0","id":null,"error":{...}}
-fn unauthorized_rpc(reason: &str) -> axum::response::Response {
-    // Your rpc_err helper is already defined like this:
-    // pub fn rpc_err(id: Value, code: i32, message: impl Into<String>, data: Option<Value>) -> Json<RpcResponse<()>>
-    // :contentReference[oaicite:0]{index=0}
-    let json = rpc_err(
-        serde_json::Value::Null, // id is null (auth happens before we can parse the request)
-        -32001, // custom code in JSON-RPC server error range
-        "Unauthorized",
-        Some(json!({ "reason": reason }))
-    ).into_response();
-
-    // Set HTTP status to 401
-    let mut resp = json;
-    *resp.status_mut() = StatusCode::UNAUTHORIZED;
-    resp
-}
-
 // ---------- Public entry ---------------------------------------------------------
 
 pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
@@ -350,10 +317,8 @@ pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
     let state = AppState { cwd, docs_index };
 
     let app = Router::new()
-        // Public GET /mcp (no auth)
-        .route("/mcp", get(get_default))
         // Protected POST /mcp (auth middleware)
-        .route("/mcp", post(handle).layer(axum::middleware::from_fn(auth_middleware)))
+        .route("/mcp", post(handle))
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -362,47 +327,6 @@ pub async fn serve_http_mcp(port: u16, cwd: PathBuf) -> Result<()> {
     Ok(())
 }
 
-// --------------- Default GET /mcp handler -----------------
-pub async fn get_default() -> impl IntoResponse {
-    use tokio::process::Command;
-
-    // 1) compute status
-    let golem_server_status = match
-        Command::new("pgrep").arg("-f").arg("golem server run").output().await
-    {
-        Ok(output) if output.status.success() && !output.stdout.is_empty() => "running...".to_string(),
-        _ => "offline (consider using call_tool with server run)".to_string(),
-    };
-
-    // 2) build schema with fields in the order you want to see serialized
-    let input_schema = ToolInputSchema {
-        type_tag: "object",
-        properties: ToolInputProperties {
-            args: ToolInputPropertyArgs {
-                type_tag: "array",
-                items: ToolInputPropertyItems { type_tag: "string" },
-                description: "All CLI words after the command name",
-            },
-            cwd: ToolInputPropertyCwd {
-                type_tag: "string",
-                description: "Working directory to run the command in",
-            },
-        },
-        required: vec!["args"],
-    };
-
-    // 3) build *only* the result payload
-    let result = ResultBody {
-        available_methods: ["list_tools", "call_tool"],
-        input_schema,
-        authentication: "Bearer Token Authentication",
-        message: "MCP server is running. Use POST /mcp with JSON-RPC 2.0.",
-        golem_server: golem_server_status,
-    };
-
-    // 4) hand the payload to rpc_ok so it envelopes it once
-    rpc_ok(serde_json::Value::Null, serde_json::to_value(result).unwrap())
-}
 // ---------- Handler --------------------------------------------------------------
 
 async fn handle(
@@ -416,6 +340,52 @@ async fn handle(
             }
 
             match req.method.as_str() {
+                "initialize" => {
+                    // Reuse your existing schema structs
+                    let input_schema = ToolInputSchema {
+                        type_tag: "object",
+                        properties: ToolInputProperties {
+                            args: ToolInputPropertyArgs {
+                                type_tag: "array",
+                                items: ToolInputPropertyItems { type_tag: "string" },
+                                description: "Command-line arguments for the tool/subcommand",
+                            },
+                            cwd: ToolInputPropertyCwd {
+                                type_tag: "string",
+                                description: "Optional working directory to execute in",
+                            },
+                        },
+                        required: vec!["args"],
+                    };
+
+                    // Define the two tools your server exposes
+                    let tools = vec![
+                        serde_json::json!({
+                            "name": "list_tools",
+                            "description": "List available golem subcommands with metadata",
+                            "inputSchema": &input_schema
+                        }),
+                        serde_json::json!({
+                            "name": "call_tool",
+                            "description": "Execute a golem subcommand with arguments",
+                            "inputSchema": &input_schema
+                        })
+                    ];
+
+                    // MCP initialize result
+                    let result =
+                        serde_json::json!({
+                            "protocolVersion":"2025-06-18",
+                            "serverInfo": { "name": "golem-mcp", "version": env!("CARGO_PKG_VERSION") },
+                            "capabilities": {},   // advertise none for now
+                            "tools": tools,
+                            "prompts": [],
+                            "resources": []
+                        });
+
+                    return rpc_ok(req.id, result).into_response();
+                }
+
                 "list_tools" => {
                     let cmds_with_descs = available_golem_commands();
                     let cmd_index = build_command_index();
@@ -499,6 +469,12 @@ async fn handle(
                             ).into_response();
                         }
                     }
+                }
+
+                "list_resources" => {
+                    let resources = list_resources(&state).await;
+                    let result = ListResourcesResult { resources };
+                    return rpc_ok(req.id, result).into_response();
                 }
                 _ => rpc_err(req.id, -32601, "Method not found", None).into_response(),
             }
@@ -1254,4 +1230,105 @@ fn split_two_or_more_spaces(s: &str) -> Option<(&str, &str)> {
         i += 1;
     }
     None
+}
+
+async fn list_resources(state: &AppState) -> Vec<ResourceNode> {
+    let mut roots: Vec<ResourceNode> = Vec::new();
+
+    for (cmd_name, _desc) in available_golem_commands().into_iter() {
+        // 1) Discover layout from Clap (same source you use in list_tools)
+        let subs = clap_subcommands_for(&cmd_name);
+
+        // 2) Gather every parent path that has a `list` leaf (sync recursion)
+        let mut targets: Vec<Vec<String>> = Vec::new();
+        let mut path: Vec<String> = Vec::new();
+        gather_list_targets(&mut path, &subs, &mut targets);
+
+        // Builders for this top-level command
+        let mut container_root = NodeBuilder::new(cmd_name.clone());
+        let mut top_level_leaf: Option<ResourceNode> = None;
+
+        // 3) For each parent path, call `available_for_path` once (async, but not recursive)
+        for parent_path in targets {
+            if parent_path.is_empty() {
+                // top-level: golem <cmd> list --format json
+                let list_path: Vec<String> = vec!["list".to_string()];
+                if let Some(val) = available_for_path(state, &cmd_name, &list_path).await {
+                    top_level_leaf = Some(ResourceNode {
+                        name: cmd_name.clone(),
+                        available: Some(val),
+                        children: vec![],
+                    });
+                }
+                continue;
+            }
+
+            // nested: golem <cmd> <parent_path...> list --format json
+            let mut full = parent_path.clone();
+            full.push("list".to_string());
+            if let Some(val) = available_for_path(state, &cmd_name, &full).await {
+                // parent_path = [container_0, ..., leaf_name]
+                let leaf_name = parent_path.last().unwrap().clone();
+                let containers = &parent_path[..parent_path.len() - 1];
+
+                let mut cursor = &mut container_root;
+                for c in containers {
+                    cursor = cursor.ensure_child_mut(c);
+                }
+                let leaf = cursor.ensure_child_mut(&leaf_name);
+                leaf.available = Some(val);
+            }
+        }
+
+        // 4) Emit a container node (if there are nested groups)
+        if !container_root.children.is_empty() {
+            roots.push(container_root.into_resource());
+        }
+        // 5) Emit a sibling leaf for direct `<cmd> list` (if any)
+        if let Some(leaf) = top_level_leaf.take() {
+            roots.push(leaf);
+        }
+    }
+
+    roots
+}
+
+
+/// Collect every path (relative to <root>) that has a terminal `list` subcommand.
+/// Example:
+///   subs describing: api -> definition -> list
+/// produces: vec!["definition"]
+///   subs describing: component -> list
+/// produces: vec![]  (top-level list)
+fn gather_list_targets(
+    path: &mut Vec<String>,
+    subs: &[SubcommandDescriptor],
+    out: &mut Vec<Vec<String>>,
+) {
+    for sub in subs {
+        if sub.name == "list" {
+            out.push(path.clone()); // parent of 'list'
+            continue;
+        }
+        if !sub.subcommands.is_empty() {
+            path.push(sub.name.clone());
+            gather_list_targets(path, &sub.subcommands, out);
+            path.pop();
+        }
+    }
+}
+
+
+
+impl NodeBuilder {
+    fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), available: None, children: BTreeMap::new() }
+    }
+    fn ensure_child_mut(&mut self, name: &str) -> &mut NodeBuilder {
+        self.children.entry(name.to_string()).or_insert_with(|| NodeBuilder::new(name))
+    }
+    fn into_resource(self) -> ResourceNode {
+        let kids: Vec<ResourceNode> = self.children.into_values().map(|c| c.into_resource()).collect();
+        ResourceNode { name: self.name, available: self.available, children: kids }
+    }
 }
