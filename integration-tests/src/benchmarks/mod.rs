@@ -74,7 +74,7 @@ impl InvokeResult {
 }
 
 pub async fn invoke_and_await(
-    deps: &impl TestDsl,
+    deps: &BenchmarkTestDependencies,
     worker_id: &WorkerId,
     function_name: &str,
     params: Vec<ValueAndType>,
@@ -87,12 +87,13 @@ pub async fn invoke_and_await(
     let mut accumulated_time = Duration::from_secs(0);
     let mut retries = 0;
     let mut timeouts = 0;
+    let dsl = deps.admin().await;
 
     loop {
         let start = SystemTime::now();
         let result = tokio::time::timeout(
             TIMEOUT,
-            deps.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+            dsl.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
         )
         .await;
         let duration = start.elapsed().expect("SystemTime elapsed failed");
@@ -113,6 +114,7 @@ pub async fn invoke_and_await(
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
+                deps.ensure_all_deps_running().await;
             }
             Ok(Err(e)) => {
                 // client error
@@ -120,12 +122,14 @@ pub async fn invoke_and_await(
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
+                deps.ensure_all_deps_running().await;
             }
             Err(e) => {
                 // timeout
                 // not counting timeouts into the accumulated time
                 timeouts += 1;
                 println!("Invocation timed out, retrying: {e:?}");
+                deps.ensure_all_deps_running().await;
             }
         }
     }

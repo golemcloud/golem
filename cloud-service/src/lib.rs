@@ -36,6 +36,7 @@ use chrono::{DateTime, Utc};
 use golem_common::config::DbConfig;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::AccountId;
+use golem_common::poem::LazyEndpointExt;
 use golem_service_base::db;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::{include_dir, Dir};
@@ -196,7 +197,9 @@ impl CloudService {
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
             .with(cors)
-            .with_if(tracer.is_some(), OpenTelemetryTracing::new(tracer.unwrap()));
+            .with_if_lazy(tracer.is_some(), || {
+                OpenTelemetryTracing::new(tracer.unwrap())
+            });
 
         let poem_listener =
             poem::listener::TcpListener::bind(format!("0.0.0.0:{}", self.config.http_port));

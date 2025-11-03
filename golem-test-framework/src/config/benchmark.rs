@@ -627,6 +627,15 @@ impl BenchmarkTestDependencies {
             }
         }
     }
+
+    /// Checks if all the spawned dependencies are still running, and if not, panicks
+    ///
+    /// This can be used as a checkpoint in benchmarks to avoid infinite retries.
+    pub async fn ensure_all_deps_running(&self) {
+        if !self.worker_executor_cluster.is_running().await {
+            panic!("Worker executor process(es) stopped");
+        }
+    }
 }
 
 #[async_trait]

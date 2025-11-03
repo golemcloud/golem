@@ -155,7 +155,7 @@ impl Benchmark for DurabilityOverhead {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {
-                    let deps_clone = deps.clone().into_admin().await;
+                    let deps_clone = deps.clone();
                     invoke_and_await(
                         &deps_clone,
                         worker_id,
@@ -197,7 +197,7 @@ impl Benchmark for DurabilityOverhead {
             .durable_persistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,
@@ -217,7 +217,7 @@ impl Benchmark for DurabilityOverhead {
             .durable_nonpersistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,
@@ -241,7 +241,7 @@ impl Benchmark for DurabilityOverhead {
             .ephemeral_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,

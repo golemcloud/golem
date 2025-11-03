@@ -691,7 +691,7 @@ impl ThroughputBenchmark {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {
-                    let deps_clone = deps.clone().into_admin().await;
+                    let deps_clone = deps.clone();
 
                     invoke_and_await(&deps_clone, worker_id, function_name, (params)(length)).await
                 })
@@ -779,7 +779,7 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(move |worker_id| async move {
                     let worker_id = worker_id.worker_id();
-                    let deps_clone = deps.clone().into_admin().await;
+                    let deps_clone = deps.clone();
 
                     let mut results = vec![];
                     for _ in 0..call_count {

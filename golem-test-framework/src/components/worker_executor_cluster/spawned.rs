@@ -199,4 +199,13 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         let stopped_indices = self.stopped_indices.lock().await;
         all_indices.difference(&stopped_indices).copied().collect()
     }
+
+    async fn is_running(&self) -> bool {
+        for executor in &self.worker_executors {
+            if !executor.is_running().await {
+                return false;
+            }
+        }
+        true
+    }
 }
