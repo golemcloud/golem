@@ -45,7 +45,7 @@ echo
 
 # Upload binaries
 echo "Uploading service binaries..."
-cd target/debug/
+cd target/release/
 
 for binary in golem-cli golem-shard-manager golem-component-service golem-worker-service; do
     if [ -f "$binary" ]; then
