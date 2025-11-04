@@ -5,8 +5,6 @@
   "requiresGolemHostWIT": true,
   "requiresWASI": true,
   "witDepsPaths": [
-    "wit/deps"
-  ],
-  "transform": false,
-  "devOnly": true
+    "golem-temp/wit/deps"
+  ]
 }

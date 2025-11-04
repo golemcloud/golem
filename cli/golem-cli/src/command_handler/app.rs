@@ -35,9 +35,7 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::AgentTypesClient;
 use golem_templates::add_component_by_template;
-use golem_templates::model::{
-    ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
-};
+use golem_templates::model::{GuestLanguage, PackageName, Template, TemplateName};
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -177,6 +175,7 @@ impl AppCommandHandler {
                         None,
                         &app_dir,
                         &dummy_package_name,
+                        Some(self.ctx.template_sdk_overrides()),
                     ) {
                         Ok(()) => {
                             log_action(
@@ -211,6 +210,7 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     component_package_name,
+                    Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {
                         log_action(
@@ -688,8 +688,13 @@ impl AppCommandHandler {
         };
 
         let lang_templates = lang_templates
-            .get(&ComposableAppGroupName::default())
-            .unwrap();
+            .get(self.ctx.template_group())
+            .ok_or_else(|| {
+                anyhow!(
+                    "No templates found for group: {}",
+                    self.ctx.template_group().as_str().log_color_highlight()
+                )
+            })?;
 
         let Some(component_template) = lang_templates.components.get(&template_name) else {
             log_error(format!(
@@ -735,7 +740,7 @@ impl AppCommandHandler {
             .iter()
             .filter_map(|(language, templates)| {
                 templates
-                    .get(&ComposableAppGroupName::default())
+                    .get(self.ctx.template_group())
                     .and_then(|templates| {
                         let matches_lang = language_filter
                             .map(|language_filter| language_filter == *language)

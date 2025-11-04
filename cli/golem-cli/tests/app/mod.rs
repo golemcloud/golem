@@ -26,29 +26,35 @@ sequential_suite!(app);
 tag_suite!(plugins, group1);
 sequential_suite!(plugins);
 
-tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group3);
+tag_suite!(agents, group4);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
-use crate::Tracing;
+use crate::{crate_path, workspace_path, Tracing};
 use assert2::assert;
 use colored::Colorize;
+use golem_client::api::HealthCheckClient;
+use golem_client::Security;
 use itertools::Itertools;
+use lenient_bool::LenientBool;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::str::FromStr;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_r::{inherit_test_dep, sequential_suite, tag_suite};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tracing::info;
+use url::Url;
 
 mod cmd {
     pub static ADD_DEPENDENCY: &str = "add-dependency";
@@ -70,10 +76,11 @@ mod cmd {
 mod flag {
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
+    pub static FORMAT: &str = "--format";
     pub static REDEPLOY_ALL: &str = "--redeploy-all";
     pub static SCRIPT: &str = "--script";
-    pub static FORMAT: &str = "--format";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static TEMPLATE_GROUP: &str = "--template-group";
     pub static YES: &str = "--yes";
 }
 
@@ -97,7 +104,11 @@ pub struct Output {
 }
 
 impl Output {
-    pub async fn stream_and_collect(prefix: &str, child: &mut Child) -> io::Result<Self> {
+    pub async fn stream_and_collect(
+        quiet: bool,
+        prefix: &str,
+        child: &mut Child,
+    ) -> io::Result<Self> {
         let stdout = child
             .stdout
             .take()
@@ -116,7 +127,9 @@ impl Output {
             async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    println!("{prefix} {line}");
+                    if !quiet {
+                        println!("{prefix} {line}");
+                    }
                     tx.send(CommandOutput::Stdout(line)).unwrap();
                 }
             }
@@ -128,7 +141,9 @@ impl Output {
             async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    println!("{prefix} {line}");
+                    if !quiet {
+                        println!("{prefix} {line}");
+                    }
                     tx.send(CommandOutput::Stderr(line)).unwrap();
                 }
             }
@@ -237,6 +252,7 @@ impl From<std::process::Output> for Output {
 
 #[derive(Debug)]
 struct TestContext {
+    quiet: bool,
     golem_path: PathBuf,
     golem_cli_path: PathBuf,
     _test_dir: TempDir,
@@ -245,6 +261,7 @@ struct TestContext {
     working_dir: PathBuf,
     server_process: Option<Child>,
     env: HashMap<String, String>,
+    template_group: Option<String>,
 }
 
 impl Drop for TestContext {
@@ -261,34 +278,67 @@ impl Drop for TestContext {
 
 impl TestContext {
     fn new() -> Self {
+        let quiet = std::env::var("QUIET")
+            .ok()
+            .and_then(|b| b.parse::<LenientBool>().ok())
+            .unwrap_or_default()
+            .0;
+
         let test_dir = TempDir::new().unwrap();
         let working_dir = test_dir.path().to_path_buf();
 
+        let mut env = HashMap::new();
+
+        env.insert(
+            "GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(),
+            "true".to_string(),
+        );
+
+        for key in [
+            "GOLEM_RUST_PATH",
+            "GOLEM_RUST_VERSION",
+            "GOLEM_TS_PACKAGES_PATH",
+            "GOLEM_TS_VERSION",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                env.insert(key.to_string(), val);
+            }
+        }
+
+        // TODO: remove before 1.3.A release
+        if !env.contains_key("GOLEM_RUST_PATH") && !env.contains_key("GOLEM_RUST_VERSION") {
+            env.insert(
+                "GOLEM_RUST_PATH".to_string(),
+                workspace_path()
+                    .join("sdks/rust/golem-rust")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+
         let ctx = Self {
-            golem_path: PathBuf::from("../../target/debug/golem")
-                .canonicalize()
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "golem binary not found in ../../target/debug/golem, with current dir: {:?}",
-                        std::env::current_dir().unwrap()
-                    );
-                }),
-            golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
-                .canonicalize()
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
-                        std::env::current_dir().unwrap()
-                    );
-                }),
+            quiet,
+            golem_path: {
+                let path = workspace_path().join("target/debug/golem");
+                if !path.exists() {
+                    panic!("golem binary not found at {}", path.display());
+                }
+                path
+            },
+            golem_cli_path: {
+                let path = workspace_path().join("target/debug/golem-cli");
+                if !path.exists() {
+                    panic!("golem-cli binary not found at {}", path.display());
+                }
+                path
+            },
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
             working_dir,
             server_process: None,
-            env: HashMap::from_iter(vec![
-                ("GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(), "true".to_string())
-            ]),
+            env,
+            template_group: None,
         };
 
         info!(ctx = ?ctx ,"Created test context");
@@ -309,6 +359,19 @@ impl TestContext {
         self.env_mut().insert(key.into(), value.into());
     }
 
+    fn use_generic_template_group(&mut self) {
+        self.use_template_group("generic")
+    }
+
+    fn use_template_group(&mut self, template_group: impl Into<String>) {
+        self.template_group = Some(template_group.into());
+    }
+
+    #[allow(dead_code)]
+    fn use_default_template_group(&mut self) {
+        self.template_group = None;
+    }
+
     #[must_use]
     async fn cli<I, S>(&self, args: I) -> Output
     where
@@ -321,6 +384,10 @@ impl TestContext {
                 self.config_dir.path().to_str().unwrap().to_string(),
                 flag::DEV_MODE.to_string(),
             ];
+            if let Some(template_group) = &self.template_group {
+                all_args.push(flag::TEMPLATE_GROUP.to_string());
+                all_args.push(template_group.to_string());
+            }
             all_args.extend(
                 args.into_iter()
                     .map(|a| a.as_ref().to_str().unwrap().to_string()),
@@ -345,12 +412,12 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        Output::stream_and_collect("golem-cli", &mut child)
+        Output::stream_and_collect(self.quiet, "golem-cli", &mut child)
             .await
             .unwrap()
     }
 
-    fn start_server(&mut self) {
+    async fn start_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
 
         println!("{}", "> starting golem server".bold());
@@ -365,20 +432,65 @@ impl TestContext {
             self.data_dir.path().display()
         );
 
+        let mut args = vec![
+            "server",
+            "run",
+            "--config-dir",
+            self.config_dir.path().to_str().unwrap(),
+            "--data-dir",
+            self.data_dir.path().to_str().unwrap(),
+        ];
+
+        if self.quiet {
+            args.push("-q");
+        }
+
         self.server_process = Some(
             Command::new(&self.golem_path)
-                .args([
-                    "server",
-                    "run",
-                    "--config-dir",
-                    self.config_dir.path().to_str().unwrap(),
-                    "--data-dir",
-                    self.data_dir.path().to_str().unwrap(),
-                ])
+                .args(&args)
                 .current_dir(&self.working_dir)
                 .spawn()
                 .unwrap(),
-        )
+        );
+
+        {
+            let start = Instant::now();
+            let client = golem_client::api::HealthCheckClientLive {
+                context: golem_client::Context {
+                    client: reqwest::ClientBuilder::new()
+                        .danger_accept_invalid_certs(true)
+                        .build()
+                        .expect("Failed to build reqwest client"),
+                    base_url: Url::from_str("http://localhost:9881").unwrap(),
+                    security_token: Security::Empty,
+                },
+            };
+            let timeout = Duration::from_secs(2);
+            let sleep_interval = Duration::from_millis(100);
+            loop {
+                match client.healthcheck().await {
+                    Ok(_) => {
+                        println!("> server healthcheck {}", "ok".green());
+                        break;
+                    }
+                    Err(err) => {
+                        if start.elapsed() > timeout {
+                            println!(
+                                "> server healthcheck failed: {}, stopping",
+                                format!("{}", err).red()
+                            );
+                            panic!("Server is still not running, stopping");
+                        } else {
+                            println!(
+                                "> server healthcheck failed: {}, retrying",
+                                format!("{}", err).red()
+                            );
+                            tokio::time::sleep(sleep_interval).await;
+                        }
+                    }
+                };
+            }
+        }
     }
 
     fn cd<P: AsRef<Path>>(&mut self, path: P) {
@@ -387,6 +499,10 @@ impl TestContext {
 
     fn cwd_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         self.working_dir.join(path)
+    }
+
+    fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        crate_path().join("test-data").join(path)
     }
 }
 

@@ -12,32 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::exports::golem::agent::guest::{AgentType, DataValue};
+use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
 
-// A simple Agent that every agent abstraction has to extend
-// This is auto implemented when using `agent_implementation` attribute.
-// Implementation detail: Once the agent_impl trait has an instance of `Agent`,
-// it's internal functionalities can be used to further implement the real component
-//
-// We never want to directly implement this trait
-// Example usage:
-//
-// ```
-//  [agent_definition]
-//  trait WeatherAgent: Agent {
-//    fn get_weather(&self, location: String) -> String;
-//  }
-// ```
-//
-//  ```
-//  struct MyWeatherAgent;
-//
-//  #[agent_implementation]
-//  impl WeatherAgent for MyWeatherAgent {fn get_weather(&self, location: String) -> String } }
-//  ```
-// There is no need to implement `Agent` anywhere, as it is automatically implemented by the `[agent_implementation]` attribute.
 pub trait Agent {
     fn get_id(&self) -> String;
-    fn invoke(&self, method_name: String, input: DataValue) -> DataValue;
+    fn invoke(&mut self, method_name: String, input: DataValue) -> Result<DataValue, AgentError>;
     fn get_definition(&self) -> AgentType;
 }

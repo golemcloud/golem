@@ -3,13 +3,27 @@ use crate::Tracing;
 use assert2::let_assert;
 use heck::ToKebabCase;
 use nanoid::nanoid;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, tag, test};
 
 inherit_test_dep!(Tracing);
 
 #[test]
-async fn build_and_deploy_all_templates() {
+#[tag(group2)]
+async fn build_and_deploy_all_templates_default() {
+    build_and_deploy_all_templates(None).await;
+}
+
+#[test]
+#[tag(group3)]
+async fn build_and_deploy_all_templates_generic() {
+    build_and_deploy_all_templates(Some("generic")).await;
+}
+
+async fn build_and_deploy_all_templates(group: Option<&str>) {
     let mut ctx = TestContext::new();
+    if let Some(group) = group {
+        ctx.use_template_group(group);
+    }
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
@@ -60,7 +74,7 @@ async fn build_and_deploy_all_templates() {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());

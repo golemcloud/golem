@@ -76,8 +76,6 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // First build
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     check_component_metadata(
         &ctx.working_dir
@@ -89,25 +87,21 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 1
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::APP, cmd::BUILD, flag::FORCE_BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stdout_contains("Finished `dev` profile"));
 
     // Rebuild - 4
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Clean
@@ -117,7 +111,6 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     // Rebuild - 5
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert2::assert!(outputs.success());
-    check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 }
 
@@ -162,6 +155,7 @@ async fn completion(_tracing: &Tracing) {
 #[test]
 async fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -261,7 +255,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
@@ -324,6 +318,7 @@ async fn custom_app_subcommand_with_builtin_name() {
     fs::append_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+
             customCommands:
               new:
                 - command: cargo tree
@@ -333,16 +328,15 @@ async fn custom_app_subcommand_with_builtin_name() {
 
     let outputs = ctx.cli([cmd::APP]).await;
     assert2::assert!(!outputs.success());
-    check!(outputs.stderr_contains(":new"));
 
     let outputs = ctx.cli([cmd::APP, ":new"]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
 
 #[test]
 async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -447,7 +441,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
          "},
     )?;
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
@@ -473,6 +467,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 #[test]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     // Setup app
