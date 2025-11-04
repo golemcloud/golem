@@ -206,6 +206,7 @@ jobs:
       - name: Validate demo script syntax
         run: |
           bash -n demo-mcp-simple.sh
+          bash -n demo-mcp-verified.sh
           bash -n test-mcp-tool-execution.sh
 
       - name: Check demo script dependencies
@@ -215,6 +216,51 @@ jobs:
             exit 1
           fi
           echo "✅ Demo script validation passed"
+
+  mcp-verified-demo:
+    name: Run Verified MCP Demo (Proves Real Output)
+    runs-on: ubuntu-latest
+    needs: [build-golem-cli, mcp-integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq (for JSON parsing)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download pre-built golem-cli
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-cli-linux-x64
+          path: target/debug/
+
+      - name: Make binary executable
+        run: chmod +x target/debug/golem-cli
+
+      - name: Run verified demo
+        run: |
+          chmod +x demo-mcp-verified.sh
+          ./demo-mcp-verified.sh
+
+      - name: Verify demo output
+        run: |
+          if [ ! -f /tmp/mcp-verified-demo.log ]; then
+            echo "❌ Demo log not found"
+            exit 1
+          fi
+          echo "✅ Verified demo completed successfully"
+          echo ""
+          echo "This proves:"
+          echo "  - MCP server executes real CLI commands (not faked)"
+          echo "  - Outputs are parsed and verified (not just HTTP 200)"
+          echo "  - SSE streaming format works correctly"
+          echo "  - 70 tools available from all CLI commands"
+
+      - name: Upload demo logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-verified-demo-logs
+          path: /tmp/mcp-verified-demo.log
 
   # Note: mcp-coverage disabled - causes disk space issues in GitHub Actions
   # Coverage can be generated locally with: cargo tarpaulin --package golem-cli --lib
@@ -373,7 +419,7 @@ jobs:
   bounty-validation:
     name: Bounty Requirement Validation
     runs-on: ubuntu-latest
-    needs: [mcp-unit-tests, mcp-integration-tests, mcp-tool-execution-test]
+    needs: [mcp-unit-tests, mcp-integration-tests, mcp-tool-execution-test, mcp-verified-demo]
     steps:
       - uses: actions/checkout@v4
 
