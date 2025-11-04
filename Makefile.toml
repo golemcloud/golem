@@ -502,7 +502,7 @@ dependencies = [
 
 [tasks.cli-integration-tests-group1]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests (1/3)"
+description = "Run CLI integration tests (1/4)"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
@@ -511,7 +511,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 
 [tasks.cli-integration-tests-group2]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests"
+description = "Run CLI integration tests (2/4)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
@@ -520,11 +520,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 
 [tasks.cli-integration-tests-group3]
 dependencies = ["build-bins-all-non-ci"]
-description = "Run CLI integration tests"
+description = "Run CLI integration tests (3/4)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group4]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests (4/4)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group4 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]

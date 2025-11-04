@@ -26,10 +26,9 @@ sequential_suite!(app);
 tag_suite!(plugins, group1);
 sequential_suite!(plugins);
 
-tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group3);
+tag_suite!(agents, group4);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
