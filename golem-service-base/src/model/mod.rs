@@ -29,7 +29,7 @@ use golem_common::model::{
 };
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::ValueAndType;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -486,7 +486,9 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue, FromValue,
+)]
 #[serde(rename_all = "camelCase")]
 #[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
 pub enum RevertWorkerTarget {
@@ -539,6 +541,7 @@ impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWo
     Deserialize,
     Object,
     IntoValue,
+    FromValue,
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -576,6 +579,7 @@ impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertTo
     Deserialize,
     Object,
     IntoValue,
+    FromValue,
 )]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]

@@ -46,7 +46,7 @@ use bincode::{Decode, Encode};
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
@@ -63,6 +63,7 @@ use std::fmt::{Display, Formatter};
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -84,6 +85,7 @@ pub struct AgentConstructor {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -140,6 +142,7 @@ impl Display for AgentError {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -162,6 +165,7 @@ pub struct AgentMethod {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -190,6 +194,7 @@ impl AgentType {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -199,7 +204,16 @@ pub struct BinaryDescriptor {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -218,7 +232,16 @@ impl Display for BinaryReference {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -248,6 +271,7 @@ impl Display for BinarySource {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -266,6 +290,7 @@ pub struct BinaryType {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -285,6 +310,7 @@ pub struct NamedElementSchema {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -311,6 +337,7 @@ impl NamedElementSchemas {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -657,6 +684,7 @@ impl Display for ElementValue {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
@@ -677,6 +705,7 @@ pub enum ElementSchema {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -695,6 +724,7 @@ pub struct ComponentModelElementSchema {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -704,7 +734,16 @@ pub struct TextDescriptor {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -723,7 +762,16 @@ impl Display for TextReference {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -738,7 +786,16 @@ impl Display for Url {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -766,6 +823,7 @@ impl Display for TextSource {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -784,6 +842,7 @@ pub struct TextType {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -792,7 +851,9 @@ pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
-#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {

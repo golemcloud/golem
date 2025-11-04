@@ -33,15 +33,17 @@ use crate::model::{
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
-use golem_wasm_derive::IntoValue;
+use golem_wasm::{FromValue, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
@@ -49,7 +51,9 @@ pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
@@ -58,7 +62,9 @@ pub enum PublicUpdateDescription {
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
@@ -66,14 +72,18 @@ pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WriteRemoteTransactionParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicDurableFunctionType {
@@ -129,7 +139,9 @@ pub struct DetailsParameter {
     pub details: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicRetryConfig {
@@ -187,7 +199,9 @@ impl IntoValue for ExportedFunctionParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
@@ -213,6 +227,7 @@ pub enum PublicWorkerInvocation {
     Ord,
     Deserialize,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -240,7 +255,9 @@ impl PluginInstallationDescription {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct CreateParameters {
@@ -271,7 +288,9 @@ pub struct ImportedFunctionInvokedParameters {
     pub durable_function_type: PublicDurableFunctionType,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
@@ -279,7 +298,9 @@ pub struct StringAttributeValue {
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Union)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicAttributeValue {
@@ -296,7 +317,9 @@ impl From<AttributeValue> for PublicAttributeValue {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicLocalSpanData {
@@ -308,7 +331,9 @@ pub struct PublicLocalSpanData {
     pub inherited: bool,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicAttribute {
@@ -316,14 +341,18 @@ pub struct PublicAttribute {
     pub value: PublicAttributeValue,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Union)]
+#[derive(
+    Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicSpanData {
@@ -364,14 +393,18 @@ pub struct ExportedFunctionCompletedParameters {
     pub consumed_fuel: i64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TimestampParameter {
     pub timestamp: Timestamp,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorParameters {
@@ -407,7 +440,27 @@ impl IntoValue for JumpParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+impl FromValue for JumpParameters {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(fields) if fields.len() == 3 => {
+                let mut fields = fields.into_iter();
+                let timestamp = Timestamp::from_value(fields.next().unwrap())?;
+                let start = OplogIndex::from_value(fields.next().unwrap())?;
+                let end = OplogIndex::from_value(fields.next().unwrap())?;
+                Ok(Self {
+                    timestamp,
+                    jump: OplogRegion { start, end },
+                })
+            }
+            other => Err(format!("Expected a record with 3 fields, got: {other:?}")),
+        }
+    }
+}
+
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ChangeRetryPolicyParameters {
@@ -415,7 +468,9 @@ pub struct ChangeRetryPolicyParameters {
     pub new_policy: PublicRetryConfig,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct EndRegionParameters {
@@ -429,14 +484,18 @@ pub struct PendingWorkerInvocationParameters {
     pub invocation: PublicWorkerInvocation,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub description: PublicUpdateDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
@@ -444,7 +503,9 @@ pub struct SuccessfulUpdateParameters {
     pub new_active_plugins: BTreeSet<PluginInstallationDescription>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct FailedUpdateParameters {
@@ -453,7 +514,9 @@ pub struct FailedUpdateParameters {
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct GrowMemoryParameters {
@@ -461,7 +524,9 @@ pub struct GrowMemoryParameters {
     pub delta: u64,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceParameters {
@@ -471,7 +536,9 @@ pub struct ResourceParameters {
     pub owner: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DescribeResourceParameters {
@@ -481,7 +548,9 @@ pub struct DescribeResourceParameters {
     pub resource_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LogParameters {
@@ -491,7 +560,9 @@ pub struct LogParameters {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ActivatePluginParameters {
@@ -499,7 +570,9 @@ pub struct ActivatePluginParameters {
     pub plugin: PluginInstallationDescription,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DeactivatePluginParameters {
@@ -533,7 +606,27 @@ impl IntoValue for RevertParameters {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+impl FromValue for RevertParameters {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(fields) if fields.len() == 3 => {
+                let mut fields = fields.into_iter();
+                let timestamp = Timestamp::from_value(fields.next().unwrap())?;
+                let start = OplogIndex::from_value(fields.next().unwrap())?;
+                let end = OplogIndex::from_value(fields.next().unwrap())?;
+                Ok(Self {
+                    timestamp,
+                    dropped_region: OplogRegion { start, end },
+                })
+            }
+            other => Err(format!("Expected a record with 3 fields, got: {other:?}")),
+        }
+    }
+}
+
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct CancelInvocationParameters {
@@ -541,7 +634,9 @@ pub struct CancelInvocationParameters {
     pub idempotency_key: IdempotencyKey,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct StartSpanParameters {
@@ -552,7 +647,9 @@ pub struct StartSpanParameters {
     pub attributes: Vec<PublicAttribute>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct FinishSpanParameters {
@@ -560,7 +657,9 @@ pub struct FinishSpanParameters {
     pub span_id: SpanId,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct SetSpanAttributeParameters {
@@ -570,7 +669,9 @@ pub struct SetSpanAttributeParameters {
     pub value: PublicAttributeValue,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ChangePersistenceLevelParameters {
@@ -578,7 +679,9 @@ pub struct ChangePersistenceLevelParameters {
     pub persistence_level: PersistenceLevel,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteTransactionParameters {
@@ -586,7 +689,9 @@ pub struct RemoteTransactionParameters {
     pub begin_index: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BeginRemoteTransactionParameters {

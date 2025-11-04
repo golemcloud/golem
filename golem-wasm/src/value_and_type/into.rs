@@ -13,80 +13,23 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
+    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
 };
 use crate::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
     TypeFlags,
 };
 use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::ops::Bound;
+use crate::{
+    NodeIndex, ResourceMode, RpcError, Value, ValueAndType, WitNode, WitType, WitTypeNode, WitValue,
+};
+use bigdecimal::BigDecimal;
+use bit_vec::BitVec;
+use chrono::{Datelike, Offset, Timelike};
+use std::collections::{BTreeMap, BTreeSet, Bound, HashMap};
 use std::time::{Duration, Instant};
+use url::Url;
 use uuid::Uuid;
-
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
-pub struct ValueAndType {
-    pub value: Value,
-    pub typ: AnalysedType,
-}
-
-#[cfg(feature = "host")]
-impl std::fmt::Display for ValueAndType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            crate::text::print_value_and_type(self).unwrap_or("<unprintable>".to_string())
-        )
-    }
-}
-
-impl ValueAndType {
-    pub fn new(value: Value, typ: AnalysedType) -> Self {
-        Self { value, typ }
-    }
-
-    pub fn into_list_items(self) -> Option<Vec<ValueAndType>> {
-        match (self.value, self.typ) {
-            (Value::List(items), AnalysedType::List(item_type)) => Some(
-                items
-                    .into_iter()
-                    .map(|item| ValueAndType::new(item, (*item_type.inner).clone()))
-                    .collect(),
-            ),
-            _ => None,
-        }
-    }
-}
-
-impl From<ValueAndType> for Value {
-    fn from(value_and_type: ValueAndType) -> Self {
-        value_and_type.value
-    }
-}
-
-impl From<ValueAndType> for AnalysedType {
-    fn from(value_and_type: ValueAndType) -> Self {
-        value_and_type.typ
-    }
-}
-
-#[cfg(feature = "host")]
-impl From<ValueAndType> for WitValue {
-    fn from(value_and_type: ValueAndType) -> Self {
-        value_and_type.value.into()
-    }
-}
-
-#[cfg(feature = "host")]
-impl From<ValueAndType> for WitType {
-    fn from(value_and_type: ValueAndType) -> Self {
-        value_and_type.typ.into()
-    }
-}
 
 /// Specific trait to convert a type into a pair of `Value` and `AnalysedType`.
 pub trait IntoValue {
@@ -415,10 +358,7 @@ impl IntoValue for Uuid {
     }
 }
 
-/// Helper for dynamically creating record ValueAndType values with String keys
-pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
-
-impl<K: AsRef<str>> IntoValueAndType for Record<K> {
+impl<K: AsRef<str>> IntoValueAndType for super::Record<K> {
     fn into_value_and_type(self) -> ValueAndType {
         let mut field_types = Vec::<NameTypePair>::with_capacity(self.0.len());
         let mut field_values = Vec::<Value>::with_capacity(self.0.len());
@@ -438,10 +378,9 @@ impl<K: AsRef<str>> IntoValueAndType for Record<K> {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for crate::WitValue {
     fn into_value(self) -> Value {
-        // NOTE: this is different than From<WitValue> for Value. That conversion creates
+        // NOTE: this is different from From<WitValue> for Value. That conversion creates
         // the Value the WitValue describes, while this conversion creates a Value version of
         // the WitValue representation itself.
         Value::Record(vec![self.nodes.into_value()])
@@ -455,7 +394,6 @@ impl IntoValue for crate::WitValue {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for WitNode {
     fn into_value(self) -> Value {
         use crate::WitNode;
@@ -561,8 +499,8 @@ impl IntoValue for WitNode {
     }
 
     fn get_type() -> AnalysedType {
+        use crate::analysis::analysed_type::{case, variant};
         use crate::NodeIndex;
-        use analysed_type::{case, variant};
 
         variant(vec![
             case("record-value", list(NodeIndex::get_type())),
@@ -600,7 +538,6 @@ impl IntoValue for WitNode {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for crate::Uri {
     fn into_value(self) -> Value {
         Value::Record(vec![Value::String(self.value)])
@@ -611,7 +548,6 @@ impl IntoValue for crate::Uri {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for WitType {
     fn into_value(self) -> Value {
         Value::Record(vec![self.nodes.into_value()])
@@ -625,7 +561,6 @@ impl IntoValue for WitType {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for NamedWitTypeNode {
     fn into_value(self) -> Value {
         Value::Record(vec![
@@ -644,7 +579,6 @@ impl IntoValue for NamedWitTypeNode {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for WitTypeNode {
     fn into_value(self) -> Value {
         match self {
@@ -733,7 +667,7 @@ impl IntoValue for WitTypeNode {
                 case_value: None,
             },
             WitTypeNode::HandleType(handle) => Value::Variant {
-                case_idx: 17,
+                case_idx: 21,
                 case_value: Some(Box::new(handle.into_value())),
             },
         }
@@ -802,7 +736,6 @@ impl IntoValue for Duration {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for crate::ResourceMode {
     fn into_value(self) -> Value {
         match self {
@@ -816,7 +749,6 @@ impl IntoValue for crate::ResourceMode {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for crate::RpcError {
     fn into_value(self) -> Value {
         match self {
@@ -840,7 +772,7 @@ impl IntoValue for crate::RpcError {
     }
 
     fn get_type() -> AnalysedType {
-        use analysed_type::case;
+        use crate::analysis::analysed_type::case;
 
         variant(vec![
             case("protocol-error", analysed_type::str()),
@@ -851,7 +783,6 @@ impl IntoValue for crate::RpcError {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for ValueAndType {
     fn into_value(self) -> Value {
         let wit_value: WitValue = self.value.into();
@@ -867,7 +798,6 @@ impl IntoValue for ValueAndType {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for Value {
     fn into_value(self) -> Value {
         let wit_value: WitValue = self.into();
@@ -879,7 +809,6 @@ impl IntoValue for Value {
     }
 }
 
-#[cfg(feature = "host")]
 impl IntoValue for AnalysedType {
     fn into_value(self) -> Value {
         let wit_type: WitType = self.into();
@@ -1112,116 +1041,105 @@ impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
     }
 }
 
-#[cfg(feature = "host")]
-mod extra_bindings {
-    use crate::analysis::analysed_type::{bool, list, str};
-    use crate::analysis::{analysed_type, AnalysedType};
-    use crate::{IntoValue, IntoValueAndType, Value};
-    use bigdecimal::BigDecimal;
-    use bit_vec::BitVec;
-    use chrono::{Datelike, Offset, Timelike};
-    use url::Url;
-
-    impl IntoValue for BigDecimal {
-        fn into_value(self) -> Value {
-            self.to_string().into_value()
-        }
-
-        fn get_type() -> AnalysedType {
-            str()
-        }
+impl IntoValue for BigDecimal {
+    fn into_value(self) -> Value {
+        self.to_string().into_value()
     }
 
-    impl IntoValue for chrono::NaiveDate {
-        fn into_value(self) -> Value {
-            let year = self.year();
-            let month = self.month() as u8;
-            let day = self.day() as u8;
-            Value::Record(vec![Value::S32(year), Value::U8(month), Value::U8(day)])
-        }
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
 
-        fn get_type() -> AnalysedType {
-            analysed_type::record(vec![
-                analysed_type::field("year", analysed_type::s32()),
-                analysed_type::field("month", analysed_type::u8()),
-                analysed_type::field("day", analysed_type::u8()),
-            ])
-        }
+impl IntoValue for chrono::NaiveDate {
+    fn into_value(self) -> Value {
+        let year = self.year();
+        let month = self.month() as u8;
+        let day = self.day() as u8;
+        Value::Record(vec![Value::S32(year), Value::U8(month), Value::U8(day)])
     }
 
-    impl IntoValue for chrono::NaiveTime {
-        fn into_value(self) -> Value {
-            let hour = self.hour() as u8;
-            let minute = self.minute() as u8;
-            let second = self.second() as u8;
-            let nanosecond = self.nanosecond();
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("year", analysed_type::s32()),
+            analysed_type::field("month", analysed_type::u8()),
+            analysed_type::field("day", analysed_type::u8()),
+        ])
+    }
+}
 
-            Value::Record(vec![
-                Value::U8(hour),
-                Value::U8(minute),
-                Value::U8(second),
-                Value::U32(nanosecond),
-            ])
-        }
+impl IntoValue for chrono::NaiveTime {
+    fn into_value(self) -> Value {
+        let hour = self.hour() as u8;
+        let minute = self.minute() as u8;
+        let second = self.second() as u8;
+        let nanosecond = self.nanosecond();
 
-        fn get_type() -> AnalysedType {
-            analysed_type::record(vec![
-                analysed_type::field("hours", analysed_type::u8()),
-                analysed_type::field("minutes", analysed_type::u8()),
-                analysed_type::field("seconds", analysed_type::u8()),
-                analysed_type::field("nanoseconds", analysed_type::u32()),
-            ])
-        }
+        Value::Record(vec![
+            Value::U8(hour),
+            Value::U8(minute),
+            Value::U8(second),
+            Value::U32(nanosecond),
+        ])
     }
 
-    impl IntoValue for chrono::NaiveDateTime {
-        fn into_value(self) -> Value {
-            let date = self.date().into_value_and_type();
-            let time = self.time().into_value_and_type();
-            Value::Record(vec![date.value, time.value])
-        }
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("hours", analysed_type::u8()),
+            analysed_type::field("minutes", analysed_type::u8()),
+            analysed_type::field("seconds", analysed_type::u8()),
+            analysed_type::field("nanoseconds", analysed_type::u32()),
+        ])
+    }
+}
 
-        fn get_type() -> AnalysedType {
-            analysed_type::record(vec![
-                analysed_type::field("date", chrono::NaiveDate::get_type()),
-                analysed_type::field("time", chrono::NaiveTime::get_type()),
-            ])
-        }
+impl IntoValue for chrono::NaiveDateTime {
+    fn into_value(self) -> Value {
+        let date = self.date().into_value_and_type();
+        let time = self.time().into_value_and_type();
+        Value::Record(vec![date.value, time.value])
     }
 
-    impl IntoValue for chrono::DateTime<chrono::Utc> {
-        fn into_value(self) -> Value {
-            let timestamp = self.naive_utc().into_value_and_type();
-            let offset = self.offset().fix().local_minus_utc();
-            Value::Record(vec![timestamp.value, Value::S32(offset)])
-        }
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("date", chrono::NaiveDate::get_type()),
+            analysed_type::field("time", chrono::NaiveTime::get_type()),
+        ])
+    }
+}
 
-        fn get_type() -> AnalysedType {
-            analysed_type::record(vec![
-                analysed_type::field("timestamp", chrono::NaiveDateTime::get_type()),
-                analysed_type::field("offset", analysed_type::s32()),
-            ])
-        }
+impl IntoValue for chrono::DateTime<chrono::Utc> {
+    fn into_value(self) -> Value {
+        let timestamp = self.naive_utc().into_value_and_type();
+        let offset = self.offset().fix().local_minus_utc();
+        Value::Record(vec![timestamp.value, Value::S32(offset)])
     }
 
-    impl IntoValue for BitVec {
-        fn into_value(self) -> Value {
-            self.into_iter().collect::<Vec<_>>().into_value()
-        }
+    fn get_type() -> AnalysedType {
+        analysed_type::record(vec![
+            analysed_type::field("timestamp", chrono::NaiveDateTime::get_type()),
+            analysed_type::field("offset", analysed_type::s32()),
+        ])
+    }
+}
 
-        fn get_type() -> AnalysedType {
-            list(bool())
-        }
+impl IntoValue for BitVec {
+    fn into_value(self) -> Value {
+        self.into_iter().collect::<Vec<_>>().into_value()
     }
 
-    impl IntoValue for Url {
-        fn into_value(self) -> Value {
-            Value::String(self.to_string())
-        }
+    fn get_type() -> AnalysedType {
+        list(bool())
+    }
+}
 
-        fn get_type() -> AnalysedType {
-            str()
-        }
+impl IntoValue for Url {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
     }
 }
 

@@ -77,6 +77,11 @@ pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 #[cfg(any(feature = "host", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
+#[cfg(feature = "derive")]
+pub mod derive {
+    pub use golem_wasm_derive::{FromValue, IntoValue};
+}
+
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi;

@@ -157,6 +157,24 @@ macro_rules! newtype_uuid {
             }
         }
 
+        impl golem_wasm::FromValue for $name {
+            fn from_value(value: golem_wasm::Value) -> Result<$name, String> {
+                match value {
+                    golem_wasm::Value::Record(mut fields) if fields.len() == 1 => {
+                        match fields.remove(0) {
+                            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
+                                let hi = u64::from_value(fields.remove(0))?;
+                                let lo = u64::from_value(fields.remove(0))?;
+                                Ok($name(uuid::Uuid::from_u64_pair(hi, lo)))
+                            }
+                            other => Err(format!("Expected a record with two u64 fields, got {other:?}"))
+                        }
+                    }
+                    other => Err(format!("Expected a record with one record field, got {other:?}"))
+                }
+            }
+        }
+
         $(
             impl TryFrom<$proto_type> for $name {
                 type Error = String;
