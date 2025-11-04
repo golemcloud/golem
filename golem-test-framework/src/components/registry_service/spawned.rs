@@ -15,8 +15,6 @@
 use super::{wait_for_startup, RegistryService};
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::Rdb;
-use crate::components::redis::Redis;
-use crate::components::shard_manager::ShardManager;
 use crate::components::{new_reqwest_client, ChildProcessLogger};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountId, PlanId};

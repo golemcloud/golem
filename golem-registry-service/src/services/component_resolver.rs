@@ -18,7 +18,6 @@ use super::component::{ComponentError, ComponentService};
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::model::component::Component;
 use crate::model::component_slug::ComponentSlug;
-use crate::repo::account::AccountRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentId;

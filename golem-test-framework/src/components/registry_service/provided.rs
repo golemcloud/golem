@@ -14,7 +14,6 @@
 
 use super::RegistryService;
 use crate::components::new_reqwest_client;
-use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
