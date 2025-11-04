@@ -125,7 +125,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 quote! {
                                     #idx => {
                                         let inner = case_value.ok_or("Missing case value")?;
-                                        let inner = #from_value?;
+                                        let inner = #from_value;
                                         Ok(#ident::#case_ident(inner))
                                     }
                                 }
@@ -140,7 +140,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let wit_field = &wit_fields[field_idx];
                                 let field_from_value = apply_from_conversions(field_ty, wit_field, quote! { fields[#field_idx].clone() });
                                 quote! {
-                                    #field_ident: #field_from_value?
+                                    #field_ident: #field_from_value
                                 }
                             });
 
@@ -149,7 +149,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident)
                                 }
                             } else {
-                                let expected_len = variant.fields.len();
+                                let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
                                 quote! {
                                     #idx => {
                                         let fields = case_value.ok_or("Missing case value")?;
@@ -169,7 +169,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let wit_field = &wit_fields[field_idx];
                                 let field_from_value = apply_from_conversions(elem_ty, wit_field, quote! { elements[#field_idx].clone() });
                                 quote! {
-                                    #field_from_value?
+                                    #field_from_value
                                 }
                             });
 
@@ -178,7 +178,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident)
                                 }
                             } else {
-                                let expected_len = variant.fields.len();
+                                let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
                                 quote! {
                                     #idx => {
                                         let elements = case_value.ok_or("Missing case value")?;
@@ -238,21 +238,23 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
             })
             .collect::<Vec<_>>();
 
-        let field_values = fields.iter().enumerate().filter_map(|(idx, field)| {
+        let field_values = fields.iter().enumerate().map(|(idx, field)| {
             let wit_field = &wit_fields[idx];
+            let field_name = field.ident.as_ref().unwrap();
             if wit_field.skip {
-                None
+                quote! {
+                    #field_name: Default::default()
+                }
             } else {
-                let field_name = field.ident.as_ref().unwrap();
                 let field_from_value =
                     apply_from_conversions(&field.ty, wit_field, quote! { fields[#idx].clone() });
-                Some(quote! {
-                    #field_name: #field_from_value?
-                })
+                quote! {
+                    #field_name: #field_from_value
+                }
             }
         });
 
-        let expected_len = fields.len();
+        let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
         quote! {
             match value {
                 golem_wasm::Value::Record(fields) if fields.len() == #expected_len => Ok(Self {
@@ -310,6 +312,6 @@ fn apply_from_conversions(
         (None, None, Some(convert_to)) => {
             quote! { <Option<#convert_to> as golem_wasm::FromValue>::from_value(#field_access)?.map(Into::<#ty>::into) }
         }
-        _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access) },
+        _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access)? },
     }
 }

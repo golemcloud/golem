@@ -57,6 +57,45 @@ enum TestVariant {
     Tuple(u32, String),
 }
 
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+#[wit_transparent]
+struct TransparentNewtype(String);
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+#[wit_transparent]
+struct TransparentNewtype2 {
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestWithRenamedField {
+    #[wit_field(rename = "custom_name")]
+    field: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct WrappedU32(u32);
+
+impl Into<u32> for WrappedU32 {
+    fn into(self) -> u32 {
+        self.0
+    }
+}
+
+impl Into<WrappedU32> for u32 {
+    fn into(self) -> WrappedU32 {
+        WrappedU32(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestWithConvertedFieldAndSkip {
+    #[wit_field(convert = u32)]
+    field: WrappedU32,
+    #[wit_field(skip)]
+    other: bool,
+}
+
 // Custom strategies for chrono types to ensure valid dates/times
 fn arb_naive_date() -> impl Strategy<Value = NaiveDate> {
     (1900..=2100i32, 1..=12u32, 1..=28u32)
@@ -416,4 +455,45 @@ fn test_variant_roundtrip() {
         let back = TestVariant::from_value(val).unwrap();
         assert_eq!(back, variant);
     }
+}
+
+#[test]
+fn test_transparent_newtype_roundtrip() {
+    let original = TransparentNewtype("transparent".to_string());
+    let val = original.clone().into_value();
+    // Since it's transparent, it should serialize as the inner String
+    assert_eq!(val, Value::String("transparent".to_string()));
+    let back = TransparentNewtype::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_transparent_newtype_roundtrip2() {
+    let original = TransparentNewtype2 {
+        value: "transparent".to_string(),
+    };
+    let val = original.clone().into_value();
+    // Since it's transparent, it should serialize as the inner String
+    assert_eq!(val, Value::String("transparent".to_string()));
+    let back = TransparentNewtype2::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_renamed_field_roundtrip() {
+    let original = TestWithRenamedField { field: 42 };
+    let val = original.clone().into_value();
+    let back = TestWithRenamedField::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_converted_and_skipped_fields_roundtrip() {
+    let original = TestWithConvertedFieldAndSkip {
+        field: WrappedU32(42),
+        other: false,
+    };
+    let val = original.clone().into_value();
+    let back = TestWithConvertedFieldAndSkip::from_value(val).unwrap();
+    assert_eq!(back, original);
 }

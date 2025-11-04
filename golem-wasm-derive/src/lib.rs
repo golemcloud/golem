@@ -17,8 +17,8 @@ mod into;
 
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
-use syn::{Attribute, LitStr, Type, Variant};
 use syn::parse::{Parse, ParseStream};
+use syn::{Attribute, LitStr, Type, Variant};
 
 #[proc_macro_derive(IntoValue, attributes(wit_transparent, unit_case, wit_field))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
@@ -29,7 +29,6 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 pub fn derive_from_value(input: TokenStream) -> TokenStream {
     from::derive_from_value(input)
 }
-
 
 #[derive(Default)]
 struct WitField {
@@ -87,7 +86,7 @@ impl Parse for WitField {
 fn is_unit_case(variant: &Variant) -> bool {
     variant.fields.is_empty()
         || variant
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("unit_case"))
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("unit_case"))
 }
