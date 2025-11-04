@@ -318,7 +318,7 @@ jobs:
         run: cargo make --profile ci clear-v8
       - name: ${{ matrix.group.description }}
         env:
-          QUIET: true
+          QUIET: false
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 15
       - name: Publish Test Report
