@@ -1,0 +1,8 @@
+# Sample Golem manifest for MCP demonstration
+# This manifest demonstrates MCP resource discovery capabilities
+components:
+  mcp-demo-agent:
+    sourceWit: wit
+    generatedWit: wit-generated
+    componentWasm: target/wasm32-wasip1/release/demo.wasm
+    componentType: durable

@@ -177,42 +177,8 @@ jobs:
           name: mcp-integration-test-results
           path: target/debug/test-results/
 
-  mcp-tool-execution-test:
-    name: MCP Tool Execution Test
-    runs-on: ubuntu-latest
-    needs: [build-golem-cli, mcp-integration-tests]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download pre-built golem-cli
-        uses: actions/download-artifact@v4
-        with:
-          name: golem-cli-linux-x64
-          path: .
-
-      - name: Make binary executable
-        run: chmod +x golem-cli
-
-      - name: Verify binary works
-        run: ./golem-cli --version
-
-      - name: Update test script to use downloaded binary
-        run: |
-          sed -i 's|GOLEM_CLI=.*|GOLEM_CLI="./golem-cli"|' test-mcp-tool-execution.sh
-
-      - name: Run tool execution test
-        run: |
-          chmod +x test-mcp-tool-execution.sh
-          ./test-mcp-tool-execution.sh
-
-      - name: Verify tool execution output
-        run: |
-          if ! grep -q "golem-cli" /tmp/mcp-execution-test.log; then
-            echo "❌ Tool execution failed - no version output found"
-            cat /tmp/mcp-execution-test.log
-            exit 1
-          fi
-          echo "✅ Tool execution successful"
+  # Note: mcp-tool-execution-test removed - redundant with mcp-verified-demo
+  # mcp-verified-demo does everything mcp-tool-execution-test did PLUS parses tool list
 
   # Note: cargo-audit and clippy disabled - origin/main CI handles full codebase validation
   # These jobs were checking entire codebase, not just MCP changes
@@ -249,7 +215,6 @@ jobs:
           bash -n demo-mcp-simple.sh
           bash -n demo-mcp-verified.sh
           bash -n demo-mcp-e2e-workflow.sh
-          bash -n test-mcp-tool-execution.sh
 
       - name: Check demo script dependencies
         run: |
@@ -509,7 +474,7 @@ jobs:
   bounty-validation:
     name: Bounty Requirement Validation
     runs-on: ubuntu-latest
-    needs: [mcp-unit-tests, mcp-integration-tests, mcp-tool-execution-test, mcp-verified-demo, mcp-e2e-workflow]
+    needs: [mcp-unit-tests, mcp-integration-tests, mcp-verified-demo, mcp-e2e-workflow]
     steps:
       - uses: actions/checkout@v4
 
