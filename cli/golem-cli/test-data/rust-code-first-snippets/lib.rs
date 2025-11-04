@@ -35,12 +35,12 @@ trait BarAgent {
 
     fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // Doesn't work yet
+    // TODO: IntoValue and FromValueAndType don't handle tuples with more than 3 elements yet
     // fn fun_tuple_complex(
     //     &mut self,
     //     tuple: (String, f64, AllPrimitives, bool),
     // ) -> (String, f64, AllPrimitives, bool);
-
+    //
     fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -67,8 +67,6 @@ trait BarAgent {
     fn fun_option(&mut self, option: Option<String>) -> Option<String>;
 
     fn fun_option_complex(&mut self, option: Option<NestedStruct>) -> Option<NestedStruct>;
-
-    fn fun_enum(&mut self, enum_with_collections: SimpleEnum) -> SimpleEnum;
 
     fn fun_enum_with_only_literals(
         &mut self,
@@ -203,14 +201,11 @@ impl BarAgent for BarAgentImpl {
         option
     }
 
-    fn fun_enum(&mut self, enum_with_collections: SimpleEnum) -> SimpleEnum {
-        enum_with_collections
-    }
-
     fn fun_enum_with_only_literals(
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals {
         enum_with_only_literals
     }
+
 }

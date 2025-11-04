@@ -15,7 +15,7 @@ pub struct AllPrimitives {
     pub f32v: f32,
     pub f64v: f64,
     pub boolv: bool,
-    //pub charv: char, // TODO; moonbit failing when adding char
+    pub charv: char,
     pub stringv: String,
 }
 
@@ -51,7 +51,7 @@ pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
     pub flag: bool,
-    //pub symbol: char, // TODO; moonbit failing when adding char
+    pub symbol: char,
 }
 
 #[derive(Schema)]
@@ -71,7 +71,7 @@ pub enum SimpleEnum {
     F32(f32),
     F64(f64),
     Bool(bool),
-    // Char(char), //TODO; moonbit failing when adding char
+    Char(char),
     String(String),
     Struct(SimpleStruct),
     Unit,
