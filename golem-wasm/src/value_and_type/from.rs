@@ -208,9 +208,16 @@ impl<T: FromValue> FromValue for Option<T> {
 impl<T: FromValue> FromValue for std::collections::Bound<T> {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Variant { case_idx, case_value } => match case_idx {
-                0 => Ok(std::collections::Bound::Included(T::from_value(*case_value.unwrap())?)),
-                1 => Ok(std::collections::Bound::Excluded(T::from_value(*case_value.unwrap())?)),
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => Ok(std::collections::Bound::Included(T::from_value(
+                    *case_value.unwrap(),
+                )?)),
+                1 => Ok(std::collections::Bound::Excluded(T::from_value(
+                    *case_value.unwrap(),
+                )?)),
                 2 => Ok(std::collections::Bound::Unbounded),
                 _ => Err(format!("Invalid Bound variant index: {case_idx}")),
             },
@@ -237,9 +244,10 @@ impl<T: FromValue> FromValue for Vec<T> {
 impl<A: FromValue, B: FromValue> FromValue for (A, B) {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Tuple(values) if values.len() == 2 => {
-                Ok((A::from_value(values[0].clone())?, B::from_value(values[1].clone())?))
-            }
+            Value::Tuple(values) if values.len() == 2 => Ok((
+                A::from_value(values[0].clone())?,
+                B::from_value(values[1].clone())?,
+            )),
             _ => Err(format!("Expected Tuple of 2 elements, got {value:?}")),
         }
     }
@@ -248,19 +256,19 @@ impl<A: FromValue, B: FromValue> FromValue for (A, B) {
 impl<A: FromValue, B: FromValue, C: FromValue> FromValue for (A, B, C) {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Tuple(values) if values.len() == 3 => {
-                Ok((
-                    A::from_value(values[0].clone())?,
-                    B::from_value(values[1].clone())?,
-                    C::from_value(values[2].clone())?,
-                ))
-            }
+            Value::Tuple(values) if values.len() == 3 => Ok((
+                A::from_value(values[0].clone())?,
+                B::from_value(values[1].clone())?,
+                C::from_value(values[2].clone())?,
+            )),
             _ => Err(format!("Expected Tuple of 3 elements, got {value:?}")),
         }
     }
 }
 
-impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue for std::collections::HashMap<K, V> {
+impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue
+    for std::collections::HashMap<K, V>
+{
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::List(pairs) => {
@@ -272,12 +280,18 @@ impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue for std::colle
                             let val = V::from_value(values.remove(0))?;
                             map.insert(key, val);
                         }
-                        _ => return Err(format!("Expected Tuple of 2 in HashMap list, got {pair:?}")),
+                        _ => {
+                            return Err(format!(
+                                "Expected Tuple of 2 in HashMap list, got {pair:?}"
+                            ))
+                        }
                     }
                 }
                 Ok(map)
             }
-            _ => Err(format!("Expected List of tuples for HashMap, got {value:?}")),
+            _ => Err(format!(
+                "Expected List of tuples for HashMap, got {value:?}"
+            )),
         }
     }
 }
@@ -294,12 +308,18 @@ impl<K: FromValue + Ord, V: FromValue> FromValue for std::collections::BTreeMap<
                             let val = V::from_value(values.remove(0))?;
                             map.insert(key, val);
                         }
-                        _ => return Err(format!("Expected Tuple of 2 in BTreeMap list, got {pair:?}")),
+                        _ => {
+                            return Err(format!(
+                                "Expected Tuple of 2 in BTreeMap list, got {pair:?}"
+                            ))
+                        }
                     }
                 }
                 Ok(map)
             }
-            _ => Err(format!("Expected List of tuples for BTreeMap, got {value:?}")),
+            _ => Err(format!(
+                "Expected List of tuples for BTreeMap, got {value:?}"
+            )),
         }
     }
 }
@@ -335,7 +355,9 @@ impl FromValue for crate::WitValue {
                 let nodes = Vec::<crate::WitNode>::from_value(fields.remove(0))?;
                 Ok(crate::WitValue { nodes })
             }
-            _ => Err(format!("Expected Record with nodes for WitValue, got {value:?}")),
+            _ => Err(format!(
+                "Expected Record with nodes for WitValue, got {value:?}"
+            )),
         }
     }
 }
@@ -344,26 +366,38 @@ impl FromValue for crate::WitNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitNode;
         match value {
-            Value::Variant { case_idx, case_value } => {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => {
                 let inner = *case_value.unwrap();
+
                 match case_idx {
-                    0 => Ok(WitNode::RecordValue(Vec::<crate::NodeIndex>::from_value(inner)?)),
-                    1 => {
-                        match inner {
-                            Value::Tuple(mut values) if values.len() == 2 => {
-                                let idx = crate::NodeIndex::from_value(values.remove(0))?;
-                                let val = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
-                                Ok(WitNode::VariantValue((idx.try_into().unwrap(), val)))
-                            }
-                            _ => Err(format!("Expected Tuple for VariantValue, got {inner:?}")),
+                    0 => Ok(WitNode::RecordValue(Vec::<crate::NodeIndex>::from_value(
+                        inner,
+                    )?)),
+                    1 => match inner {
+                        Value::Tuple(mut values) if values.len() == 2 => {
+                            let idx = u32::from_value(values.remove(0))?;
+                            let val = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
+                            Ok(WitNode::VariantValue((idx, val)))
                         }
-                    }
-                    2 => Ok(WitNode::EnumValue(crate::NodeIndex::from_value(inner)?.try_into().unwrap())),
+                        _ => Err(format!("Expected Tuple for VariantValue, got {inner:?}")),
+                    },
+                    2 => Ok(WitNode::EnumValue(u32::from_value(inner)?)),
                     3 => Ok(WitNode::FlagsValue(Vec::<bool>::from_value(inner)?)),
-                    4 => Ok(WitNode::TupleValue(Vec::<crate::NodeIndex>::from_value(inner)?)),
-                    5 => Ok(WitNode::ListValue(Vec::<crate::NodeIndex>::from_value(inner)?)),
-                    6 => Ok(WitNode::OptionValue(Some(crate::NodeIndex::from_value(inner)?))),
-                    7 => Ok(WitNode::ResultValue(<Result<Option<i32>, Option<i32>> as FromValue>::from_value(inner)?)),
+                    4 => Ok(WitNode::TupleValue(Vec::<crate::NodeIndex>::from_value(
+                        inner,
+                    )?)),
+                    5 => Ok(WitNode::ListValue(Vec::<crate::NodeIndex>::from_value(
+                        inner,
+                    )?)),
+                    6 => Ok(WitNode::OptionValue(
+                        Option::<crate::NodeIndex>::from_value(inner)?,
+                    )),
+                    7 => Ok(WitNode::ResultValue(
+                        <Result<Option<i32>, Option<i32>> as FromValue>::from_value(inner)?,
+                    )),
                     8 => Ok(WitNode::PrimU8(u8::from_value(inner)?)),
                     9 => Ok(WitNode::PrimU16(u16::from_value(inner)?)),
                     10 => Ok(WitNode::PrimU32(u32::from_value(inner)?)),
@@ -377,16 +411,14 @@ impl FromValue for crate::WitNode {
                     18 => Ok(WitNode::PrimChar(char::from_value(inner)?)),
                     19 => Ok(WitNode::PrimBool(bool::from_value(inner)?)),
                     20 => Ok(WitNode::PrimString(String::from_value(inner)?)),
-                    21 => {
-                        match inner {
-                            Value::Tuple(mut values) if values.len() == 2 => {
-                                let uri = String::from_value(values.remove(0))?;
-                                let resource_id = u64::from_value(values.remove(0))?;
-                                Ok(WitNode::Handle((crate::golem_rpc_0_2_x::types::Uri { value: uri }, resource_id)))
-                            }
-                            _ => Err(format!("Expected Tuple for Handle, got {inner:?}")),
+                    21 => match inner {
+                        Value::Tuple(mut values) if values.len() == 2 => {
+                            let uri = crate::Uri::from_value(values.remove(0))?;
+                            let resource_id = u64::from_value(values.remove(0))?;
+                            Ok(WitNode::Handle((uri, resource_id)))
                         }
-                    }
+                        _ => Err(format!("Expected Tuple for Handle, got {inner:?}")),
+                    },
                     _ => Err(format!("Invalid WitNode variant index: {case_idx}")),
                 }
             }
@@ -395,78 +427,147 @@ impl FromValue for crate::WitNode {
     }
 }
 
+impl FromValue for crate::Uri {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(mut fields) if fields.len() == 1 => {
+                let value = String::from_value(fields.remove(0))?;
+                Ok(crate::Uri { value })
+            }
+            _ => Err(format!("Expected Record with value for Uri, got {value:?}")),
+        }
+    }
+}
+
 impl FromValue for crate::WitTypeNode {
     fn from_value(value: Value) -> Result<Self, String> {
         use crate::WitTypeNode;
         match value {
-            Value::Variant { case_idx, case_value } => {
-                match case_idx {
-                    0 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::RecordType(Vec::<(String, crate::NodeIndex)>::from_value(inner)?))
-                    }
-                    1 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::VariantType(Vec::<(String, Option<crate::NodeIndex>)>::from_value(inner)?))
-                    }
-                    2 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::EnumType(Vec::<String>::from_value(inner)?))
-                    }
-                    3 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::FlagsType(Vec::<String>::from_value(inner)?))
-                    }
-                    4 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::TupleType(Vec::<crate::NodeIndex>::from_value(inner)?))
-                    }
-                    5 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::ListType(crate::NodeIndex::from_value(inner)?))
-                    }
-                    6 => {
-                        let inner = *case_value.unwrap();
-                        Ok(WitTypeNode::OptionType(crate::NodeIndex::from_value(inner)?))
-                    }
-                    7 => {
-                        let inner = *case_value.unwrap();
-                        match inner {
-                            Value::Tuple(mut values) if values.len() == 2 => {
-                                let ok = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
-                                let err = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
-                                Ok(WitTypeNode::ResultType((ok, err)))
-                            }
-                            _ => Err(format!("Expected Tuple for ResultType, got {inner:?}")),
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => match case_idx {
+                0 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
                         }
-                    }
-                    8 => Ok(WitTypeNode::PrimU8Type),
-                    9 => Ok(WitTypeNode::PrimU16Type),
-                    10 => Ok(WitTypeNode::PrimU32Type),
-                    11 => Ok(WitTypeNode::PrimU64Type),
-                    12 => Ok(WitTypeNode::PrimS8Type),
-                    13 => Ok(WitTypeNode::PrimS16Type),
-                    14 => Ok(WitTypeNode::PrimS32Type),
-                    15 => Ok(WitTypeNode::PrimS64Type),
-                    16 => Ok(WitTypeNode::PrimF32Type),
-                    17 => Ok(WitTypeNode::PrimF64Type),
-                    18 => Ok(WitTypeNode::PrimCharType),
-                    19 => Ok(WitTypeNode::PrimBoolType),
-                    20 => Ok(WitTypeNode::PrimStringType),
-                    21 => {
-                        let inner = *case_value.unwrap();
-                        match inner {
-                            Value::Tuple(mut values) if values.len() == 2 => {
-                                let id = u64::from_value(values.remove(0))?;
-                                let mode = crate::ResourceMode::from_value(values.remove(0))?;
-                                Ok(WitTypeNode::HandleType((id, mode)))
-                            }
-                            _ => Err(format!("Expected Tuple for HandleType, got {inner:?}")),
-                        }
-                    }
-                    _ => Err(format!("Invalid WitTypeNode variant index: {case_idx}")),
+                    };
+                    Ok(WitTypeNode::RecordType(
+                        Vec::<(String, crate::NodeIndex)>::from_value(inner)?,
+                    ))
                 }
-            }
+                1 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::VariantType(Vec::<(
+                        String,
+                        Option<crate::NodeIndex>,
+                    )>::from_value(
+                        inner
+                    )?))
+                }
+                2 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::EnumType(Vec::<String>::from_value(inner)?))
+                }
+                3 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::FlagsType(Vec::<String>::from_value(inner)?))
+                }
+                4 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::TupleType(Vec::<crate::NodeIndex>::from_value(
+                        inner,
+                    )?))
+                }
+                5 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::ListType(crate::NodeIndex::from_value(inner)?))
+                }
+                6 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    Ok(WitTypeNode::OptionType(crate::NodeIndex::from_value(
+                        inner,
+                    )?))
+                }
+                7 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    match inner {
+                        Value::Tuple(mut values) if values.len() == 2 => {
+                            let ok = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
+                            let err = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
+                            Ok(WitTypeNode::ResultType((ok, err)))
+                        }
+                        _ => Err(format!("Expected Tuple for ResultType, got {inner:?}")),
+                    }
+                }
+                8 => Ok(WitTypeNode::PrimU8Type),
+                9 => Ok(WitTypeNode::PrimU16Type),
+                10 => Ok(WitTypeNode::PrimU32Type),
+                11 => Ok(WitTypeNode::PrimU64Type),
+                12 => Ok(WitTypeNode::PrimS8Type),
+                13 => Ok(WitTypeNode::PrimS16Type),
+                14 => Ok(WitTypeNode::PrimS32Type),
+                15 => Ok(WitTypeNode::PrimS64Type),
+                16 => Ok(WitTypeNode::PrimF32Type),
+                17 => Ok(WitTypeNode::PrimF64Type),
+                18 => Ok(WitTypeNode::PrimCharType),
+                19 => Ok(WitTypeNode::PrimBoolType),
+                20 => Ok(WitTypeNode::PrimStringType),
+                21 => {
+                    let inner = match case_value {
+                        Some(inner) => *inner,
+                        None => {
+                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                        }
+                    };
+                    match inner {
+                        Value::Tuple(mut values) if values.len() == 2 => {
+                            let id = u64::from_value(values.remove(0))?;
+                            let mode = crate::ResourceMode::from_value(values.remove(0))?;
+                            Ok(WitTypeNode::HandleType((id, mode)))
+                        }
+                        _ => Err(format!("Expected Tuple for HandleType, got {inner:?}")),
+                    }
+                }
+                _ => Err(format!("Invalid WitTypeNode variant index: {case_idx}")),
+            },
             _ => Err(format!("Expected Variant for WitTypeNode, got {value:?}")),
         }
     }
@@ -481,7 +582,9 @@ impl FromValue for NamedWitTypeNode {
                 let type_ = crate::WitTypeNode::from_value(fields.remove(0))?;
                 Ok(NamedWitTypeNode { name, owner, type_ })
             }
-            _ => Err(format!("Expected Record for NamedWitTypeNode, got {value:?}")),
+            _ => Err(format!(
+                "Expected Record for NamedWitTypeNode, got {value:?}"
+            )),
         }
     }
 }
@@ -489,7 +592,9 @@ impl FromValue for NamedWitTypeNode {
 impl FromValue for std::time::Instant {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::U64(nanos) => Ok(std::time::Instant::now() - std::time::Duration::from_nanos(nanos)),
+            Value::U64(nanos) => {
+                Ok(std::time::Instant::now() - std::time::Duration::from_nanos(nanos))
+            }
             _ => Err(format!("Expected U64 for Instant, got {value:?}")),
         }
     }
@@ -520,13 +625,18 @@ impl FromValue for crate::ResourceMode {
 impl FromValue for crate::RpcError {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {
-            Value::Variant { case_idx, case_value } => {
+            Value::Variant {
+                case_idx,
+                case_value,
+            } => {
                 let inner = *case_value.unwrap();
                 match case_idx {
                     0 => Ok(crate::RpcError::ProtocolError(String::from_value(inner)?)),
                     1 => Ok(crate::RpcError::Denied(String::from_value(inner)?)),
                     2 => Ok(crate::RpcError::NotFound(String::from_value(inner)?)),
-                    3 => Ok(crate::RpcError::RemoteInternalError(String::from_value(inner)?)),
+                    3 => Ok(crate::RpcError::RemoteInternalError(String::from_value(
+                        inner,
+                    )?)),
                     _ => Err(format!("Invalid RpcError variant index: {case_idx}")),
                 }
             }
@@ -543,7 +653,9 @@ impl FromValue for crate::ValueAndType {
                 let typ = crate::analysis::AnalysedType::from_value(fields.remove(0))?;
                 Ok(crate::ValueAndType { value, typ })
             }
-            _ => Err(format!("Expected Record with value and type for ValueAndType, got {value:?}")),
+            _ => Err(format!(
+                "Expected Record with value and type for ValueAndType, got {value:?}"
+            )),
         }
     }
 }
@@ -592,8 +704,13 @@ impl FromValue for chrono::NaiveTime {
                 let minute = u8::from_value(fields.remove(0))?;
                 let second = u8::from_value(fields.remove(0))?;
                 let nanosecond = u32::from_value(fields.remove(0))?;
-                chrono::NaiveTime::from_hms_nano_opt(hour as u32, minute as u32, second as u32, nanosecond)
-                    .ok_or_else(|| format!("Invalid time: {hour}:{minute}:{second}.{nanosecond}"))
+                chrono::NaiveTime::from_hms_nano_opt(
+                    hour as u32,
+                    minute as u32,
+                    second as u32,
+                    nanosecond,
+                )
+                .ok_or_else(|| format!("Invalid time: {hour}:{minute}:{second}.{nanosecond}"))
             }
             _ => Err(format!("Expected Record for NaiveTime, got {value:?}")),
         }
@@ -619,7 +736,10 @@ impl FromValue for chrono::DateTime<chrono::Utc> {
             Value::Record(mut fields) if fields.len() == 2 => {
                 let timestamp = chrono::NaiveDateTime::from_value(fields.remove(0))?;
                 let _offset_seconds = i32::from_value(fields.remove(0))?; // Ignored for Utc
-                Ok(chrono::DateTime::from_naive_utc_and_offset(timestamp, chrono::Utc))
+                Ok(chrono::DateTime::from_naive_utc_and_offset(
+                    timestamp,
+                    chrono::Utc,
+                ))
             }
             _ => Err(format!("Expected Record for DateTime<Utc>, got {value:?}")),
         }
@@ -647,7 +767,9 @@ impl FromValue for crate::WitType {
                 let nodes = Vec::<NamedWitTypeNode>::from_value(fields.remove(0))?;
                 Ok(crate::WitType { nodes })
             }
-            _ => Err(format!("Expected Record with nodes for WitType, got {value:?}")),
+            _ => Err(format!(
+                "Expected Record with nodes for WitType, got {value:?}"
+            )),
         }
     }
 }

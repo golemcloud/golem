@@ -422,9 +422,9 @@ fn has_only_named_fields(fields: &Fields) -> bool {
 fn is_unit_case(variant: &Variant) -> bool {
     variant.fields.is_empty()
         || variant
-        .attrs
-        .iter()
-        .any(|attr| attr.path().is_ident("unit_case"))
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("unit_case"))
 }
 
 fn apply_conversions(

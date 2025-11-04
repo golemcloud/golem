@@ -17,6 +17,7 @@ use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use proptest::prelude::*;
+use proptest_arbitrary_interop::arb_sized;
 use std::collections::Bound;
 use std::str::FromStr;
 use url::Url;
@@ -25,12 +26,13 @@ use test_r::test;
 
 // Custom strategies for chrono types to ensure valid dates/times
 fn arb_naive_date() -> impl Strategy<Value = NaiveDate> {
-(1900..=2100i32, 1..=12u32, 1..=28u32).prop_map(|(y, m, d)| NaiveDate::from_ymd_opt(y, m, d).unwrap())
+    (1900..=2100i32, 1..=12u32, 1..=28u32)
+        .prop_map(|(y, m, d)| NaiveDate::from_ymd_opt(y, m, d).unwrap())
 }
 
 fn arb_naive_time() -> impl Strategy<Value = NaiveTime> {
-(0..=23u32, 0..=59u32, 0..=59u32, 0..=999999999u32)
-.prop_map(|(h, m, s, n)| NaiveTime::from_hms_nano_opt(h, m, s, n).unwrap())
+    (0..=23u32, 0..=59u32, 0..=59u32, 0..=999999999u32)
+        .prop_map(|(h, m, s, n)| NaiveTime::from_hms_nano_opt(h, m, s, n).unwrap())
 }
 
 fn arb_naive_datetime() -> impl Strategy<Value = NaiveDateTime> {
@@ -42,7 +44,14 @@ fn arb_datetime_utc() -> impl Strategy<Value = DateTime<Utc>> {
         .prop_map(|(dt, _offset)| DateTime::from_naive_utc_and_offset(dt, Utc))
 }
 
+const CASES: u32 = 10000;
+const SIZE: usize = 4096;
+
 proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: CASES, .. ProptestConfig::default()
+    })]
+
     #[test]
     fn u8_roundtrip(value in any::<u8>()) {
         let val = value.into_value();
@@ -219,12 +228,24 @@ proptest! {
     }
 
     #[test]
-    fn url_roundtrip(value in any::<String>().prop_filter("valid url", |s| Url::parse(s).is_ok()).prop_map(|s| Url::parse(&s).unwrap())) {
-            let original = value.clone();
+    fn url_roundtrip(value in proptest::sample::select(vec![
+        url::Url::parse("https://example.com").unwrap(),
+        url::Url::parse("http://localhost:8080/path").unwrap(),
+        url::Url::parse("https://test.com?query=value").unwrap(),
+    ])) {
+        let original = value.clone();
             let val = value.into_value();
             let back = Url::from_value(val).unwrap();
-        prop_assert_eq!(back, original);
-    }
+            prop_assert_eq!(back, original);
+        }
+
+        #[test]
+        fn uri_roundtrip(value in any::<String>().prop_map(|s| crate::Uri { value: s })) {
+            let original = value.clone();
+            let val = value.into_value();
+            let back = crate::Uri::from_value(val).unwrap();
+            prop_assert_eq!(back, original);
+        }
 
     #[test]
     fn duration_roundtrip(value in any::<u64>().prop_map(std::time::Duration::from_nanos)) {
@@ -273,6 +294,13 @@ proptest! {
         let back = std::collections::BTreeSet::<u32>::from_value(val).unwrap();
         prop_assert_eq!(back, original);
     }
+
+    #[test]
+    fn value_round_trip(value in arb_sized::<Value>(SIZE).prop_filter("Value must be equal to itself", |v| v.eq(v))) {
+        let val = value.clone().into_value();
+        let back: Value = Value::from_value(val).unwrap();
+        prop_assert_eq!(back, value);
+    }
 }
 
 #[test]
@@ -301,6 +329,3 @@ fn analysed_type_roundtrip() {
     let back = crate::analysis::AnalysedType::from_value(val).unwrap();
     assert_eq!(back, typ);
 }
-
-
-

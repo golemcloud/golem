@@ -15,9 +15,7 @@
 mod from;
 mod into;
 
-use heck::*;
 use proc_macro::TokenStream;
-use syn::parse::Parse;
 
 #[proc_macro_derive(IntoValue, attributes(wit_transparent, unit_case, wit_field))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {

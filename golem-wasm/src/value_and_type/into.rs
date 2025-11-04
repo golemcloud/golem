@@ -358,10 +358,7 @@ impl IntoValue for Uuid {
     }
 }
 
-/// Helper for dynamically creating record ValueAndType values with String keys
-pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
-
-impl<K: AsRef<str>> IntoValueAndType for Record<K> {
+impl<K: AsRef<str>> IntoValueAndType for super::Record<K> {
     fn into_value_and_type(self) -> ValueAndType {
         let mut field_types = Vec::<NameTypePair>::with_capacity(self.0.len());
         let mut field_values = Vec::<Value>::with_capacity(self.0.len());

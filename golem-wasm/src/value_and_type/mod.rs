@@ -13,14 +13,14 @@
 // limitations under the License.
 
 #[cfg(feature = "host")]
-mod into;
-#[cfg(feature = "host")]
 mod from;
+#[cfg(feature = "host")]
+mod into;
 #[cfg(all(feature = "host", test))]
 mod tests;
 
 use crate::analysis::AnalysedType;
-use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
+use crate::{Value, WitType, WitValue};
 
 pub use into::IntoValue;
 pub use into::IntoValueAndType;
@@ -87,3 +87,6 @@ impl From<ValueAndType> for WitType {
         value_and_type.typ.into()
     }
 }
+
+/// Helper for dynamically creating record ValueAndType values with String keys
+pub struct Record<K: AsRef<str>>(pub Vec<(K, ValueAndType)>);
