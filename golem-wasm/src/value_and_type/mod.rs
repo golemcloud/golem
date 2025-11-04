@@ -20,12 +20,16 @@ mod into;
 mod tests;
 
 use crate::analysis::AnalysedType;
-use crate::{Value, WitType, WitValue};
+use crate::{Value, WitValue};
 
+#[cfg(feature = "host")]
 pub use into::IntoValue;
+#[cfg(feature = "host")]
 pub use into::IntoValueAndType;
 
+#[cfg(feature = "host")]
 pub use from::FromValue;
+#[cfg(feature = "host")]
 pub use from::FromValueAndType;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,7 +86,8 @@ impl From<ValueAndType> for WitValue {
     }
 }
 
-impl From<ValueAndType> for WitType {
+#[cfg(feature = "host")]
+impl From<ValueAndType> for crate::WitType {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.typ.into()
     }

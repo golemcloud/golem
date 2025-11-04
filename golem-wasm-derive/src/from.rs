@@ -16,7 +16,6 @@ use crate::{is_unit_case, parse_wit_field_attribute, WitField};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::parse::Parse;
 use syn::{Data, DeriveInput, Fields, Type};
 
 pub fn derive_from_value(input: TokenStream) -> TokenStream {

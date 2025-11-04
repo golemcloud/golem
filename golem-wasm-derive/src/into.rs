@@ -17,7 +17,6 @@ use heck::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::parse::Parse;
 use syn::{Data, DeriveInput, Fields, LitStr, Type};
 
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
