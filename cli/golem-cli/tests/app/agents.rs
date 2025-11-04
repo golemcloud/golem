@@ -9,11 +9,43 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 
 #[test]
+async fn test_rust_counter() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:counter"])
+        .await;
+    assert!(outputs.success());
+
+    let uuid = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("app:counter/counter({{ id: \"{uuid}\" }})"),
+            "increment",
+        ])
+        .await;
+    assert!(outputs.success());
+
+    assert!(outputs.stdout_contains("- 1"));
+}
+
+#[test]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -51,7 +83,7 @@ async fn test_ts_code_first_complex() {
 
     let app_name = "ts-code-first";
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
 
@@ -94,13 +126,13 @@ async fn test_ts_code_first_complex() {
     .unwrap();
 
     fs::copy(
-        "test-data/ts-code-first-snippets/main.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/main.ts"),
         &component_source_code_main_file,
     )
     .unwrap();
 
     fs::copy(
-        "test-data/ts-code-first-snippets/model.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/model.ts"),
         &component_source_code_model_file,
     )
     .unwrap();
@@ -407,7 +439,7 @@ async fn test_common_dep_plugs_errors() {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
@@ -463,7 +495,7 @@ async fn test_component_env_var_substitution() {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     // Building is okay, as that does not resolve env vars
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
@@ -669,7 +701,7 @@ async fn test_http_api_merging() {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx
         .cli([cmd::APP, cmd::DEPLOY, flag::REDEPLOY_ALL, flag::YES])
@@ -730,7 +762,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx
         .cli([
@@ -772,7 +804,7 @@ async fn test_naming_extremes() {
     let mut ctx = TestContext::new();
     let app_name = "test_naming_extremes";
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
@@ -790,7 +822,7 @@ async fn test_naming_extremes() {
     );
 
     fs::copy(
-        "test-data/ts-code-first-snippets/naming_extremes.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/naming_extremes.ts"),
         &component_source_code,
     )
     .unwrap();

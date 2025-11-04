@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_cli::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use test_r::tag_suite;
 
 mod add_dep;
@@ -28,14 +28,8 @@ tag_suite!(compose, group1);
 tag_suite!(stub_wasm, group1);
 tag_suite!(wit, group1);
 
-tag_suite!(cargo, uses_cargo);
-tag_suite!(compose, uses_cargo);
-tag_suite!(stub_wasm, uses_cargo);
-
-static TEST_DATA_PATH: &str = "test-data";
-
-pub fn test_data_path() -> &'static Path {
-    Path::new(TEST_DATA_PATH)
+pub fn test_data_path() -> PathBuf {
+    crate::crate_path().join("test-data")
 }
 
 pub fn golem_rust_override() -> RustDependencyOverride {

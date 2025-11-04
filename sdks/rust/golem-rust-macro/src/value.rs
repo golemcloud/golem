@@ -18,8 +18,7 @@ use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
 
-pub fn derive_into_value(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).expect("derive input");
+pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -27,7 +26,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
         .any(|attr| attr.path().is_ident("flatten_value"));
     let ident_lit = LitStr::new(&ident.to_string(), Span::call_site());
 
-    let (add_to_builder, add_to_type_builder) = match ast.data {
+    let (add_to_builder, add_to_type_builder) = match &ast.data {
         Data::Struct(data) => {
             let newtype_result = if data.fields.len() == 1 {
                 let field = data.fields.iter().next().unwrap().clone();
@@ -353,15 +352,14 @@ fn is_unit_case(variant: &Variant) -> bool {
             .any(|attr| attr.path().is_ident("unit_case"))
 }
 
-pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).expect("derive input");
+pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
         .iter()
         .any(|attr| attr.path().is_ident("flatten_value"));
 
-    let extractor = match ast.data {
+    let extractor = match &ast.data {
         Data::Struct(data) => {
             let newtype_result = if data.fields.len() == 1 {
                 let field = data.fields.iter().next().unwrap().clone();

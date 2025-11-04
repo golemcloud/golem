@@ -262,6 +262,9 @@ jobs:
           - name: cli-integration-tests-group3
             description: "CLI tests #3"
             runner: blacksmith-16vcpu-ubuntu-2204
+          - name: cli-integration-tests-group4
+            description: "CLI tests #4"
+            runner: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v5
