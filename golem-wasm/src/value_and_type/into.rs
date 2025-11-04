@@ -670,7 +670,7 @@ impl IntoValue for WitTypeNode {
                 case_value: None,
             },
             WitTypeNode::HandleType(handle) => Value::Variant {
-                case_idx: 17,
+                case_idx: 21,
                 case_value: Some(Box::new(handle.into_value())),
             },
         }

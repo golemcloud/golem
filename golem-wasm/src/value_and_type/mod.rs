@@ -16,6 +16,8 @@
 mod into;
 #[cfg(feature = "host")]
 mod from;
+#[cfg(all(feature = "host", test))]
+mod tests;
 
 use crate::analysis::AnalysedType;
 use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};

@@ -15,12 +15,7 @@
 use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
 use crate::{Value, ValueAndType, WitValue};
 use bigdecimal::BigDecimal;
-use bit_vec::BitVec;
-use std::collections::{BTreeMap, BTreeSet, Bound, HashMap};
 use std::str::FromStr;
-use std::time::{Duration, Instant};
-use url::Url;
-use uuid::Uuid;
 
 pub trait FromValue: Sized {
     fn from_value(value: Value) -> Result<Self, String>;
@@ -405,16 +400,37 @@ impl FromValue for crate::WitTypeNode {
         use crate::WitTypeNode;
         match value {
             Value::Variant { case_idx, case_value } => {
-                let inner = *case_value.unwrap();
                 match case_idx {
-                    0 => Ok(WitTypeNode::RecordType(Vec::<(String, crate::NodeIndex)>::from_value(inner)?)),
-                    1 => Ok(WitTypeNode::VariantType(Vec::<(String, Option<crate::NodeIndex>)>::from_value(inner)?)),
-                    2 => Ok(WitTypeNode::EnumType(Vec::<String>::from_value(inner)?)),
-                    3 => Ok(WitTypeNode::FlagsType(Vec::<String>::from_value(inner)?)),
-                    4 => Ok(WitTypeNode::TupleType(Vec::<crate::NodeIndex>::from_value(inner)?)),
-                    5 => Ok(WitTypeNode::ListType(crate::NodeIndex::from_value(inner)?)),
-                    6 => Ok(WitTypeNode::OptionType(crate::NodeIndex::from_value(inner)?)),
+                    0 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::RecordType(Vec::<(String, crate::NodeIndex)>::from_value(inner)?))
+                    }
+                    1 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::VariantType(Vec::<(String, Option<crate::NodeIndex>)>::from_value(inner)?))
+                    }
+                    2 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::EnumType(Vec::<String>::from_value(inner)?))
+                    }
+                    3 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::FlagsType(Vec::<String>::from_value(inner)?))
+                    }
+                    4 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::TupleType(Vec::<crate::NodeIndex>::from_value(inner)?))
+                    }
+                    5 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::ListType(crate::NodeIndex::from_value(inner)?))
+                    }
+                    6 => {
+                        let inner = *case_value.unwrap();
+                        Ok(WitTypeNode::OptionType(crate::NodeIndex::from_value(inner)?))
+                    }
                     7 => {
+                        let inner = *case_value.unwrap();
                         match inner {
                             Value::Tuple(mut values) if values.len() == 2 => {
                                 let ok = Option::<crate::NodeIndex>::from_value(values.remove(0))?;
@@ -438,6 +454,7 @@ impl FromValue for crate::WitTypeNode {
                     19 => Ok(WitTypeNode::PrimBoolType),
                     20 => Ok(WitTypeNode::PrimStringType),
                     21 => {
+                        let inner = *case_value.unwrap();
                         match inner {
                             Value::Tuple(mut values) if values.len() == 2 => {
                                 let id = u64::from_value(values.remove(0))?;
