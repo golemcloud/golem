@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{is_unit_case, parse_wit_field_attribute, WitField};
 use heck::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Type, Variant};
+use syn::parse::Parse;
+use syn::{Data, DeriveInput, Fields, LitStr, Type};
 
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).expect("derive input");
@@ -419,14 +420,6 @@ fn has_only_named_fields(fields: &Fields) -> bool {
     fields.iter().all(|field| field.ident.is_some())
 }
 
-fn is_unit_case(variant: &Variant) -> bool {
-    variant.fields.is_empty()
-        || variant
-            .attrs
-            .iter()
-            .any(|attr| attr.path().is_ident("unit_case"))
-}
-
 fn apply_conversions(
     wit_field: &WitField,
     field_access: proc_macro2::TokenStream,
@@ -446,58 +439,5 @@ fn apply_conversions(
             quote! { #field_access.map(Into::<#convert_to>::into).into_value() }
         }
         _ => quote! { #field_access.into_value() },
-    }
-}
-
-#[derive(Default)]
-struct WitField {
-    skip: bool,
-    rename: Option<LitStr>,
-    convert: Option<Type>,
-    convert_vec: Option<Type>,
-    convert_option: Option<Type>,
-}
-
-fn parse_wit_field_attribute(attr: &Attribute) -> WitField {
-    attr.parse_args_with(WitField::parse)
-        .expect("failed to parse wit_field attribute")
-}
-
-impl Parse for WitField {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut skip = false;
-        let mut rename = None;
-        let mut convert = None;
-        let mut convert_vec = None;
-        let mut convert_option = None;
-
-        while !input.is_empty() {
-            let ident: Ident = input.parse()?;
-            if ident == "skip" {
-                skip = true;
-            } else if ident == "rename" {
-                input.parse::<syn::Token![=]>()?;
-                rename = Some(input.parse()?);
-            } else if ident == "convert" {
-                input.parse::<syn::Token![=]>()?;
-                convert = Some(input.parse()?);
-            } else if ident == "convert_vec" {
-                input.parse::<syn::Token![=]>()?;
-                convert_vec = Some(input.parse()?);
-            } else if ident == "convert_option" {
-                input.parse::<syn::Token![=]>()?;
-                convert_option = Some(input.parse()?);
-            } else {
-                return Err(syn::Error::new(ident.span(), "unexpected attribute"));
-            }
-        }
-
-        Ok(WitField {
-            skip,
-            rename,
-            convert,
-            convert_vec,
-            convert_option,
-        })
     }
 }
