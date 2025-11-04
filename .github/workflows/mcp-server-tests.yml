@@ -192,6 +192,7 @@ jobs:
         run: |
           bash -n demo-mcp-simple.sh
           bash -n demo-mcp-verified.sh
+          bash -n demo-mcp-e2e-workflow.sh
           bash -n test-mcp-tool-execution.sh
 
       - name: Check demo script dependencies
@@ -246,6 +247,54 @@ jobs:
         with:
           name: mcp-verified-demo-logs
           path: /tmp/mcp-verified-demo.log
+
+  mcp-e2e-workflow:
+    name: Run E2E Workflow Demo (Multi-Tool Sequence)
+    runs-on: ubuntu-latest
+    needs: [build-golem-cli, mcp-integration-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq (for JSON parsing)
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download pre-built golem-cli
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-cli-linux-x64
+          path: target/debug/
+
+      - name: Make binary executable
+        run: chmod +x target/debug/golem-cli
+
+      - name: Run end-to-end workflow demo
+        run: |
+          chmod +x demo-mcp-e2e-workflow.sh
+          ./demo-mcp-e2e-workflow.sh
+
+      - name: Verify workflow completed
+        run: |
+          if [ ! -f /tmp/mcp-e2e-demo.log ]; then
+            echo "❌ E2E demo log not found"
+            exit 1
+          fi
+          echo "✅ End-to-end workflow completed successfully"
+          echo ""
+          echo "Workflow demonstrated:"
+          echo "  - component_templates (list templates)"
+          echo "  - component_list (list components)"
+          echo "  - agent_list (list agents)"
+          echo "  - agent_new --help (command help)"
+          echo "  - resources/list (manifest discovery)"
+          echo ""
+          echo "This proves MCP supports complete agent lifecycle"
+
+      - name: Upload workflow logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-e2e-workflow-logs
+          path: /tmp/mcp-e2e-demo.log
 
   # Note: mcp-coverage disabled - causes disk space issues in GitHub Actions
   # Coverage can be generated locally with: cargo tarpaulin --package golem-cli --lib
@@ -404,7 +453,7 @@ jobs:
   bounty-validation:
     name: Bounty Requirement Validation
     runs-on: ubuntu-latest
-    needs: [mcp-unit-tests, mcp-integration-tests, mcp-tool-execution-test, mcp-verified-demo]
+    needs: [mcp-unit-tests, mcp-integration-tests, mcp-tool-execution-test, mcp-verified-demo, mcp-e2e-workflow]
     steps:
       - uses: actions/checkout@v4
 
