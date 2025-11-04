@@ -16,10 +16,10 @@ templates:
           basedOnCompiledWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
           withAgent: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
-          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
-        sourceWit: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
+        sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
         clean:
         - src/bindings.rs
@@ -36,10 +36,10 @@ templates:
           basedOnCompiledWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
           withAgent: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
-          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
-        sourceWit: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ./../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
+        componentWasm: ./../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
         clean:
         - src/bindings.rs

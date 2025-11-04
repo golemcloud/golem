@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::{
-    agentic::{agent_initiator::AgentInitiator, agent_type_name::AgentTypeName, ResolvedAgent},
-    golem_agentic::exports::golem::agent::guest::AgentType,
+    agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
+    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
 
 thread_local! {
@@ -46,6 +46,63 @@ where
     AGENT_INSTANCE.with(|instance| instance.borrow_mut().as_mut().map(|agent| f(agent)))
 }
 
+pub fn get_constructor_parameter_type(
+    agent_type_name: &AgentTypeName,
+    parameter_index: usize,
+) -> Option<ElementSchema> {
+    let agent_type = get_agent_type_by_name(agent_type_name)?;
+
+    let constructor = &agent_type.constructor;
+
+    match &constructor.input_schema {
+        crate::golem_agentic::golem::agent::common::DataSchema::Tuple(items) => {
+            if parameter_index < items.len() {
+                let element_schema = &items[parameter_index].1;
+                Some(element_schema.clone())
+            } else {
+                None
+            }
+        }
+        crate::golem_agentic::golem::agent::common::DataSchema::Multimodal(items) => {
+            if parameter_index < items.len() {
+                let element_schema = &items[parameter_index].1;
+                Some(element_schema.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn get_method_parameter_type(
+    agent_type_name: &AgentTypeName,
+    method_name: &str,
+    parameter_index: usize,
+) -> Option<ElementSchema> {
+    let agent_type = get_agent_type_by_name(agent_type_name)?;
+
+    let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
+
+    match &method.input_schema {
+        crate::golem_agentic::golem::agent::common::DataSchema::Tuple(items) => {
+            if parameter_index < items.len() {
+                let element_schema = &items[parameter_index].1;
+                Some(element_schema.clone())
+            } else {
+                None
+            }
+        }
+        crate::golem_agentic::golem::agent::common::DataSchema::Multimodal(items) => {
+            if parameter_index < items.len() {
+                let element_schema = &items[parameter_index].1;
+                Some(element_schema.clone())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 pub fn register_agent_initiator(agent_type_name: &str, initiator: Box<dyn AgentInitiator>) {
     let agent_type_name = AgentTypeName(agent_type_name.to_string());
     AGENT_INITIATOR_REGISTRY.with(|registry| {
@@ -65,3 +122,6 @@ where
             .map(|initiator| f(initiator))
     })
 }
+
+#[derive(Eq, Hash, PartialEq)]
+pub struct AgentTypeName(pub String);

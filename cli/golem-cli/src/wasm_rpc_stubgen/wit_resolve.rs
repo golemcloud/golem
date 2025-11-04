@@ -445,7 +445,7 @@ impl ResolvedWitApplication {
         for component_name in app.component_names() {
             validation.push_context("component name", component_name.to_string());
 
-            let source_wit_dir = app.component_source_wit(component_name, profile);
+            let source_wit = app.component_source_wit(component_name, profile);
             let generated_wit_dir = app.component_generated_wit(component_name, profile);
 
             let app_component_deps = app
@@ -456,20 +456,20 @@ impl ResolvedWitApplication {
                 .map(|dep| dep.name)
                 .collect();
 
-            let resolved_component = if source_wit_dir.is_dir() {
+            let resolved_component = if source_wit.is_dir() {
                 log_action(
                     "Resolving",
                     format!(
                         "component wit dirs for {} ({}, {})",
                         component_name.as_str().log_color_highlight(),
-                        source_wit_dir.log_color_highlight(),
+                        source_wit.log_color_highlight(),
                         generated_wit_dir.log_color_highlight(),
                     ),
                 );
 
                 Self::resolve_using_wit_dir(
                     component_name,
-                    &source_wit_dir,
+                    &source_wit,
                     &generated_wit_dir,
                     app_component_deps,
                 )
@@ -479,7 +479,7 @@ impl ResolvedWitApplication {
                     format!(
                         "component interface using base WASM for {} ({}, {})",
                         component_name.as_str().log_color_highlight(),
-                        source_wit_dir.log_color_highlight(),
+                        source_wit.log_color_highlight(),
                         generated_wit_dir.log_color_highlight(),
                     ),
                 );
@@ -487,7 +487,7 @@ impl ResolvedWitApplication {
                 Self::resolve_using_base_wasm(
                     component_name,
                     app_component_deps,
-                    &source_wit_dir,
+                    &source_wit,
                     tools_with_ensured_common_deps,
                 )
                 .await
@@ -565,33 +565,26 @@ impl ResolvedWitApplication {
     async fn resolve_using_base_wasm(
         component_name: &AppComponentName,
         app_component_deps: HashSet<AppComponentName>,
-        source_wit_dir: &Path,
+        source_wasm_path: &Path,
         tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
     ) -> anyhow::Result<ResolvedWitComponent> {
-        if !source_wit_dir.exists() {
+        if !source_wasm_path.exists() {
             // The source WIT path does not exist. We add a special case here for paths pointing into `node_modules`
             // and trigger an `npm install` if needed. This should be generalized later as an initialization step.
-            if source_wit_dir
+            if source_wasm_path
                 .components()
                 .any(|c| c.as_os_str() == OsStr::new("node_modules"))
             {
                 ensure_common_deps_for_tool(tools_with_ensured_common_deps, "node").await?;
-            } else if source_wit_dir
-                .components()
-                .any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1"))
-            {
-                // For rust the base wasm is the component itself, and this ensures it
-                // May be there is a better approach.
-                ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo").await?;
             }
         }
 
-        let source_wasm = std::fs::read(source_wit_dir)
+        let source_wasm = std::fs::read(source_wasm_path)
             .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
         let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
             anyhow!(
                 "Failed to decode the source WIT path as a WASM component: {}",
-                source_wit_dir.log_color_highlight()
+                source_wasm_path.log_color_highlight()
             )
         })?;
 
@@ -603,7 +596,7 @@ impl ResolvedWitApplication {
         // that into a generated WIT dir, just treat it as a static interface definition for
         // the given component. So resolved_wit_dir in this case is the resolved _source_ WIT
         // parsed from the WASM.
-        let resolved_wit_dir = ResolvedWitDir::from_wasm(source_wit_dir, &wasm);
+        let resolved_wit_dir = ResolvedWitDir::from_wasm(source_wasm_path, &wasm);
 
         let resolve = wasm.resolve();
         let root_package_id = wasm.package();
@@ -611,7 +604,7 @@ impl ResolvedWitApplication {
         let root_world = resolve.worlds.get(root_world_id).ok_or_else(|| {
             anyhow!(
                 "Failed to get root world from the resolved component interface: {}",
-                source_wit_dir.log_color_highlight()
+                source_wasm_path.log_color_highlight()
             )
         })?;
 

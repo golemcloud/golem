@@ -12,118 +12,50 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wasm_rpc::IntoValue;
-use crate::wasm_rpc::WitType;
-use crate::wasm_rpc::WitValue;
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 
-pub trait Schema: IntoValue + FromValue {
-    fn to_value(self) -> golem_wasm::Value
-    where
-        Self: Sized,
-    {
-        IntoValue::into_value(self)
-    }
+use crate::golem_agentic::golem::agent::common::ElementSchema;
+use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::value_and_type::FromValueAndType;
+use crate::value_and_type::IntoValue;
 
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        FromValue::from_value(value)
-    }
-
-    fn from_wit_value(value: WitValue) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        let value = golem_wasm::Value::from(value);
-        FromValue::from_value(value)
-    }
-
-    fn to_wit_value(self) -> WitValue
-    where
-        Self: Sized,
-    {
-        let value = IntoValue::into_value(self);
-        WitValue::from(value)
-    }
-
-    fn get_wit_type() -> WitType
-    where
-        Self: Sized,
-    {
-        let analysed_type = <Self as IntoValue>::get_type();
-        WitType::from(analysed_type)
-    }
-}
-
-impl<T: IntoValue + FromValue> Schema for T {}
-
-pub trait FromValue {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String>
+pub trait Schema {
+    fn get_type() -> ElementSchema;
+    fn to_element_value(self) -> Result<ElementValue, String>;
+    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
     where
         Self: Sized;
 }
 
-impl FromValue for String {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::String(s) => Ok(s),
-            _ => Err("Expected a String value".to_string()),
-        }
+impl<T: IntoValue + FromValueAndType> Schema for T {
+    fn get_type() -> ElementSchema {
+        ElementSchema::ComponentModel(T::get_type())
     }
-}
 
-impl FromValue for u32 {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::U32(n) => Ok(n),
-            _ => Err("Expected a u32 value".to_string()),
-        }
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        let wit_value = self.into_value();
+        Ok(ElementValue::ComponentModel(wit_value))
     }
-}
 
-impl FromValue for bool {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+    fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String> {
         match value {
-            golem_wasm::Value::Bool(b) => Ok(b),
-            _ => Err("Expected a bool value".to_string()),
-        }
-    }
-}
+            ElementValue::ComponentModel(wit_value) => {
+                let value_and_type = ValueAndType {
+                    value: wit_value,
+                    typ: match schema {
+                        ElementSchema::ComponentModel(wit_type) => wit_type,
+                        _ => {
+                            return Err(format!(
+                                "Expected ComponentModel schema, got: {:?}",
+                                schema
+                            ))
+                        }
+                    },
+                };
 
-impl FromValue for u64 {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::U64(n) => Ok(n),
-            _ => Err("Expected a u64 value".to_string()),
-        }
-    }
-}
-
-impl FromValue for i32 {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::S32(n) => Ok(n),
-            _ => Err("Expected a i32 WitValue".to_string()),
-        }
-    }
-}
-
-impl<T: FromValue> FromValue for Vec<T> {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::List(list) => list.into_iter().map(|v| T::from_value(v)).collect(),
-            _ => Err("Expected a List WitValue".to_string()),
-        }
-    }
-}
-
-impl<T: FromValue> FromValue for Option<T> {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Option(Some(v)) => T::from_value(v.as_ref().clone()).map(Some),
-            golem_wasm::Value::Option(None) => Ok(None),
-            _ => Err("Expected an Option WitValue".to_string()),
+                T::from_value_and_type(value_and_type)
+            }
+            _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
     }
 }

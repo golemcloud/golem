@@ -12,17 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn to_kebab_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i != 0 {
-                result.push('-');
+pub enum InputParamType {
+    Tuple,
+    Multimodal,
+}
+
+pub enum OutputParamType {
+    Tuple,
+    Multimodal,
+}
+
+pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
+    if sig.inputs.len() == 1 {
+        if let syn::FnArg::Typed(pat_ty) = &sig.inputs[0] {
+            if let syn::Type::Path(type_path) = &*pat_ty.ty {
+                if let Some(seg) = type_path.path.segments.last() {
+                    if seg.ident == "Multimodal" {
+                        // Depends on how exactly multimodal is represented
+                        return InputParamType::Multimodal;
+                    }
+                }
             }
-            result.push(ch.to_ascii_lowercase());
-        } else {
-            result.push(ch);
         }
     }
-    result
+    InputParamType::Tuple
+}
+
+pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
+    if let syn::ReturnType::Type(_, ty) = &sig.output {
+        if let syn::Type::Path(type_path) = &**ty {
+            if let Some(seg) = type_path.path.segments.last() {
+                if seg.ident == "Multimodal" {
+                    // Depends on how exactly multimodal is represented
+                    return OutputParamType::Multimodal;
+                }
+            }
+        }
+    }
+    OutputParamType::Tuple
 }

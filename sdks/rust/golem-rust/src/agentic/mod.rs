@@ -16,15 +16,13 @@ pub use agent::*;
 pub use agent_arg_schema::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
-pub use agent_type_name::*;
+pub use errors::*;
+pub use resolved_agent::*;
 
 mod agent;
 mod agent_arg_schema;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
-mod agent_type_name;
-
-pub struct ResolvedAgent {
-    pub agent: Box<dyn agent::Agent>,
-}
+mod errors;
+mod resolved_agent;
