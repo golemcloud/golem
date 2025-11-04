@@ -76,12 +76,14 @@ struct TestWithRenamedField {
 #[derive(Debug, Clone, PartialEq)]
 struct WrappedU32(u32);
 
+#[allow(clippy::from_over_into)]
 impl Into<u32> for WrappedU32 {
     fn into(self) -> u32 {
         self.0
     }
 }
 
+#[allow(clippy::from_over_into)]
 impl TryInto<WrappedU32> for u32 {
     type Error = String;
 
@@ -251,10 +253,9 @@ proptest! {
 
     #[test]
     fn bound_u32_roundtrip(value in proptest::sample::select(vec![Bound::Included(0u32), Bound::Excluded(1), Bound::Unbounded])) {
-            let original = value.clone();
             let val = value.into_value();
             let back = Bound::<u32>::from_value(val).unwrap();
-        prop_assert_eq!(back, original);
+        prop_assert_eq!(back, value);
     }
 
     #[test]
