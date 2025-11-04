@@ -17,38 +17,23 @@ env:
 
 jobs:
   build-golem-cli:
-    name: Build golem-cli Binary
+    name: Download Pre-built golem-cli Binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache target directory
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build golem-cli (debug for faster compilation)
+      - name: Download pre-built golem-cli from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cargo build --package golem-cli
-          ls -lh target/debug/golem-cli
+          mkdir -p target/debug
+          cd target/debug
+          gh release download mcp-services-v1 --repo ${{ github.repository }} --pattern 'golem-cli'
+          chmod +x golem-cli
+          ls -lh golem-cli
+          ./golem-cli --version
 
-      - name: Upload golem-cli binary
+      - name: Upload golem-cli binary as artifact
         uses: actions/upload-artifact@v4
         with:
           name: golem-cli-linux-x64
