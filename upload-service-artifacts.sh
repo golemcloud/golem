@@ -1,71 +1,70 @@
 #!/bin/bash
-# Upload pre-built Golem service binaries as GitHub Release
-# This allows CI to download and run real services without building them
+# Upload Linux service binaries to GitHub Release
+# Bounty #1926 - Replace macOS binaries with Linux binaries for CI
 
 set -e
 
+RELEASE_TAG="mcp-services-v1"
 REPO="michaeloboyle/golem"
-TAG="mcp-services-v1"
-RELEASE_NAME="Pre-built Services for MCP Integration Testing"
 
-echo "📦 Uploading Golem Service Binaries to GitHub Release"
+echo "🚀 Uploading Linux Service Binaries to Release"
 echo "============================================================"
-echo
+echo "📦 Release: $RELEASE_TAG"
+echo "📂 Repository: $REPO"
+echo ""
 
-# Check if release exists
-if gh release view "$TAG" --repo "$REPO" &>/dev/null; then
-    echo "Release $TAG already exists. Deleting..."
-    gh release delete "$TAG" --repo "$REPO" --yes
-    echo
-
-fi
-
-# Create release
-echo "Creating release $TAG..."
-gh release create "$TAG" \
-    --repo "$REPO" \
-    --title "$RELEASE_NAME" \
-    --notes "Pre-built debug binaries for MCP integration testing in CI.
-
-**Services included:**
-- golem-cli (257MB)
-- golem-shard-manager (58MB)
-- golem-component-service (115MB)
-- golem-worker-service (153MB)
-
-**Usage in CI:**
-These binaries are downloaded in the MCP integration workflow to run real Golem services alongside the MCP server, proving end-to-end integration without building from source in CI (saves ~10GB disk space).
-
-**Built from:** $(git rev-parse HEAD)
-**Build date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-"
-
-echo "✅ Release created"
-echo
-
-# Upload binaries
-echo "Uploading service binaries..."
-cd target/release/
-
+# Verify binaries exist and are Linux format
+echo "1️⃣  Verifying Linux binaries..."
 for binary in golem-cli golem-shard-manager golem-component-service golem-worker-service; do
-    if [ -f "$binary" ]; then
-        echo "  Uploading $binary..."
-        gh release upload "$TAG" "$binary" --repo "$REPO" --clobber
-        echo "  ✅ $binary uploaded"
-    else
-        echo "  ❌ $binary not found, skipping"
+    BINARY_PATH="target/release/$binary"
+    
+    if [ ! -f "$BINARY_PATH" ]; then
+        echo "❌ $binary not found at $BINARY_PATH"
+        exit 1
     fi
+    
+    # Check file format
+    FILE_TYPE=$(file "$BINARY_PATH")
+    if ! echo "$FILE_TYPE" | grep -q "ELF 64-bit"; then
+        echo "❌ $binary is not Linux ELF format:"
+        echo "   $FILE_TYPE"
+        exit 1
+    fi
+    
+    echo "✅ $binary - $(du -h "$BINARY_PATH" | cut -f1)"
 done
 
-cd ../..
+echo ""
+echo "2️⃣  Deleting old macOS binaries from release..."
 
-echo
+# Delete existing assets (macOS binaries)
+for binary in golem-cli golem-shard-manager golem-component-service golem-worker-service; do
+    echo "   Deleting $binary..."
+    gh release delete-asset "$RELEASE_TAG" "$binary" \
+        --repo "$REPO" \
+        --yes 2>/dev/null || echo "   (Asset $binary not found, skipping)"
+done
+
+echo ""
+echo "3️⃣  Uploading new Linux binaries to release..."
+
+# Upload new Linux binaries
+gh release upload "$RELEASE_TAG" \
+    target/release/golem-cli \
+    target/release/golem-shard-manager \
+    target/release/golem-component-service \
+    target/release/golem-worker-service \
+    --repo "$REPO" \
+    --clobber
+
+echo ""
 echo "============================================================"
-echo "✅ All service binaries uploaded successfully!"
-echo
-echo "Release URL:"
-gh release view "$TAG" --repo "$REPO" --web
-echo
-echo "To use in CI, download with:"
-echo "  gh release download $TAG --repo $REPO --pattern 'golem-*'"
-echo
+echo "✅ UPLOAD COMPLETE"
+echo "============================================================"
+echo ""
+echo "Uploaded binaries:"
+gh release view "$RELEASE_TAG" --repo "$REPO" --json assets --jq '.assets[] | "  - \(.name) (\(.size / 1024 / 1024 | floor)MB)"'
+echo ""
+echo "Next step: Rerun CI workflow"
+echo "  gh run rerun <run-id> --repo $REPO"
+echo ""

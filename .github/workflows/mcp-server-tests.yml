@@ -31,6 +31,7 @@ jobs:
           gh release download mcp-services-v1 --repo ${{ github.repository }} --pattern 'golem-cli'
           chmod +x golem-cli
           ls -lh golem-cli
+          file golem-cli
           ./golem-cli --version
 
       - name: Upload golem-cli binary as artifact
