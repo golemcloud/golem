@@ -40,6 +40,8 @@ async fn test_rust_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
+// TODO: We can find ways to unify this with the TS version of the same test later.
+// and run the same test for both TS and Rust code-first agents
 #[test]
 async fn test_rust_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
@@ -121,132 +123,231 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         assert!(outputs.success(), "function {func} failed");
     }
 
-    // run_and_assert(&ctx, "fun-void-return", &["\"sample\""]).await;
+    run_and_assert(&ctx, "fun-string", &["\"sample\""]).await;
 
-    // run_and_assert(&ctx, "fun-no-return", &["\"sample\""]).await;
+    run_and_assert(&ctx, "fun-u8", &["42"]).await;
 
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-optional",
-    //     &[
-    //         "some(case1(\"foo\"))",
-    //         "{a: some(\"foo\")}",
-    //         "{a: some(case1(\"foo\"))}",
-    //         "{a: some(case1(\"foo\"))}",
-    //         "{a: some(\"foo\")}",
-    //         "some(\"foo\")",
-    //         "some(case3(\"foo\"))",
-    //     ],
-    // )
-    // .await;
+    run_and_assert(&ctx, "fun-i8", &["-42"]).await;
 
-    // run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
+    run_and_assert(&ctx, "fun-u16", &["42"]).await;
 
-    // let argument = r#"
-    //   {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
+    run_and_assert(&ctx, "fun-i16", &["-42"]).await;
+
+    run_and_assert(&ctx, "fun-i32", &["-42"]).await;
+
+    run_and_assert(&ctx, "fun-u32", &["42"]).await;
+
+    run_and_assert(&ctx, "fun-u64", &["42"]).await;
+
+    run_and_assert(&ctx, "fun-i64", &["-42"]).await;
+
+    run_and_assert(&ctx, "fun-f32", &["3.14"]).await;
+
+    run_and_assert(&ctx, "fun-f64", &["3.1415926535"]).await;
+
+    run_and_assert(&ctx, "fun-boolean", &["true"]).await;
+
+    // let all_primitives_arg = r#"
+    // {
+    //     u8v: 42,
+    //     u16v: 42,
+    //     u32v: 42,
+    //     u64v: 42,
+    //     i8v: -42,
+    //     i16v: -42,
+    //     i32v: -42,
+    //     i64v: -42,
+    //     f32v: 3.14,
+    //     f64v: 3.1415926535,
+    //     boolv: true,
+    //     charv: 'a',
+    //     stringv: "sample"
+    // }
     // "#;
     //
-    // run_and_assert(&ctx, "fun-object-complex-type", &[argument]).await;
-
-    // run_and_assert(&ctx, "fun-union-type", &[r#"union-type1("foo")"#]).await;
-
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-union-complex-type",
-    //     &[r#"union-complex-type1("foo")"#],
-    // )
-    // .await;
-
-    // run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
-
-    // Union that includes literals and boolean (boolean input)
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-union-with-literals",
-    //     &[r#"union-with-literals1(true)"#],
-    // )
-    // .await;
-
-    // run_and_assert(&ctx, "fun-enum-with-only-literals", &["foo"]).await;
+    // run_and_assert(&ctx, "fun-all-primitives", &[all_primitives_arg]).await;
     //
-    // run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
+    // run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
     //
-    // run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
+    // let collections_arg = r#"
+    // {
+    //     list-u8: [1, 2, 3, 4, 5],
+    //     list-str: ["foo", "bar", "baz"],
+    //     map-num: { "a": 1.1, "b": 2.2, "c": 3.3 },
+    //     map-text: { "1": "one", "2": "two", "3": "three" }
+    // }
+    // "#;
     //
-    // run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
-
-    // run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
+    // run_and_assert(&ctx, "fun-collections", &[collections_arg]).await;
     //
-    // run_and_assert(&ctx, "fun-union-with-only-literals", &["baz"]).await;
+    // let simple_struct_arg = r#"
+    // {
+    //     name: "test",
+    //     value: 3.14,
+    //     flag: true,
+    //     symbol: 't'
+    // }
+    // "#;
     //
-    // run_and_assert(&ctx, "fun-number", &["42"]).await;
-
-    // A string type
-    run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
-
-    run_and_assert(&ctx, "fun-mut", &[r#""foo""#]).await;
-
-    // run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
+    // run_and_assert(&ctx, "fun-simple-struct", &[simple_struct_arg]).await;
     //
-    // run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
-
-    // run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
-
-    // A complex tuple type
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-tuple-complex-type",
-    //     &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
-    // )
-    // .await;
-
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-list-complex-type",
-    //     &[r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#],
-    // ).await;
-
-    // run_and_assert(&ctx, "fun-null-return", &[r#""foo""#]).await;
-
-    // run_and_assert(&ctx, "fun-undefined-return", &[r#""foo""#]).await;
-
-    // run_and_assert(&ctx, "fun-result-exact", &[r#"ok("foo")"#]).await;
-
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-either-optional",
-    //     &[r#"{ok: some("foo"), err: none}"#],
-    // )
-    // .await;
-
-    // run_and_assert(
-    //     &ctx,
-    //     "fun-all",
-    //     &[
-    //         r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
-    //         r#"union-type1("foo")"#,
-    //         r#"union-complex-type1("foo")"#,
-    //         r#"42"#,
-    //         r#""foo""#,
-    //         r#"true"#,
-    //         r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
-    //         r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
-    //         r#"("foo", 42, true)"#,
-    //         r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
-    //         r#"{a: "foo", b: 42, c: true}"#,
-    //         r#"okay("foo")"#,
-    //         r#"{ok: some("foo"), err: some("foo")}"#,
-    //         r#"some(case1("foo"))"#,
-    //         r#"{a: some("foo")}"#,
-    //         r#"{a: some(case1("foo"))}"#,
-    //         r#"{a: some(case1("foo"))}"#,
-    //         r#"{a: some("foo")}"#,
-    //         r#"some("foo")"#,
-    //         r#"some(case3("foo"))"#,
-    //         r#"a("foo")"#
+    // // nested struct
+    //
+    // let nested_struct_arg = r#"
+    // {
+    //     id: "nested1",
+    //     simple: {
+    //         name: "inner",
+    //         value: 2.71,
+    //         flag: false,
+    //         symbol: 'i'
+    //     },
+    //     list: [
+    //         {
+    //             name: "list1",
+    //             value: 1.61,
+    //             flag: true,
+    //             symbol: 'l'
+    //         },
+    //         {
+    //             name: "list2",
+    //             value: 0.577,
+    //             flag: false,
+    //             symbol: 'm'
+    //         }
     //     ],
-    // )
-    //     .await;
+    //     map: {
+    //         "x": 10.0,
+    //         "y": 20.0
+    //     },
+    //     option: some("optional value"),
+    //     result: ok("result value")
+    // }
+    // "#;
+    //
+    //
+    // run_and_assert(&ctx, "fun-nested-struct", &[nested_struct_arg]).await;
+    //
+    // let complex_struct_arg = r#"
+    // {
+    //     primitives: {
+    //         u8v: 1,
+    //         u16v: 2,
+    //         u32v: 3,
+    //         u64v: 4,
+    //         i8v: -1,
+    //         i16v: -2,
+    //         i32v: -3,
+    //         i64v: -4,
+    //         f32v: 1.1,
+    //         f64v: 2.2,
+    //         boolv: true,
+    //         charv: 'c',
+    //         stringv: "complex"
+    //     },
+    //     options_results_bounds: {
+    //         option_str: some("option value"),
+    //         option_struct: some({
+    //             id: "opt_struct",
+    //             simple: {
+    //                 name: "opt_inner",
+    //                 value: 0.99,
+    //                 flag: true,
+    //                 symbol: 'o'
+    //             },
+    //             list: [],
+    //             map: {},
+    //             option: none,
+    //             result: err("error in result")
+    //         }),
+    //         result_str_str: ok("result ok"),
+    //         result_str_unit: err("result error"),
+    //         bound_u8: 255
+    //     },
+    //     tuples: {
+    //         simple_tuple: ("tuple", 3.33, false),
+    //         // complex_tuple: ("complex", 4.44, { ... })
+    //     },
+    //     collections: {
+    //         list-u8: [10, 20, 30],
+    //         list-str: ["x", "y", "z"],
+    //         map-num: { "alpha": 0.1, "beta": 0.2 },
+    //         map-text: { "one": "uno", "two": "dos" }
+    //     },
+    //     simple_struct: {
+    //         name: "comp_simple",
+    //         value: 5.55,
+    //         flag: false,
+    //         symbol: 's'
+    //     },
+    //     nested_struct: {
+    //         id: "comp_nested",
+    //         simple: {
+    //             name: "comp_inner",
+    //             value: 6.66,
+    //             flag: true,
+    //             symbol: 'n'
+    //         },
+    //         list: [],
+    //         map: {},
+    //         option: none,
+    //         result: ok("nested result")
+    //     },
+    //     enum_simple: U8(100),
+    //     enum_collections: Vec([100, 200, 300]),
+    //     enum_complex: UnitA
+    // }
+    // "#;
+    //
+    // run_and_assert(&ctx, "fun-complex-struct", &[complex_struct_arg]).await;
+    //
+    // run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
+    //
+    // run_and_assert(&ctx, "fun-result", &["ok(\"success\")"]).await;
+    //
+    // run_and_assert(&ctx, "fun-result-unit-left", &["ok"]).await;
+    //
+    // run_and_assert(&ctx, "fun-result-unit-right", &["err"]).await;
+    //
+    // let result_complex_arg = r#"
+    // ok({
+    //     id: "res_comp",
+    //     simple: {
+    //         name: "res_inner",
+    //         value: 7.77,
+    //         flag: false,
+    //         symbol: 'r'
+    //     },
+    //     list: [],
+    //     map: {},
+    //     option: none,
+    //     result: ok("result in nested")
+    // })
+    // "#;
+    //
+    // run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
+    //
+    // run_and_assert(&ctx, "fun-option", &["some(\"optional value\")"]).await;
+    //
+    // let option_complex_arg = r#"
+    // some({
+    //     id: "opt_comp",
+    //     simple: {
+    //         name: "opt_inner",
+    //         value: 8.88,
+    //         flag: true,
+    //         symbol: 'p'
+    //     },
+    //     list: [],
+    //     map: {},
+    //     option: none,
+    //     result: err("error in nested")
+    // })
+    // "#;
+    //
+    // run_and_assert(&ctx, "fun-option-complex", &[option_complex_arg]).await;
+    //
+    // run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
 }
 
 #[test]
