@@ -12,10 +12,106 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
+use serde::Serialize;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub enum VecMergeMode {
     #[default]
     Append,
     Prepend,
     Replace,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum VecPropertyTraceElem<L: Layer, T> {
+    Append {
+        id: L::Id,
+        appended_elems: Vec<T>,
+    },
+    Prepend {
+        id: L::Id,
+        prepended_elems: Vec<T>,
+    },
+    Replace {
+        id: L::Id,
+        new_elems: Vec<T>,
+        old_elems: Vec<T>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VecProperty<L: Layer, T: Serialize> {
+    vec: Vec<T>,
+    trace: Vec<VecPropertyTraceElem<L, T>>,
+}
+
+impl<L: Layer, T: Serialize> Default for VecProperty<L, T> {
+    fn default() -> Self {
+        Self {
+            vec: vec![],
+            trace: vec![],
+        }
+    }
+}
+
+impl<L: Layer, T: Serialize> VecProperty<L, T> {
+    pub fn new(vec: Vec<T>) -> Self {
+        Self { vec, trace: vec![] }
+    }
+}
+
+impl<L: Layer, T: Serialize> From<Vec<T>> for VecProperty<L, T> {
+    fn from(value: Vec<T>) -> Self {
+        Self::new(value)
+    }
+}
+
+impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
+    type Value = Vec<T>;
+    type PropertyLayer = (VecMergeMode, Vec<T>);
+    type TraceElem = VecPropertyTraceElem<L, T>;
+
+    fn value(&self) -> &Self::Value {
+        &self.vec
+    }
+
+    fn trace(&self) -> &[Self::TraceElem] {
+        self.trace.as_slice()
+    }
+
+    fn apply_layer(
+        &mut self,
+        id: &L::Id,
+        _selection: Option<&L::AppliedSelection>,
+        layer: Self::PropertyLayer,
+    ) {
+        let (mode, elems) = layer;
+        match mode {
+            VecMergeMode::Append => {
+                self.vec.extend(elems.clone());
+                self.trace.push(VecPropertyTraceElem::Append {
+                    id: id.clone(),
+                    appended_elems: elems,
+                });
+            }
+            VecMergeMode::Prepend => {
+                let mut new_vec = elems.clone();
+                new_vec.extend(self.vec.clone());
+                self.vec = new_vec;
+            }
+            VecMergeMode::Replace => {
+                let old_elems = self.vec.clone();
+                self.vec = elems.clone();
+                self.trace.push(VecPropertyTraceElem::Replace {
+                    id: id.clone(),
+                    new_elems: elems,
+                    old_elems,
+                });
+            }
+        }
+    }
 }

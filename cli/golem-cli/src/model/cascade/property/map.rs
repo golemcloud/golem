@@ -33,20 +33,17 @@ pub enum MapPropertyTraceElem<L: Layer, K, V> {
     #[serde(rename_all = "camelCase")]
     Upsert {
         id: L::Id,
-        selection: Option<L::AppliedSelection>,
         inserted_entries: HashMap<K, V>,
         updated_entries: HashMap<K, V>,
     },
     #[serde(rename_all = "camelCase")]
     Replace {
         id: L::Id,
-        selection: Option<L::AppliedSelection>,
         new_entries: HashMap<K, V>,
     },
     #[serde(rename_all = "camelCase")]
     Remove {
         id: L::Id,
-        selection: Option<L::AppliedSelection>,
         removed_entries: HashMap<K, V>,
     },
 }
@@ -71,8 +68,6 @@ impl<L: Layer, K: Serialize, V: Serialize> MapProperty<L, K, V> {
     pub fn new(map: HashMap<K, V>) -> Self {
         Self { map, trace: vec![] }
     }
-
-    // TODO: from and from_iter, like HashMap
 }
 
 impl<L: Layer, K: Serialize, V: Serialize> From<HashMap<K, V>> for MapProperty<L, K, V> {
@@ -99,7 +94,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
     fn apply_layer(
         &mut self,
         id: &L::Id,
-        selection: Option<&L::AppliedSelection>,
+        _selection: Option<&L::AppliedSelection>,
         layer: Self::PropertyLayer,
     ) {
         let (mode, map) = layer;
@@ -116,7 +111,6 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 }
                 self.trace.push(MapPropertyTraceElem::Upsert {
                     id: id.clone(),
-                    selection: selection.map(|selection| selection.clone()),
                     inserted_entries,
                     updated_entries,
                 });
@@ -125,7 +119,6 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 self.map = map.clone();
                 self.trace.push(MapPropertyTraceElem::Replace {
                     id: id.clone(),
-                    selection: selection.map(|selection| selection.clone()),
                     new_entries: map,
                 })
             }
@@ -138,7 +131,6 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 }
                 self.trace.push(MapPropertyTraceElem::Remove {
                     id: id.clone(),
-                    selection: selection.map(|selection| selection.clone()),
                     removed_entries,
                 })
             }
