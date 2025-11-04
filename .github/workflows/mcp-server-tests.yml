@@ -17,22 +17,54 @@ env:
 
 jobs:
   build-golem-cli:
-    name: Download Pre-built golem-cli Binary
+    name: Build golem-cli Binary in CI
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download pre-built golem-cli from release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install system dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-golem-cli-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('cli/golem-cli/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-golem-cli-target-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-golem-cli-target-
+
+      - name: Build golem-cli (release mode for speed)
+        run: |
+          cargo build --package golem-cli --release
           mkdir -p target/debug
-          cd target/debug
-          gh release download mcp-services-v1 --repo ${{ github.repository }} --pattern 'golem-cli'
-          chmod +x golem-cli
-          ls -lh golem-cli
-          file golem-cli
-          ./golem-cli --version
+          cp target/release/golem-cli target/debug/golem-cli
+          chmod +x target/debug/golem-cli
+
+      - name: Verify binary
+        run: |
+          ls -lh target/debug/golem-cli
+          file target/debug/golem-cli
+          ./target/debug/golem-cli --version
 
       - name: Upload golem-cli binary as artifact
         uses: actions/upload-artifact@v4

@@ -1,17 +1,33 @@
-# CI Binary Architecture Issue
+# CI Binary Architecture Issue - RESOLVED
 
-## Problem
+## Problem (Historical)
 
-The MCP Server CI workflow (`mcp-server-tests.yml`) is failing on the "Download Pre-built golem-cli Binary" step with:
+The MCP Server CI workflow (`mcp-server-tests.yml`) was failing on the "Download Pre-built golem-cli Binary" step with:
 
 ```
 golem-cli: Mach-O 64-bit arm64 executable
 ./golem-cli: cannot execute binary file: Exec format error
 ```
 
-## Root Cause
+## Root Cause (Historical)
 
-The `mcp-services-v1` GitHub Release contains **macOS ARM64** binaries, but GitHub Actions runs on **Linux x86_64** (ubuntu-latest). The pre-built binaries were uploaded from a macOS development machine.
+The `mcp-services-v1` GitHub Release contained **macOS ARM64** binaries, but GitHub Actions runs on **Linux x86_64** (ubuntu-latest). The pre-built binaries were uploaded from a macOS development machine.
+
+## Resolution (2025-11-04)
+
+**Modified CI workflow to build binaries in CI instead of downloading pre-built binaries.**
+
+The `build-golem-cli` job now:
+1. Installs Rust toolchain and system dependencies (protobuf, openssl)
+2. Uses aggressive cargo caching (registry, git, target directory)
+3. Builds `golem-cli` in release mode directly on Linux runner
+4. Uploads native Linux x86_64 binary as artifact
+
+This approach:
+- ✅ Eliminates architecture mismatch (builds Linux binary on Linux)
+- ✅ Uses cargo caching to minimize build time (~5-10 min after cache warm-up)
+- ✅ Avoids pre-built binary maintenance complexity
+- ✅ Ensures CI always tests with correct architecture
 
 ## Impact
 
