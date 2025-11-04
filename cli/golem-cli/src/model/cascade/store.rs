@@ -44,7 +44,7 @@ impl<L: Layer> Store<L> {
         &self,
         id: &L::Id,
         selector: &L::Selector,
-    ) -> Result<Ref<L::Value>, StoreGetValueError<L>> {
+    ) -> Result<Ref<'_, L::Value>, StoreGetValueError<L>> {
         {
             let value_cache = self.value_cache.borrow();
             if value_cache

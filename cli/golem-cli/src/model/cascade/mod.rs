@@ -18,22 +18,17 @@ pub mod property;
 pub mod selector;
 pub mod store;
 
-use serde::Serialize;
-use std::fmt::Debug;
-use std::hash::Hash;
-
 #[cfg(test)]
 mod test {
     mod example_component_properties {
+        use crate::model::cascade::layer::Layer;
         use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
         use crate::model::cascade::property::optional::OptionalProperty;
         use crate::model::cascade::property::Property;
+        use crate::model::cascade::store::Store;
         use crate::model::cascade::test::example_component_properties::ComponentLayerId::{
             BaseDefinition, BaseTemplate, DefinitionPresets, TemplatePresets,
         };
-
-        use crate::model::cascade::layer::Layer;
-        use crate::model::cascade::store::Store;
         use crate::model::deploy_diff::ToYamlValueWithoutNulls;
         use serde_derive::Serialize;
         use std::collections::HashMap;
