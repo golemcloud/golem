@@ -16,6 +16,7 @@ use super::*;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use golem_wasm_derive::{FromValue, IntoValue};
 use proptest::prelude::*;
 use proptest_arbitrary_interop::arb_sized;
 use std::collections::Bound;
@@ -23,6 +24,38 @@ use std::str::FromStr;
 use url::Url;
 
 use test_r::test;
+
+// For the derivation macros
+mod golem_wasm {
+    pub use crate::*;
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestStruct {
+    a: u32,
+    b: String,
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestNewtype(u64);
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+struct TestTuple(u32, String);
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+enum TestEnum {
+    A,
+    B,
+    C,
+}
+
+#[derive(Debug, Clone, PartialEq, IntoValue, FromValue)]
+enum TestVariant {
+    Unit,
+    Single(u32),
+    Named { x: String, y: i32 },
+    Tuple(u32, String),
+}
 
 // Custom strategies for chrono types to ensure valid dates/times
 fn arb_naive_date() -> impl Strategy<Value = NaiveDate> {
@@ -328,4 +361,59 @@ fn analysed_type_roundtrip() {
     let val = typ.clone().into_value();
     let back = crate::analysis::AnalysedType::from_value(val).unwrap();
     assert_eq!(back, typ);
+}
+
+#[test]
+fn test_struct_roundtrip() {
+    let original = TestStruct {
+        a: 42,
+        b: "hello".to_string(),
+    };
+    let val = original.clone().into_value();
+    let back = TestStruct::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_newtype_roundtrip() {
+    let original = TestNewtype(12345);
+    let val = original.clone().into_value();
+    let back = TestNewtype::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_tuple_roundtrip() {
+    let original = TestTuple(100, "world".to_string());
+    let val = original.clone().into_value();
+    let back = TestTuple::from_value(val).unwrap();
+    assert_eq!(back, original);
+}
+
+#[test]
+fn test_enum_roundtrip() {
+    for variant in [TestEnum::A, TestEnum::B, TestEnum::C] {
+        let val = variant.clone().into_value();
+        let back = TestEnum::from_value(val).unwrap();
+        assert_eq!(back, variant);
+    }
+}
+
+#[test]
+fn test_variant_roundtrip() {
+    let variants = vec![
+        TestVariant::Unit,
+        TestVariant::Single(42),
+        TestVariant::Named {
+            x: "test".to_string(),
+            y: -10,
+        },
+        TestVariant::Tuple(99, "tuple".to_string()),
+    ];
+
+    for variant in variants {
+        let val = variant.clone().into_value();
+        let back = TestVariant::from_value(val).unwrap();
+        assert_eq!(back, variant);
+    }
 }

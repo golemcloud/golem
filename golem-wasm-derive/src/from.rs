@@ -14,7 +14,6 @@
 
 use crate::{is_unit_case, parse_wit_field_attribute, WitField};
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Type};
 
@@ -122,7 +121,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let single_field = variant.fields.iter().next().unwrap();
                                 let typ = &single_field.ty;
                                 let wit_field = wit_fields.first().unwrap();
-                                let from_value = apply_from_conversions(typ, wit_field, quote! { inner });
+                                let from_value = apply_from_conversions(typ, wit_field, quote! { *inner });
                                 quote! {
                                     #idx => {
                                         let inner = case_value.ok_or("Missing case value")?;
@@ -150,36 +149,27 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident)
                                 }
                             } else {
+                                let expected_len = variant.fields.len();
                                 quote! {
                                     #idx => {
                                         let fields = case_value.ok_or("Missing case value")?;
-                                        match fields {
-                                            golem_wasm::Value::Record(fields) => Ok(#ident::#case_ident {
+                                        match *fields {
+                                            golem_wasm::Value::Record(fields) if fields.len() == #expected_len => Ok(#ident::#case_ident {
                                                 #(#field_values),*
                                             }),
-                                            _ => Err(format!("Expected Record for variant fields, got {:?}", fields)),
+                                            _ => Err(format!("Expected Record with {} fields for variant fields, got {:?}", #expected_len, fields)),
                                         }
                                     }
                                 }
                             }
                         } else {
                             // tuple case
-                            let field_names = variant
-                                .fields
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, _field)| {
-                                    Ident::new(&format!("f{idx}"), Span::call_site())
-                                })
-                                .collect::<Vec<_>>();
-
                             let field_values = variant.fields.iter().enumerate().map(|(field_idx, field)| {
                                 let elem_ty = &field.ty;
                                 let wit_field = &wit_fields[field_idx];
                                 let field_from_value = apply_from_conversions(elem_ty, wit_field, quote! { elements[#field_idx].clone() });
-                                let field_ident = field_names[field_idx].clone();
                                 quote! {
-                                    #field_ident: #field_from_value?
+                                    #field_from_value?
                                 }
                             });
 
@@ -188,14 +178,15 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident)
                                 }
                             } else {
+                                let expected_len = variant.fields.len();
                                 quote! {
                                     #idx => {
                                         let elements = case_value.ok_or("Missing case value")?;
-                                        match elements {
-                                            golem_wasm::Value::Tuple(elements) => Ok(#ident::#case_ident {
+                                        match *elements {
+                                            golem_wasm::Value::Tuple(elements) if elements.len() == #expected_len => Ok(#ident::#case_ident(
                                                 #(#field_values),*
-                                            }),
-                                            _ => Err(format!("Expected Tuple for variant fields, got {:?}", elements)),
+                                            )),
+                                            _ => Err(format!("Expected Tuple with {} fields for variant fields, got {:?}", #expected_len, elements)),
                                         }
                                     }
                                 }
@@ -253,35 +244,40 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
                 None
             } else {
                 let field_name = field.ident.as_ref().unwrap();
-                let field_from_value = apply_from_conversions(&field.ty, wit_field, quote! { fields[#idx].clone() });
+                let field_from_value =
+                    apply_from_conversions(&field.ty, wit_field, quote! { fields[#idx].clone() });
                 Some(quote! {
                     #field_name: #field_from_value?
                 })
             }
         });
 
+        let expected_len = fields.len();
         quote! {
             match value {
-                golem_wasm::Value::Record(fields) => Ok(Self {
+                golem_wasm::Value::Record(fields) if fields.len() == #expected_len => Ok(Self {
                     #(#field_values),*
                 }),
-                _ => Err(format!("Expected Record value, got {:?}", value)),
+                _ => Err(format!("Expected Record value with {} fields, got {:?}", #expected_len, value)),
             }
         }
     } else {
         let field_values = fields.iter().enumerate().map(|(idx, field)| {
-            let field_from_value = quote! { <#field.ty as golem_wasm::FromValue>::from_value(fields[#idx].clone())? };
+            let ty = &field.ty;
+            let field_from_value =
+                quote! { <#ty as golem_wasm::FromValue>::from_value(fields[#idx].clone())? };
             quote! {
                 #field_from_value
             }
         });
 
+        let expected_len = fields.len();
         quote! {
             match value {
-                golem_wasm::Value::Tuple(fields) => Ok(Self(
+                golem_wasm::Value::Tuple(fields) if fields.len() == #expected_len => Ok(Self(
                     #(#field_values),*
                 )),
-                _ => Err(format!("Expected Tuple value, got {:?}", value)),
+                _ => Err(format!("Expected Tuple value with {} fields, got {:?}", #expected_len, value)),
             }
         }
     }

@@ -17,7 +17,7 @@ use heck::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, LitStr, Type};
+use syn::{Data, DeriveInput, Fields, Index, LitStr, Type};
 
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).expect("derive input");
@@ -137,7 +137,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                     }
                                 }
                             } else {
-                                let wit_field = wit_fields.first().unwrap();
+                                let wit_field = wit_fields.first().expect("Expected one item in wit_fields");
                                 let into_value = apply_conversions(wit_field, quote! { inner });
                                 quote! {
                                     #ident::#case_ident(inner) => golem_wasm::Value::Variant {
@@ -152,13 +152,13 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 .fields
                                 .iter()
                                 .map(|field| {
-                                    let field = field.ident.as_ref().unwrap();
+                                    let field = field.ident.as_ref().expect("Expected field to have an identifier");
                                     quote! { #field }
                                 })
                                 .collect::<Vec<_>>();
 
                             let field_values = variant.fields.iter().map(|field| {
-                                let field = field.ident.as_ref().unwrap();
+                                let field = field.ident.as_ref().expect("Expected field to have an identifier");
                                 quote! {
                                     #field.into_value()
                                 }
@@ -241,9 +241,9 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 golem_wasm::analysis::analysed_type::unit_case(#case_name)
                             }
                         } else if has_single_anonymous_field(&variant.fields) {
-                            let single_field = variant.fields.iter().next().unwrap();
+                            let single_field = variant.fields.iter().next().expect("Expected variant.fields to have at least one item");
                             let typ = &single_field.ty;
-                            let wit_field = wit_fields.first().unwrap();
+                            let wit_field = wit_fields.first().expect("Expected wit_fields to have at least one item");
                             let typ = get_field_type(typ, wit_field);
 
                             quote! {
@@ -319,7 +319,10 @@ fn record_or_tuple(
                 if wit_field.skip {
                     None
                 } else {
-                    let field_name = field.ident.as_ref().unwrap();
+                    let field_name = field
+                        .ident
+                        .as_ref()
+                        .expect("Expected field to have an identifier");
                     Some(apply_conversions(wit_field, quote! { self.#field_name }))
                 }
             })
@@ -337,7 +340,12 @@ fn record_or_tuple(
                         .as_ref()
                         .map(|lit| lit.value())
                         .unwrap_or_else(|| {
-                            field.ident.as_ref().unwrap().to_string().to_kebab_case()
+                            field
+                                .ident
+                                .as_ref()
+                                .expect("Expected field to have an identifier")
+                                .to_string()
+                                .to_kebab_case()
                         });
                     let field_type = get_field_type(&field.ty, &wit_field);
                     Some(quote! {
@@ -365,9 +373,10 @@ fn record_or_tuple(
     } else {
         let tuple_field_values = fields
             .iter()
-            .map(|field| {
-                let field_name = field.ident.as_ref().unwrap();
-                quote! { self.#field_name.into_value() }
+            .enumerate()
+            .map(|(idx, _field)| {
+                let idx = Index::from(idx);
+                quote! { self.#idx.into_value() }
             })
             .collect::<Vec<_>>();
 
