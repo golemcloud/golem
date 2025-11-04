@@ -20,7 +20,7 @@ use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{IntoValue, Value, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use itertools::Itertools;
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub trait NamedType {
     fn name(&self) -> String;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct EnumerationType {
     pub name: String,
 }
@@ -418,7 +418,7 @@ impl<T: IntoValue> IntoValue for ValuesRange<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct Interval {
     pub months: i32,
     pub days: i32,
@@ -441,7 +441,7 @@ impl Display for Interval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, FromValue)]
 pub struct TimeTz {
     #[bincode(with_serde)]
     pub time: chrono::NaiveTime,
@@ -463,7 +463,7 @@ impl Display for TimeTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct Enumeration {
     pub name: String,
     pub value: String,

@@ -19,7 +19,7 @@ use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -906,7 +906,18 @@ impl Display for GolemSpecificWasmTrap {
 impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
-    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+    Debug,
+    Clone,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    FromValue,
 )]
 pub enum InterruptKind {
     Interrupt,

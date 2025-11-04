@@ -18,7 +18,6 @@ pub mod auth;
 pub mod config;
 pub mod debug_context;
 pub mod debug_session;
-pub mod from_value;
 pub mod jrpc;
 pub mod model;
 pub mod oplog;

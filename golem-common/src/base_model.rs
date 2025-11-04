@@ -16,6 +16,7 @@ use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -129,6 +130,8 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     serde::Serialize,
     serde::Deserialize,
     poem_openapi::Object,
+    IntoValue,
+    FromValue,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -239,23 +242,6 @@ impl AsRef<WorkerId> for &WorkerId {
     }
 }
 
-impl golem_wasm::IntoValue for WorkerId {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            self.component_id.into_value(),
-            self.worker_name.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::{field, record};
-        record(vec![
-            field("component_id", ComponentId::get_type()),
-            field("worker_name", String::get_type()),
-        ])
-    }
-}
-
 #[derive(
     Clone,
     Debug,
@@ -266,7 +252,8 @@ impl golem_wasm::IntoValue for WorkerId {
     Decode,
     serde::Serialize,
     serde::Deserialize,
-    golem_wasm_derive::IntoValue,
+    IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
@@ -304,6 +291,7 @@ impl Display for PromiseId {
     serde::Serialize,
     serde::Deserialize,
     golem_wasm_derive::IntoValue,
+    golem_wasm_derive::FromValue,
 )]
 pub struct OplogIndex(pub(crate) u64);
 
@@ -368,7 +356,8 @@ impl From<OplogIndex> for u64 {
     poem_openapi::NewType,
     serde::Serialize,
     serde::Deserialize,
-    golem_wasm_derive::IntoValue,
+    IntoValue,
+    FromValue,
 )]
 pub struct TransactionId(pub(crate) String);
 

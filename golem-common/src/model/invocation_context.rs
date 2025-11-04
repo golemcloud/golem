@@ -20,8 +20,8 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm::{IntoValue, Value};
-use golem_wasm_derive::IntoValue;
+use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -68,6 +68,13 @@ impl IntoValue for TraceId {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+impl FromValue for TraceId {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let str = String::from_value(value)?;
+        Self::from_string(str)
     }
 }
 
@@ -183,6 +190,13 @@ impl IntoValue for SpanId {
     }
 }
 
+impl FromValue for SpanId {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let str = String::from_value(value)?;
+        Self::from_string(str)
+    }
+}
+
 impl Serialize for SpanId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -251,7 +265,7 @@ impl poem_openapi::types::ToJSON for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum AttributeValue {
     String(String),
 }

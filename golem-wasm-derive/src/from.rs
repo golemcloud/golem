@@ -115,7 +115,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                             // separate inner type
                             if is_unit_case(variant) {
                                 quote! {
-                                    #idx => Ok(#ident::#case_ident)
+                                    #idx => Ok(#ident::#case_ident(Default::default()))
                                 }
                             } else {
                                 let single_field = variant.fields.iter().next().unwrap();
@@ -146,7 +146,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
 
                             if is_unit_case(variant) {
                                 quote! {
-                                    #idx => Ok(#ident::#case_ident)
+                                    #idx => Ok(#ident::#case_ident(Default::default()))
                                 }
                             } else {
                                 let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
@@ -175,7 +175,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
 
                             if is_unit_case(variant) {
                                 quote! {
-                                    #idx => Ok(#ident::#case_ident)
+                                    #idx => Ok(#ident::#case_ident(Default::default()))
                                 }
                             } else {
                                 let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
@@ -304,13 +304,13 @@ fn apply_from_conversions(
         &wit_field.convert_option,
     ) {
         (Some(convert_to), None, None) => {
-            quote! { Into::<#ty>::into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?) }
+            quote! { TryInto::<#ty>::try_into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?)? }
         }
         (None, Some(convert_to), None) => {
-            quote! { <Vec<#convert_to> as golem_wasm::FromValue>::from_value(#field_access)?.into_iter().map(Into::<#ty>::into).collect::<Vec<_>>() }
+            quote! { Vec::<#convert_to>::from_value(#field_access)?.into_iter().map(TryInto::<#ty>::try_into).collect::<Result<Vec<_>, _>>()? }
         }
         (None, None, Some(convert_to)) => {
-            quote! { <Option<#convert_to> as golem_wasm::FromValue>::from_value(#field_access)?.map(Into::<#ty>::into) }
+            quote! { Option::<#convert_to>::from_value(#field_access)?.into_iter().map(TryInto::<#ty>::try_into).transpose()? }
         }
         _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access)? },
     }

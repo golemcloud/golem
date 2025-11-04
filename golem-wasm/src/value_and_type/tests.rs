@@ -82,9 +82,11 @@ impl Into<u32> for WrappedU32 {
     }
 }
 
-impl Into<WrappedU32> for u32 {
-    fn into(self) -> WrappedU32 {
-        WrappedU32(self)
+impl TryInto<WrappedU32> for u32 {
+    type Error = String;
+
+    fn try_into(self) -> Result<WrappedU32, String> {
+        Ok(WrappedU32(self))
     }
 }
 

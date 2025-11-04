@@ -27,7 +27,7 @@ use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{IntoValue, Value, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
@@ -221,7 +221,7 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoValue, FromValue)]
 pub struct RdbmsPoolKey {
     #[bincode(with_serde)]
     pub address: Url,
@@ -439,7 +439,7 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum Error {
     ConnectionFailure(String),
     QueryParameterFailure(String),
