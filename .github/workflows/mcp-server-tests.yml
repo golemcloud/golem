@@ -131,15 +131,40 @@ jobs:
           ls -lh target/debug/golem-cli
           file target/debug/golem-cli
 
-      - name: Install Rust (for test runner)
+      - name: Install Rust (for test harness only)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install redis
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache target directory (reuse from build job)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-golem-cli-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('cli/golem-cli/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-golem-cli-target-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-golem-cli-target-
+
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y redis-server
+          sudo apt-get install -y redis-server protobuf-compiler pkg-config libssl-dev
           sudo systemctl start redis-server
           redis-cli ping
+
+      - name: Build test harness only (reuses cached golem-cli build)
+        run: |
+          cargo test --package golem-cli --test integration mcp_server_integration --no-run
 
       - name: Run MCP integration tests
         run: |
