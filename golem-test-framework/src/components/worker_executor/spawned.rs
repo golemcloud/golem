@@ -228,6 +228,17 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         *child_field = Some(child);
         *logger_field = Some(logger);
     }
+
+    async fn is_running(&self) -> bool {
+        let mut child_field = self.child.lock().unwrap();
+        if let Some(mut child) = child_field.take() {
+            let result = matches!(child.try_wait(), Ok(None));
+            *child_field = Some(child);
+            result
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for SpawnedWorkerExecutor {

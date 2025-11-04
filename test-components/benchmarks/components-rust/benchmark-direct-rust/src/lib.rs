@@ -19,8 +19,8 @@ impl Guest for Component {
         common_lib::large_input(input)
     }
 
-    fn oplog_heavy(length: u32, persistence_on: bool) -> u32 {
-        common_lib::oplog_heavy(length, persistence_on)
+    fn oplog_heavy(length: u32, persistence_on: bool, commit: bool) -> u32 {
+        common_lib::oplog_heavy(length, persistence_on, commit)
     }
 
     fn sleep(millis: u64) -> bool {

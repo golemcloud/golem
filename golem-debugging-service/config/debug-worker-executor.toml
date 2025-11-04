@@ -122,7 +122,7 @@ blob_storage_layers = 1
 entry_count_limit = 1024
 indexed_storage_layers = 2
 max_operations_before_commit = 128
-max_operations_before_commit_ephemeral = 512
+max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
 
 [plugin_service]
@@ -384,7 +384,7 @@ without_time = false
 # entry_count_limit = 1024
 # indexed_storage_layers = 2
 # max_operations_before_commit = 128
-# max_operations_before_commit_ephemeral = 512
+# max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
 # 
 # [plugin_service]

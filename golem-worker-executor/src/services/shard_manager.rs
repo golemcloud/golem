@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 /// Service providing access to the shard manager service
 #[async_trait]
@@ -50,7 +51,7 @@ pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerSer
 
 pub struct ShardManagerServiceGrpc {
     config: ShardManagerServiceGrpcConfig,
-    client: GrpcClient<ShardManagerServiceClient<Channel>>,
+    client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl ShardManagerServiceGrpc {

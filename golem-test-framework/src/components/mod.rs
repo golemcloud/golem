@@ -185,6 +185,7 @@ impl EnvVarBuilder {
             .with_rust_log_with_dep_defaults(verbosity)
             .with_rust_back_log()
             .with_tracing_from_env()
+            .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
     }
 
     fn with(mut self, name: &str, value: String) -> Self {

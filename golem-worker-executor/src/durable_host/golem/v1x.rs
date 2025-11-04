@@ -428,6 +428,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            self.state
+                .oplog
+                .switch_persistence_level(new_persistence_level)
+                .await;
             self.state.persistence_level = new_persistence_level;
             debug!(
                 "Worker's oplog persistence level is set to {:?}",

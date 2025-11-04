@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
-use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{
+    postgres_enable_stats, postgres_print_stats, postgres_wait_for_startup, DbInfo, PostgresInfo,
+    Rdb,
+};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
@@ -33,7 +36,7 @@ impl DockerPostgresRdb {
     const DEFAULT_PASSWORD: &'static str = "postgres";
     const DEFAULT_DATABASE: &'static str = "postgres";
 
-    pub async fn new(unique_network_id: &str) -> Self {
+    pub async fn new(unique_network_id: &str, enable_stats: bool) -> Self {
         info!("Starting Postgres container");
 
         let database = Self::DEFAULT_DATABASE;
@@ -41,13 +44,23 @@ impl DockerPostgresRdb {
         let username = Self::DEFAULT_USERNAME;
         let port = Self::DEFAULT_PORT;
 
-        let container = tryhard::retry_fn(|| {
+        let args = if enable_stats {
+            vec![
+                "postgres",
+                "-c",
+                "shared_preload_libraries=pg_stat_statements",
+            ]
+        } else {
+            vec!["postgres"]
+        };
+        let container = tryhard::retry_fn(move || {
             Postgres::default()
                 .with_tag("14")
                 .with_env_var("POSTGRES_DB", database)
                 .with_env_var("POSTGRES_PASSWORD", password)
                 .with_env_var("POSTGRES_USER", username)
                 .with_network(network(unique_network_id))
+                .with_cmd(args.clone())
                 .start()
         })
         .retries(5)
@@ -74,6 +87,12 @@ impl DockerPostgresRdb {
         };
 
         postgres_wait_for_startup(&info, Duration::from_secs(30)).await;
+
+        if enable_stats {
+            postgres_enable_stats(&info)
+                .await
+                .expect("Failed to enable postgres stats");
+        }
 
         Self {
             container: ContainerHandle::new(container),
@@ -116,6 +135,7 @@ impl Rdb for DockerPostgresRdb {
     }
 
     async fn kill(&self) {
+        postgres_print_stats(&self.info).await;
         self.container.kill().await
     }
 }
