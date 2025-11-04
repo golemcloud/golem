@@ -56,12 +56,11 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
-use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord,
-};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -81,7 +80,7 @@ use wasmtime_wasi_http::WasiHttpView;
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     config: Arc<GolemConfig>,
-    project_owner_account_id: AccountId,
+    environment_owner_account_id: AccountId,
     resource_limits: Arc<dyn ResourceLimits>,
     last_fuel_level: i64,
     min_fuel_level: i64,
@@ -97,7 +96,7 @@ impl Context {
         Self {
             durable_ctx: golem_ctx,
             config,
-            project_owner_account_id,
+            environment_owner_account_id: project_owner_account_id,
             resource_limits,
             last_fuel_level: i64::MAX,
             min_fuel_level: i64::MAX,
@@ -106,7 +105,7 @@ impl Context {
 
     pub async fn get_max_memory(&self) -> Result<usize, WorkerExecutorError> {
         self.resource_limits
-            .get_max_memory(&self.project_owner_account_id)
+            .get_max_memory(&self.environment_owner_account_id)
             .await
     }
 }
@@ -131,26 +130,26 @@ impl FuelManagement for Context {
         let amount = self
             .resource_limits
             .borrow_fuel(
-                &self.project_owner_account_id,
+                &self.environment_owner_account_id,
                 self.config.limits.fuel_to_borrow,
             )
             .await?;
         self.min_fuel_level -= amount;
         debug!(
             "borrowed fuel for {}: {}",
-            self.project_owner_account_id, amount
+            self.environment_owner_account_id, amount
         );
         Ok(())
     }
 
     fn borrow_fuel_sync(&mut self) {
         let amount = self.resource_limits.borrow_fuel_sync(
-            &self.project_owner_account_id,
+            &self.environment_owner_account_id,
             self.config.limits.fuel_to_borrow,
         );
         match amount {
             Some(amount) => {
-                debug!("borrowed fuel for {}: {}", self.project_owner_account_id, amount);
+                debug!("borrowed fuel for {}: {}", self.environment_owner_account_id, amount);
                 self.min_fuel_level -= amount;
             }
             None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
@@ -165,17 +164,17 @@ impl FuelManagement for Context {
             debug!("last_fuel_level: {}", self.last_fuel_level);
             debug!(
                 "returning unused fuel for {}: {}",
-                self.project_owner_account_id, unused
+                self.environment_owner_account_id, unused
             );
             self.resource_limits
-                .return_fuel(&self.project_owner_account_id, unused)
+                .return_fuel(&self.environment_owner_account_id, unused)
                 .await?
         }
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
         debug!(
             "reset fuel mark for {}: {}",
-            self.project_owner_account_id, current_level
+            self.environment_owner_account_id, current_level
         );
         Ok(consumed)
     }

@@ -24,10 +24,9 @@ pub struct ProvidedWorkerExecutorCluster {
 }
 
 impl ProvidedWorkerExecutorCluster {
-    pub fn new(host: String, http_port: u16, grpc_port: u16, shared_client: bool) -> Self {
+    pub fn new(host: String, grpc_port: u16) -> Self {
         info!("Using an already running cluster of golem-worker-executors of size 1");
-        let worker_executor =
-            ProvidedWorkerExecutor::new(host, http_port, grpc_port, shared_client);
+        let worker_executor = ProvidedWorkerExecutor::new(host, grpc_port);
         Self {
             worker_executor: Arc::new(worker_executor),
         }

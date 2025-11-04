@@ -31,19 +31,21 @@ pub enum UsageTracking {
     SelectTotalAppCount,
     SelectTotalEnvCount,
     SelectTotalComponentCount,
+    SelectTotalComponentSize,
 }
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "integer")]
 pub enum UsageType {
-    TotalAppCount = 0,
-    TotalEnvCount = 1,
-    TotalComponentCount = 2,
-    TotalWorkerCount = 3,
-    TotalComponentStorageBytes = 4,
-    MonthlyGasLimit = 5,
-    MonthlyComponentUploadLimitBytes = 6,
+    TotalWorkerCount = 0,
+    TotalWorkerConnectionCount = 1,
+    MonthlyGasLimit = 2,
+    MonthlyComponentUploadLimitBytes = 3,
+    TotalAppCount = 4,
+    TotalEnvCount = 5,
+    TotalComponentCount = 6,
+    TotalComponentStorageBytes = 7,
 }
 
 impl UsageType {
@@ -53,6 +55,7 @@ impl UsageType {
             | UsageType::TotalEnvCount
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerCount
+            | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit | UsageType::MonthlyComponentUploadLimitBytes => {
                 UsageGrouping::Monthly
@@ -65,8 +68,9 @@ impl UsageType {
             UsageType::TotalAppCount => UsageTracking::SelectTotalAppCount,
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
+            UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
             UsageType::TotalWorkerCount
-            | UsageType::TotalComponentStorageBytes
+            | UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes => UsageTracking::Stats,
         }
@@ -91,7 +95,7 @@ pub struct AccountUsage {
     pub usage: BTreeMap<UsageType, i64>,
     pub plan: PlanRecord,
 
-    pub increase: BTreeMap<UsageType, i64>,
+    pub changes: BTreeMap<UsageType, i64>,
 }
 
 impl AccountUsage {
@@ -99,22 +103,21 @@ impl AccountUsage {
         self.usage.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn increase(&self, usage_type: UsageType) -> i64 {
-        self.increase.get(&usage_type).copied().unwrap_or(0)
+    pub fn change(&self, usage_type: UsageType) -> i64 {
+        self.changes.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn add_checked(&mut self, usage_type: UsageType, increase: i64) -> RepoResult<bool> {
-        let Some(limit) = self.plan.limit(usage_type)? else {
-            return Ok(true);
-        };
+    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> RepoResult<bool> {
+        let limit = self.plan.limit(usage_type);
 
-        self.increase
+        self.changes
             .entry(usage_type)
-            .and_modify(|e| *e += increase)
-            .or_insert(increase);
+            .and_modify(|e| *e = e.saturating_add(change))
+            .or_insert(change);
 
-        let increase = self.increase.get(&usage_type).copied().unwrap_or(0);
+        let change = self.change(usage_type);
+        let final_value = self.usage(usage_type).saturating_add(change);
 
-        Ok(self.usage(usage_type) + increase <= limit)
+        Ok(final_value <= limit)
     }
 }

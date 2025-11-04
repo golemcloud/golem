@@ -63,13 +63,13 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
-    WorkerMetadata, WorkerStatus,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
+    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::protobuf::Val;
 use golem_wasm::ValueAndType;
 use std::cmp::min;

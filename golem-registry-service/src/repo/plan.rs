@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+use futures::{FutureExt, StreamExt};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
+use golem_service_base::db::{LabelledPoolApi, Pool};
 use golem_service_base::repo::RepoResult;
 use indoc::indoc;
-use sqlx::{Database, Row};
-use std::collections::BTreeMap;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -114,27 +111,37 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             async move {
                 tx.execute(
                     sqlx::query(indoc! { r#"
-                        INSERT INTO plans (plan_id, name) VALUES ($1, $2)
-                        ON CONFLICT (plan_id) DO UPDATE SET name = $2
+                        INSERT INTO plans (
+                            plan_id, name, max_memory_per_worker, total_app_count,
+                            total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                            total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        ON CONFLICT (plan_id) DO UPDATE SET
+                            name = $2,
+                            max_memory_per_worker = $3,
+                            total_app_count = $4,
+                            total_env_count = $5,
+                            total_component_count = $6,
+                            total_worker_count = $7,
+                            total_worker_connection_count = $8,
+                            total_component_storage_bytes = $9,
+                            monthly_gas_limit = $10,
+                            monthly_component_upload_limit_bytes = $11
                     "#})
                     .bind(plan.plan_id)
-                    .bind(plan.name),
+                    .bind(plan.name)
+                    .bind(plan.max_memory_per_worker)
+                    .bind(plan.total_app_count)
+                    .bind(plan.total_env_count)
+                    .bind(plan.total_component_count)
+                    .bind(plan.total_worker_count)
+                    .bind(plan.total_worker_connection_count)
+                    .bind(plan.total_component_storage_bytes)
+                    .bind(plan.monthly_gas_limit)
+                    .bind(plan.monthly_component_upload_limit_bytes)
                 )
                 .await?;
-
-                tx.execute(
-                    sqlx::query(indoc! { r#"
-                        DELETE FROM plan_usage_limits WHERE plan_id = $1;
-                    "#})
-                    .bind(plan.plan_id),
-                )
-                .await?;
-
-                for (usage_type, limit) in plan.limits {
-                    if let Some(limit) = limit {
-                        Self::insert_limit(tx, &plan.plan_id, usage_type, limit).await?;
-                    }
-                }
 
                 Ok(())
             }
@@ -148,14 +155,19 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
             .with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT plan_id, name FROM plans WHERE plan_id = $1
+                    SELECT
+                        plan_id, name, max_memory_per_worker, total_app_count,
+                        total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                        total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                    FROM plans
+                    WHERE plan_id = $1
                 "# })
                 .bind(plan_id),
             )
             .await?;
 
         match plan {
-            Some(plan) => Ok(Some(self.with_limits(plan).await?)),
+            Some(plan) => Ok(Some(plan)),
             None => Ok(None),
         }
     }
@@ -164,79 +176,14 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
         let plans = self
             .with_ro("list")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
-                SELECT plan_id, name FROM plans
+                SELECT
+                    plan_id, name, max_memory_per_worker, total_app_count,
+                    total_env_count, total_component_count, total_worker_count, total_worker_connection_count,
+                    total_component_storage_bytes, monthly_gas_limit, monthly_component_upload_limit_bytes
+                FROM plans
             "# }))
             .await?;
 
-        stream::iter(plans)
-            .then(|plan| self.with_limits(plan))
-            .try_collect()
-            .await
-    }
-}
-
-#[async_trait]
-trait PlanInternalRepo: PlanRepo {
-    type Db: Database;
-    type Tx: LabelledPoolTransaction;
-
-    async fn get_limits(&self, plan_id: &Uuid) -> RepoResult<BTreeMap<UsageType, Option<i64>>>;
-
-    async fn with_limits(&self, mut plan: PlanRecord) -> RepoResult<PlanRecord> {
-        plan.limits = self.get_limits(&plan.plan_id).await?;
-        Ok(plan.with_limit_placeholders())
-    }
-
-    async fn insert_limit(
-        tx: &mut Self::Tx,
-        plan_id: &Uuid,
-        usage_type: UsageType,
-        limit: i64,
-    ) -> RepoResult<()>;
-}
-
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-#[async_trait]
-impl PlanInternalRepo for DbPlanRepo<PostgresPool> {
-    type Db = <PostgresPool as Pool>::Db;
-    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
-
-    async fn get_limits(&self, plan_id: &Uuid) -> RepoResult<BTreeMap<UsageType, Option<i64>>> {
-        let rows = self
-            .with_ro("get_limits")
-            .fetch_all(
-                sqlx::query(indoc! { r#"
-                    SELECT usage_type, value FROM plan_usage_limits WHERE plan_id = $1
-                "# })
-                .bind(plan_id),
-            )
-            .await?;
-
-        let mut limits = BTreeMap::new();
-        for row in rows {
-            limits.insert(row.try_get("usage_type")?, Some(row.try_get("value")?));
-        }
-
-        Ok(limits)
-    }
-
-    async fn insert_limit(
-        tx: &mut Self::Tx,
-        plan_id: &Uuid,
-        usage_type: UsageType,
-        limit: i64,
-    ) -> RepoResult<()> {
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                INSERT INTO plan_usage_limits (plan_id, usage_type, value)
-                VALUES ($1, $2, $3)
-            "#})
-            .bind(plan_id)
-            .bind(usage_type)
-            .bind(limit),
-        )
-        .await?;
-
-        Ok(())
+        Ok(plans)
     }
 }

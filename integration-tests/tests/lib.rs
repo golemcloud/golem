@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod api;
+mod worker;
+
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use test_r::test_dep;
-
-mod api;
 
 test_r::enable!();
 

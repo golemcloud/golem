@@ -16,7 +16,7 @@ use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageCo
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlobStorageInfo {
     LocalFileSytem { root: PathBuf },
 }

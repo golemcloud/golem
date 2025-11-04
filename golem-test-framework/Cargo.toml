@@ -19,6 +19,10 @@ golem-common = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm = { workspace = true }
 golem-registry-service = { path = "../golem-registry-service", version = "=0.0.0" }
+golem-worker-service = { path = "../golem-worker-service", version = "=0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "=0.0.0" }
+golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "=0.0.0" }
+golem-worker-executor = { path = "../golem-worker-executor", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

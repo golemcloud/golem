@@ -49,10 +49,10 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId,
-    WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
 use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};

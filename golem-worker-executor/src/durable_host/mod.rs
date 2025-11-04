@@ -98,12 +98,14 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
     IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
     WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::{
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;

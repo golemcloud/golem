@@ -294,6 +294,10 @@ impl OplogIndex {
         OplogIndex(value)
     }
 
+    pub const fn as_u64(&self) -> u64 {
+        self.0
+    }
+
     /// Gets the previous oplog index
     pub fn previous(&self) -> OplogIndex {
         OplogIndex(self.0 - 1)

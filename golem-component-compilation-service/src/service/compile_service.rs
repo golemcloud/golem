@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
+use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -30,7 +30,7 @@ pub struct ComponentCompilationService {
 impl ComponentCompilationService {
     pub async fn new(
         compile_worker: CompileWorkerConfig,
-        component_service: ComponentServiceConfig,
+        registry_service: RegistryServiceConfig,
         engine: Engine,
         compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
@@ -38,7 +38,7 @@ impl ComponentCompilationService {
         let (upload_tx, upload_rx) = mpsc::channel(100);
 
         CompileWorker::start(
-            component_service.static_config(),
+            registry_service.static_config(),
             compile_worker,
             engine.clone(),
             compiled_component_service.clone(),

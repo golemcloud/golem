@@ -18,8 +18,7 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::clients::registry::GrpcRegistryService;
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +29,7 @@ pub trait AgentTypesService: Send + Sync {
         &self,
         owner_environment: &EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError>;
+
     async fn get(
         &self,
         owner_environment: &EnvironmentId,
@@ -40,17 +40,12 @@ pub trait AgentTypesService: Send + Sync {
 pub fn configured(
     config: &AgentTypesServiceConfig,
     component_service: Arc<dyn ComponentService>,
+    registry_service: Arc<dyn RegistryService>,
 ) -> Arc<dyn AgentTypesService> {
     match config {
         AgentTypesServiceConfig::Grpc(config) => {
             let client = CachedAgentTypes::new(
-                Arc::new(self::grpc::RemoteAgentTypesService::new(Arc::new(
-                    GrpcRegistryService::new(&RemoteServiceConfig {
-                        host: config.host.clone(),
-                        port: config.port,
-                        retries: config.retries.clone(),
-                    }),
-                ))),
+                Arc::new(self::grpc::AgentTypesServiceGrpc::new(registry_service)),
                 config.cache_time_to_idle,
             );
             Arc::new(client)
@@ -136,18 +131,18 @@ mod grpc {
     use std::sync::Arc;
 
     #[derive(Clone)]
-    pub struct RemoteAgentTypesService {
+    pub struct AgentTypesServiceGrpc {
         client: Arc<dyn RegistryService>,
     }
 
-    impl RemoteAgentTypesService {
+    impl AgentTypesServiceGrpc {
         pub fn new(client: Arc<dyn RegistryService>) -> Self {
             Self { client }
         }
     }
 
     #[async_trait]
-    impl AgentTypesService for RemoteAgentTypesService {
+    impl AgentTypesService for AgentTypesServiceGrpc {
         async fn get_all(
             &self,
             owner_environment: &EnvironmentId,

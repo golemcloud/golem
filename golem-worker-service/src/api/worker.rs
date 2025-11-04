@@ -29,7 +29,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
-use golem_common::model::worker::{WorkerCreationRequest, WorkerMetadataDto};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationRequest, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
@@ -900,7 +900,7 @@ impl WorkerApi {
         self.worker_service
             .update(
                 &worker_id,
-                params.mode.clone(),
+                params.mode,
                 params.target_version,
                 component.environment_id,
                 auth,

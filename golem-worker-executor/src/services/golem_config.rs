@@ -21,6 +21,7 @@ use golem_common::config::{
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
+use golem_service_base::clients::RegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
@@ -52,9 +53,9 @@ pub struct GolemConfig {
     pub memory: MemoryConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
-    pub component_service: ComponentServiceConfig,
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
+    pub registry_service: RegistryServiceConfig,
     pub engine: EngineConfig,
     pub grpc_address: String,
     pub port: u16,
@@ -143,11 +144,11 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.resource_limits.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "component service:");
+        let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.component_service.to_safe_string_indented()
+            self.registry_service.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "component cache:");
         let _ = writeln!(
@@ -235,35 +236,13 @@ impl SafeDisplay for Limits {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PluginServiceConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-    pub retries: RetryConfig,
     pub plugin_cache_size: usize,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
-}
-
-impl PluginServiceConfig {
-    pub fn url(&self) -> Url {
-        build_url("plugin", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("plugin", &self.host, self.port)
-    }
 }
 
 impl SafeDisplay for PluginServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "plugin cache size: {}", self.plugin_cache_size);
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
     }
 }
@@ -316,10 +295,14 @@ pub struct ShardManagerServiceSingleShardConfig {}
 pub struct WorkerServiceGrpcConfig {
     pub host: String,
     pub port: u16,
-    pub access_token: String,
     pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
+    pub auth_cache_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub auth_cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub auth_cache_eviction_period: Duration,
 }
 
 impl SafeDisplay for WorkerServiceGrpcConfig {
@@ -331,6 +314,13 @@ impl SafeDisplay for WorkerServiceGrpcConfig {
         let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "auth cache size: {}", self.auth_cache_size);
+        let _ = writeln!(&mut result, "auth cache ttl: {:?}", self.auth_cache_ttl);
+        let _ = writeln!(
+            &mut result,
+            "auth cache eviction period: {:?}",
+            self.auth_cache_eviction_period
+        );
         result
     }
 }
@@ -721,10 +711,6 @@ impl SafeDisplay for ResourceLimitsConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResourceLimitsGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-    pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub batch_update_interval: Duration,
 }
@@ -732,27 +718,12 @@ pub struct ResourceLimitsGrpcConfig {
 impl SafeDisplay for ResourceLimitsGrpcConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
         let _ = writeln!(
             &mut result,
             "batch update interval: {:?}",
             self.batch_update_interval
         );
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
-    }
-}
-
-impl ResourceLimitsGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("resource limits", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("resource limits", &self.host, self.port)
     }
 }
 
@@ -812,84 +783,24 @@ impl SafeDisplay for AgentTypesServiceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentTypesServiceGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-    pub retries: RetryConfig,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_time_to_idle: Duration,
-}
-
-impl AgentTypesServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("agent_types", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("agent_types", &self.host, self.port)
-    }
 }
 
 impl SafeDisplay for AgentTypesServiceGrpcConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(
             &mut result,
             "cache time to idle: {:?}",
             self.cache_time_to_idle
         );
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentTypesServiceLocalConfig {}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: String,
-    pub retries: RetryConfig,
-    pub max_component_size: usize,
-    #[serde(with = "humantime_serde")]
-    pub connect_timeout: Duration,
-}
-
-impl ComponentServiceConfig {
-    pub fn url(&self) -> Url {
-        build_url("component service", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("component service", &self.host, self.port)
-    }
-}
-
-impl SafeDisplay for ComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(
-            &mut result,
-            "max component size: {}",
-            self.max_component_size
-        );
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-        result
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct EngineConfig {
@@ -925,9 +836,9 @@ impl Default for GolemConfig {
             memory: MemoryConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
-            component_service: ComponentServiceConfig::default(),
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
+            registry_service: RegistryServiceConfig::default(),
             engine: EngineConfig::default(),
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
@@ -990,12 +901,7 @@ impl Default for Limits {
 impl Default for PluginServiceConfig {
     fn default() -> Self {
         Self {
-            host: "localhost".to_string(),
-            port: 9090,
-            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
-            retries: RetryConfig::max_attempts_3(),
             plugin_cache_size: 1024,
-            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -1060,9 +966,11 @@ impl Default for WorkerServiceGrpcConfig {
         Self {
             host: "localhost".to_string(),
             port: 9007,
-            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
             retries: RetryConfig::max_attempts_5(),
             connect_timeout: Duration::from_secs(10),
+            auth_cache_size: 1024,
+            auth_cache_ttl: Duration::from_mins(10),
+            auth_cache_eviction_period: Duration::from_mins(1),
         }
     }
 }
@@ -1123,10 +1031,6 @@ impl Default for RdbmsPoolConfig {
 impl Default for ResourceLimitsConfig {
     fn default() -> Self {
         Self::Grpc(ResourceLimitsGrpcConfig {
-            host: "localhost".to_string(),
-            port: 8080,
-            access_token: "00000000-0000-0000-0000-000000000000".to_string(),
-            retries: RetryConfig::default(),
             batch_update_interval: Duration::from_secs(60),
         })
     }
@@ -1143,19 +1047,6 @@ impl Default for ComponentCacheConfig {
     }
 }
 
-impl Default for ComponentServiceConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9090,
-            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
-            retries: RetryConfig::max_attempts_3(),
-            max_component_size: 50 * 1024 * 1024,
-            connect_timeout: Duration::from_secs(30),
-        }
-    }
-}
-
 impl Default for AgentTypesServiceConfig {
     fn default() -> Self {
         Self::Grpc(AgentTypesServiceGrpcConfig::default())
@@ -1165,11 +1056,6 @@ impl Default for AgentTypesServiceConfig {
 impl Default for AgentTypesServiceGrpcConfig {
     fn default() -> Self {
         Self {
-            host: "localhost".to_string(),
-            port: 9092,
-            access_token: "2a354594-7a63-4091-a46b-cc58d379f677".to_string(),
-            retries: RetryConfig::max_attempts_3(),
-            connect_timeout: Duration::from_secs(30),
             cache_time_to_idle: Duration::from_secs(60),
         }
     }

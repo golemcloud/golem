@@ -88,7 +88,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_component(&component_id, &auth)
+            .get_staged_component(&component_id, &auth)
             .await?
             .into();
         Ok(Json(component))

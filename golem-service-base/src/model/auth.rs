@@ -177,6 +177,7 @@ pub enum AccountAction {
     ViewApplications,
     ViewPlugin,
     ViewToken,
+    ViewUsage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -246,6 +247,10 @@ impl AuthCtx {
     /// Get the sytem AuthCtx for system initiated action
     pub fn system() -> AuthCtx {
         AuthCtx::System
+    }
+
+    pub fn is_system(&self) -> bool {
+        matches!(self, AuthCtx::System)
     }
 
     pub fn account_id(&self) -> &AccountId {
@@ -348,9 +353,11 @@ impl AuthCtx {
         roles_from_shares: &HashSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
-        // Environment owners are allowed to do everything with their environments
-        if self.account_id() == account_owning_enviroment {
-            return Ok(());
+        // Environment owners and system users are allowed to do everything with their environments
+        match self {
+            Self::User(user) if user.account_id == *account_owning_enviroment => return Ok(()),
+            Self::System => return Ok(()),
+            _ => {}
         };
 
         let is_allowed = match action {

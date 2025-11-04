@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
 use std::str::FromStr;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use uuid::{uuid, Uuid};
 
 pub trait PoemTypeRequirements:
@@ -1794,29 +1794,6 @@ impl Display for WorkerEvent {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GetFileSystemNodeResult {
-    Ok(Vec<ComponentFileSystemNode>),
-    File(ComponentFileSystemNode),
-    NotFound,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ComponentFileSystemNodeDetails {
-    File {
-        permissions: ComponentFilePermissions,
-        size: u64,
-    },
-    Directory,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ComponentFileSystemNode {
-    pub name: String,
-    pub last_modified: SystemTime,
-    pub details: ComponentFileSystemNodeDetails,
-}
 
 // Custom Deserialize is replaced with Simple Deserialize
 #[derive(

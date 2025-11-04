@@ -58,11 +58,11 @@ use golem_common::model::public_oplog::{
     SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
     TimestampParameter,
 };
+use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::{Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation};
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::plugin_registration::PluginRegistration;
-use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };

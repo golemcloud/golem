@@ -76,6 +76,11 @@ pub trait ComponentRepo: Send + Sync {
         name: &str,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
+    async fn get_all_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>>;
+
     async fn get_by_id_and_revision(
         &self,
         component_id: &Uuid,
@@ -237,6 +242,16 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         self.repo
             .get_deployed_by_name(environment_id, name)
             .instrument(Self::span_name(environment_id, name))
+            .await
+    }
+
+    async fn get_all_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
+        self.repo
+            .get_all_deployed_by_id(component_id)
+            .instrument(Self::span_id(component_id))
             .await
     }
 
@@ -653,6 +668,45 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
             None => Ok(None),
         }
+    }
+
+    async fn get_all_deployed_by_id(
+        &self,
+        component_id: &Uuid,
+    ) -> RepoResult<Vec<ComponentExtRevisionRecord>> {
+        let revisions = self.with_ro("get_all_deployed_by_id")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    WITH distinct_revs AS (
+                        SELECT DISTINCT cr.revision_id
+                        FROM deployment_revisions dr
+                        JOIN deployment_component_revisions dcr
+                            ON dcr.environment_id = dr.environment_id AND dcr.deployment_revision_id = dr.revision_id
+                        JOIN component_revisions cr
+                            ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
+                        JOIN components c
+                            ON c.component_id = cr.component_id
+                        WHERE c.component_id = $1
+                    )
+                    SELECT
+                          c.environment_id, c.name,
+                           cr.component_id, cr.revision_id, cr.version, cr.hash,
+                           cr.created_at, cr.created_by, cr.deleted,
+                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM distinct_revs dr
+                    JOIN component_revisions cr
+                        ON cr.revision_id = dr.revision_id
+                    JOIN components c
+                        ON c.component_id = cr.component_id
+                    WHERE c.component_id = $1
+                    ORDER BY cr.revision_id;
+                "#})
+                    .bind(component_id),
+            )
+            .await?;
+
+        Ok(revisions)
     }
 
     async fn get_by_id_and_revision(

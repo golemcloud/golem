@@ -43,6 +43,8 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
+    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>>;
+
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
@@ -149,6 +151,13 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
+    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>> {
+        self.repo
+            .get_next_revision_number(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
@@ -297,6 +306,28 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
+    async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>> {
+        let current_staged_revision_id_row = self
+            .with_ro("deploy - get current staged revision")
+            .fetch_optional(
+                sqlx::query(indoc! { r#"
+                    SELECT revision_id FROM deployment_revisions
+                    WHERE environment_id = $1
+                    ORDER BY revision_id DESC
+                    LIMIT 1
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+
+        let current_staged_revision_id = match current_staged_revision_id_row {
+            Some(row) => Some(row.try_get("revision_id").map_err(RepoError::from)?),
+            None => None,
+        };
+
+        Ok(current_staged_revision_id)
+    }
+
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
@@ -405,26 +436,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         version: String,
         expected_deployment_hash: SqlBlake3Hash,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let actual_current_staged_revision_id_row = self
-            .with_ro("deploy - get current staged revision")
-            .fetch_optional(
-                sqlx::query(indoc! { r#"
-                    SELECT revision_id FROM deployment_revisions
-                    WHERE environment_id = $1
-                    ORDER BY revision_id DESC
-                    LIMIT 1
-                "#})
-                .bind(environment_id),
-            )
-            .await?;
-
-        let actual_current_staged_revision_id: Option<i64> =
-            match actual_current_staged_revision_id_row {
-                Some(row) => Some(row.try_get("revision_id").map_err(RepoError::from)?),
-                None => None,
-            };
-
+        let actual_current_staged_revision_id =
+            self.get_next_revision_number(environment_id).await?;
         if current_staged_deployment_revision_id != actual_current_staged_revision_id {
+            tracing::info!(
+                "Failing deployment due to concurrent modification: expected_staged_deployment_revision_id: {current_staged_deployment_revision_id:?}; actual_current_staged_revision_id: {actual_current_staged_revision_id:?}"
+            );
             return Err(DeployRepoError::ConcurrentModification);
         };
 

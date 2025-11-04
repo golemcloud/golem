@@ -43,8 +43,6 @@ pub trait AccountUsageRepo: Send + Sync {
     ) -> RepoResult<Option<AccountUsage>>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()>;
-
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()>;
 }
 
 pub struct LoggedAccountUsageRepo<Repo: AccountUsageRepo> {
@@ -90,13 +88,6 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
             .instrument(Self::span_account_id(&account_usage.account_id))
             .await
     }
-
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.repo
-            .rollback(account_usage)
-            .instrument(Self::span_account_id(&account_usage.account_id))
-            .await
-    }
 }
 
 pub struct DbAccountUsageRepo<DBP: Pool> {
@@ -137,7 +128,7 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 #[async_trait]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
     async fn get(&self, account_id: &Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id, None).await? else {
+        let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -147,29 +138,47 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     WITH counts AS (
                         SELECT
-                            COUNT(*) as total_apps,
-                            COUNT(DISTINCT e.environment_id) as total_envs,
-                            COUNT(DISTINCT c.component_id) as total_components
+                            COUNT(DISTINCT a.application_id) AS total_apps,
+                            COUNT(DISTINCT e.environment_id) AS total_envs,
+                            COUNT(DISTINCT c.component_id) AS total_components,
+                            CASE
+                                WHEN SUM(CAST(cr.size AS NUMERIC)) > 9223372036854775807 THEN 9223372036854775807
+                                WHEN SUM(CAST(cr.size AS NUMERIC)) < -9223372036854775808 THEN -9223372036854775808
+                                ELSE CAST(COALESCE(SUM(CAST(cr.size AS NUMERIC)), 0) AS BIGINT)
+                            END AS total_component_size
                         FROM applications a
-                        LEFT JOIN environments e ON e.application_id = a.application_id
+                        LEFT JOIN environments e
+                            ON e.application_id = a.application_id
                             AND e.deleted_at IS NULL
-                        LEFT JOIN components c ON c.environment_id = e.environment_id
+                        LEFT JOIN components c
+                            ON c.environment_id = e.environment_id
                             AND c.deleted_at IS NULL
-                        WHERE a.account_id = $1
+                        LEFT JOIN component_revisions cr
+                            ON c.component_id = cr.component_id
+                        WHERE
+                            a.account_id = $1
                             AND a.deleted_at IS NULL
                     )
-                    SELECT usage_type, value FROM account_usage_stats
-                    WHERE account_id = $1 AND usage_key IN ($2, $3)
-                    UNION ALL SELECT $4 as usage_type, total_apps as value from counts
-                    UNION ALL SELECT $5 as usage_type, total_envs as value from counts
-                    UNION ALL SELECT $6 as usage_type, total_components as value from counts
+                    SELECT
+                        usage_type,
+                        value
+                    FROM
+                        account_usage_stats
+                    WHERE
+                        account_id = $1
+                        AND usage_key IN ($2, $3)
+                    UNION ALL SELECT $4 AS usage_type, total_apps AS value FROM counts
+                    UNION ALL SELECT $5 AS usage_type, total_envs AS value FROM counts
+                    UNION ALL SELECT $6 AS usage_type, total_components AS value FROM counts
+                    UNION ALL SELECT $7 AS usage_type, total_component_size AS value FROM counts;
                 "#})
                 .bind(account_id)
                 .bind(date_to_usage_key(date))
                 .bind(USAGE_KEY_TOTAL)
                 .bind(UsageType::TotalAppCount)
                 .bind(UsageType::TotalEnvCount)
-                .bind(UsageType::TotalComponentCount),
+                .bind(UsageType::TotalComponentCount)
+                .bind(UsageType::TotalComponentStorageBytes)
             )
             .await?;
 
@@ -184,7 +193,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             plan,
-            increase: Default::default(),
+            changes: Default::default(),
         }))
     }
 
@@ -194,7 +203,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         date: &SqlDateTime,
         usage_type: UsageType,
     ) -> RepoResult<Option<AccountUsage>> {
-        let Some(plan) = self.get_plan(account_id, Some(usage_type)).await? else {
+        let Some(plan) = self.get_plan(account_id).await? else {
             return Ok(None);
         };
 
@@ -238,7 +247,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     SELECT COUNT(*)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
-                                    WHERE a.account_id = $1 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
+                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
                                 ) as value
                             "#})
                                 .bind(UsageType::TotalEnvCount)
@@ -255,11 +264,45 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     JOIN components c ON c.environment_id = e.environment_id
-                                    WHERE a.account_id = $1 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
-                                        AND c.deleted_at IS NULL
+                                    WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL AND c.deleted_at IS NULL
                                 ) as value
                             "#})
                                 .bind(UsageType::TotalAppCount)
+                                .bind(account_id),
+                        )
+                        .await?
+                }
+                UsageTracking::SelectTotalComponentSize => {
+                    self.with_ro("get_for_type - total component size")
+                        .fetch_all(
+                            sqlx::query(indoc! { r#"
+                                SELECT
+                                    $1 AS usage_type,
+                                    (
+                                        SELECT
+                                            CASE
+                                                WHEN total > 9223372036854775807 THEN 9223372036854775807
+                                                WHEN total < -9223372036854775808 THEN -9223372036854775808
+                                                ELSE CAST(total AS BIGINT)
+                                            END AS value
+                                        FROM (
+                                            SELECT COALESCE(SUM(CAST(cr.size AS NUMERIC)), 0) AS total
+                                            FROM applications a
+                                            JOIN environments e
+                                                ON e.application_id = a.application_id
+                                            JOIN components c
+                                                ON c.environment_id = e.environment_id
+                                            JOIN component_revisions cr
+                                                ON c.component_id = cr.component_id
+                                            WHERE
+                                                a.account_id = $2
+                                                AND a.deleted_at IS NULL
+                                                AND e.deleted_at IS NULL
+                                                AND c.deleted_at IS NULL
+                                        ) AS t
+                                    ) AS value;
+                            "#})
+                                .bind(UsageType::TotalComponentStorageBytes)
                                 .bind(account_id),
                         )
                         .await?
@@ -277,97 +320,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
             month: date.as_utc().month(),
             usage,
             plan,
-            increase: Default::default(),
+            changes: Default::default(),
         }))
     }
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.change_usage(account_usage, false).await
-    }
-
-    async fn rollback(&self, account_usage: &AccountUsage) -> RepoResult<()> {
-        self.change_usage(account_usage, true).await
-    }
-}
-
-#[async_trait]
-trait AccountUsageRepoInternal: AccountUsageRepo {
-    type Db: Database;
-    type Tx: LabelledPoolTransaction;
-
-    async fn get_plan(
-        &self,
-        account_id: &Uuid,
-        usage_type: Option<UsageType>,
-    ) -> RepoResult<Option<PlanRecord>>;
-
-    async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()>;
-}
-
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-#[async_trait]
-impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
-    type Db = <PostgresPool as Pool>::Db;
-    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
-
-    async fn get_plan(
-        &self,
-        account_id: &Uuid,
-        usage_type: Option<UsageType>,
-    ) -> RepoResult<Option<PlanRecord>> {
-        let plan: Option<PlanRecord> = self
-            .with_ro("get_plan - plan")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                SELECT p.plan_id, p.name
-                FROM accounts a
-                JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
-                JOIN plans p ON p.plan_id = ar.plan_id
-                WHERE a.account_id = $1
-            "#})
-                .bind(account_id),
-            )
-            .await?;
-
-        let Some(mut plan) = plan else {
-            return Ok(None);
-        };
-
-        let limit_rows = self
-            .with_ro("get_plan - limits")
-            .fetch_all(match usage_type {
-                Some(usage_type) =>
-                //
-                {
-                    sqlx::query(indoc! { r#"
-                        SELECT usage_type, value FROM plan_usage_limits
-                        WHERE plan_id = $1 AND usage_type = $2
-                     "#})
-                    .bind(plan.plan_id)
-                    .bind(usage_type)
-                }
-                None =>
-                //
-                {
-                    sqlx::query(indoc! { r#"
-                        SELECT usage_type, value FROM plan_usage_limits WHERE plan_id = $1
-                    "#})
-                    .bind(plan.plan_id)
-                }
-            })
-            .await?;
-        for row in limit_rows {
-            plan.limits
-                .insert(row.try_get("usage_type")?, row.try_get("value")?);
-        }
-        plan.add_limit_placeholders();
-
-        Ok(Some(plan))
-    }
-
-    async fn change_usage(&self, account_usage: &AccountUsage, rollback: bool) -> RepoResult<()> {
         let account_id = account_usage.account_id;
-        let changes = account_usage.increase.clone();
+        let changes = account_usage.changes.clone();
         let date_usage_key = year_and_month_to_usage_key(account_usage.year, account_usage.month);
 
         self.with_tx("change_usage", |tx| {
@@ -379,28 +338,80 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
 
                     tx.execute(
                         sqlx::query(indoc! { r#"
-                            INSERT INTO account_usage_stats (account_id, usage_type, usage_key, value, updated_at)
-                            VALUES ($1, $2, $3, $4, $5)
-                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE SET value = account_usage_stats.value + $4
-                        "#})
-                            .bind(account_id)
-                            .bind(usage_type)
-                            .bind(
-                                match usage_type.grouping() {
-                                    UsageGrouping::Total => USAGE_KEY_TOTAL,
-                                    UsageGrouping::Monthly => &date_usage_key,
-                                }
+                            INSERT INTO account_usage_stats (
+                                account_id,
+                                usage_type,
+                                usage_key,
+                                value,
+                                updated_at
                             )
-                            .bind(if rollback { -change } else { change })
-                            .bind(SqlDateTime::now()),
-                    ).await?;
+                            VALUES ($1, $2, $3, $4, $5)
+                            ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
+                            SET
+                                value = CASE
+                                    WHEN $4 > 0
+                                        AND account_usage_stats.value > 9223372036854775807 - $4
+                                        THEN 9223372036854775807
+                                    WHEN $4 < 0
+                                        AND account_usage_stats.value < -9223372036854775808 - $4
+                                        THEN -9223372036854775808
+                                    ELSE account_usage_stats.value + $4
+                                END,
+                                updated_at = $5;
+                        "#})
+                        .bind(account_id)
+                        .bind(usage_type)
+                        .bind(match usage_type.grouping() {
+                            UsageGrouping::Total => USAGE_KEY_TOTAL,
+                            UsageGrouping::Monthly => &date_usage_key,
+                        })
+                        .bind(change)
+                        .bind(SqlDateTime::now()),
+                    )
+                    .await?;
                 }
 
                 Ok(())
             }
-                .boxed()
+            .boxed()
         })
-            .await
+        .await
+    }
+}
+
+#[async_trait]
+trait AccountUsageRepoInternal: AccountUsageRepo {
+    type Db: Database;
+    type Tx: LabelledPoolTransaction;
+
+    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>>;
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+#[async_trait]
+impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
+    type Db = <PostgresPool as Pool>::Db;
+    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
+
+    async fn get_plan(&self, account_id: &Uuid) -> RepoResult<Option<PlanRecord>> {
+        let plan: Option<PlanRecord> = self
+            .with_ro("get_plan - plan")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                SELECT
+                    p.plan_id, p.name, p.max_memory_per_worker, p.total_app_count,
+                    p.total_env_count, p.total_component_count, p.total_worker_count, p.total_worker_connection_count,
+                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes
+                FROM accounts a
+                JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
+                JOIN plans p ON p.plan_id = ar.plan_id
+                WHERE a.account_id = $1
+            "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        Ok(plan)
     }
 }
 

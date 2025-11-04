@@ -42,6 +42,7 @@ use crate::wasi_host::create_linker;
 use crate::workerctx::default::Context;
 use crate::{Bootstrap, RunDetails};
 use async_trait::async_trait;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
 use prometheus::Registry;
 use std::sync::Arc;
@@ -61,19 +62,24 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
-    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService> {
-        crate::services::plugins::configured(&golem_config.plugin_service)
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn PluginsService> {
+        crate::services::plugins::configured(registry_service, &golem_config.plugin_service)
     }
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
-            &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
+            registry_service.clone(),
             blob_storage,
         )
     }
@@ -104,8 +110,10 @@ impl Bootstrap<Context> for ServerBootstrap {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Context>> {
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
+        let resource_limits =
+            resource_limits::configured(&golem_config.resource_limits, registry_service);
 
         let additional_deps = NoAdditionalDeps {};
 

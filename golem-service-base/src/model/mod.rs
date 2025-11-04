@@ -16,20 +16,17 @@ pub mod auth;
 pub mod component;
 pub mod plugin_registration;
 
-use bincode::{Decode, Encode};
-use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::{ComponentFilePermissions, ComponentRevision};
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, ScanCursor, WorkerFilter, WorkerId,
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::worker::{
+    FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
 };
+use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};
 use golem_wasm::ValueAndType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
-use golem_wasm_derive::IntoValue;
-use poem_openapi::{Enum, Object, Union};
+use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -109,110 +106,6 @@ pub struct GetFilesResponse {
     pub nodes: Vec<FlatComponentFileSystemNode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub enum FlatComponentFileSystemNodeKind {
-    Directory,
-    File,
-}
-
-// Flat, worse typed version ComponentFileSystemNode for rest representation
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct FlatComponentFileSystemNode {
-    pub name: String,
-    pub last_modified: u64,
-    pub kind: FlatComponentFileSystemNodeKind,
-    pub permissions: Option<ComponentFilePermissions>, // only for files
-    pub size: Option<u64>,                             // only for files
-}
-
-impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
-    fn from(value: ComponentFileSystemNode) -> Self {
-        let last_modified = value
-            .last_modified
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        match value.details {
-            ComponentFileSystemNodeDetails::Directory => Self {
-                name: value.name,
-                last_modified,
-                kind: FlatComponentFileSystemNodeKind::Directory,
-                permissions: None,
-                size: None,
-            },
-            ComponentFileSystemNodeDetails::File { permissions, size } => Self {
-                name: value.name,
-                last_modified,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(permissions),
-                size: Some(size),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct PublicOplogEntryWithIndex {
-    pub oplog_index: OplogIndex,
-    pub entry: PublicOplogEntry,
-}
-
-impl TryFrom<OplogEntryWithIndex> for PublicOplogEntryWithIndex {
-    type Error = String;
-
-    fn try_from(value: OplogEntryWithIndex) -> Result<Self, Self::Error> {
-        Ok(Self {
-            oplog_index: OplogIndex::from_u64(value.oplog_index),
-            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
-        })
-    }
-}
-
-impl TryFrom<PublicOplogEntryWithIndex> for OplogEntryWithIndex {
-    type Error = String;
-
-    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
-        Ok(Self {
-            oplog_index: value.oplog_index.into(),
-            entry: Some(value.entry.try_into()?),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
-pub enum WorkerUpdateMode {
-    Automatic,
-    Manual,
-}
-
-impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
-    fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
-                WorkerUpdateMode::Automatic
-            }
-            golem_api_grpc::proto::golem::worker::UpdateMode::Manual => WorkerUpdateMode::Manual,
-        }
-    }
-}
-
-impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
-    fn from(value: WorkerUpdateMode) -> Self {
-        match value {
-            WorkerUpdateMode::Automatic => {
-                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
-            }
-            WorkerUpdateMode::Manual => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -264,115 +157,126 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue)]
-#[serde(rename_all = "camelCase")]
-#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
-pub enum RevertWorkerTarget {
-    RevertToOplogIndex(RevertToOplogIndex),
-    RevertLastInvocations(RevertLastInvocations),
+#[derive(Clone, Debug, PartialEq)]
+pub enum GetFileSystemNodeResult {
+    Ok(Vec<ComponentFileSystemNode>),
+    File(ComponentFileSystemNode),
+    NotFound,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
-    type Error = String;
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComponentFileSystemNodeDetails {
+    File {
+        permissions: ComponentFilePermissions,
+        size: u64,
+    },
+    Directory,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentFileSystemNode {
+    pub name: String,
+    pub last_modified: SystemTime,
+    pub details: ComponentFileSystemNodeDetails,
+}
+
+impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
+    fn from(value: ComponentFileSystemNode) -> Self {
+        let last_modified = value
+            .last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        match value.details {
+            ComponentFileSystemNodeDetails::Directory => Self {
+                name: value.name,
+                last_modified,
+                kind: FlatComponentFileSystemNodeKind::Directory,
+                permissions: None,
+                size: None,
+            },
+            ComponentFileSystemNodeDetails::File { permissions, size } => Self {
+                name: value.name,
+                last_modified,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(permissions),
+                size: Some(size),
+            },
+        }
+    }
+}
+
+impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::FileSystemNode {
+    fn from(value: ComponentFileSystemNode) -> Self {
+        let last_modified = value
+            .last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        match value.details {
+            ComponentFileSystemNodeDetails::File { permissions, size } =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                        golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                            size,
+                            permissions:
+                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
+                        }
+                    ))
+                },
+            ComponentFileSystemNodeDetails::Directory =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                        golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                        }
+                    ))
+                }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for ComponentFileSystemNode {
+    type Error = anyhow::Error;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+        value: golem_api_grpc::proto::golem::worker::FileSystemNode,
     ) -> Result<Self, Self::Error> {
-        match value.target {
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
-                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
-            }
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
-                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
-            }
-            None => Err("Missing field: target".to_string()),
-        }
-    }
-}
-
-impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
-    fn from(value: RevertWorkerTarget) -> Self {
-        match value {
-            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
-            },
-            RevertWorkerTarget::RevertLastInvocations(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
-            },
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertToOplogIndex {
-    pub last_oplog_index: OplogIndex,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
-        }
-    }
-}
-
-impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
-    fn from(value: RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: u64::from(value.last_oplog_index) as i64,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertLastInvocations {
-    pub number_of_invocations: u64,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as u64,
-        }
-    }
-}
-
-impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
-    fn from(value: RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as i64,
+        match value.value {
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                    name,
+                    last_modified,
+                },
+            )) => Ok(ComponentFileSystemNode {
+                name,
+                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                details: ComponentFileSystemNodeDetails::Directory,
+            }),
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                    name,
+                    last_modified,
+                    size,
+                    permissions,
+                },
+            )) => Ok(ComponentFileSystemNode {
+                name,
+                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions:
+                        golem_api_grpc::proto::golem::component::ComponentFilePermissions::try_from(
+                            permissions,
+                        )?
+                        .into(),
+                    size,
+                },
+            }),
+            None => Err(anyhow::anyhow!("Missing value")),
         }
     }
 }

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RemoteServiceConfig;
+use super::RegistryServiceConfig;
+use crate::grpc::GrpcError;
 use crate::model::ResourceLimits;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
@@ -22,12 +23,15 @@ use golem_api_grpc::proto::golem::registry::v1::registry_service_client::Registr
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest,
-    GetComponentMetadataRequest, GetLatestComponentRequest, GetPluginRegistrationByIdRequest,
-    GetResourceLimitsRequest, ResolveComponentRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response,
-    get_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, resolve_component_response, update_worker_limit_response,
+    GetAuthCtxForAccountIdRequest, GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
+    GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response, get_agent_type_response,
+    get_all_agent_types_response, get_all_component_versions_response,
+    get_auth_ctx_for_account_id_response, get_component_metadata_response,
+    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
@@ -43,8 +47,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::retries::with_retries;
 use std::collections::HashMap;
-use std::fmt::Display;
-use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::info;
@@ -55,6 +57,12 @@ pub trait RegistryService: Send + Sync {
     // auth api
     async fn authenticate_token(&self, token: TokenSecret)
     -> Result<AuthCtx, RegistryServiceError>;
+
+    async fn auth_ctx_for_account_id(
+        &self,
+        account_id: &AccountId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthCtx, RegistryServiceError>;
 
     // limits api
     async fn get_resource_limits(
@@ -67,7 +75,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -75,7 +83,7 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
@@ -150,18 +158,20 @@ pub struct GrpcRegistryService {
 }
 
 impl GrpcRegistryService {
-    pub fn new(config: &RemoteServiceConfig) -> Self {
+    pub fn new(config: &RegistryServiceConfig) -> Self {
+        let max_message_size = config.max_message_size;
         let client: GrpcClient<RegistryServiceClient<Channel>> = GrpcClient::new(
             "registry",
-            |channel| {
+            move |channel| {
                 RegistryServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(max_message_size)
             },
             config.uri(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
-                ..Default::default()
+                connect_timeout: config.connect_timeout,
             },
         );
         Self {
@@ -198,11 +208,59 @@ impl RegistryService for GrpcRegistryService {
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
                         Some(authenticate_token_response::Result::Success(payload)) => {
-                            let user_auth_ctx: UserAuthCtx =
-                                payload.auth_ctx.unwrap().try_into()?;
+                            let user_auth_ctx: UserAuthCtx = payload
+                                .auth_ctx
+                                .ok_or("missing authctx field")?
+                                .try_into()?;
                             Ok(AuthCtx::User(user_auth_ctx))
                         }
                         Some(authenticate_token_response::Result::Error(error)) => {
+                            Err(error.into())
+                        }
+                    }
+                })
+            },
+            RegistryServiceClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
+    async fn auth_ctx_for_account_id(
+        &self,
+        account_id: &AccountId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthCtx, RegistryServiceError> {
+        let result: Result<AuthCtx, RegistryServiceClientError> = with_retries(
+            "auth",
+            "auth-ctx-for-account-id",
+            None,
+            &self.retry_config,
+            &(self.client.clone(), account_id.clone(), auth_ctx.clone()),
+            |(client, account_id, auth_ctx)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("auth-ctx-for-account-id", move |client| {
+                            let request = GetAuthCtxForAccountIdRequest {
+                                account_id: Some(account_id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
+                            };
+
+                            Box::pin(client.get_auth_ctx_for_account_id(request))
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_auth_ctx_for_account_id_response::Result::Success(payload)) => {
+                            let user_auth_ctx: UserAuthCtx = payload
+                                .auth_ctx
+                                .ok_or("missing authctx field")?
+                                .try_into()?;
+                            Ok(AuthCtx::User(user_auth_ctx))
+                        }
+                        Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
@@ -227,12 +285,13 @@ impl RegistryService for GrpcRegistryService {
             Some(account_id.to_string()),
             &self.retry_config,
             &(self.client.clone(), account_id.clone(), auth_ctx.clone()),
-            |(client, id, _auth_ctx)| {
+            |(client, id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-resource-limits", move |client| {
                             let request = GetResourceLimitsRequest {
                                 account_id: Some(id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_resource_limits(request))
                         })
@@ -240,9 +299,9 @@ impl RegistryService for GrpcRegistryService {
                         .into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(get_resource_limits_response::Result::Success(response)) => {
-                            Ok(response.into())
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(get_resource_limits_response::Result::Success(payload)) => {
+                            Ok(payload.limits.ok_or("missing limits field")?.into())
                         }
                         Some(get_resource_limits_response::Result::Error(error)) => {
                             Err(error.into())
@@ -261,7 +320,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
@@ -273,17 +332,18 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value,
+                added,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, value, _auth_ctx)| {
+            |(client, account_id, worker_id, added, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-limit", move |client| {
                             let request = UpdateWorkerLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
-                                value: *value,
+                                added: *added,
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.update_worker_limit(request))
@@ -292,7 +352,7 @@ impl RegistryService for GrpcRegistryService {
                         .into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
+                        None => Err(RegistryServiceClientError::empty_response()),
                         Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
                         Some(update_worker_limit_response::Result::Error(error)) => {
                             Err(error.into())
@@ -311,7 +371,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         account_id: &AccountId,
         worker_id: &WorkerId,
-        value: i32,
+        added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
         let result: Result<(), RegistryServiceClientError> = with_retries(
@@ -323,17 +383,18 @@ impl RegistryService for GrpcRegistryService {
                 self.client.clone(),
                 account_id.clone(),
                 worker_id.clone(),
-                value,
+                added,
                 auth_ctx.clone(),
             ),
-            |(client, account_id, worker_id, value, _auth_ctx)| {
+            |(client, account_id, worker_id, added, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("update-worker-connection-limit", move |client| {
-                            let request = UpdateWorkerLimitRequest {
+                            let request = UpdateWorkerConnectionLimitRequest {
                                 account_id: Some(account_id.clone().into()),
                                 worker_id: Some(worker_id.clone().into()),
-                                value: *value,
+                                added: *added,
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.update_worker_connection_limit(request))
@@ -342,9 +403,9 @@ impl RegistryService for GrpcRegistryService {
                         .into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
-                        Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
-                        Some(update_worker_limit_response::Result::Error(error)) => {
+                        None => Err(RegistryServiceClientError::empty_response()),
+                        Some(update_worker_connection_limit_response::Result::Success(_)) => Ok(()),
+                        Some(update_worker_connection_limit_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
@@ -376,12 +437,13 @@ impl RegistryService for GrpcRegistryService {
             None,
             &self.retry_config,
             &(self.client.clone(), payload, auth_ctx.clone()),
-            |(client, payload, _auth_ctx)| {
+            |(client, payload, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("batch-update-fuel-usage", move |client| {
                             let request = BatchUpdateFuelUsageRequest {
                                 updates: payload.clone(),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.batch_update_fuel_usage(request))
@@ -390,7 +452,7 @@ impl RegistryService for GrpcRegistryService {
                         .into_inner();
 
                     match response.result {
-                        None => Err("Empty response".to_string().into()),
+                        None => Err(RegistryServiceClientError::empty_response()),
                         Some(batch_update_fuel_usage_response::Result::Success(_)) => Ok(()),
                         Some(batch_update_fuel_usage_response::Result::Error(error)) => {
                             Err(error.into())
@@ -416,12 +478,13 @@ impl RegistryService for GrpcRegistryService {
             Some(format!("{plugin_id}")),
             &self.retry_config,
             &(self.client.clone(), plugin_id.clone(), auth_ctx.clone()),
-            |(client, plugin_id, _auth_ctx)| {
+            |(client, plugin_id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-plugin-registration-by-id", move |client| {
                             let request = GetPluginRegistrationByIdRequest {
                                 id: Some(plugin_id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.get_plugin_registration_by_id(request))
@@ -432,10 +495,7 @@ impl RegistryService for GrpcRegistryService {
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
                         Some(get_plugin_registration_by_id_response::Result::Success(payload)) => {
-                            Ok(payload
-                                .plugin
-                                .ok_or("missing plugin field".to_string())?
-                                .try_into()?)
+                            Ok(payload.plugin.ok_or("missing plugin field")?.try_into()?)
                         }
                         Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
                             Err(error.into())
@@ -473,7 +533,7 @@ impl RegistryService for GrpcRegistryService {
                         .call("download-component", move |client| {
                             let request = DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),
-                                version: Some(component_revision.0),
+                                version: component_revision.0,
                                 auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
@@ -541,7 +601,7 @@ impl RegistryService for GrpcRegistryService {
                         Some(get_component_metadata_response::Result::Success(payload)) => {
                             let converted = payload
                                 .component
-                                .ok_or("missing component field".to_string())?
+                                .ok_or("missing component field")?
                                 .try_into()?;
                             Ok(converted)
                         }
@@ -573,7 +633,7 @@ impl RegistryService for GrpcRegistryService {
                 Box::pin(async move {
                     let response = client
                         .call("get-latest-component-metadata", move |client| {
-                            let request = GetLatestComponentRequest {
+                            let request = GetLatestComponentMetadataRequest {
                                 component_id: Some(component_id.clone().into()),
                                 auth_ctx: Some(auth_ctx.clone().into()),
                             };
@@ -585,14 +645,14 @@ impl RegistryService for GrpcRegistryService {
 
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
-                        Some(get_component_metadata_response::Result::Success(payload)) => {
+                        Some(get_latest_component_metadata_response::Result::Success(payload)) => {
                             let converted = payload
                                 .component
-                                .ok_or("missing component field".to_string())?
+                                .ok_or("missing component field")?
                                 .try_into()?;
                             Ok(converted)
                         }
-                        Some(get_component_metadata_response::Result::Error(error)) => {
+                        Some(get_latest_component_metadata_response::Result::Error(error)) => {
                             Err(error.into())
                         }
                     }
@@ -721,12 +781,13 @@ impl RegistryService for GrpcRegistryService {
                 environment_id.clone(),
                 auth_ctx.clone(),
             ),
-            |(client, environment_id, _auth_ctx)| {
+            |(client, environment_id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-all-agent-types", move |client| {
                             let request = GetAllAgentTypesRequest {
                                 environment_id: Some(environment_id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
 
                             Box::pin(client.get_all_agent_types(request))
@@ -774,15 +835,15 @@ impl RegistryService for GrpcRegistryService {
                 name.to_string(),
                 auth_ctx.clone(),
             ),
-            |(client, environment_id, name, _auth_ctx)| {
+            |(client, environment_id, name, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get-all-agent-types", move |client| {
                             let request = GetAgentTypeRequest {
                                 environment_id: Some(environment_id.clone().into()),
-                                agent_type: name.clone()
+                                agent_type: name.clone(),
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-
                             Box::pin(client.get_agent_type(request))
                         })
                         .await?
@@ -790,7 +851,13 @@ impl RegistryService for GrpcRegistryService {
 
                     match response.result {
                         None => Err(RegistryServiceClientError::empty_response()),
-                        Some(get_agent_type_response::Result::Success(payload)) => Ok(Some(RegisteredAgentType::try_from(payload)?)),
+                        Some(get_agent_type_response::Result::Success(payload)) => {
+                            let converted = payload
+                                .agent_type
+                                .map(RegisteredAgentType::try_from)
+                                .transpose()?;
+                            Ok(converted)
+                        },
                         Some(get_agent_type_response::Result::Error(golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
                             error: Some(golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error::NotFound(_))
                         })) => Ok(None),
@@ -842,86 +909,14 @@ impl IntoAnyhow for RegistryServiceError {
     }
 }
 
-#[derive(Debug)]
-enum RegistryServiceClientError {
-    Server(golem_api_grpc::proto::golem::registry::v1::RegistryServiceError),
-    Connection(Status),
-    Transport(tonic::transport::Error),
-    Custom(String),
-}
-
-impl RegistryServiceClientError {
-    fn empty_response() -> Self {
-        Self::Custom("empty response".to_string())
-    }
-
-    fn is_retriable(error: &RegistryServiceClientError) -> bool {
-        matches!(
-            error,
-            RegistryServiceClientError::Connection(_) | RegistryServiceClientError::Transport(_)
-        )
-    }
-}
-
-impl Display for RegistryServiceClientError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error;
-
-        match &self {
-            Self::Server(err) => match &err.error {
-                Some(Error::LimitExceeded(error)) => {
-                    write!(f, "limit exceeded: {}", error.error)
-                }
-                Some(Error::NotFound(error)) => {
-                    write!(f, "not found: {}", error.error)
-                }
-                Some(Error::AlreadyExists(error)) => {
-                    write!(f, "already exists: {}", error.error)
-                }
-                Some(Error::BadRequest(errors)) => {
-                    write!(f, "Invalid request: {:?}", errors.errors)
-                }
-                Some(Error::InternalError(error)) => {
-                    write!(f, "Internal server error: {}", error.error)
-                }
-                Some(Error::Unauthorized(error)) => write!(f, "Unauthorized: {}", error.error),
-                Some(Error::CouldNotAuthenticate(error)) => {
-                    write!(f, "Could not authenticate: {}", error.error)
-                }
-                None => write!(f, "Unknown error"),
-            },
-            Self::Connection(status) => write!(f, "Connection error: {status}"),
-            Self::Transport(error) => write!(f, "Transport error: {error}"),
-            Self::Custom(error) => write!(f, "Internal client error: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for RegistryServiceClientError {}
-
-impl From<String> for RegistryServiceClientError {
-    fn from(value: String) -> Self {
-        Self::Custom(value)
-    }
-}
+type RegistryServiceClientError =
+    GrpcError<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>;
 
 impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
     for RegistryServiceClientError
 {
     fn from(value: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError) -> Self {
-        Self::Server(value)
-    }
-}
-
-impl From<Status> for RegistryServiceClientError {
-    fn from(value: Status) -> Self {
-        Self::Connection(value)
-    }
-}
-
-impl From<tonic::transport::Error> for RegistryServiceClientError {
-    fn from(value: tonic::transport::Error) -> Self {
-        Self::Transport(value)
+        Self::Domain(value)
     }
 }
 
@@ -930,7 +925,7 @@ impl From<RegistryServiceClientError> for RegistryServiceError {
         use golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error;
 
         match value {
-            RegistryServiceClientError::Server(err) => match err.error {
+            RegistryServiceClientError::Domain(err) => match err.error {
                 Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
                 Some(Error::NotFound(error)) => Self::NotFound(error.error),
                 Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
@@ -940,13 +935,13 @@ impl From<RegistryServiceClientError> for RegistryServiceError {
                 Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
                 None => Self::internal_client_error("Unknown error"),
             },
-            RegistryServiceClientError::Connection(status) => {
+            RegistryServiceClientError::Status(status) => {
                 RegistryServiceError::internal_client_error(format!("Connection error: {status}"))
             }
             RegistryServiceClientError::Transport(error) => {
                 RegistryServiceError::internal_client_error(format!("Transport error: {error}"))
             }
-            RegistryServiceClientError::Custom(error) => {
+            RegistryServiceClientError::Unexpected(error) => {
                 RegistryServiceError::internal_client_error(format!(
                     "Internal client error: {error}"
                 ))
