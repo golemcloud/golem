@@ -12,19 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod from;
-mod into;
-
-use heck::*;
 use proc_macro::TokenStream;
-use syn::parse::Parse;
 
-#[proc_macro_derive(IntoValue, attributes(wit_transparent, unit_case, wit_field))]
-pub fn derive_into_value(input: TokenStream) -> TokenStream {
-    into::derive_into_value(input)
-}
-
-#[proc_macro_derive(FromValueAndType)]
 pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
-    from::derive_from_value_and_type(input)
+    todo!()
 }
