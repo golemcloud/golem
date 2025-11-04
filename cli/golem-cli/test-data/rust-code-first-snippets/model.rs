@@ -15,6 +15,7 @@ pub struct AllPrimitives {
     pub f32v: f32,
     pub f64v: f64,
     pub boolv: bool,
+    // https://github.com/golemcloud/golem/issues/2272
     //pub charv: char, // TODO; moonbit failing when adding char
     pub stringv: String,
 }
@@ -51,6 +52,7 @@ pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
     pub flag: bool,
+    // https://github.com/golemcloud/golem/issues/2272
     //pub symbol: char, // TODO; moonbit failing when adding char
 }
 
@@ -71,6 +73,7 @@ pub enum SimpleEnum {
     F32(f32),
     F64(f64),
     Bool(bool),
+    // https://github.com/golemcloud/golem/issues/2272
     // Char(char), //TODO; moonbit failing when adding char
     String(String),
     Struct(SimpleStruct),
