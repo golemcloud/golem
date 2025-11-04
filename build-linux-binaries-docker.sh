@@ -14,8 +14,8 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-# Use official Rust image with same platform as GitHub Actions (ubuntu-latest)
-DOCKER_IMAGE="rust:1.83"
+# Use Ubuntu 22.04 (same as GitHub Actions ubuntu-latest)
+DOCKER_IMAGE="ubuntu:22.04"
 
 echo "1️⃣  Pulling Docker image: $DOCKER_IMAGE"
 docker pull "$DOCKER_IMAGE"
@@ -26,15 +26,21 @@ echo "   This will take 10-15 minutes on first run (uses Docker layer caching)"
 echo ""
 
 # Mount the repository and build
+# Note: Mounting .git separately to ensure build scripts can access git metadata
 docker run --rm \
     -v "$(pwd)":/workspace \
+    -v "$(pwd)/.git":/workspace/.git \
     -w /workspace \
     "$DOCKER_IMAGE" \
     bash -c '
         set -e
-        echo "Installing build dependencies..."
+        echo "Installing system dependencies..."
         apt-get update -qq
-        apt-get install -y -qq protobuf-compiler > /dev/null
+        apt-get install -y -qq curl build-essential protobuf-compiler pkg-config libssl-dev git > /dev/null
+
+        echo "Installing Rust..."
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+        source "$HOME/.cargo/env"
 
         echo "Building golem-cli..."
         cargo build --package golem-cli --release
