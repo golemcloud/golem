@@ -36,6 +36,8 @@ inherit_test_dep!(Tracing);
 use crate::{crate_path, workspace_path, Tracing};
 use assert2::assert;
 use colored::Colorize;
+use golem_client::api::HealthCheckClient;
+use golem_client::Security;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use std::collections::{HashMap, HashSet};
@@ -43,12 +45,16 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::str::FromStr;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_r::{inherit_test_dep, sequential_suite, tag_suite};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 use tracing::info;
+use url::Url;
 
 mod cmd {
     pub static ADD_DEPENDENCY: &str = "add-dependency";
@@ -411,7 +417,7 @@ impl TestContext {
             .unwrap()
     }
 
-    fn start_server(&mut self) {
+    async fn start_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
 
         println!("{}", "> starting golem server".bold());
@@ -445,7 +451,46 @@ impl TestContext {
                 .current_dir(&self.working_dir)
                 .spawn()
                 .unwrap(),
-        )
+        );
+
+        {
+            let start = Instant::now();
+            let client = golem_client::api::HealthCheckClientLive {
+                context: golem_client::Context {
+                    client: reqwest::ClientBuilder::new()
+                        .danger_accept_invalid_certs(true)
+                        .build()
+                        .expect("Failed to build reqwest client"),
+                    base_url: Url::from_str("http://localhost:9881").unwrap(),
+                    security_token: Security::Empty,
+                },
+            };
+            let timeout = Duration::from_secs(2);
+            let sleep_interval = Duration::from_millis(100);
+            loop {
+                match client.healthcheck().await {
+                    Ok(_) => {
+                        println!("> server healthcheck {}", "ok".green());
+                        break;
+                    }
+                    Err(err) => {
+                        if start.elapsed() > timeout {
+                            println!(
+                                "> server healthcheck failed: {}, stopping",
+                                format!("{}", err).red()
+                            );
+                            panic!("Server is still not running, stopping");
+                        } else {
+                            println!(
+                                "> server healthcheck failed: {}, retrying",
+                                format!("{}", err).red()
+                            );
+                            tokio::time::sleep(sleep_interval).await;
+                        }
+                    }
+                };
+            }
+        }
     }
 
     fn cd<P: AsRef<Path>>(&mut self, path: P) {

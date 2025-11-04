@@ -255,7 +255,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
@@ -441,7 +441,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
          "},
     )?;
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
