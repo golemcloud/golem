@@ -12,6 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::hash::Hash;
+use serde::Serialize;
 
-pub trait Selector: Clone + Eq + Hash {}
+pub trait Selector {
+    fn selector_hash(&self) -> blake3::Hash;
+}
+
+impl <T:Serialize> Selector for T {
+    fn selector_hash(&self) -> blake3::Hash {
+        let mut hasher = blake3::Hasher::new();
+        serde_json::to_writer(&mut hasher, self)
+            .expect("Failed to serialize selector for hashing");
+        hasher.finalize()
+    }
+}

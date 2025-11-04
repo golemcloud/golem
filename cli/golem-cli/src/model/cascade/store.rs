@@ -14,13 +14,14 @@
 
 use crate::model::cascade::error::{StoreAddLayerError, StoreGetValueError};
 pub(crate) use crate::model::cascade::layer::Layer;
+use crate::model::cascade::selector::Selector;
 use std::cell::{Ref, RefCell};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Store<L: Layer> {
     layers: HashMap<L::Id, L>,
-    value_cache: RefCell<HashMap<L::Id, HashMap<L::Selector, L::Value>>>,
+    value_cache: RefCell<HashMap<L::Id, HashMap<blake3::Hash, L::Value>>>,
 }
 
 // TODO: check for circular parents (either on add or on get, or have a separate validation step)
@@ -45,15 +46,25 @@ impl<L: Layer> Store<L> {
         id: &L::Id,
         selector: &L::Selector,
     ) -> Result<Ref<'_, L::Value>, StoreGetValueError<L>> {
+        let hash = selector.selector_hash();
+        self.value_hashed(id, selector, &hash)
+    }
+
+    fn value_hashed(
+        &self,
+        id: &L::Id,
+        selector: &L::Selector,
+        selector_hash: &blake3::Hash,
+    ) -> Result<Ref<'_, L::Value>, StoreGetValueError<L>> {
         {
             let value_cache = self.value_cache.borrow();
             if value_cache
                 .get(id)
-                .map(|v| v.contains_key(selector))
+                .map(|v| v.contains_key(selector_hash))
                 .unwrap_or(false)
             {
                 return Ok(Ref::map(value_cache, |value_cache| {
-                    value_cache.get(id).unwrap().get(selector).unwrap()
+                    value_cache.get(id).unwrap().get(selector_hash).unwrap()
                 }));
             }
         }
@@ -91,11 +102,11 @@ impl<L: Layer> Store<L> {
                     value_cache.get_mut(id).unwrap()
                 }
             };
-            value_cache.insert(selector.clone(), value);
+            value_cache.insert(selector_hash.clone(), value);
         }
 
         Ok(Ref::map(self.value_cache.borrow(), |value_cache| {
-            value_cache.get(id).unwrap().get(selector).unwrap()
+            value_cache.get(id).unwrap().get(selector_hash).unwrap()
         }))
     }
 }

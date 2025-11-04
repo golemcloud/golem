@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cascade::selector::Selector;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -19,7 +20,7 @@ use std::hash::Hash;
 pub trait Layer {
     type Id: Debug + Eq + Hash + Clone + Serialize;
     type Value: Debug + Default + Clone + Serialize;
-    type Selector: Debug + Eq + Hash + Clone;
+    type Selector: Debug + Selector;
     type AppliedSelection: Debug + Clone + Serialize;
     type ApplyError;
 

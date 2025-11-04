@@ -54,7 +54,7 @@ mod test {
             }
         }
 
-        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        #[derive(Debug, Clone, Serialize)]
         struct ComponentSelector {
             pub selected_presets: Vec<String>,
             pub template_env: Vec<(String, String)>,
