@@ -104,13 +104,11 @@ jobs:
 
       - name: Run MCP security unit tests
         run: |
-          cd cli/golem-cli
-          cargo test --lib mcp_server::security::tests -- --nocapture
+          cargo test --package golem-cli --lib -- mcp_server::security::tests --nocapture
 
       - name: Run MCP tools unit tests
         run: |
-          cd cli/golem-cli
-          cargo test --lib mcp_server::tools::tests -- --nocapture
+          cargo test --package golem-cli --lib -- mcp_server::tools::tests --nocapture
 
   mcp-integration-tests:
     name: MCP Integration Tests
