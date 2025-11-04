@@ -52,6 +52,8 @@ pub trait WorkerExecutor: Send + Sync {
 
     async fn kill(&self);
     async fn restart(&self);
+
+    async fn is_running(&self) -> bool;
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {

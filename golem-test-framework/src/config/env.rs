@@ -183,7 +183,9 @@ impl EnvBasedTestDependencies {
                 let sqlite_path = Path::new("../target/golem_test_db");
                 Arc::new(SqliteRdb::new(sqlite_path))
             }
-            DbType::Postgres => Arc::new(DockerPostgresRdb::new(&config.unique_network_id).await),
+            DbType::Postgres => {
+                Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
+            }
         }
     }
 

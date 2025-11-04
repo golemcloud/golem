@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]
 pub trait ComponentCompilationService: Debug + Send + Sync {
@@ -39,7 +40,7 @@ pub trait ComponentCompilationService: Debug + Send + Sync {
 }
 
 pub struct ComponentCompilationServiceDefault {
-    client: GrpcClient<ComponentCompilationServiceClient<Channel>>,
+    client: GrpcClient<ComponentCompilationServiceClient<OtelGrpcService<Channel>>>,
     component_service_port: AtomicU16,
 }
 

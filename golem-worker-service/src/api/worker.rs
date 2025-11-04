@@ -1314,7 +1314,23 @@ impl WorkerApi {
         worker_id: &str,
         auth: &AuthCtx,
     ) -> Result<WorkerId> {
-        // First we try with the latest version, which usually should be the happy path
+        // First, we try with the latest cached version to avoid the overhead of calling the component service
+        let latest_cached_component = self
+            .component_service
+            .get_latest_cached_by_id(&component_id)
+            .await;
+
+        if let Some(component) = latest_cached_component {
+            let id = validated_worker_id(component_id.clone(), &component.metadata, worker_id);
+
+            if id.is_ok() || !component.metadata.is_agent() {
+                // Normalization worked with the cached metadata,
+                // or this is a non-agent component => returning the result
+                return id;
+            }
+        }
+
+        // Next we try with the latest version which we have to fetch from the component service
         let latest_component_version = self
             .component_service
             .get_latest_by_id(&component_id, auth)

@@ -19,8 +19,8 @@ use crate::durable_host::http::serialized::{
 };
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::serialized::{
-    SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
-    SerializableIpAddresses, SerializableStreamError,
+    SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddresses,
+    SerializableStreamError,
 };
 use crate::durable_host::wasm_rpc::serialized::{
     EnrichedSerializableInvokeRequest, EnrichedSerializableScheduleInvocationRequest,
@@ -67,10 +67,9 @@ use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm::analysis::{AnalysedFunctionParameter, AnalysedType};
+use golem_wasm::analysis::AnalysedFunctionParameter;
 use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
-use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -1777,20 +1776,6 @@ fn encode_host_function_response_as_value(
             let payload: ValueAndType = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload)
         }
-    }
-}
-
-impl IntoValue for SerializableIpAddress {
-    fn into_value(self) -> Value {
-        let addr = match self {
-            SerializableIpAddress::IPv4 { address } => IpAddr::V4(address.into()),
-            SerializableIpAddress::IPv6 { address } => IpAddr::V6(address.into()),
-        };
-        Value::String(addr.to_string())
-    }
-
-    fn get_type() -> AnalysedType {
-        str()
     }
 }
 

@@ -41,7 +41,7 @@ jobs:
           path: benchmark-results
 
       - name: Run benchmark suite
-        run: cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' --primary-only suite --add-to-json benchmark-results/results/results.json integration-tests/benchmark_suites/ci.yaml spawned --mute-child
+        run: cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' --primary-only suite --add-to-json benchmark-results/results/results.json integration-tests/benchmark_suites/ci.yaml spawned
 
       - name: Commit results
         run: |

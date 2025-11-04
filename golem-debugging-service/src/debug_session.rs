@@ -12,14 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::from_value::{
-    Bucket, BucketAndKey, BucketAndKeys, BucketKeyValue, BucketKeyValues, Container,
-    ContainerAndObject, ContainerAndObjects, ContainerCopyObjectInfo, ContainerObjectBeginEnd,
-    ContainerObjectLength, ForkWorkerInfo, FromValue, RevertWorkerInfo, UpdateWorkerInfo,
-};
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use bincode::Encode;
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
@@ -30,12 +26,14 @@ use golem_common::model::public_oplog::{
     PublicDurableFunctionType, PublicOplogEntry, ResourceParameters,
 };
 use golem_common::model::{
-    ComponentId, IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId, RetryConfig,
-    WorkerId, WorkerMetadata,
+    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId,
+    RetryConfig, WorkerId, WorkerMetadata,
 };
+use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::derive::FromValue;
 use golem_wasm::wasmtime::ResourceTypeId;
-use golem_wasm::{Value, ValueAndType};
+use golem_wasm::{FromValue, Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
 };
@@ -291,13 +289,11 @@ fn get_oplog_entry_from_public_oplog_entry(
             durable_function_type: wrapped_function_type,
             request,
         }) => {
-            let response: OplogPayload = convert_response_value_and_type_to_oplog_payload(
-                function_name.as_str(),
-                &response,
-            )?;
+            let response: OplogPayload =
+                convert_response_value_and_type_to_oplog_payload(function_name.as_str(), response)?;
 
             let request: OplogPayload =
-                convert_request_value_and_type_to_oplog_payload(function_name.as_str(), &request)?;
+                convert_request_value_and_type_to_oplog_payload(function_name.as_str(), request)?;
 
             let durable_function_type = match wrapped_function_type {
                 PublicDurableFunctionType::ReadLocal(_) => DurableFunctionType::ReadLocal,
@@ -526,7 +522,7 @@ fn get_oplog_entry_from_public_oplog_entry(
 #[allow(clippy::type_complexity)]
 fn convert_request_value_and_type_to_oplog_payload(
     function_name: &str,
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<OplogPayload, String> {
     match function_name {
         "golem::rpc::future-invoke-result::get" => {
@@ -537,35 +533,34 @@ fn convert_request_value_and_type_to_oplog_payload(
         }
         "http::types::future_incoming_response::get" => {
             let payload: SerializableHttpRequest =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem io::poll::poll" => {
-            let payload: usize = u64::from_value(&value_and_type.value)? as usize;
+            let payload: usize = u64::from_value(value_and_type.value)? as usize;
             create_oplog_payload(&payload)
         }
         "golem io::poll::ready" => Ok(empty_payload()),
         "golem blobstore::container::object_info" => {
-            let payload: ContainerAndObject =
-                ContainerAndObject::from_value(&value_and_type.value)?;
+            let payload: ContainerAndObject = ContainerAndObject::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.container, payload.object))
         }
         "golem blobstore::container::delete_objects" => {
             let payload: ContainerAndObjects =
-                ContainerAndObjects::from_value(&value_and_type.value)?;
+                ContainerAndObjects::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.container, payload.objects))
         }
         "golem blobstore::container::list_objects" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::container::get_data" => {
             let payload: ContainerObjectBeginEnd =
-                ContainerObjectBeginEnd::from_value(&value_and_type.value)?;
+                ContainerObjectBeginEnd::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(
                 payload.container,
@@ -576,30 +571,28 @@ fn convert_request_value_and_type_to_oplog_payload(
         }
         "golem blobstore::container::write_data" => {
             let payload: ContainerObjectLength =
-                ContainerObjectLength::from_value(&value_and_type.value)?;
+                ContainerObjectLength::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.container, payload.object, payload.length))
         }
         "golem blobstore::container::delete_object" => {
-            let payload: ContainerAndObject =
-                ContainerAndObject::from_value(&value_and_type.value)?;
+            let payload: ContainerAndObject = ContainerAndObject::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.container, payload.object))
         }
         "golem blobstore::container::has_object" => {
-            let payload: ContainerAndObject =
-                ContainerAndObject::from_value(&value_and_type.value)?;
+            let payload: ContainerAndObject = ContainerAndObject::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.container, payload.object))
         }
         "golem blobstore::container::clear" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::blobstore::copy_object" => {
             let payload: ContainerCopyObjectInfo =
-                ContainerCopyObjectInfo::from_value(&value_and_type.value)?;
+                ContainerCopyObjectInfo::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(
                 payload.src_container,
@@ -609,28 +602,28 @@ fn convert_request_value_and_type_to_oplog_payload(
             ))
         }
         "golem blobstore::blobstore::delete_container" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::blobstore::create_container" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::blobstore::get_container" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::blobstore::container_exists" => {
-            let payload: Container = Container::from_value(&value_and_type.value)?;
+            let payload: Container = Container::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.0))
         }
         "golem blobstore::blobstore::move_object" => {
             let payload: ContainerCopyObjectInfo =
-                ContainerCopyObjectInfo::from_value(&value_and_type.value)?;
+                ContainerCopyObjectInfo::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(
                 payload.src_container,
@@ -645,19 +638,19 @@ fn convert_request_value_and_type_to_oplog_payload(
         "monotonic_clock::resolution" => Ok(empty_payload()),
         "monotonic_clock::now" => Ok(empty_payload()),
         "monotonic_clock::subscribe_duration" => {
-            let payload = u64::from_value(&value_and_type.value)?;
+            let payload = u64::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "wall_clock::now" => Ok(empty_payload()),
         "wall_clock::resolution" => Ok(empty_payload()),
         "golem::api::create_promise" => Ok(empty_payload()),
         "golem::api::complete_promise" => {
-            let payload = PromiseId::from_value(&value_and_type.value)?;
+            let payload = PromiseId::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::get-promise-result::get" => Ok(empty_payload()),
         "golem::api::update-worker" => {
-            let payload: UpdateWorkerInfo = UpdateWorkerInfo::from_value(&value_and_type.value)?;
+            let payload: UpdateWorkerInfo = UpdateWorkerInfo::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(
                 payload.worker_id,
@@ -666,7 +659,7 @@ fn convert_request_value_and_type_to_oplog_payload(
             ))
         }
         "golem::api::fork-worker" => {
-            let payload: ForkWorkerInfo = ForkWorkerInfo::from_value(&value_and_type.value)?;
+            let payload: ForkWorkerInfo = ForkWorkerInfo::from_value(value_and_type.value)?;
             create_oplog_payload(&(
                 payload.source_worker_id,
                 payload.target_worker_id,
@@ -674,66 +667,66 @@ fn convert_request_value_and_type_to_oplog_payload(
             ))
         }
         "golem::api::revert-worker" => {
-            let payload: RevertWorkerInfo = RevertWorkerInfo::from_value(&value_and_type.value)?;
+            let payload: RevertWorkerInfo = RevertWorkerInfo::from_value(value_and_type.value)?;
             create_oplog_payload(&(payload.worker_id, payload.target))
         }
         "http::types::incoming_body_stream::skip" => {
             let serializable_http_request =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
             create_oplog_payload(&serializable_http_request)
         }
         "http::types::incoming_body_stream::read" => {
             let serializable_http_request =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
             create_oplog_payload(&serializable_http_request)
         }
         "http::types::incoming_body_stream::blocking_read" => {
             let serializable_http_request =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
             create_oplog_payload(&serializable_http_request)
         }
         "http::types::incoming_body_stream::blocking_skip" => {
             let serializable_http_request =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
             create_oplog_payload(&serializable_http_request)
         }
         "golem keyvalue::eventual::delete" => {
-            let payload: BucketAndKey = BucketAndKey::from_value(&value_and_type.value)?;
+            let payload: BucketAndKey = BucketAndKey::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.key))
         }
         "golem keyvalue::eventual::get" => {
-            let payload: BucketAndKey = BucketAndKey::from_value(&value_and_type.value)?;
+            let payload: BucketAndKey = BucketAndKey::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.key))
         }
         "golem keyvalue::eventual::set" => {
-            let payload: BucketKeyValue = BucketKeyValue::from_value(&value_and_type.value)?;
+            let payload: BucketKeyValue = BucketKeyValue::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.key, payload.value))
         }
         "golem keyvalue::eventual::exists" => {
-            let payload: BucketAndKey = BucketAndKey::from_value(&value_and_type.value)?;
+            let payload: BucketAndKey = BucketAndKey::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.key))
         }
         "golem keyvalue::eventual_batch::set_many" => {
-            let payload: BucketKeyValues = BucketKeyValues::from_value(&value_and_type.value)?;
+            let payload: BucketKeyValues = BucketKeyValues::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.key_values))
         }
         "golem keyvalue::eventual_batch::get_many" => {
-            let payload: BucketAndKeys = BucketAndKeys::from_value(&value_and_type.value)?;
+            let payload: BucketAndKeys = BucketAndKeys::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.keys))
         }
         "golem keyvalue::eventual_batch::get_keys" => {
-            let payload: Bucket = Bucket::from_value(&value_and_type.value)?;
+            let payload: Bucket = Bucket::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload.0)
         }
         "golem keyvalue::eventual_batch::delete_many" => {
-            let payload: BucketAndKeys = BucketAndKeys::from_value(&value_and_type.value)?;
+            let payload: BucketAndKeys = BucketAndKeys::from_value(value_and_type.value)?;
 
             create_oplog_payload(&(payload.bucket, payload.keys))
         }
@@ -743,7 +736,7 @@ fn convert_request_value_and_type_to_oplog_payload(
         "golem random::get_random_bytes" => Ok(empty_payload()),
         "golem random::get_random_u64" => Ok(empty_payload()),
         "sockets::ip_name_lookup::resolve_addresses" => {
-            let payload: String = String::from_value(&value_and_type.value)?;
+            let payload: String = String::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
@@ -761,19 +754,19 @@ fn convert_request_value_and_type_to_oplog_payload(
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => Ok(empty_payload()),
         "filesystem::types::descriptor::stat" => {
-            let payload: String = String::from_value(&value_and_type.value)?;
+            let payload: String = String::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "filesystem::types::descriptor::stat_at" => {
-            let payload: String = String::from_value(&value_and_type.value)?;
+            let payload: String = String::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem api::generate_idempotency_key" => Ok(empty_payload()),
         "golem http::types::future_trailers::get" => {
             let payload: SerializableHttpRequest =
-                SerializableHttpRequest::from_value(&value_and_type.value)?;
+                SerializableHttpRequest::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
@@ -786,15 +779,15 @@ fn convert_request_value_and_type_to_oplog_payload(
             create_oplog_payload(&payload)
         }
         "golem::rpc::cancellation-token::cancel" => {
-            let payload = SerializableScheduleId::from_value(&value_and_type.value)?;
+            let payload = SerializableScheduleId::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {
-            let payload = String::from_value(&value_and_type.value)?;
+            let payload = String::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_worker_id_strict" => {
-            let payload: (String, String) = FromValue::from_value(&value_and_type.value)?;
+            let payload: (String, String) = FromValue::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::mysql::db-connection::query"
@@ -821,14 +814,14 @@ fn convert_request_value_and_type_to_oplog_payload(
         | "rdbms::postgres::db-transaction::commit"
         | "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => Ok(empty_payload()),
-        _ => create_oplog_payload(value_and_type),
+        _ => create_oplog_payload(&value_and_type),
     }
 }
 
 #[allow(clippy::type_complexity)]
 fn convert_response_value_and_type_to_oplog_payload(
     function_name: &str,
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<OplogPayload, String> {
     match function_name {
         "golem::rpc::future-invoke-result::get" => {
@@ -838,243 +831,236 @@ fn convert_response_value_and_type_to_oplog_payload(
         }
         "http::types::future_incoming_response::get" => {
             let payload: SerializableResponse =
-                SerializableResponse::from_value(&value_and_type.value)?;
+                SerializableResponse::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem io::poll::poll" => {
-            let payload: Result<u32, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u32, SerializableError> = Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem io::poll::ready" => {
             let payload: Result<bool, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::object_info" => {
             let payload: Result<ObjectMetadata, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::delete_objects" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::list_objects" => {
             let payload: Result<Vec<String>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::get_data" => {
             let payload: Result<Vec<u8>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::write_data" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::delete_object" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::has_object" => {
             let payload: Result<bool, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::container::clear" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::copy_object" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::delete_container" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::create_container" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::get_container" => {
             let payload: Result<Option<u64>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::container_exists" => {
             let payload: Result<bool, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem blobstore::blobstore::move_object" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem_environment::get_arguments" => {
             let payload: Result<Vec<String>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem_environment::get_environment" => {
             let payload: Result<Vec<(String, String)>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem_environment::initial_cwd" => {
             let payload: Result<Option<String>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "monotonic_clock::resolution" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "monotonic_clock::now" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "monotonic_clock::subscribe_duration" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "wall_clock::now" => {
             let payload: Result<SerializableDateTime, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "wall_clock::resolution" => {
             let payload: Result<SerializableDateTime, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::create_promise" => {
             let payload: Result<PromiseId, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::complete_promise" => {
             let payload: Result<bool, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::get-promise-result::get" => {
             let payload: Result<Vec<u8>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::update-worker" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::fork-worker" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::revert-worker" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "http::types::incoming_body_stream::skip" => {
             let payload: Result<u64, SerializableStreamError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "http::types::incoming_body_stream::read" => {
             let payload: Result<Vec<u8>, SerializableStreamError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "http::types::incoming_body_stream::blocking_read" => {
             let payload: Result<Vec<u8>, SerializableStreamError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "http::types::incoming_body_stream::blocking_skip" => {
             let payload: Result<u64, SerializableStreamError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual::delete" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual::get" => {
             let payload: Result<Option<Vec<u8>>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual::set" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual::exists" => {
             let payload: Result<bool, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual_batch::set_many" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual_batch::get_many" => {
             let payload: Result<Vec<Option<Vec<u8>>>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual_batch::get_keys" => {
             let payload: Result<Vec<String>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem keyvalue::eventual_batch::delete_many" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem random::insecure::get_insecure_random_bytes" => {
             let payload: Result<Vec<u8>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem random::insecure::get_insecure_random_u64" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem random::insecure_seed::insecure_seed" => {
             let payload: Result<(u64, u64), SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem random::get_random_bytes" => {
             let payload: Result<Vec<u8>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem random::get_random_u64" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "sockets::ip_name_lookup::resolve_addresses" => {
             let payload: Result<SerializableIpAddresses, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem::rpc::wasm-rpc::invoke" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::rpc::wasm-rpc::invoke-and-await"
@@ -1084,23 +1070,23 @@ fn convert_response_value_and_type_to_oplog_payload(
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => {
             let payload: Result<WorkerId, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "filesystem::types::descriptor::stat" => {
             let payload: Result<SerializableFileTimes, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "filesystem::types::descriptor::stat_at" => {
             let payload: Result<SerializableFileTimes, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
         "golem api::generate_idempotency_key" => {
             // ValueAndType corresponds to a UUID, and UUID serialized as a tuple of high and low.
-            let uuid: Result<Uuid, SerializableError> = Result::from_value(&value_and_type.value)?;
+            let uuid: Result<Uuid, SerializableError> = Result::from_value(value_and_type.value)?;
             let payload = uuid.map(|x| {
                 let (h, l) = x.as_u64_pair();
                 (h, l)
@@ -1112,7 +1098,7 @@ fn convert_response_value_and_type_to_oplog_payload(
             let payload: Result<
                 Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
                 SerializableError,
-            > = Result::from_value(&value_and_type.value)?;
+            > = Result::from_value(value_and_type.value)?;
 
             create_oplog_payload(&payload)
         }
@@ -1125,33 +1111,32 @@ fn convert_response_value_and_type_to_oplog_payload(
         }
         "golem::rpc::wasm-rpc::schedule_invocation" => {
             let payload: Result<SerializableScheduleId, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::rpc::cancellation-token::cancel" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {
             let payload: Result<Option<ComponentId>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_worker_id_strict" => {
             let payload: Result<Option<WorkerId>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+                Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::mysql::db-connection::execute" | "rdbms::mysql::db-transaction::execute" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::mysql::db-connection::query" | "rdbms::mysql::db-transaction::query" => {
             Err("Cannot override DB oplog entries currently".to_string())
         }
         "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::mysql::db-result-stream::get-columns" => {
@@ -1161,15 +1146,14 @@ fn convert_response_value_and_type_to_oplog_payload(
             Err("Cannot override DB oplog entries currently".to_string())
         }
         "rdbms::postgres::db-connection::execute" | "rdbms::postgres::db-transaction::execute" => {
-            let payload: Result<u64, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
+            let payload: Result<u64, SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::postgres::db-connection::query" | "rdbms::postgres::db-transaction::query" => {
             Err("Cannot override DB oplog entries currently".to_string())
         }
         "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
+            let payload: Result<(), SerializableError> = Result::from_value(value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "rdbms::postgres::db-result-stream::get-columns" => {
@@ -1178,15 +1162,16 @@ fn convert_response_value_and_type_to_oplog_payload(
         "rdbms::postgres::db-result-stream::get-next" => {
             Err("Cannot override DB oplog entries currently".to_string())
         }
-        _ => create_oplog_payload(value_and_type),
+        _ => create_oplog_payload(&value_and_type),
     }
 }
 
 fn get_invoke_and_await_result(
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<Result<ValueAndType, SerializableError>, String> {
-    match &value_and_type.value {
-        Value::Result(Ok(Some(value))) => match &value_and_type.typ {
+    let ValueAndType { value, typ } = value_and_type;
+    match value {
+        Value::Result(Ok(Some(value))) => match typ {
             AnalysedType::Result(type_result) => {
                 let typ = type_result
                     .clone()
@@ -1203,7 +1188,7 @@ fn get_invoke_and_await_result(
         },
 
         Value::Result(Err(Some(err))) => {
-            let serializable_error = SerializableError::from_value(err)?;
+            let serializable_error = SerializableError::from_value(*err)?;
             Ok(Err(serializable_error))
         }
 
@@ -1216,24 +1201,28 @@ fn get_invoke_and_await_result(
 }
 
 fn get_serializable_invoke_request(
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<SerializableInvokeRequest, String> {
-    match &value_and_type.value {
+    let ValueAndType { value, typ } = value_and_type;
+    match value {
         Value::Record(values) => {
             if values.len() != 6 {
                 return Err("Failed to get SerializableInvokeRequest".to_string());
             }
             // values contains fields of EnrichedSerializableInvokeRequest; we ignore the enriched information
-            let remote_worker_id = &values[0];
-            let idempotency_key = &values[3];
-            let function_name = &values[4];
-            let function_params = &values[5];
+            let mut values = values.into_iter();
+            let remote_worker_id = values.next().unwrap();
+            let _ = values.next().unwrap();
+            let _ = values.next().unwrap();
+            let idempotency_key = values.next().unwrap();
+            let function_name = values.next().unwrap();
+            let function_params = values.next().unwrap();
 
             let remote_worker_id = WorkerId::from_value(remote_worker_id)?;
             let idempotency_key = IdempotencyKey::from_uuid(Uuid::from_value(idempotency_key)?);
             let function_name = String::from_value(function_name)?;
 
-            let function_param_cases = match &value_and_type.typ {
+            let function_param_cases = match typ {
                 AnalysedType::Record(type_record) => {
                     let function_param_type = type_record
                         .fields
@@ -1314,20 +1303,20 @@ fn get_serializable_invoke_request(
 }
 
 fn get_serializable_invoke_result(
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<SerializableInvokeResult, String> {
-    match &value_and_type.value {
+    match value_and_type.value {
         Value::Variant {
             case_idx,
             case_value,
         } => match (case_idx, case_value) {
             (0, Some(payload)) => {
-                let error = SerializableError::from_value(payload)?;
+                let error = SerializableError::from_value(*payload)?;
                 Ok(SerializableInvokeResult::Failed(error))
             }
 
             (1, None) => Ok(SerializableInvokeResult::Pending),
-            (2, Some(payload)) => match payload.deref() {
+            (2, Some(payload)) => match *payload {
                 Value::Result(Ok(Some(value))) => {
                     let value_of_type_annotated_value = value.deref();
                     match &value_and_type.typ {
@@ -1351,7 +1340,7 @@ fn get_serializable_invoke_result(
                     }
                 }
                 Value::Result(Err(Some(value))) => {
-                    let rpc_error = RpcError::from_value(value)?;
+                    let rpc_error = RpcError::from_value(*value)?;
 
                     Ok(SerializableInvokeResult::Completed(Err(rpc_error)))
                 }
@@ -1365,19 +1354,22 @@ fn get_serializable_invoke_result(
 }
 
 fn get_serializable_schedule_invocation_request(
-    value_and_type: &ValueAndType,
+    value_and_type: ValueAndType,
 ) -> Result<SerializableScheduleInvocationRequest, String> {
-    match &value_and_type.value {
+    match value_and_type.value {
         Value::Record(values) => {
             if values.len() != 7 {
                 return Err("Failed to get SerializableInvokeRequest".to_string());
             }
             // values contains fields of EnrichedSerializableInvokeRequest; we ignore the enriched information
-            let remote_worker_id = &values[0];
-            let idempotency_key = &values[3];
-            let function_name = &values[4];
-            let function_params = &values[5];
-            let datetime = &values[6];
+            let mut values = values.into_iter();
+            let remote_worker_id = values.next().unwrap();
+            let _ = values.next().unwrap();
+            let _ = values.next().unwrap();
+            let idempotency_key = values.next().unwrap();
+            let function_name = values.next().unwrap();
+            let function_params = values.next().unwrap();
+            let datetime = values.next().unwrap();
 
             let remote_worker_id = WorkerId::from_value(remote_worker_id)?;
             let idempotency_key = IdempotencyKey::from_uuid(Uuid::from_value(idempotency_key)?);
@@ -1466,8 +1458,8 @@ fn get_serializable_schedule_invocation_request(
     }
 }
 
-fn create_uuid_payload(value_and_type: &ValueAndType) -> Result<OplogPayload, String> {
-    let uuid: Result<Uuid, SerializableError> = Result::from_value(&value_and_type.value)?;
+fn create_uuid_payload(value_and_type: ValueAndType) -> Result<OplogPayload, String> {
+    let uuid: Result<Uuid, SerializableError> = Result::from_value(value_and_type.value)?;
 
     let payload = uuid.map(|x| {
         let (h, l) = x.as_u64_pair();
@@ -1486,6 +1478,92 @@ fn empty_payload() -> OplogPayload {
     OplogPayload::Inline(vec![])
 }
 
+#[derive(FromValue)]
+pub struct ContainerAndObject {
+    pub container: String,
+    pub object: String,
+}
+
+#[derive(FromValue)]
+pub struct Container(pub String);
+
+#[derive(FromValue)]
+pub struct ContainerObjectBeginEnd {
+    pub container: String,
+    pub object: String,
+    pub begin: u64,
+    pub end: u64,
+}
+
+#[derive(FromValue)]
+pub struct ContainerCopyObjectInfo {
+    pub src_container: String,
+    pub src_object: String,
+    pub dest_container: String,
+    pub dest_object: String,
+}
+
+#[derive(FromValue)]
+pub struct UpdateWorkerInfo {
+    pub worker_id: WorkerId,
+    pub component_version: ComponentVersion,
+    pub update_mode: UpdateMode,
+}
+
+#[derive(FromValue)]
+pub struct ForkWorkerInfo {
+    pub source_worker_id: WorkerId,
+    pub target_worker_id: WorkerId,
+    pub oplog_idx_cut_off: OplogIndex,
+}
+
+#[derive(FromValue)]
+pub struct RevertWorkerInfo {
+    pub worker_id: WorkerId,
+    pub target: RevertWorkerTarget,
+}
+
+#[derive(FromValue)]
+pub struct ContainerObjectLength {
+    pub container: String,
+    pub object: String,
+    pub length: u64,
+}
+
+#[derive(FromValue)]
+pub struct ContainerAndObjects {
+    pub container: String,
+    pub objects: Vec<String>,
+}
+
+#[derive(FromValue)]
+pub struct Bucket(pub String);
+
+#[derive(FromValue)]
+pub struct BucketAndKey {
+    pub bucket: String,
+    pub key: String,
+}
+
+#[derive(FromValue)]
+pub struct BucketKeyValue {
+    pub bucket: String,
+    pub key: String,
+    pub value: u64,
+}
+
+#[derive(FromValue)]
+pub struct BucketKeyValues {
+    pub bucket: String,
+    pub key_values: Vec<(String, u64)>,
+}
+
+#[derive(FromValue)]
+pub struct BucketAndKeys {
+    pub bucket: String,
+    pub keys: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use crate::debug_session::{get_serializable_invoke_request, get_serializable_invoke_result};
@@ -1502,10 +1580,7 @@ mod tests {
 
     #[test]
     fn test_get_serializable_invoke_result_1() {
-        let error_value = Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::String("generic_error".to_string()))),
-        };
+        let error_value = Value::String("generic_error".to_string());
 
         let value_and_type = ValueAndType {
             value: Value::Variant {
@@ -1518,7 +1593,7 @@ mod tests {
             }]),
         };
 
-        let result = get_serializable_invoke_result(&value_and_type);
+        let result = get_serializable_invoke_result(value_and_type);
         assert!(matches!(result, Ok(SerializableInvokeResult::Failed(_))));
     }
 
@@ -1532,7 +1607,7 @@ mod tests {
             typ: variant(vec![]),
         };
 
-        let result = get_serializable_invoke_result(&value_and_type);
+        let result = get_serializable_invoke_result(value_and_type);
         assert!(matches!(result, Ok(SerializableInvokeResult::Pending)));
     }
 
@@ -1548,7 +1623,7 @@ mod tests {
             typ: variant(vec![case("Completed", str())]),
         };
 
-        let result = get_serializable_invoke_result(&value_and_type);
+        let result = get_serializable_invoke_result(value_and_type);
         assert_eq!(
             result,
             Ok(SerializableInvokeResult::Completed(Ok(Some(
@@ -1561,7 +1636,9 @@ mod tests {
     fn test_get_serializable_invoke_result_4() {
         let error_value = Value::Variant {
             case_idx: 0,
-            case_value: Some(Box::new(Value::String("generic_error".to_string()))),
+            case_value: Some(Box::new(Value::Record(vec![Value::String(
+                "generic_error".to_string(),
+            )]))),
         };
 
         let payload = Value::Result(Err(Some(Box::new(error_value))));
@@ -1574,7 +1651,7 @@ mod tests {
             typ: variant(vec![case("Completed", str())]),
         };
 
-        let result = get_serializable_invoke_result(&value_and_type);
+        let result = get_serializable_invoke_result(value_and_type);
 
         assert_eq!(
             result,
@@ -1609,7 +1686,7 @@ mod tests {
         };
 
         let value_and_type = serializable_invoke_request.clone().into_value_and_type();
-        let result = get_serializable_invoke_request(&value_and_type).unwrap();
+        let result = get_serializable_invoke_request(value_and_type).unwrap();
         assert_eq!(
             result,
             SerializableInvokeRequest {

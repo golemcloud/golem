@@ -21,6 +21,7 @@ use golem_component_service::config::{make_config_loader, ComponentServiceConfig
 use golem_component_service::{metrics, ComponentService};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
+use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use tracing::info;
 
@@ -31,14 +32,15 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        init_tracing_with_default_env_filter(&config.tracing);
+        let tracer = init_tracing_with_default_env_filter(&config.tracing);
         info!("Using configuration:\n{}", config.to_safe_string_indented());
 
         let prometheus = metrics::register_all();
 
-        let exporter = opentelemetry_prometheus::exporter()
-            .with_registry(prometheus.clone())
-            .build()?;
+        let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
+            .without_counter_suffixes()
+            .without_units()
+            .build();
 
         global::set_meter_provider(
             MeterProviderBuilder::default()
@@ -49,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(async_main(config, prometheus))
+            .block_on(async_main(config, prometheus, tracer))
     } else {
         Ok(())
     }
@@ -65,12 +67,16 @@ async fn dump_openapi_yaml() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn async_main(config: ComponentServiceConfig, prometheus: Registry) -> anyhow::Result<()> {
+async fn async_main(
+    config: ComponentServiceConfig,
+    prometheus: Registry,
+    tracer: Option<SdkTracer>,
+) -> anyhow::Result<()> {
     let server = ComponentService::new(config, prometheus).await?;
 
     let mut join_set = tokio::task::JoinSet::new();
 
-    server.run(&mut join_set).await?;
+    server.run(&mut join_set, tracer).await?;
 
     while let Some(res) = join_set.join_next().await {
         res??;

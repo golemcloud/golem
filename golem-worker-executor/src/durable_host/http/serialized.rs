@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
@@ -72,7 +72,7 @@ impl From<SerializedHttpVersion> for Version {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum SerializableResponse {
     Pending,
     HeadersReceived(SerializableResponseHeaders),
@@ -80,7 +80,7 @@ pub enum SerializableResponse {
     InternalError(Option<SerializableError>),
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableResponseHeaders {
     pub status: u16,
     pub headers: HashMap<String, Vec<u8>>,
@@ -121,7 +121,7 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableTlsAlertReceivedPayload {
     pub alert_id: Option<u8>,
     pub alert_message: Option<String>,
@@ -145,7 +145,7 @@ impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableDnsErrorPayload {
     pub rcode: Option<String>,
     pub info_code: Option<u16>,
@@ -169,7 +169,7 @@ impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableFieldSizePayload {
     pub field_name: Option<String>,
     pub field_size: Option<u32>,
@@ -193,7 +193,7 @@ impl From<SerializableFieldSizePayload> for FieldSizePayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum SerializableErrorCode {
     DnsTimeout,
     DnsError(SerializableDnsErrorPayload),
@@ -392,7 +392,7 @@ impl From<SerializableErrorCode> for ErrorCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum SerializableHttpMethod {
     Get,
     Post,
@@ -440,7 +440,7 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableHttpRequest {
     pub uri: String,
     pub method: SerializableHttpMethod,

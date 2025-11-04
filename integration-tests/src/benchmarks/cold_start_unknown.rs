@@ -354,7 +354,7 @@ impl ColdStartUnknownBenchmark {
             .worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = self.deps.clone().into_admin().await;
+                let deps_clone = self.deps.clone();
                 invoke_and_await(
                     &deps_clone,
                     worker_id,

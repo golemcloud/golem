@@ -298,7 +298,7 @@ impl BenchmarkTestDependencies {
 
         let rdb: Arc<dyn Rdb> = {
             let unique_network_id = Uuid::new_v4().to_string();
-            Arc::new(DockerPostgresRdb::new(&unique_network_id).await)
+            Arc::new(DockerPostgresRdb::new(&unique_network_id, true).await)
         };
 
         let cloud_service: Arc<dyn CloudService> = Arc::new(
@@ -625,6 +625,15 @@ impl BenchmarkTestDependencies {
                 )
                 .await
             }
+        }
+    }
+
+    /// Checks if all the spawned dependencies are still running, and if not, panicks
+    ///
+    /// This can be used as a checkpoint in benchmarks to avoid infinite retries.
+    pub async fn ensure_all_deps_running(&self) {
+        if !self.worker_executor_cluster.is_running().await {
+            panic!("Worker executor process(es) stopped");
         }
     }
 }
