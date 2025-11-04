@@ -55,7 +55,8 @@ sequenceDiagram
     ToolGen->>ToolGen: Generate MCP tool schemas<br/>(name, description, inputSchema)
     ToolGen-->>HTTP: Array of tool definitions
     HTTP->>MCP: Format as JSON-RPC response
-    MCP-->>-Client: SSE: data: {result: {tools: [...]}}
+    MCP->>HTTP: SSE response
+    HTTP-->>-Client: SSE: data: {result: {tools: [...]}}
 
     Note over Client,Golem: 5. Call Tool: --version
 
