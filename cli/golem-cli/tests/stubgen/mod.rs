@@ -23,9 +23,9 @@ mod stub_wasm;
 mod wit;
 
 tag_suite!(add_dep, group1);
-tag_suite!(cargo, group1_sequential);
-tag_suite!(compose, group1_sequential);
-tag_suite!(stub_wasm, group1_sequential);
+tag_suite!(cargo, group1);
+tag_suite!(compose, group1);
+tag_suite!(stub_wasm, group1);
 tag_suite!(wit, group1);
 
 pub fn test_data_path() -> PathBuf {
