@@ -44,18 +44,18 @@ error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError>;
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
+
+    /// Gets the latest cached metadata of a given component, if any.
+    ///
+    /// This is guaranteed to not make any remote service calls, but not guaranteed it's returning
+    /// the most up-to-date information about which component version is the latest. If there is
+    /// no cached information about this component at all, it returns None.
+    async fn get_latest_cached_by_id(&self, component_id: &ComponentId) -> Option<Component>;
 
     async fn get_all_versions(
         &self,
@@ -85,31 +85,6 @@ impl CachedComponentService {
 
 #[async_trait]
 impl ComponentService for CachedComponentService {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError> {
-        let inner_clone = self.inner.clone();
-        self.cache
-            .get_or_insert_simple(&(component_id.clone(), version), || async {
-                inner_clone
-                    .get_by_version(component_id, version, auth_ctx)
-                    .await
-                    .map_err(Arc::new)
-            })
-            .await
-            .map_err(|e| match &*e {
-                ComponentServiceError::InternalError(inner) => {
-                    ComponentServiceError::InternalError(anyhow!("Cached error: {inner}"))
-                }
-                ComponentServiceError::ComponentNotFound => {
-                    ComponentServiceError::ComponentNotFound
-                }
-            })
-    }
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
@@ -139,21 +114,6 @@ impl RemoteComponentService {
 
 #[async_trait]
 impl ComponentService for RemoteComponentService {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client
-            .get_component_metadata(component_id, version, auth_ctx)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-                other => other.into(),
-            })
-    }
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
