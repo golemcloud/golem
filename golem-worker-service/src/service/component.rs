@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};

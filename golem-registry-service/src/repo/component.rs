@@ -85,7 +85,7 @@ pub trait ComponentRepo: Send + Sync {
         &self,
         component_id: &Uuid,
         revision_id: i64,
-        include_deleted: bool
+        include_deleted: bool,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_by_name_and_revision(
@@ -732,7 +732,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 "#})
                 .bind(component_id)
                 .bind(revision_id)
-                .bind(include_deleted)
+                .bind(include_deleted),
             )
             .await?;
 

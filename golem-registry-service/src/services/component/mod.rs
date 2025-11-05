@@ -145,7 +145,12 @@ impl ComponentService {
 
         let environment =
             self.environment_service
-                .get_and_authorize(&environment_id, EnvironmentAction::ViewComponent, false, auth)
+                .get_and_authorize(
+                    &environment_id,
+                    EnvironmentAction::ViewComponent,
+                    false,
+                    auth,
+                )
                 .await
                 .map_err(|err| match err {
                     EnvironmentError::EnvironmentNotFound(_)
@@ -178,11 +183,7 @@ impl ComponentService {
 
         let record = self
             .component_repo
-            .get_by_id_and_revision(
-                &component_id.0,
-                revision.0 as i64,
-                include_deleted,
-            )
+            .get_by_id_and_revision(&component_id.0, revision.0 as i64, include_deleted)
             .await?
             .ok_or(ComponentError::NotFound)?;
 
@@ -217,7 +218,12 @@ impl ComponentService {
 
         let environment =
             self.environment_service
-                .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
+                .get_and_authorize(
+                    environment_id,
+                    EnvironmentAction::ViewComponent,
+                    false,
+                    auth,
+                )
                 .await
                 .map_err(|err| match err {
                     EnvironmentError::EnvironmentNotFound(_)
@@ -294,7 +300,12 @@ impl ComponentService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
+            .get_and_authorize(
+                environment_id,
+                EnvironmentAction::ViewComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -408,7 +419,12 @@ impl ComponentService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
+            .get_and_authorize(
+                environment_id,
+                EnvironmentAction::ViewComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {

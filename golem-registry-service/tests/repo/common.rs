@@ -315,6 +315,7 @@ pub async fn test_environment_create(deps: &Deps) {
             &env.revision.environment_id,
             &user.revision.account_id,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -416,7 +417,12 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_1.environment_id, &user.revision.account_id, false)
+        .get_by_id(
+            &env_rev_1.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -475,7 +481,12 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_2.environment_id, &user.revision.account_id, false)
+        .get_by_id(
+            &env_rev_2.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);

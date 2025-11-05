@@ -108,7 +108,12 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::CreateComponent, false, auth)
+            .get_and_authorize(
+                environment_id,
+                EnvironmentAction::CreateComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -221,7 +226,12 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, false, auth)
+            .get_and_authorize(
+                &environment_id,
+                EnvironmentAction::UpdateComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,

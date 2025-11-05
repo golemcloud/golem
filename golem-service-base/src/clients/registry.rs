@@ -34,7 +34,6 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::RetryConfig;
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::RegisteredAgentType;
@@ -84,6 +83,7 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError>;
 
+    // will be a noop if the account no longer exists
     async fn batch_update_fuel_usage(
         &self,
         updates: HashMap<AccountId, i64>,
@@ -158,7 +158,7 @@ pub trait RegistryService: Send + Sync {
 
 #[derive(Clone)]
 pub struct GrpcRegistryService {
-    client: GrpcClient<RegistryServiceClient<Channel>>
+    client: GrpcClient<RegistryServiceClient<Channel>>,
 }
 
 impl GrpcRegistryService {
@@ -188,7 +188,8 @@ impl RegistryService for GrpcRegistryService {
         &self,
         token: TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("authenticate-token", move |client| {
                 let request = AuthenticateTokenRequest {
                     secret: Some(token.0.into()),
@@ -207,9 +208,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(AuthCtx::User(user_auth_ctx))
             }
-            Some(authenticate_token_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -240,9 +239,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(AuthCtx::User(user_auth_ctx))
             }
-            Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -251,7 +248,8 @@ impl RegistryService for GrpcRegistryService {
         account_id: &AccountId,
         auth_ctx: &AuthCtx,
     ) -> Result<ResourceLimits, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-resource-limits", move |client| {
                 let request = GetResourceLimitsRequest {
                     account_id: Some(account_id.clone().into()),
@@ -267,9 +265,7 @@ impl RegistryService for GrpcRegistryService {
             Some(get_resource_limits_response::Result::Success(payload)) => {
                 Ok(payload.limits.ok_or("missing limits field")?.into())
             }
-            Some(get_resource_limits_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_resource_limits_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -280,7 +276,8 @@ impl RegistryService for GrpcRegistryService {
         added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("update-worker-limit", move |client| {
                 let request = UpdateWorkerLimitRequest {
                     account_id: Some(account_id.clone().into()),
@@ -297,9 +294,7 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_limit_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(update_worker_limit_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -310,7 +305,8 @@ impl RegistryService for GrpcRegistryService {
         added: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("update-worker-connection-limit", move |client| {
                 let request = UpdateWorkerConnectionLimitRequest {
                     account_id: Some(account_id.clone().into()),
@@ -346,7 +342,8 @@ impl RegistryService for GrpcRegistryService {
             })
             .collect();
 
-        let response = self.client
+        let response = self
+            .client
             .call("batch-update-fuel-usage", move |client| {
                 let request = BatchUpdateFuelUsageRequest {
                     updates: updates.clone(),
@@ -361,9 +358,7 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(batch_update_fuel_usage_response::Result::Success(_)) => Ok(()),
-            Some(batch_update_fuel_usage_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(batch_update_fuel_usage_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -372,7 +367,8 @@ impl RegistryService for GrpcRegistryService {
         plugin_id: &PluginRegistrationId,
         auth_ctx: &AuthCtx,
     ) -> Result<PluginRegistration, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-plugin-registration-by-id", move |client| {
                 let request = GetPluginRegistrationByIdRequest {
                     id: Some(plugin_id.clone().into()),
@@ -389,9 +385,7 @@ impl RegistryService for GrpcRegistryService {
             Some(get_plugin_registration_by_id_response::Result::Success(payload)) => {
                 Ok(payload.plugin.ok_or("missing plugin field")?.try_into()?)
             }
-            Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_plugin_registration_by_id_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -401,7 +395,8 @@ impl RegistryService for GrpcRegistryService {
         component_revision: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError> {
-        let mut response = self.client
+        let mut response = self
+            .client
             .call("download-component", move |client| {
                 let request = DownloadComponentRequest {
                     component_id: Some(component_id.clone().into()),
@@ -435,7 +430,8 @@ impl RegistryService for GrpcRegistryService {
         component_revision: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-component-metadata", move |client| {
                 let request = GetComponentMetadataRequest {
                     component_id: Some(component_id.clone().into()),
@@ -457,9 +453,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(converted)
             }
-            Some(get_component_metadata_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_component_metadata_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -468,7 +462,8 @@ impl RegistryService for GrpcRegistryService {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-latest-component-metadata", move |client| {
                 let request = GetLatestComponentMetadataRequest {
                     component_id: Some(component_id.clone().into()),
@@ -489,9 +484,7 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 Ok(converted)
             }
-            Some(get_latest_component_metadata_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_latest_component_metadata_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -500,7 +493,8 @@ impl RegistryService for GrpcRegistryService {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("resolve-component-by-name", move |client| {
                 let request = GetAllComponentVersionsRequest {
                     component_id: Some(component_id.clone().into()),
@@ -522,9 +516,7 @@ impl RegistryService for GrpcRegistryService {
                     .collect::<Result<_, _>>()?;
                 Ok(converted)
             }
-            Some(get_all_component_versions_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_all_component_versions_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -536,7 +528,8 @@ impl RegistryService for GrpcRegistryService {
         component_slug: &str,
         auth_ctx: &AuthCtx,
     ) -> Result<Option<ComponentDto>, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("resolve-component", move |client| {
                 let request = ResolveComponentRequest {
                     resolving_account_id: Some(resolving_account_id.clone().into()),
@@ -554,15 +547,10 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(resolve_component_response::Result::Success(payload)) => {
-                let converted = payload
-                    .component
-                    .map(ComponentDto::try_from)
-                    .transpose()?;
+                let converted = payload.component.map(ComponentDto::try_from).transpose()?;
                 Ok(converted)
             }
-            Some(resolve_component_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(resolve_component_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -571,7 +559,8 @@ impl RegistryService for GrpcRegistryService {
         environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-all-agent-types", move |client| {
                 let request = GetAllAgentTypesRequest {
                     environment_id: Some(environment_id.clone().into()),
@@ -593,9 +582,7 @@ impl RegistryService for GrpcRegistryService {
                     .collect::<Result<_, _>>()?;
                 Ok(converted)
             }
-            Some(get_all_agent_types_response::Result::Error(error)) => {
-                Err(error.into())
-            }
+            Some(get_all_agent_types_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -605,12 +592,13 @@ impl RegistryService for GrpcRegistryService {
         name: &str,
         auth_ctx: &AuthCtx,
     ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
-        let response = self.client
+        let response = self
+            .client
             .call("get-all-agent-types", move |client| {
                 let request = GetAgentTypeRequest {
                     environment_id: Some(environment_id.clone().into()),
                     agent_type: name.to_string(),
-                    auth_ctx: Some(auth_ctx.clone().into())
+                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
                 Box::pin(client.get_agent_type(request))
             })
@@ -674,7 +662,8 @@ impl IntoAnyhow for RegistryServiceError {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError> for RegistryServiceError
+impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
+    for RegistryServiceError
 {
     fn from(value: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError) -> Self {
         use golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error;
