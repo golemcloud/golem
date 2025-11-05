@@ -16,13 +16,14 @@
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
 
-    use golem_rust::{agent_definition, agent_implementation, Schema};
+    use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
 
     #[agent_definition]
     trait Echo {
         fn new(init: UserId) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
+        fn get_agent_id(&self) -> String;
     }
 
     struct EchoImpl {
@@ -40,6 +41,10 @@ mod tests {
 
         fn echo(&self, message: String) -> String {
             message.to_string()
+        }
+
+        fn get_agent_id(&self) -> String {
+            self.get_id()
         }
     }
 

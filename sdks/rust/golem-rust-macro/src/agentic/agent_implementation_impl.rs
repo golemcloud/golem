@@ -63,7 +63,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let input_param_type = get_input_param_type(&constructor_method.sig);
 
     let constructor_param_extraction_call_back = quote! {
-        let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+        let agent_instance = std::cell::RefCell::new(Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*)));
 
         let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
 
@@ -266,9 +266,7 @@ fn generate_base_agent_impl(
     quote! {
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
             fn get_id(&self) -> String {
-                golem_rust::agentic::with_agent_instance(|resolved_agent| {
-                    resolved_agent.agent_id.to_string()
-                }).expect("Internal Error:  Invoke on agentic method without initialisation") // It's guaranteed to have an instance by this time
+                golem_rust::agentic::get_agent_id().map(|id| id.agent_id).expect("Internal Error:  Invoke on agentic method without initialisation") // It's guaranteed to have an instance by this time
             }
 
             fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
