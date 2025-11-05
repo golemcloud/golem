@@ -160,7 +160,6 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         f32v: 3.14,
         f64v: 3.1415926535,
         boolv: true,
-        charv: 'a',
         stringv: "sample"
     }
     "#;
@@ -177,127 +176,102 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     "#;
 
     run_and_assert(&ctx, "fun-collections", &[collections_arg]).await;
-    //
-    // let simple_struct_arg = r#"
-    // {
-    //     name: "test",
-    //     value: 3.14,
-    //     flag: true,
-    //     symbol: 't'
-    // }
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-simple-struct", &[simple_struct_arg]).await;
-    //
-    // // nested struct
-    //
-    // let nested_struct_arg = r#"
-    // {
-    //     id: "nested1",
-    //     simple: {
-    //         name: "inner",
-    //         value: 2.71,
-    //         flag: false,
-    //         symbol: 'i'
-    //     },
-    //     list: [
-    //         {
-    //             name: "list1",
-    //             value: 1.61,
-    //             flag: true,
-    //             symbol: 'l'
-    //         },
-    //         {
-    //             name: "list2",
-    //             value: 0.577,
-    //             flag: false,
-    //             symbol: 'm'
-    //         }
-    //     ],
-    //     map: {
-    //         "x": 10.0,
-    //         "y": 20.0
-    //     },
-    //     option: some("optional value"),
-    //     result: ok("result value")
-    // }
-    // "#;
-    //
-    //
-    // run_and_assert(&ctx, "fun-nested-struct", &[nested_struct_arg]).await;
-    //
-    // let complex_struct_arg = r#"
-    // {
-    //     primitives: {
-    //         u8v: 1,
-    //         u16v: 2,
-    //         u32v: 3,
-    //         u64v: 4,
-    //         i8v: -1,
-    //         i16v: -2,
-    //         i32v: -3,
-    //         i64v: -4,
-    //         f32v: 1.1,
-    //         f64v: 2.2,
-    //         boolv: true,
-    //         charv: 'c',
-    //         stringv: "complex"
-    //     },
-    //     options_results_bounds: {
-    //         option_str: some("option value"),
-    //         option_struct: some({
-    //             id: "opt_struct",
-    //             simple: {
-    //                 name: "opt_inner",
-    //                 value: 0.99,
-    //                 flag: true,
-    //                 symbol: 'o'
-    //             },
-    //             list: [],
-    //             map: {},
-    //             option: none,
-    //             result: err("error in result")
-    //         }),
-    //         result_str_str: ok("result ok"),
-    //         result_str_unit: err("result error"),
-    //         bound_u8: 255
-    //     },
-    //     tuples: {
-    //         simple_tuple: ("tuple", 3.33, false),
-    //         // complex_tuple: ("complex", 4.44, { ... })
-    //     },
-    //     collections: {
-    //         list-u8: [10, 20, 30],
-    //         list-str: ["x", "y", "z"],
-    //         map-num: { "alpha": 0.1, "beta": 0.2 },
-    //         map-text: { "one": "uno", "two": "dos" }
-    //     },
-    //     simple_struct: {
-    //         name: "comp_simple",
-    //         value: 5.55,
-    //         flag: false,
-    //         symbol: 's'
-    //     },
-    //     nested_struct: {
-    //         id: "comp_nested",
-    //         simple: {
-    //             name: "comp_inner",
-    //             value: 6.66,
-    //             flag: true,
-    //             symbol: 'n'
-    //         },
-    //         list: [],
-    //         map: {},
-    //         option: none,
-    //         result: ok("nested result")
-    //     },
-    //     enum_simple: U8(100),
-    //     enum_collections: Vec([100, 200, 300]),
-    //     enum_complex: UnitA
-    // }
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-complex-struct", &[complex_struct_arg]).await;
+
+    let simple_struct_arg = r#"
+    {
+        name: "test",
+        value: 3.14,
+        flag: true,
+    }
+    "#;
+
+    run_and_assert(&ctx, "fun-struct-simple", &[simple_struct_arg]).await;
+
+    let nested_struct_arg = r#"
+    {
+        id: "nested1",
+        simple: {
+            name: "inner",
+            value: 2.71,
+            flag: false,
+        },
+        list: [
+            {
+                name: "list1",
+                value: 1.61,
+                flag: true,
+            },
+            {
+                name: "list2",
+                value: 0.577,
+                flag: false,
+            }
+        ],
+        option: some("optional value"),
+        result: ok("result value")
+    }
+    "#;
+
+    run_and_assert(&ctx, "fun-struct-nested", &[nested_struct_arg]).await;
+
+    let complex_struct_arg = r#"
+    {
+        primitives: {
+            u8v: 1,
+            u16v: 2,
+            u32v: 3,
+            u64v: 4,
+            i8v: -1,
+            i16v: -2,
+            i32v: -3,
+            i64v: -4,
+            f32v: 1.1,
+            f64v: 2.2,
+            boolv: true,
+            stringv: "complex"
+        },
+        options-results-bounds: {
+            option-u8: some(128),
+            option-str: some("option value"),
+            res-ok: ok("success"),
+            res-num-err: err("number error"),
+            res-unit-ok: ok("b"),
+            res-unit-err: err("a"),
+            bound-u8: included(1),
+            bound-str: excluded("z")
+        },
+        tuples: {
+            pair: ("pair", 2.22),
+            triple: ("triple", 3.33, true),
+            mixed: ( -8, 16, 4.4)
+        },
+        collections: {
+            list-u8: [10, 20, 30],
+            list-str: ["x", "y", "z"]
+        },
+        simple-struct: {
+            name: "comp_simple",
+            value: 5.55,
+            flag: false,
+        },
+        nested-struct: {
+            id: "comp_nested",
+            simple: {
+                name: "comp_inner",
+                value: 6.66,
+                flag: true,
+            },
+            list: [],
+            option: none,
+            result: ok("nested result")
+        },
+        enum-simple: u8(100),
+        enum-collections: vec([1, 2, 3]),
+        enum-complex: unit-a
+    }
+    "#;
+
+    run_and_assert(&ctx, "fun-struct-complex", &[complex_struct_arg]).await;
     //
     // run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
     //

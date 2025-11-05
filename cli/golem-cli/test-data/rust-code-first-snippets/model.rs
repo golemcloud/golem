@@ -21,12 +21,12 @@ pub struct AllPrimitives {
 
 #[derive(Schema)]
 pub struct OptionResultBound {
-    pub maybe_u8: Option<u8>,
-    pub maybe_str: Option<String>,
+    pub option_u8: Option<u8>,
+    pub option_str: Option<String>,
     pub res_ok: Result<String, String>,
     pub res_num_err: Result<u32, String>,
-    pub res_unit_ok: Result<(), String>,
-    pub res_unit_err: Result<String, ()>,
+    pub res_unit_ok: Result<String, String>, // TODO; https://github.com/golemcloud/golem/issues/2274
+    pub res_unit_err: Result<String, String>, // TODO; https://github.com/golemcloud/golem/issues/2274
     pub bound_u8: Bound<u8>,
     pub bound_str: Bound<String>,
 }
