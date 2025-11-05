@@ -1430,7 +1430,7 @@ dependencies = [
  "hyperlocal",
  "log",
  "pin-project-lite",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "rustls-native-certs 0.8.2",
  "rustls-pemfile 2.2.0",
  "rustls-pki-types",
@@ -2988,7 +2988,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce291f3104611ae429de87781cf498917f380e2f3b7dcc11ec872ea9c0e7ec63"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -3009,7 +3011,9 @@ dependencies = [
 
 [[package]]
 name = "desert_macro"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45c1872b068de0fef8a2ad914d3e9210f3201a7d0424a30f5149b97b5cf6689e"
 dependencies = [
  "bytes 1.10.1",
  "desert_core",
@@ -3021,7 +3025,9 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e7f7be96a9b626bf3946bf67810799639f388bf1e63692f96ae8afc4571dfbb"
 dependencies = [
  "desert_core",
  "desert_macro",
@@ -4168,7 +4174,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.24",
  "rlimit",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "serde",
  "tempfile",
  "test-r",
@@ -4676,7 +4682,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "prometheus",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "serde",
  "test-r",
  "thiserror 2.0.17",
@@ -5466,7 +5472,7 @@ dependencies = [
  "hyper 1.7.0",
  "hyper-util",
  "log",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "rustls-native-certs 0.8.2",
  "rustls-pki-types",
  "tokio",
@@ -5914,9 +5920,9 @@ dependencies = [
 
 [[package]]
 name = "iri-string"
-version = "0.7.8"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc5ebe9c3a1a7a5127f920a418f7585e9e758e911d0466ed004f393b0e380b2"
+checksum = "4f867b9d1d896b67beb18518eda36fdb77a32ea590de864f1325b294a6d14397"
 dependencies = [
  "memchr",
  "serde",
@@ -6228,7 +6234,7 @@ dependencies = [
  "k8s-openapi",
  "kube-core",
  "pem",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "rustls-pemfile 2.2.0",
  "secrecy 0.10.3",
  "serde",
@@ -8765,7 +8771,7 @@ dependencies = [
  "quinn-proto",
  "quinn-udp",
  "rustc-hash 2.1.1",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "socket2 0.6.1",
  "thiserror 2.0.17",
  "tokio",
@@ -8785,7 +8791,7 @@ dependencies = [
  "rand 0.9.2",
  "ring",
  "rustc-hash 2.1.1",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "rustls-pki-types",
  "slab",
  "thiserror 2.0.17",
@@ -9152,7 +9158,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "quinn",
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -9516,9 +9522,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.34"
+version = "0.23.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a9586e9ee2b4f8fab52a0048ca7334d7024eef48e2cb9407e3497bb7cab7fa7"
+checksum = "533f54bc6a7d4f647e46ad909549eda97bf5afc1585190ef692b4286b198bd8f"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -9789,9 +9795,9 @@ dependencies = [
 
 [[package]]
 name = "sdd"
-version = "4.2.4"
+version = "4.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a8729f5224c38cb041e72fa9968dd4e379d3487b85359539d31d75ed95992d8"
+checksum = "761f511cb884dc21c5debb847b53f6dfa3e5896fb0a46c8b33be758d747f6028"
 
 [[package]]
 name = "sec1"
@@ -11259,7 +11265,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
- "rustls 0.23.34",
+ "rustls 0.23.35",
  "tokio",
 ]
 
