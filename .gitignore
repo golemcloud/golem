@@ -58,28 +58,5 @@ claude-flow
 # Removed Windows wrapper files per user request
 hive-mind-prompt-*.txt
 
-# MCP Server development artifacts
-/mcp-interaction-commands.sh
-/test-dynamic-tools.sh
-/test-mcp-tool-execution.sh
-/push-and-test-ci.sh
-/demo-mcp-with-services.sh
-/mcp_server_demo.ipynb
-/CODE-QUALITY-ANALYSIS.md
-/TEST-COVERAGE-ANALYSIS.md
-/BOUNTY-STATUS-ANALYSIS.md
-/MCP-SERVER-IMPLEMENTATION-PLAN.md
-/RMCP-RESEARCH-FINDINGS.md
-/TDD-IMPLEMENTATION-PLAN.md
-/TDD-PROGRESS.md
-/CHATGPT-PLUS-MCP-INTEGRATION.md
-/CI-BINARY-ARCHITECTURE-ISSUE.md
-/CI-SERVICE-INTEGRATION-PROPOSAL.md
-/CLAUDE.md
-/GITHUB-ACTIONS-FORK-TESTING.md
-/build-linux-binaries-docker.sh
-/upload-service-artifacts.sh
-/docs/MCP-SEQUENCE-DIAGRAM.md
-cli/golem-cli/src/mcp_server/test_tool_gen.rs
-cli/golem-cli/src/mcp_server/tools_old.rs.backup
+# MCP Server development artifacts (moved to .local/mcp-dev/ - see line 25)
 
