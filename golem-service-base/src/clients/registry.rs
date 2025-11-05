@@ -107,6 +107,7 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<u8>, RegistryServiceError>;
 
+    // will also return metadata for deleted components
     async fn get_component_metadata(
         &self,
         component_id: &ComponentId,
@@ -114,18 +115,21 @@ pub trait RegistryService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
+    // will only return non-deleted components
     async fn get_latest_component_metadata(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, RegistryServiceError>;
 
+    // will only return non-deleted components
     async fn get_all_component_versions(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, RegistryServiceError>;
 
+    // will only return non-deleted components
     async fn resolve_component(
         &self,
         resolving_account_id: &AccountId,
@@ -136,12 +140,14 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ComponentDto>, RegistryServiceError>;
 
     // agent types api
+    // will only return agent types provided by non-deleted components
     async fn get_all_agent_types(
         &self,
         environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
 
+    // will only return agent types provided by non-deleted components
     async fn get_agent_type(
         &self,
         environment_id: &EnvironmentId,

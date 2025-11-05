@@ -50,13 +50,6 @@ pub trait ComponentService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
 
-    /// Gets the latest cached metadata of a given component, if any.
-    ///
-    /// This is guaranteed to not make any remote service calls, but not guaranteed it's returning
-    /// the most up-to-date information about which component version is the latest. If there is
-    /// no cached information about this component at all, it returns None.
-    async fn get_latest_cached_by_id(&self, component_id: &ComponentId) -> Option<Component>;
-
     async fn get_all_versions(
         &self,
         component_id: &ComponentId,
@@ -66,14 +59,14 @@ pub trait ComponentService: Send + Sync {
 
 pub struct CachedComponentService {
     inner: Arc<dyn ComponentService>,
-    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<ComponentServiceError>>,
+    _cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<ComponentServiceError>>,
 }
 
 impl CachedComponentService {
     pub fn new(inner: Arc<dyn ComponentService>, cache_capacity: usize) -> Self {
         Self {
             inner,
-            cache: Cache::new(
+            _cache: Cache::new(
                 Some(cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
