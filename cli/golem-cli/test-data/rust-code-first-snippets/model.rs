@@ -15,7 +15,7 @@ pub struct AllPrimitives {
     pub f32v: f32,
     pub f64v: f64,
     pub boolv: bool,
-    //pub charv: char, // TODO; https://github.com/golemcloud/golem/issues/2272
+    //pub charv: char, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
     pub stringv: String,
 }
 
@@ -25,8 +25,8 @@ pub struct OptionResultBound {
     pub option_str: Option<String>,
     pub res_ok: Result<String, String>,
     pub res_num_err: Result<u32, String>,
-    pub res_unit_ok: Result<String, String>, // TODO; https://github.com/golemcloud/golem/issues/2274
-    pub res_unit_err: Result<String, String>, // TODO; https://github.com/golemcloud/golem/issues/2274
+    pub res_unit_ok: Result<String, String>, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
+    pub res_unit_err: Result<String, String>, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
     pub bound_u8: Bound<u8>,
     pub bound_str: Bound<String>,
 }
@@ -42,7 +42,7 @@ pub struct Tuples {
 pub struct Collections {
     pub list_u8: Vec<u8>,
     pub list_str: Vec<String>,
-    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
     // pub map_num: HashMap<String, f64>,
     // pub map_text: HashMap<i32, String>,
 }
@@ -52,7 +52,7 @@ pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
     pub flag: bool,
-    //pub symbol: char, // TODO; https://github.com/golemcloud/golem/issues/2272
+    //pub symbol: char, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
 }
 
 #[derive(Schema)]
@@ -73,7 +73,7 @@ pub enum SimpleEnum {
     F32(f32),
     F64(f64),
     Bool(bool),
-    // Char(char), //TODO; https://github.com/golemcloud/golem/issues/2272
+    // Char(char), //TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
     String(String),
     Struct(SimpleStruct),
     Unit,
@@ -89,7 +89,7 @@ pub enum EnumWithOnlyLiterals {
 #[derive(Schema)]
 pub enum EnumWithCollections {
     Vec(Vec<u8>),
-    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
     // Map(HashMap<String, f64>),
     Tuple((String, f64)),
     Bound(Bound<u8>),
@@ -102,7 +102,7 @@ pub enum ComplexEnum {
     ListOfStructs(Vec<SimpleStruct>),
     Option(Option<String>),
     Result(Result<String, String>),
-    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
     //Map(HashMap<String, f64>),
     Bound(Bound<String>),
     Tuple((String, f64, bool)),

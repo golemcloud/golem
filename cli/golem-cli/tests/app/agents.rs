@@ -40,8 +40,6 @@ async fn test_rust_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
-// TODO: We can find ways to unify this with the TS version of the same test later.
-// and run the same test for both TS and Rust code-first agents
 #[test]
 async fn test_rust_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
@@ -113,7 +111,6 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        // TODO; to use foo-agent, which will do RPC (once RPC is implemented)
         let agent_constructor = format!("rust:agent/bar-agent(some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
@@ -122,6 +119,9 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         let outputs = ctx.cli(cmd).await;
         assert!(outputs.success(), "function {func} failed");
     }
+
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2275
+    // run_and_assert(&ctx, "get-agent-id", &[]).await;
 
     run_and_assert(&ctx, "fun-string", &["\"sample\""]).await;
 
@@ -289,10 +289,10 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
     .await;
 
-    // TODO: https://github.com/golemcloud/golem/issues/2274
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
     // run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-ok}", &["ok"]).await;
 
-    // TODO: https://github.com/golemcloud/golem/issues/2274
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
     //run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-err}", &["err"]).await;
 
     let result_complex_arg = r#"

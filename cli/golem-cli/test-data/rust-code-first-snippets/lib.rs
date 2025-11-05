@@ -1,11 +1,15 @@
 mod model;
 
 use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::agentic::Agent;
+
 use model::*;
 
 #[agent_definition]
 trait BarAgent {
     fn new(opt_string: Option<String>) -> Self;
+
+    fn get_agent_id(&self) -> String;
 
     fn fun_string(&self, string: String) -> String;
 
@@ -35,7 +39,7 @@ trait BarAgent {
 
     fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // TODO: IntoValue and FromValueAndType don't handle tuples with more than 3 elements yet
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
     // fn fun_tuple_complex(
     //     &mut self,
     //     tuple: (String, f64, AllPrimitives, bool),
@@ -84,6 +88,10 @@ impl BarAgent for BarAgentImpl {
         BarAgentImpl {
             _id: opt_string.unwrap_or_else(|| "default_id".to_string()),
         }
+    }
+
+    fn get_agent_id(&self) -> String {
+        self.get_id()
     }
 
     fn fun_string(&self, string: String) -> String {
@@ -142,7 +150,7 @@ impl BarAgent for BarAgentImpl {
         tuple
     }
 
-    // Doesn't work yet
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
     // fn fun_tuple_complex(
     //     &mut self,
     //     tuple: (String, f64, AllPrimitives, bool),
