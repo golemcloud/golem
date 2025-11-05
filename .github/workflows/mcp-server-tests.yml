@@ -212,13 +212,13 @@ jobs:
 
       - name: Validate demo script syntax
         run: |
-          bash -n demo-mcp-simple.sh
-          bash -n demo-mcp-verified.sh
-          bash -n demo-mcp-e2e-workflow.sh
+          bash -n cli/golem-cli/demo-mcp-simple.sh
+          bash -n cli/golem-cli/demo-mcp-verified.sh
+          bash -n cli/golem-cli/demo-mcp-e2e-workflow.sh
 
       - name: Check demo script dependencies
         run: |
-          if ! grep -q "golem-cli" demo-mcp-simple.sh; then
+          if ! grep -q "golem-cli" cli/golem-cli/demo-mcp-simple.sh; then
             echo "❌ Demo script missing golem-cli reference"
             exit 1
           fi
@@ -245,8 +245,8 @@ jobs:
 
       - name: Run verified demo
         run: |
-          chmod +x demo-mcp-verified.sh
-          ./demo-mcp-verified.sh
+          chmod +x cli/golem-cli/demo-mcp-verified.sh
+          ./cli/golem-cli/demo-mcp-verified.sh
 
       - name: Verify demo output
         run: |
@@ -290,8 +290,8 @@ jobs:
 
       - name: Run end-to-end workflow demo
         run: |
-          chmod +x demo-mcp-e2e-workflow.sh
-          ./demo-mcp-e2e-workflow.sh
+          chmod +x cli/golem-cli/demo-mcp-e2e-workflow.sh
+          ./cli/golem-cli/demo-mcp-e2e-workflow.sh
 
       - name: Verify workflow completed
         run: |
