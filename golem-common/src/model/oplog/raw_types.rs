@@ -298,19 +298,6 @@ pub struct TimestampedUpdateDescription {
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-pub enum OplogPayload {
-    /// Load the payload from the given byte array
-    Inline(Vec<u8>),
-
-    /// Load the payload from the blob storage
-    External {
-        payload_id: PayloadId,
-        md5_hash: Vec<u8>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
 pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)

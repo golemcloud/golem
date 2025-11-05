@@ -20,8 +20,10 @@ mod raw_types;
 
 #[cfg(test)]
 mod tests;
+mod payload;
 
 pub use crate::base_model::OplogIndex;
+pub use payload::*;
 pub use public_types::*;
 pub use raw_types::*;
 
@@ -36,7 +38,7 @@ use crate::model::{ProjectId, RetryConfig};
 use crate::oplog_entry;
 use desert_rust::BinaryCodec;
 use golem_wasm::wasmtime::ResourceTypeId;
-use golem_wasm::{ValueAndType, WitValue};
+use golem_wasm::{Value, ValueAndType, WitValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -60,7 +62,7 @@ oplog_entry! {
     ExportedFunctionCompleted {
         hint: false
         raw {
-            response: OplogPayload,
+            response: OplogPayload<Option<ValueAndType>>,
             consumed_fuel: i64,
         }
         public {
@@ -268,8 +270,8 @@ oplog_entry! {
         hint: false
         raw {
             function_name: String,
-            request: OplogPayload,
-            response: OplogPayload,
+            request: OplogPayload<HostRequest>,
+            response: OplogPayload<HostResponse>,
             durable_function_type: DurableFunctionType,
         }
         public {
@@ -370,7 +372,7 @@ oplog_entry! {
         hint: false
         raw {
             function_name: String,
-            request: OplogPayload,
+            request: OplogPayload<Vec<Value>>,
             idempotency_key: IdempotencyKey,
             trace_id: TraceId,
             trace_states: Vec<String>,
