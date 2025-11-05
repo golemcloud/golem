@@ -91,6 +91,7 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<(), RegistryServiceError>;
 
     // plugins api
+    // will return the plugin registration even if it is deleted
     async fn get_plugin_registration_by_id(
         &self,
         plugin_id: &PluginRegistrationId,
@@ -98,6 +99,7 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<PluginRegistration, RegistryServiceError>;
 
     // components api
+    // will return the component even if it is deleted
     async fn download_component(
         &self,
         component_id: &ComponentId,

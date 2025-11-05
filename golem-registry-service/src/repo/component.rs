@@ -85,6 +85,7 @@ pub trait ComponentRepo: Send + Sync {
         &self,
         component_id: &Uuid,
         revision_id: i64,
+        include_deleted: bool
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
     async fn get_by_name_and_revision(
@@ -259,9 +260,10 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         &self,
         component_id: &Uuid,
         revision_id: i64,
+        include_deleted: bool,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         self.repo
-            .get_by_id_and_revision(component_id, revision_id)
+            .get_by_id_and_revision(component_id, revision_id, include_deleted)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
             .await
     }
@@ -713,6 +715,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
         &self,
         component_id: &Uuid,
         revision_id: i64,
+        include_deleted: bool,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
         let revision = self
             .with_ro("get_by_id_and_revision")
@@ -725,10 +728,11 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND cr.deleted = FALSE
+                    WHERE c.component_id = $1 AND cr.revision_id = $2 AND ($3 OR cr.deleted = FALSE)
                 "#})
                 .bind(component_id)
-                .bind(revision_id),
+                .bind(revision_id)
+                .bind(include_deleted)
             )
             .await?;
 

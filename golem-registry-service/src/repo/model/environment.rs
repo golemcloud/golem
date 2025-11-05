@@ -174,7 +174,7 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             security_overrides: value.revision.security_overrides,
 
             owner_account_id: AccountId(value.owner_account_id),
-            roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
+            roles_from_active_shares: HashSet::from_iter(environment_roles_from_bit_vector(
                 value.environment_roles_from_shares,
             )),
 

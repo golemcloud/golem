@@ -108,7 +108,7 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::CreateComponent, auth)
+            .get_and_authorize(environment_id, EnvironmentAction::CreateComponent, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -191,7 +191,7 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
-                environment.roles_from_shares,
+                environment.roles_from_active_shares,
             )?;
 
         self.component_compilation
@@ -221,7 +221,7 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, auth)
+            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
@@ -232,7 +232,7 @@ impl ComponentWriteService {
         let component = component_record.try_into_model(
             environment.application_id.clone(),
             environment.owner_account_id.clone(),
-            environment.roles_from_shares.clone(),
+            environment.roles_from_active_shares.clone(),
         )?;
 
         // Fast path. If the current revision does not match we will reject it later anyway
@@ -323,7 +323,7 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
-                environment.roles_from_shares,
+                environment.roles_from_active_shares,
             )?;
 
         self.component_compilation

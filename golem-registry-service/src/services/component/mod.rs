@@ -72,6 +72,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id).clone(),
                     EnvironmentAction::ViewComponent,
+                    false,
                     auth,
                 )
                 .await
@@ -84,7 +85,7 @@ impl ComponentService {
         Ok(record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?)
     }
 
@@ -106,6 +107,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id).clone(),
                     EnvironmentAction::ViewComponent,
+                    false,
                     auth,
                 )
                 .await
@@ -118,7 +120,7 @@ impl ComponentService {
         Ok(record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?)
     }
 
@@ -143,7 +145,7 @@ impl ComponentService {
 
         let environment =
             self.environment_service
-                .get_and_authorize(&environment_id, EnvironmentAction::ViewComponent, auth)
+                .get_and_authorize(&environment_id, EnvironmentAction::ViewComponent, false, auth)
                 .await
                 .map_err(|err| match err {
                     EnvironmentError::EnvironmentNotFound(_)
@@ -157,7 +159,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
-                    environment.roles_from_shares.clone(),
+                    environment.roles_from_active_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -169,13 +171,18 @@ impl ComponentService {
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(component_id = %component_id, "Get component revision");
 
         let record = self
             .component_repo
-            .get_by_id_and_revision(&component_id.0, revision.0 as i64)
+            .get_by_id_and_revision(
+                &component_id.0,
+                revision.0 as i64,
+                include_deleted,
+            )
             .await?
             .ok_or(ComponentError::NotFound)?;
 
@@ -184,6 +191,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id),
                     EnvironmentAction::ViewComponent,
+                    include_deleted,
                     auth,
                 )
                 .await
@@ -196,7 +204,7 @@ impl ComponentService {
         Ok(record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?)
     }
 
@@ -209,7 +217,7 @@ impl ComponentService {
 
         let environment =
             self.environment_service
-                .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+                .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
                 .await
                 .map_err(|err| match err {
                     EnvironmentError::EnvironmentNotFound(_)
@@ -226,7 +234,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
-                    environment.roles_from_shares.clone(),
+                    environment.roles_from_active_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -257,6 +265,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id),
                     EnvironmentAction::ViewComponent,
+                    false,
                     auth,
                 )
                 .await
@@ -269,7 +278,7 @@ impl ComponentService {
         Ok(record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?)
     }
 
@@ -285,7 +294,7 @@ impl ComponentService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -304,7 +313,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
-                    environment.roles_from_shares.clone(),
+                    environment.roles_from_active_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -335,6 +344,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id),
                     EnvironmentAction::ViewComponent,
+                    false,
                     auth,
                 )
                 .await
@@ -353,7 +363,7 @@ impl ComponentService {
         let converted = record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?;
 
         Ok(Some(converted))
@@ -398,7 +408,7 @@ impl ComponentService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -417,7 +427,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
-                    environment.roles_from_shares.clone(),
+                    environment.roles_from_active_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -454,6 +464,7 @@ impl ComponentService {
                 .get_and_authorize(
                     &EnvironmentId(record.environment_id),
                     EnvironmentAction::ViewComponent,
+                    false,
                     auth,
                 )
                 .await
@@ -466,7 +477,7 @@ impl ComponentService {
         Ok(record.try_into_model(
             environment.application_id,
             environment.owner_account_id,
-            environment.roles_from_shares,
+            environment.roles_from_active_shares,
         )?)
     }
 
@@ -502,10 +513,11 @@ impl ComponentService {
         &self,
         component_id: &ComponentId,
         revision: ComponentRevision,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
         let component = self
-            .get_component_revision(component_id, revision, auth)
+            .get_component_revision(component_id, revision, include_deleted, auth)
             .await?;
 
         let stream = self

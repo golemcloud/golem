@@ -108,7 +108,7 @@ impl DeploymentService {
     ) -> Result<Deployment, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -119,7 +119,7 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
 
@@ -169,7 +169,7 @@ impl DeploymentService {
     ) -> Result<Vec<Deployment>, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -180,7 +180,7 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeployment,
         )?;
 
@@ -202,7 +202,7 @@ impl DeploymentService {
     ) -> Result<DeploymentPlan, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -213,7 +213,7 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeploymentPlan,
         )?;
 
@@ -240,7 +240,7 @@ impl DeploymentService {
     ) -> Result<DeploymentSummary, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -251,7 +251,7 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeploymentPlan,
         )?;
 

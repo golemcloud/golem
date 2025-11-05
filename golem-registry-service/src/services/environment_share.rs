@@ -89,7 +89,7 @@ impl EnvironmentShareService {
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         self.environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::CreateShare, auth)
+            .get_and_authorize(&environment_id, EnvironmentAction::CreateShare, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -128,6 +128,7 @@ impl EnvironmentShareService {
             .get_and_authorize(
                 &environment_share.environment_id,
                 EnvironmentAction::UpdateShare,
+                false,
                 auth,
             )
             .await
@@ -174,6 +175,7 @@ impl EnvironmentShareService {
             .get_and_authorize(
                 &environment_share.environment_id,
                 EnvironmentAction::DeleteShare,
+                false,
                 auth,
             )
             .await
@@ -226,6 +228,7 @@ impl EnvironmentShareService {
             .get_and_authorize(
                 &environment_share.environment_id,
                 EnvironmentAction::ViewShares,
+                false,
                 auth,
             )
             .await
@@ -245,7 +248,7 @@ impl EnvironmentShareService {
         auth: &AuthCtx,
     ) -> Result<Vec<EnvironmentShare>, EnvironmentShareError> {
         self.environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::ViewShares, auth)
+            .get_and_authorize(&environment_id, EnvironmentAction::ViewShares, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -273,7 +276,7 @@ impl EnvironmentShareService {
         auth: &AuthCtx,
     ) -> Result<Option<EnvironmentShare>, EnvironmentShareError> {
         self.environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewShares, auth)
+            .get_and_authorize(environment_id, EnvironmentAction::ViewShares, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {

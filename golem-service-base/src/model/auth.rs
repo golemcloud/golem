@@ -274,7 +274,7 @@ impl AuthCtx {
         }
     }
 
-    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment)
+    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment / does this user own the environment)
     /// should be disabled for this user.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
         has_any_role(self.account_roles(), &[AccountRole::Admin])
