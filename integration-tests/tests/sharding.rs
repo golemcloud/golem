@@ -34,7 +34,7 @@ mod tests {
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
-    use golem_test_framework::dsl::TestDslUnsafe;
+    use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 
     pub struct Tracing;
 
@@ -53,7 +53,8 @@ mod tests {
             number_of_shards_override: Some(16),
             ..EnvBasedTestDependenciesConfig::new()
         })
-        .await;
+        .await
+        .unwrap();
 
         deps.redis_monitor().assert_valid();
 
@@ -390,16 +391,17 @@ mod tests {
 
         async fn create_component_and_start_workers(&self, n: usize) -> Vec<WorkerId> {
             let admin = self.admin().await;
+            let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
-            let component_id = admin.component("option-service").store().await;
-            info!("ComponentId: {}", component_id);
+            let component = admin.component(&env.id, "option-service").store().await.unwrap();
+            info!("ComponentId: {}", component.id);
 
             let mut worker_ids = Vec::new();
 
             for i in 1..=n {
                 info!("Worker {i} starting");
                 let worker_name = format!("sharding-test-{i}");
-                let worker_id = admin.start_worker(&component_id, &worker_name).await;
+                let worker_id = admin.start_worker(&component.id, &worker_name).await.unwrap();
                 info!("Worker {i} started");
                 worker_ids.push(worker_id);
             }
