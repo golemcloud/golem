@@ -20,7 +20,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{IdempotencyKey, WorkerId, WorkerStatus};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Record, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -36,8 +36,9 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin().await;
+async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8586;
 
@@ -45,81 +46,82 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = admin.component("http-client-2").store().await;
+    let component = user.component(&env.id, "http-client-2").store().await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let worker_id = admin
+    let worker_id = user
         .start_worker_with(
-            &component_id,
+            &component.id,
             source_worker_name.as_str(),
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component_id.clone(),
+        component_id: component.id.clone(),
         worker_name: target_worker_name,
     };
 
-    admin.log_output(&worker_id).await;
+    user.log_output(&worker_id).await?;
 
-    admin
+    user
         .invoke(
             &worker_id,
             "golem:it/api.{start-polling}",
             vec!["first".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await?;
 
-    admin
+    user
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
-        .await;
+        .await?;
 
-    admin.interrupt(&worker_id).await;
+    user.interrupt(&worker_id).await?;
 
-    let oplog = admin.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = user.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    admin
+    user
         .fork_worker(&worker_id, &target_worker_id, last_index)
-        .await;
+        .await?;
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    admin
+    user
         .wait_for_status(
             &target_worker_id,
             WorkerStatus::Idle,
             Duration::from_secs(10),
         )
-        .await;
+        .await?;
 
-    let result = admin
+    let result = user
         .search_oplog(&target_worker_id, "Received first")
-        .await;
+        .await?;
 
     http_server.abort();
 
     assert_eq!(result.len(), 1);
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin().await;
+async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
 
-    let component_id = admin.component("shopping-cart").store().await;
+    let component = user.component(&env.id, "shopping-cart").store().await?;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -128,15 +130,15 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: source_worker_name,
     };
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    let _ = admin
+    let _ = user
         .invoke_and_await(
             &source_worker_id,
             "golem:it/api.{add-item}",
@@ -148,7 +150,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
             ])
             .into_value_and_type()],
         )
-        .await;
+        .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -157,9 +159,9 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: target_worker_name,
     };
 
-    let source_oplog = admin
+    let source_oplog = user
         .get_oplog(&source_worker_id, OplogIndex::INITIAL)
-        .await;
+        .await?;
 
     let oplog_index_of_function_invoked: OplogIndex = OplogIndex::from_u64(3);
 
@@ -172,27 +174,29 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         PublicOplogEntry::ExportedFunctionInvoked(_)
     ));
 
-    let _ = admin
+    let _ = user
         .fork_worker(
             &source_worker_id,
             &target_worker_id,
             oplog_index_of_function_invoked,
         )
-        .await;
+        .await?;
 
-    admin
+    user
         .wait_for_status(
             &target_worker_id,
             WorkerStatus::Idle,
             Duration::from_secs(10),
         )
-        .await;
+        .await?;
 
-    let total_cart_initialisation = admin
+    let total_cart_initialisation = user
         .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
-        .await;
+        .await?;
 
     assert_eq!(total_cart_initialisation.len(), 1);
+
+    Ok(())
 }
 
 #[test]
@@ -201,94 +205,97 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[flaky(5)]
 #[timeout(120000)]
 async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin().await;
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
     let response = Arc::new(Mutex::new("initial".to_string()));
     let host_http_port = 8587;
     let http_server = run_http_server(&response, host_http_port);
 
-    let component_id = admin.component("http-client-2").store().await;
+    let component = user.component(&env.id, "http-client-2").store().await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let source_worker_name = Uuid::new_v4().to_string();
-    let source_worker_id = admin
+    let source_worker_id = user
         .start_worker_with(
-            &component_id,
+            &component.id,
             source_worker_name.as_str(),
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component_id.clone(),
+        component_id: component.id.clone(),
         worker_name: target_worker_name,
     };
 
-    admin.log_output(&source_worker_id).await;
+    user.log_output(&source_worker_id).await?;
 
-    admin
+    user
         .invoke(
             &source_worker_id,
             "golem:it/api.{start-polling}",
             vec!["first".into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await?;
 
-    admin
+    user
         .wait_for_status(
             &source_worker_id,
             WorkerStatus::Running,
             Duration::from_secs(10),
         )
-        .await;
+        .await?;
 
-    let oplog = admin
+    let oplog = user
         .get_oplog(&source_worker_id, OplogIndex::INITIAL)
-        .await;
+        .await?;
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    admin
+    user
         .fork_worker(&source_worker_id, &target_worker_id, last_index)
-        .await;
+        .await?;
 
     {
         let mut response = response.lock().unwrap();
         *response = "first".to_string();
     }
 
-    admin
+    user
         .wait_for_status(
             &target_worker_id,
             WorkerStatus::Idle,
             Duration::from_secs(20),
         )
-        .await;
+        .await?;
 
-    admin
+    user
         .wait_for_status(
             &source_worker_id,
             WorkerStatus::Idle,
             Duration::from_secs(20),
         )
-        .await;
+        .await?;
 
-    let target_result = admin
+    let target_result = user
         .search_oplog(&target_worker_id, "Received first")
-        .await;
-    let source_result = admin
+        .await?;
+    let source_result = user
         .search_oplog(&source_worker_id, "Received first")
-        .await;
+        .await?;
 
     http_server.abort();
 
     assert_eq!(target_result.len(), 1);
     assert_eq!(source_result.len(), 1);
+
+    Ok(())
 }
 
 #[test]
