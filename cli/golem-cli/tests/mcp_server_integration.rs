@@ -8,12 +8,27 @@ use tempfile::TempDir;
 
 /// Helper to start MCP server in background
 fn start_mcp_server(port: u16, temp_dir: &TempDir) -> Child {
-    // Find the compiled golem-cli binary in target/debug
+    // Find the compiled golem-cli binary - try multiple locations for CI compatibility
     let binary_path = std::env::current_exe()
         .expect("Failed to get test executable path")
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.join("golem-cli"))
+        .and_then(|target_debug| {
+            // First try: target/debug/golem-cli (CI artifact location)
+            let direct_path = target_debug.join("golem-cli");
+            if direct_path.exists() {
+                return Some(direct_path);
+            }
+
+            // Second try: target/release/golem-cli (release build)
+            let release_path = target_debug.parent()?.join("release").join("golem-cli");
+            if release_path.exists() {
+                return Some(release_path);
+            }
+
+            // Fallback: assume target/debug (original behavior)
+            Some(direct_path)
+        })
         .expect("Failed to find golem-cli binary");
 
     Command::new(binary_path)
