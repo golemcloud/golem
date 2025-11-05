@@ -69,6 +69,13 @@ hive-mind-prompt-*.txt
 /RMCP-RESEARCH-FINDINGS.md
 /TDD-IMPLEMENTATION-PLAN.md
 /TDD-PROGRESS.md
+/CHATGPT-PLUS-MCP-INTEGRATION.md
+/CI-BINARY-ARCHITECTURE-ISSUE.md
+/CLAUDE.md
+/GITHUB-ACTIONS-FORK-TESTING.md
+/build-linux-binaries-docker.sh
+/upload-service-artifacts.sh
+/docs/MCP-SEQUENCE-DIAGRAM.md
 cli/golem-cli/src/mcp_server/test_tool_gen.rs
 cli/golem-cli/src/mcp_server/tools_old.rs.backup
 
