@@ -61,6 +61,9 @@ hive-mind-prompt-*.txt
 # MCP Server development artifacts
 /mcp-interaction-commands.sh
 /test-dynamic-tools.sh
+/test-mcp-tool-execution.sh
+/push-and-test-ci.sh
+/demo-mcp-with-services.sh
 /mcp_server_demo.ipynb
 /CODE-QUALITY-ANALYSIS.md
 /TEST-COVERAGE-ANALYSIS.md
