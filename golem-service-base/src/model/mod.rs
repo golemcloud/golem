@@ -21,7 +21,7 @@ use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
     FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
 };
-use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::{OplogIndex, ScanCursor, WorkerFilter, WorkerId};
 use golem_wasm::ValueAndType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use poem_openapi::Object;
@@ -85,6 +85,9 @@ pub struct DeactivatePluginResponse {}
 pub struct RevertWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+pub struct ForkWorkerResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct CancelInvocationResponse {
     pub canceled: bool,
 }
@@ -112,6 +115,14 @@ pub struct GetFilesResponse {
 pub struct UpdateWorkerRequest {
     pub mode: WorkerUpdateMode,
     pub target_version: ComponentRevision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ForkWorkerRequest {
+    pub target_worker_id: WorkerId,
+    pub oplog_index_cutoff: OplogIndex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]

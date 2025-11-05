@@ -13,6 +13,9 @@
 // limitations under the License.
 
 mod api;
+mod fork;
+mod rib;
+mod rib_repl;
 mod worker;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};

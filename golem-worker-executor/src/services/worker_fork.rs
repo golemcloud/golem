@@ -53,6 +53,7 @@ use tokio::runtime::Handle;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
+    // TODO: this should be restricted to targets within the same component
     async fn fork(
         &self,
         fork_account_id: &AccountId,
@@ -61,6 +62,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError>;
 
+    // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: &AccountId,

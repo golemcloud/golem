@@ -1457,6 +1457,83 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/fork:
+    post:
+      tags:
+      - Worker
+      summary: Fork a worker
+      description: Fork a worker by creating a new worker with the oplog up to the provided index
+      operationId: fork_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/ForkWorkerRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ForkWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/components/{component_id}/workers/{worker_name}/invocations/{idempotency_key}:
     delete:
       tags:
@@ -9059,6 +9136,21 @@ components:
       enum:
       - directory
       - file
+    ForkWorkerRequest:
+      title: ForkWorkerRequest
+      type: object
+      properties:
+        targetWorkerId:
+          $ref: '#/components/schemas/WorkerId'
+        oplogIndexCutoff:
+          type: integer
+          format: uint64
+      required:
+      - targetWorkerId
+      - oplogIndexCutoff
+    ForkWorkerResponse:
+      title: ForkWorkerResponse
+      type: object
     GetFilesResponse:
       title: GetFilesResponse
       type: object
