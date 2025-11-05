@@ -63,6 +63,9 @@ trait BarAgent {
 
     fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
+    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+
     fn fun_result_complex(
         &mut self,
         result: Result<NestedStruct, ComplexEnum>,
@@ -193,6 +196,11 @@ impl BarAgent for BarAgentImpl {
     fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()> {
         result
     }
+
+    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
+    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
+    //     result
+    // }
 
     fn fun_result_complex(
         &mut self,

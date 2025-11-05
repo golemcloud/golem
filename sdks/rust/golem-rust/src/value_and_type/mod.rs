@@ -377,6 +377,36 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     }
 }
 
+impl FromValueAndType for Result<(), ()> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        match extractor.result() {
+            Some(Ok(Some(_))) => Err("Expected unit Ok case".to_string()),
+            Some(Ok(None)) => Ok(Ok(())),
+            Some(Err(Some(_))) => Err("Expected unit Err case".to_string()),
+            Some(Err(None)) => Ok(Err(())),
+            None => Err("Expected Result".to_string()),
+        }
+    }
+}
+
+impl IntoValue for Result<(), ()> {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        match self {
+            Ok(_) => builder.result_ok().finish().finish(),
+            Err(_) => builder.result_err().finish().finish(),
+        }
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let mut builder = builder.result(None, None);
+        builder = builder.ok_unit();
+        builder = builder.err_unit();
+        builder.finish()
+    }
+}
+
 impl<S: FromValueAndType> FromValueAndType for Result<S, ()> {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl WitValueExtractor<'a, 'b>,
