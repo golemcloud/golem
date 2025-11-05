@@ -276,8 +276,18 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
 
     // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
-    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result}", &["ok(\"success\")"]).await;
-    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result}", &["err(\"failed\")"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/bar-agent.{fun-result}",
+        &["ok(\"success\")"],
+    )
+    .await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/bar-agent.{fun-result}",
+        &["err(\"failed\")"],
+    )
+    .await;
 
     // TODO: https://github.com/golemcloud/golem/issues/2274
     // run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-ok}", &["ok"]).await;
@@ -301,7 +311,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
 
-    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-option}", &["some(\"optional value\")"]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/bar-agent.{fun-option}",
+        &["some(\"optional value\")"],
+    )
+    .await;
 
     let option_complex_arg = r#"
     some({
@@ -317,7 +332,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     })
     "#;
 
-    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-option-complex}", &[option_complex_arg]).await;
+    run_and_assert(
+        &ctx,
+        "rust:agent/bar-agent.{fun-option-complex}",
+        &[option_complex_arg],
+    )
+    .await;
 
     run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
 }
