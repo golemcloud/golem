@@ -19,14 +19,7 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response,
-    delete_worker_response, get_oplog_response, get_workers_metadata_response,
-    interrupt_worker_response, resume_worker_response, revert_worker_response,
-    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
-    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest,
-    GetFileSystemNodeRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest,
-    RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
+    cancel_invocation_response, complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response, get_workers_metadata_response, interrupt_worker_response, resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest, GetFileContentsRequest, GetFileSystemNodeRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -1072,6 +1065,46 @@ impl TestDsl for TestWorkerExecutor {
             }
         }
         Ok(Bytes::from(bytes))
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_version(&source_worker_id.component_id)
+            .await?;
+
+        let target_worker_id = WorkerId {
+            component_id: source_worker_id.component_id.clone(),
+            worker_name: target_worker_name.to_string()
+        };
+
+        let response = self
+            .client
+            .clone()
+            .fork_worker(ForkWorkerRequest {
+                source_worker_id: Some(source_worker_id.clone().into()),
+                target_worker_id: Some(target_worker_id.into()),
+                oplog_index_cutoff: oplog_index.into(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(workerexecutor::v1::fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(workerexecutor::v1::fork_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Error forking worker: {error:?}"))
+            }
+            None => Err(anyhow!(
+                "No response from golem-worker-executor fork-worker call"
+            )),
+        }
     }
 }
 

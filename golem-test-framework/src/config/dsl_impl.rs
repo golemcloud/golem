@@ -63,6 +63,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::Payload;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
+use golem_service_base::model::ForkWorkerRequest;
 
 #[derive(Clone)]
 pub struct TestDependenciesTestDsl<Deps> {
@@ -694,6 +695,30 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
             .get_file_content(&worker_id.component_id.0, &worker_id.worker_name, path)
             .await?;
         Ok(result)
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        client.fork_worker(
+            &source_worker_id.component_id.0,
+            &source_worker_id.worker_name,
+            &golem_client::model::ForkWorkerRequest {
+                target_worker_id: WorkerId { component_id: source_worker_id.component_id.clone(), worker_name: target_worker_name.to_string() },
+                oplog_index_cutoff: oplog_index.as_u64()
+            }
+        ).await?;
+
+        Ok(())
     }
 }
 

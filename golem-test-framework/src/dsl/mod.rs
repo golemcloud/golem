@@ -488,6 +488,13 @@ pub trait TestDsl {
     ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>>;
 
     async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes>;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
