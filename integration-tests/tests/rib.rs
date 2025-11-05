@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::test;
 use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{WorkerId};
+use golem_common::model::WorkerId;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -30,14 +30,16 @@ use rib::{
 };
 use std::sync::Arc;
 use test_r::inherit_test_dep;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use test_r::test;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_simple_without_worker_name(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn test_rib_simple_without_worker_name(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     test_simple_rib(deps, None).await?;
     Ok(())
 }
@@ -51,7 +53,9 @@ async fn test_rib_simple_with_worker_name(deps: &EnvBasedTestDependencies) -> an
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_complex_without_worker_name(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn test_rib_complex_without_worker_name(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     test_rib_for_loop(deps, None).await?;
     Ok(())
 }
@@ -65,19 +69,26 @@ async fn test_rib_complex_with_worker_name(deps: &EnvBasedTestDependencies) -> a
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_with_resource_methods_without_worker_param(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn test_rib_with_resource_methods_without_worker_param(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     test_rib_with_resource_methods(deps, None).await?;
     Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_with_resource_methods_with_worker_param(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn test_rib_with_resource_methods_with_worker_param(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     test_rib_with_resource_methods(deps, Some("rib-with-resource-worker")).await?;
     Ok(())
 }
 
-async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) -> anyhow::Result<()> {
+async fn test_simple_rib(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) -> anyhow::Result<()> {
     let user = deps.clone().into_user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
@@ -90,8 +101,10 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
         root_package_version: component.metadata.root_package_version().clone(),
     };
 
-    let component_dependency =
-        ComponentDependency::new(component_dependency_key, component.metadata.exports().to_vec());
+    let component_dependency = ComponentDependency::new(
+        component_dependency_key,
+        component.metadata.exports().to_vec(),
+    );
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 
@@ -167,7 +180,10 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
     Ok(())
 }
 
-async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) -> anyhow::Result<()> {
+async fn test_rib_for_loop(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) -> anyhow::Result<()> {
     let user = deps.clone().into_user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
@@ -180,8 +196,10 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
         root_package_version: component.metadata.root_package_version().clone(),
     };
 
-    let component_dependency =
-        ComponentDependency::new(component_dependency_key, component.metadata.exports().to_vec());
+    let component_dependency = ComponentDependency::new(
+        component_dependency_key,
+        component.metadata.exports().to_vec(),
+    );
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 
@@ -279,7 +297,10 @@ async fn test_rib_with_resource_methods(
 ) -> anyhow::Result<()> {
     let user = deps.clone().into_user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "shopping-cart-resource").store().await?;
+    let component = user
+        .component(&env.id, "shopping-cart-resource")
+        .store()
+        .await?;
 
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
@@ -289,8 +310,10 @@ async fn test_rib_with_resource_methods(
         root_package_version: component.metadata.root_package_version().clone(),
     };
 
-    let component_dependency =
-        ComponentDependency::new(component_dependency_key, component.metadata.exports().to_vec());
+    let component_dependency = ComponentDependency::new(
+        component_dependency_key,
+        component.metadata.exports().to_vec(),
+    );
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![], vec![]);
 

@@ -393,7 +393,11 @@ mod tests {
             let admin = self.admin().await;
             let (_, env) = admin.app_and_env().await.unwrap();
             info!("Storing component");
-            let component = admin.component(&env.id, "option-service").store().await.unwrap();
+            let component = admin
+                .component(&env.id, "option-service")
+                .store()
+                .await
+                .unwrap();
             info!("ComponentId: {}", component.id);
 
             let mut worker_ids = Vec::new();
@@ -401,7 +405,10 @@ mod tests {
             for i in 1..=n {
                 info!("Worker {i} starting");
                 let worker_name = format!("sharding-test-{i}");
-                let worker_id = admin.start_worker(&component.id, &worker_name).await.unwrap();
+                let worker_id = admin
+                    .start_worker(&component.id, &worker_name)
+                    .await
+                    .unwrap();
                 info!("Worker {i} started");
                 worker_ids.push(worker_id);
             }

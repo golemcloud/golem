@@ -19,7 +19,14 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response, get_workers_metadata_response, interrupt_worker_response, resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest, GetFileContentsRequest, GetFileSystemNodeRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest
+    cancel_invocation_response, complete_promise_response, create_worker_response,
+    delete_worker_response, get_oplog_response, get_workers_metadata_response,
+    interrupt_worker_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
+    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
+    GetFileContentsRequest, GetFileSystemNodeRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -1079,7 +1086,7 @@ impl TestDsl for TestWorkerExecutor {
 
         let target_worker_id = WorkerId {
             component_id: source_worker_id.component_id.clone(),
-            worker_name: target_worker_name.to_string()
+            worker_name: target_worker_name.to_string(),
         };
 
         let response = self

@@ -18,10 +18,12 @@ use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{WorkerId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::WorkerId;
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -32,8 +34,6 @@ use std::path::Path;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
-use golem_common::model::environment::EnvironmentId;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -61,12 +61,17 @@ async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) -> anyhow:
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn test_rib_repl_with_resource_without_param(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     test_repl_invoking_resource_methods(deps, None).await?;
     Ok(())
 }
 
-async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) -> anyhow::Result<()> {
+async fn test_repl_invoking_functions(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) -> anyhow::Result<()> {
     let dsl = deps.clone().into_user().await?;
     let (_, env) = dsl.app_and_env().await?;
 
@@ -122,9 +127,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
 
     assert!(result.unwrap_err().contains("function 'add' not found"));
 
-    let result = rib_repl
-        .execute(rib3)
-        .await?;
+    let result = rib_repl.execute(rib3).await?;
 
     assert_eq!(
         result,
@@ -143,15 +146,11 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
         )))
     );
 
-    let result = rib_repl
-        .execute(rib4)
-        .await?;
+    let result = rib_repl.execute(rib4).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib5)
-        .await?;
+    let result = rib_repl.execute(rib5).await?;
 
     assert_eq!(
         result,
@@ -227,15 +226,11 @@ async fn test_repl_invoking_resource_methods(
       resource.get-cart-contents()
      "#;
 
-    let result = rib_repl
-        .execute(&rib1)
-        .await?;
+    let result = rib_repl.execute(&rib1).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib2)
-        .await?;
+    let result = rib_repl.execute(rib2).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
@@ -262,15 +257,11 @@ async fn test_repl_invoking_resource_methods(
         )))
     );
 
-    let result = rib_repl
-        .execute(rib4)
-        .await?;
+    let result = rib_repl.execute(rib4).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib5)
-        .await?;
+    let result = rib_repl.execute(rib5).await?;
 
     assert_eq!(
         result,
@@ -307,7 +298,10 @@ impl TestRibReplDependencyManager {
         test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>,
         environment_id: EnvironmentId,
     ) -> Self {
-        Self { test_dsl, environment_id }
+        Self {
+            test_dsl,
+            environment_id,
+        }
     }
 }
 
@@ -326,7 +320,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
     ) -> anyhow::Result<ComponentDependency> {
         let component = self
             .test_dsl
-            .component(&&self.environment_id, component_name.as_str())
+            .component(&self.environment_id, component_name.as_str())
             .store()
             .await?;
 
@@ -351,9 +345,7 @@ pub struct TestRibReplWorkerFunctionInvoke {
 
 impl TestRibReplWorkerFunctionInvoke {
     pub fn new(test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>) -> Self {
-        Self {
-            test_dsl,
-        }
+        Self { test_dsl }
     }
 }
 

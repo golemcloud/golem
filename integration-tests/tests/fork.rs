@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use assert2::assert;
 use axum::extract::Path;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -29,7 +30,6 @@ use std::time::Duration;
 use test_r::{flaky, inherit_test_dep, test, timeout};
 use tracing::{info, Instrument};
 use uuid::Uuid;
-use assert2::assert;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -37,7 +37,10 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn fork_interrupted_worker(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let response = Arc::new(Mutex::new("initial".to_string()));
@@ -70,16 +73,14 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     user.log_output(&worker_id).await?;
 
-    user
-        .invoke(
-            &worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await?;
+    user.invoke(
+        &worker_id,
+        "golem:it/api.{start-polling}",
+        vec!["first".into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+    user.wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
 
     user.interrupt(&worker_id).await?;
@@ -88,8 +89,7 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    user
-        .fork_worker(&worker_id, &target_worker_name, last_index)
+    user.fork_worker(&worker_id, &target_worker_name, last_index)
         .await?;
 
     {
@@ -97,13 +97,12 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
         *response = "first".to_string();
     }
 
-    user
-        .wait_for_status(
-            &target_worker_id,
-            WorkerStatus::Idle,
-            Duration::from_secs(10),
-        )
-        .await?;
+    user.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await?;
 
     let result = user
         .search_oplog(&target_worker_id, "Received first")
@@ -118,7 +117,10 @@ async fn fork_interrupted_worker(deps: &EnvBasedTestDependencies, _tracing: &Tra
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn fork_running_worker_1(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
@@ -131,27 +133,25 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         worker_name: source_worker_name,
     };
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{initialize-cart}",
+        vec!["test-user-1".into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1002".into_value_and_type()),
+            ("name", "Mud Golem".into_value_and_type()),
+            ("price", 11.0f32.into_value_and_type()),
+            ("quantity", 10u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -175,21 +175,19 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         PublicOplogEntry::ExportedFunctionInvoked(_)
     ));
 
-    user
-        .fork_worker(
-            &source_worker_id,
-            &target_worker_name,
-            oplog_index_of_function_invoked,
-        )
-        .await?;
+    user.fork_worker(
+        &source_worker_id,
+        &target_worker_name,
+        oplog_index_of_function_invoked,
+    )
+    .await?;
 
-    user
-        .wait_for_status(
-            &target_worker_id,
-            WorkerStatus::Idle,
-            Duration::from_secs(10),
-        )
-        .await?;
+    user.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(10),
+    )
+    .await?;
 
     let total_cart_initialisation = user
         .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
@@ -205,7 +203,10 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[tracing::instrument]
 #[flaky(5)]
 #[timeout(120000)]
-async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn fork_running_worker_2(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
@@ -237,21 +238,19 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 
     user.log_output(&source_worker_id).await?;
 
-    user
-        .invoke(
-            &source_worker_id,
-            "golem:it/api.{start-polling}",
-            vec!["first".into_value_and_type()],
-        )
-        .await?;
+    user.invoke(
+        &source_worker_id,
+        "golem:it/api.{start-polling}",
+        vec!["first".into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .wait_for_status(
-            &source_worker_id,
-            WorkerStatus::Running,
-            Duration::from_secs(10),
-        )
-        .await?;
+    user.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Running,
+        Duration::from_secs(10),
+    )
+    .await?;
 
     let oplog = user
         .get_oplog(&source_worker_id, OplogIndex::INITIAL)
@@ -259,8 +258,7 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 
     let last_index = OplogIndex::from_u64(oplog.len() as u64);
 
-    user
-        .fork_worker(&source_worker_id, &target_worker_name, last_index)
+    user.fork_worker(&source_worker_id, &target_worker_name, last_index)
         .await?;
 
     {
@@ -268,21 +266,19 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
         *response = "first".to_string();
     }
 
-    user
-        .wait_for_status(
-            &target_worker_id,
-            WorkerStatus::Idle,
-            Duration::from_secs(20),
-        )
-        .await?;
+    user.wait_for_status(
+        &target_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(20),
+    )
+    .await?;
 
-    user
-        .wait_for_status(
-            &source_worker_id,
-            WorkerStatus::Idle,
-            Duration::from_secs(20),
-        )
-        .await?;
+    user.wait_for_status(
+        &source_worker_id,
+        WorkerStatus::Idle,
+        Duration::from_secs(20),
+    )
+    .await?;
 
     let target_result = user
         .search_oplog(&target_worker_id, "Received first")
@@ -302,7 +298,10 @@ async fn fork_running_worker_2(deps: &EnvBasedTestDependencies, _tracing: &Traci
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn fork_idle_worker(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
@@ -314,41 +313,38 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -
         worker_name: source_worker_name,
     };
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{initialize-cart}",
+        vec!["test-user-1".into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1001".into_value_and_type()),
+            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+            ("price", 999999.0f32.into_value_and_type()),
+            ("quantity", 1u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1002".into_value_and_type()),
+            ("name", "Mud Golem".into_value_and_type()),
+            ("price", 11.0f32.into_value_and_type()),
+            ("quantity", 10u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
@@ -370,36 +366,33 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -
         PublicOplogEntry::ExportedFunctionCompleted(_)
     ));
 
-    user
-        .fork_worker(
-            &source_worker_id,
-            &target_worker_name,
-            OplogIndex::from_u64(source_oplog.len() as u64),
-        )
-        .await?;
+    user.fork_worker(
+        &source_worker_id,
+        &target_worker_name,
+        OplogIndex::from_u64(source_oplog.len() as u64),
+    )
+    .await?;
 
     //Invoking G1002 again in forked worker
-    user
-        .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &target_worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1002".into_value_and_type()),
+            ("name", "Mud Golem".into_value_and_type()),
+            ("price", 11.0f32.into_value_and_type()),
+            ("quantity", 10u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{update-item-quantity}",
-            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &target_worker_id,
+        "golem:it/api.{update-item-quantity}",
+        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
+    )
+    .await?;
 
     let original_contents = user
         .invoke_and_await(
@@ -500,13 +493,12 @@ async fn fork_worker_when_target_already_exists(
         worker_name: source_worker_name,
     };
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{initialize-cart}",
+        vec!["test-user-1".into_value_and_type()],
+    )
+    .await?;
 
     let second_call_oplogs = user
         .search_oplog(&source_worker_id, "initialize-cart")
@@ -517,14 +509,11 @@ async fn fork_worker_when_target_already_exists(
         .expect("Expect at least one entry for the product id G1001")
         .oplog_index;
 
-    let error = user.fork_worker(
-        &source_worker_id,
-        &source_worker_id.worker_name,
-        index,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let error = user
+        .fork_worker(&source_worker_id, &source_worker_id.worker_name, index)
+        .await
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("Worker already exists"));
 
@@ -549,24 +538,20 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
         worker_name: source_worker_name,
     };
 
-    user
-        .invoke_and_await(
-            &source_worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &source_worker_id,
+        "golem:it/api.{initialize-cart}",
+        vec!["test-user-1".into_value_and_type()],
+    )
+    .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
 
-    let error = user.fork_worker(
-        &source_worker_id,
-        &target_worker_name,
-        OplogIndex::INITIAL,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let error = user
+        .fork_worker(&source_worker_id, &target_worker_name, OplogIndex::INITIAL)
+        .await
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains("oplog_index_cut_off must be at least 2"));
 
@@ -576,7 +561,10 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyhow::Result<()> {
+async fn fork_invalid_worker(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
@@ -589,14 +577,15 @@ async fn fork_invalid_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         worker_name: source_worker_name,
     };
 
-    let error = user.fork_worker(
-        &source_worker_id,
-        &target_worker_name,
-        OplogIndex::from_u64(14),
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let error = user
+        .fork_worker(
+            &source_worker_id,
+            &target_worker_name,
+            OplogIndex::from_u64(14),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
 
     assert!(error.contains(&format!("Worker not found: {source_worker_id}")));
     Ok(())
@@ -614,7 +603,10 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
-    let component = user.component(&env.id, "environment-service").store().await?;
+    let component = user
+        .component(&env.id, "environment-service")
+        .store()
+        .await?;
 
     let source_worker_name = Uuid::new_v4().to_string();
 
@@ -623,8 +615,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         worker_name: source_worker_name.clone(),
     };
 
-    user
-        .invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
+    user.invoke_and_await(&source_worker_id, "golem:it/api.{get-environment}", vec![])
         .await?;
 
     // The worker name is foo
@@ -657,13 +648,12 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     // has the same value as foo. As far as the fork cut off point is post the completion, there
     // shouldn't be any divergence for worker information even if forked worker name
     // is different from the source worker name
-    user
-        .fork_worker(
-            &source_worker_id,
-            &target_worker_name,
-            OplogIndex::from_u64(oplog.len() as u64),
-        )
-        .await?;
+    user.fork_worker(
+        &source_worker_id,
+        &target_worker_name,
+        OplogIndex::from_u64(oplog.len() as u64),
+    )
+    .await?;
 
     let entry = oplog.last().unwrap().clone();
 

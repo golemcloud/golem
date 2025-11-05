@@ -1369,7 +1369,14 @@ impl WorkerApi {
         )?;
 
         self.worker_service
-            .fork_worker(&worker_id, &request.target_worker_id, request.oplog_index_cutoff, component.environment_id, component.account_id, auth)
+            .fork_worker(
+                &worker_id,
+                &request.target_worker_id,
+                request.oplog_index_cutoff,
+                component.environment_id,
+                component.account_id,
+                auth,
+            )
             .await?;
 
         Ok(Json(ForkWorkerResponse {}))
