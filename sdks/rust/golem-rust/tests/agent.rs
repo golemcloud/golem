@@ -16,13 +16,18 @@
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
 
-    use golem_rust::{agent_definition, agent_implementation, Schema};
+    use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
 
     #[agent_definition]
     trait Echo {
         fn new(init: UserId) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
+        fn get_agent_id(&self) -> String;
+        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()>;
+        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
+        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
+        fn echo_option(&self, option: Option<String>) -> Option<String>;
     }
 
     struct EchoImpl {
@@ -40,6 +45,26 @@ mod tests {
 
         fn echo(&self, message: String) -> String {
             message.to_string()
+        }
+
+        fn get_agent_id(&self) -> String {
+            self.get_id()
+        }
+
+        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
+            result
+        }
+
+        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String> {
+            result
+        }
+
+        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()> {
+            result
+        }
+
+        fn echo_option(&self, option: Option<String>) -> Option<String> {
+            option
         }
     }
 

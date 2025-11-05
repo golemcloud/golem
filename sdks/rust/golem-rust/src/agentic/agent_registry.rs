@@ -3,7 +3,10 @@ use std::collections::HashMap;
 
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
+    golem_agentic::{
+        exports::golem::agent::guest::AgentType,
+        golem::{agent::common::ElementSchema, api::host::AgentId},
+    },
 };
 
 thread_local! {
@@ -41,9 +44,18 @@ pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
 
 pub fn with_agent_instance<F, R>(f: F) -> Option<R>
 where
-    F: FnOnce(&mut ResolvedAgent) -> R,
+    F: FnOnce(&ResolvedAgent) -> R,
 {
-    AGENT_INSTANCE.with(|instance| instance.borrow_mut().as_mut().map(|agent| f(agent)))
+    AGENT_INSTANCE.with(|instance| instance.borrow().as_ref().map(|agent| f(agent)))
+}
+
+pub fn get_agent_id() -> Option<AgentId> {
+    AGENT_INSTANCE.with(|instance| {
+        instance
+            .borrow()
+            .as_ref()
+            .map(|resolved_agent| resolved_agent.agent_id.clone())
+    })
 }
 
 pub fn get_constructor_parameter_type(
