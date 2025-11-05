@@ -120,8 +120,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         assert!(outputs.success(), "function {func} failed");
     }
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2275
-    // run_and_assert(&ctx, "get-agent-id", &[]).await;
+    run_and_assert(&ctx, "get-agent-id", &[]).await;
 
     run_and_assert(&ctx, "fun-string", &["\"sample\""]).await;
 

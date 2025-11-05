@@ -70,7 +70,11 @@ impl Guest for Component {
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
         let result = agent_registry::with_agent_instance(|resolved_agent| {
-            resolved_agent.agent.invoke(method_name, input)
+            resolved_agent
+                .agent
+                .borrow_mut()
+                .as_mut()
+                .invoke(method_name, input)
         });
         if let Some(result) = result {
             result
@@ -87,7 +91,7 @@ impl Guest for Component {
 
     fn get_definition() -> AgentType {
         let agent_type = agent_registry::with_agent_instance(|resolved_agent| {
-            resolved_agent.agent.get_definition()
+            resolved_agent.agent.borrow().get_definition()
         });
 
         if let Some(agent) = agent_type {
