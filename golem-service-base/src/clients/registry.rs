@@ -187,44 +187,29 @@ impl RegistryService for GrpcRegistryService {
         &self,
         token: TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
-        let result: Result<AuthCtx, RegistryServiceClientError> = with_retries(
-            "auth",
-            "authenticate-token",
-            None,
-            &self.retry_config,
-            &(self.client.clone(), token),
-            |(client, token)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("authenticate-token", move |client| {
-                            let request = AuthenticateTokenRequest {
-                                secret: Some(token.0.into()),
-                            };
+        let response = self.client
+            .call("authenticate-token", move |client| {
+                let request = AuthenticateTokenRequest {
+                    secret: Some(token.0.into()),
+                };
+                Box::pin(client.authenticate_token(request))
+            })
+            .await?
+            .into_inner();
 
-                            Box::pin(client.authenticate_token(request))
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        None => Err(RegistryServiceClientError::empty_response()),
-                        Some(authenticate_token_response::Result::Success(payload)) => {
-                            let user_auth_ctx: UserAuthCtx = payload
-                                .auth_ctx
-                                .ok_or("missing authctx field")?
-                                .try_into()?;
-                            Ok(AuthCtx::User(user_auth_ctx))
-                        }
-                        Some(authenticate_token_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
-                    }
-                })
-            },
-            RegistryServiceClientError::is_retriable,
-        )
-        .await;
-
-        result.map_err(|e| e.into())
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(authenticate_token_response::Result::Success(payload)) => {
+                let user_auth_ctx: UserAuthCtx = payload
+                    .auth_ctx
+                    .ok_or("missing authctx field")?
+                    .try_into()?;
+                Ok(AuthCtx::User(user_auth_ctx))
+            }
+            Some(authenticate_token_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
     }
 
     async fn auth_ctx_for_account_id(
@@ -232,45 +217,31 @@ impl RegistryService for GrpcRegistryService {
         account_id: &AccountId,
         auth_ctx: &AuthCtx,
     ) -> Result<AuthCtx, RegistryServiceError> {
-        let result: Result<AuthCtx, RegistryServiceClientError> = with_retries(
-            "auth",
-            "auth-ctx-for-account-id",
-            None,
-            &self.retry_config,
-            &(self.client.clone(), account_id.clone(), auth_ctx.clone()),
-            |(client, account_id, auth_ctx)| {
-                Box::pin(async move {
-                    let response = client
-                        .call("auth-ctx-for-account-id", move |client| {
-                            let request = GetAuthCtxForAccountIdRequest {
-                                account_id: Some(account_id.clone().into()),
-                                auth_ctx: Some(auth_ctx.clone().into()),
-                            };
+        let response = self
+            .client
+            .call("auth-ctx-for-account-id", move |client| {
+                let request = GetAuthCtxForAccountIdRequest {
+                    account_id: Some(account_id.clone().into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                };
 
-                            Box::pin(client.get_auth_ctx_for_account_id(request))
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        None => Err(RegistryServiceClientError::empty_response()),
-                        Some(get_auth_ctx_for_account_id_response::Result::Success(payload)) => {
-                            let user_auth_ctx: UserAuthCtx = payload
-                                .auth_ctx
-                                .ok_or("missing authctx field")?
-                                .try_into()?;
-                            Ok(AuthCtx::User(user_auth_ctx))
-                        }
-                        Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => {
-                            Err(error.into())
-                        }
-                    }
-                })
-            },
-            RegistryServiceClientError::is_retriable,
-        )
-        .await;
-
-        result.map_err(|e| e.into())
+                Box::pin(client.get_auth_ctx_for_account_id(request))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_auth_ctx_for_account_id_response::Result::Success(payload)) => {
+                let user_auth_ctx: UserAuthCtx = payload
+                    .auth_ctx
+                    .ok_or("missing authctx field")?
+                    .try_into()?;
+                Ok(AuthCtx::User(user_auth_ctx))
+            }
+            Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
     }
 
     async fn get_resource_limits(
@@ -875,7 +846,7 @@ impl RegistryService for GrpcRegistryService {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum RegistryServiceError {
     #[error("BadRequest: {0:?}")]
     BadRequest(Vec<String>),
@@ -901,6 +872,10 @@ impl RegistryServiceError {
     pub fn internal_client_error(error: impl AsRef<str>) -> Self {
         Self::InternalClientError(error.as_ref().to_string())
     }
+
+    pub fn empty_response() -> Self {
+        Self::internal_client_error("empty response")
+    }
 }
 
 impl IntoAnyhow for RegistryServiceError {
@@ -909,43 +884,96 @@ impl IntoAnyhow for RegistryServiceError {
     }
 }
 
-type RegistryServiceClientError =
-    GrpcError<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>;
-
-impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
-    for RegistryServiceClientError
+impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError> for RegistryServiceError
 {
     fn from(value: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError) -> Self {
-        Self::Domain(value)
-    }
-}
-
-impl From<RegistryServiceClientError> for RegistryServiceError {
-    fn from(value: RegistryServiceClientError) -> Self {
         use golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error;
-
-        match value {
-            RegistryServiceClientError::Domain(err) => match err.error {
-                Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
-                Some(Error::NotFound(error)) => Self::NotFound(error.error),
-                Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
-                Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
-                Some(Error::InternalError(error)) => Self::InternalError(error.error),
-                Some(Error::Unauthorized(error)) => Self::Unauthorized(error.error),
-                Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
-                None => Self::internal_client_error("Unknown error"),
-            },
-            RegistryServiceClientError::Status(status) => {
-                RegistryServiceError::internal_client_error(format!("Connection error: {status}"))
-            }
-            RegistryServiceClientError::Transport(error) => {
-                RegistryServiceError::internal_client_error(format!("Transport error: {error}"))
-            }
-            RegistryServiceClientError::Unexpected(error) => {
-                RegistryServiceError::internal_client_error(format!(
-                    "Internal client error: {error}"
-                ))
-            }
+        match value.error {
+            Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
+            Some(Error::NotFound(error)) => Self::NotFound(error.error),
+            Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
+            Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
+            Some(Error::InternalError(error)) => Self::InternalError(error.error),
+            Some(Error::Unauthorized(error)) => Self::Unauthorized(error.error),
+            Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
+            None => Self::internal_client_error("Missing error field"),
         }
     }
 }
+
+impl From<tonic::transport::Error> for RegistryServiceError {
+    fn from(error: tonic::transport::Error) -> Self {
+        Self::internal_client_error(format!("Transport error: {error}"))
+    }
+}
+
+impl From<tonic::Status> for RegistryServiceError {
+    fn from(status: tonic::Status) -> Self {
+        Self::internal_client_error(format!("Conection error: {status}"))
+    }
+}
+
+impl From<String> for RegistryServiceError {
+    fn from(value: String) -> Self {
+        Self::internal_client_error(value)
+    }
+}
+
+impl From<&'static str> for RegistryServiceError {
+    fn from(value: &'static str) -> Self {
+        Self::internal_client_error(value)
+    }
+}
+
+// impl<E> From<String> for GrpcError<E> {
+//     fn from(value: String) -> Self {
+//         Self::Unexpected(value)
+//     }
+// }
+
+// impl<E> From<&'static str> for GrpcError<E> {
+//     fn from(value: &'static str) -> Self {
+//         Self::from(value.to_string())
+//     }
+
+
+// type RegistryServiceClientError =
+//     GrpcError<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>;
+
+// impl From<golem_api_grpc::proto::golem::registry::v1::RegistryServiceError>
+//     for RegistryServiceClientError
+// {
+//     fn from(value: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError) -> Self {
+//         Self::Domain(value)
+//     }
+// }
+
+// impl From<RegistryServiceClientError> for RegistryServiceError {
+//     fn from(value: RegistryServiceClientError) -> Self {
+//         use golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error;
+
+//         match value {
+//             RegistryServiceClientError::Domain(err) => match err.error {
+//                 Some(Error::LimitExceeded(error)) => Self::LimitExceeded(error.error),
+//                 Some(Error::NotFound(error)) => Self::NotFound(error.error),
+//                 Some(Error::AlreadyExists(error)) => Self::AlreadyExists(error.error),
+//                 Some(Error::BadRequest(errors)) => Self::BadRequest(errors.errors),
+//                 Some(Error::InternalError(error)) => Self::InternalError(error.error),
+//                 Some(Error::Unauthorized(error)) => Self::Unauthorized(error.error),
+//                 Some(Error::CouldNotAuthenticate(error)) => Self::CouldNotAuthenticate(error.error),
+//                 None => Self::internal_client_error("Unknown error"),
+//             },
+//             RegistryServiceClientError::Status(status) => {
+//                 RegistryServiceError::internal_client_error(format!("Connection error: {status}"))
+//             }
+//             RegistryServiceClientError::Transport(error) => {
+//                 RegistryServiceError::internal_client_error(format!("Transport error: {error}"))
+//             }
+//             RegistryServiceClientError::Unexpected(error) => {
+//                 RegistryServiceError::internal_client_error(format!(
+//                     "Internal client error: {error}"
+//                 ))
+//             }
+//         }
+//     }
+// }
