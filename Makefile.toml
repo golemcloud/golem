@@ -453,11 +453,12 @@ dependencies = [
     "integration-tests-group1",
     "integration-tests-group2",
     "integration-tests-group3",
+    "integration-tests-group4",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/3)"
+description = "Runs integration tests (group 1/4)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -465,7 +466,15 @@ cargo-test-r run --package integration-tests --test integration -- --nocapture -
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/3)"
+description = "Runs integration tests (group 2/4)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_TEST_DB="sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group3]
+description = "Runs integration tests (group 3/4)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -475,8 +484,8 @@ cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --repo
 cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
 
-[tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/3)"
+[tasks.integration-tests-group4]
+description = "Runs integration tests (group 4/4)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
