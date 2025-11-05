@@ -45,6 +45,8 @@ pub trait ComponentService: Send + Sync {
         component_version: ComponentRevision,
     ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
 
+    // If a version is provided, deleted components will also be returned.
+    // If no version is provided, only the latest non-deleted version is returned.
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
