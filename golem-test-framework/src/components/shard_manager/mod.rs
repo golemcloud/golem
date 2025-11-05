@@ -12,52 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
-use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
-use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tracing::Level;
-
 pub mod provided;
 pub mod spawned;
 
+use crate::components::redis::Redis;
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::Level;
+
 #[async_trait]
 pub trait ShardManager: Send + Sync {
-    async fn client(&self) -> ShardManagerServiceClient<Channel> {
-        new_client(&self.public_host(), self.public_grpc_port()).await
-    }
-
-    fn private_host(&self) -> String;
-    fn private_http_port(&self) -> u16;
-    fn private_grpc_port(&self) -> u16;
-
-    fn public_host(&self) -> String {
-        self.private_host()
-    }
-
-    fn public_http_port(&self) -> u16 {
-        self.private_http_port()
-    }
-
-    fn public_grpc_port(&self) -> u16 {
-        self.private_grpc_port()
-    }
+    fn grpc_host(&self) -> String;
+    fn gprc_port(&self) -> u16;
 
     async fn kill(&self);
-    async fn restart(&self, number_of_shards_override: Option<usize>);
-}
 
-async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {
-    ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
-        .await
-        .expect("Failed to connect to golem-shard-manager")
-        .send_compressed(CompressionEncoding::Gzip)
-        .accept_compressed(CompressionEncoding::Gzip)
+    async fn restart(&self, number_of_shards_override: Option<usize>);
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

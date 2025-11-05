@@ -44,17 +44,18 @@ use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPri
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation, WorkerId,
+    WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::RevertWorkerTarget;
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -292,6 +293,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // just some sanity checking
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
+
+        tracing::debug!("Checking worker for agent initialization: last_oplog_idx: {last_oplog_idx}; agent_id: {agent_id:?}");
 
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.

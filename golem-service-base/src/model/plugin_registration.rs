@@ -98,6 +98,27 @@ mod protobuf {
         }
     }
 
+    impl From<PluginSpec> for golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+        fn from(value: PluginSpec) -> Self {
+            Self {
+                definition: Some(value.into()),
+            }
+        }
+    }
+
+    impl From<PluginSpec>
+        for golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition
+    {
+        fn from(value: PluginSpec) -> Self {
+            match value {
+                PluginSpec::ComponentTransformer(value) => Self::ComponentTransformer(value.into()),
+                PluginSpec::OplogProcessor(value) => Self::OplogProcessor(value.into()),
+                PluginSpec::Library(value) => Self::Library(value.into()),
+                PluginSpec::App(value) => Self::App(value.into()),
+            }
+        }
+    }
+
     impl From<LibraryPluginSpec> for golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
         fn from(value: LibraryPluginSpec) -> Self {
             golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
@@ -156,6 +177,22 @@ mod protobuf {
                 spec: value.specs.ok_or("Missing plugin specs")?.try_into()?,
                 deleted: value.deleted,
             })
+        }
+    }
+
+    impl From<PluginRegistration> for golem_api_grpc::proto::golem::component::PluginRegistration {
+        fn from(value: PluginRegistration) -> Self {
+            Self {
+                id: Some(value.id.into()),
+                account_id: Some(value.account_id.into()),
+                name: value.name,
+                version: value.version,
+                description: value.description,
+                icon: value.icon,
+                homepage: value.homepage,
+                specs: Some(value.spec.into()),
+                deleted: value.deleted,
+            }
         }
     }
 }

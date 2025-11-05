@@ -408,7 +408,7 @@ impl ApiErrorDetails for WorkerExecutorError {
     }
 
     fn take_cause(&mut self) -> Option<anyhow::Error> {
-        todo!()
+        None
     }
 }
 

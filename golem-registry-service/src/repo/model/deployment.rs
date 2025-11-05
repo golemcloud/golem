@@ -17,7 +17,9 @@ use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
-use golem_common::model::deployment::{Deployment, DeploymentPlan};
+use golem_common::model::deployment::{
+    Deployment, DeploymentPlan, DeploymentRevision, DeploymentSummary,
+};
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -166,13 +168,31 @@ pub struct DeploymentIdentity {
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
 }
 
-impl From<DeploymentIdentity> for DeploymentPlan {
+impl DeploymentIdentity {
+    pub fn into_plan(
+        self,
+        current_deployment_revision: Option<DeploymentRevision>,
+    ) -> DeploymentPlan {
+        DeploymentPlan {
+            current_deployment_revision,
+            deployment_hash: self.to_diffable().hash(),
+            components: self.components.into_iter().map(|c| c.into()).collect(),
+        }
+    }
+}
+
+impl From<DeploymentIdentity> for DeploymentSummary {
     fn from(value: DeploymentIdentity) -> Self {
         Self {
             deployment_hash: value.to_diffable().hash(),
             components: value.components.into_iter().map(|c| c.into()).collect(),
         }
     }
+}
+
+pub struct StagedDeploymentIdentity {
+    pub latest_revision: DeploymentRevision,
+    pub identity: DeploymentIdentity,
 }
 
 pub struct DeployedDeploymentIdentity {

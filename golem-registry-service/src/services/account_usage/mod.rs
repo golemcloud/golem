@@ -12,43 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod error;
+
+use self::error::LimitExceededError;
 use crate::repo::account_usage::AccountUsageRepo;
 use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageType};
 use crate::repo::model::datetime::SqlDateTime;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
+use golem_service_base::model::ResourceLimits;
+use golem_service_base::model::auth::{AccountAction, AuthCtx};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::error;
-
-pub mod error;
-
-pub struct AccountUsage {
-    account_usage: RepoAccountUsage,
-    account_usage_repo: Arc<dyn AccountUsageRepo>,
-    acked: bool,
-}
-
-impl AccountUsage {
-    pub fn ack(&mut self) {
-        self.acked = true;
-    }
-}
-
-impl Drop for AccountUsage {
-    fn drop(&mut self) {
-        if self.acked {
-            return;
-        }
-
-        let account_usage = self.account_usage.clone();
-        let account_usage_repo = self.account_usage_repo.clone();
-        tokio::spawn(async move {
-            if let Err(err) = account_usage_repo.rollback(&account_usage).await {
-                error!("Failed to rollback account usage: {account_usage:?}, {err}");
-            }
-        });
-    }
-}
 
 pub struct AccountUsageService {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
@@ -61,54 +36,54 @@ impl AccountUsageService {
         Self { account_usage_repo }
     }
 
-    pub async fn add_application(
+    pub async fn ensure_application_within_limits(
         &self,
         account_id: &AccountId,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalAppCount))
             .await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalAppCount, 1)?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_environment(
+    pub async fn ensure_environment_within_limits(
         &self,
         account_id: &AccountId,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalEnvCount))
             .await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalEnvCount, 1)?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_component(
+    pub async fn ensure_new_component_within_limits(
         &self,
         account_id: &AccountId,
         component_size_bytes: i64,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
 
-        self.add_checked(&mut account_usage, UsageType::TotalAppCount, 1)?;
+        self.add_checked(&mut account_usage, UsageType::TotalComponentCount, 1)?;
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
             component_size_bytes,
         )?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
     }
 
-    pub async fn add_component_version(
+    pub async fn ensure_updated_component_within_limits(
         &self,
         account_id: &AccountId,
         component_size_bytes: i64,
-    ) -> Result<AccountUsage, AccountUsageError> {
+    ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalComponentStorageBytes))
             .await?;
@@ -119,7 +94,85 @@ impl AccountUsageService {
             component_size_bytes,
         )?;
 
-        Ok(self.wrapped_account_usage(account_usage))
+        Ok(())
+    }
+
+    pub async fn add_worker(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
+            .await?;
+        self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
+
+    pub async fn remove_worker(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
+            .await?;
+        self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
+
+    pub async fn add_worker_connection(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
+            .await?;
+        self.add_checked(&mut account_usage, UsageType::TotalWorkerConnectionCount, 1)?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
+
+    pub async fn remove_worker_connection(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+        let mut account_usage = self
+            .get_account_usage(account_id, Some(UsageType::TotalWorkerConnectionCount))
+            .await?;
+        self.add_checked(
+            &mut account_usage,
+            UsageType::TotalWorkerConnectionCount,
+            -1,
+        )?;
+        self.account_usage_repo.add(&account_usage).await?;
+        Ok(())
+    }
+
+    pub async fn record_fuel_consumption(
+        &self,
+        updates: &HashMap<AccountId, i64>,
+        auth: &AuthCtx,
+    ) -> Result<(), AccountUsageError> {
+        for (account_id, update) in updates {
+            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
+            let mut account_usage = self
+                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+                .await?;
+
+            self.add_checked(&mut account_usage, UsageType::MonthlyGasLimit, *update)?;
+
+            self.account_usage_repo.add(&account_usage).await?;
+        }
+        Ok(())
     }
 
     async fn get_account_usage(
@@ -146,28 +199,42 @@ impl AccountUsageService {
         }
     }
 
+    pub async fn get_resouce_limits(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<ResourceLimits, AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
+
+        let record = self
+            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+            .await?;
+
+        let available_fuel = record
+            .plan
+            .monthly_gas_limit
+            .saturating_sub(record.usage(UsageType::MonthlyGasLimit));
+
+        Ok(ResourceLimits {
+            available_fuel,
+            max_memory_per_worker: record.plan.max_memory_per_worker as u64,
+        })
+    }
+
     fn add_checked(
         &self,
         account_usage: &mut RepoAccountUsage,
         usage_type: UsageType,
         value: i64,
     ) -> Result<(), AccountUsageError> {
-        if !account_usage.add_checked(usage_type, value)? {
-            return Err(AccountUsageError::LimitExceeded {
+        if !account_usage.add_change(usage_type, value)? {
+            return Err(AccountUsageError::LimitExceeded(LimitExceededError {
                 limit_name: format!("{usage_type:?}"),
-                limit_value: account_usage.plan.limit(usage_type)?.unwrap_or(-1),
+                limit_value: account_usage.plan.limit(usage_type),
                 current_value: account_usage.usage(usage_type),
-            });
+            }));
         }
 
         Ok(())
-    }
-
-    fn wrapped_account_usage(&self, account_usage: RepoAccountUsage) -> AccountUsage {
-        AccountUsage {
-            account_usage,
-            account_usage_repo: self.account_usage_repo.clone(),
-            acked: false,
-        }
     }
 }

@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
+use golem_common::model::{Empty, RetryConfig};
+use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
@@ -19,14 +25,6 @@ use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
-use uuid::Uuid;
-
-use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
-use golem_common::model::RetryConfig;
-use golem_common::tracing::TracingConfig;
-use golem_common::SafeDisplay;
-use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -34,7 +32,7 @@ pub struct ServerConfig {
     pub tracing: TracingConfig,
 
     // Services
-    pub component_service: ComponentServiceConfig,
+    pub registry_service: RegistryServiceConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub blob_storage: BlobStorageConfig,
 
@@ -59,7 +57,7 @@ impl SafeDisplay for ServerConfig {
         let _ = writeln!(
             &mut result,
             "{}",
-            self.component_service.to_safe_string_indented()
+            self.registry_service.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "compiled component service:");
         let _ = writeln!(
@@ -96,31 +94,30 @@ impl ServerConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum ComponentServiceConfig {
+pub enum RegistryServiceConfig {
     Static(StaticComponentServiceConfig),
-    Dynamic(DynamicComponentServiceConfig),
+    Dynamic(Empty),
 }
 
-impl ComponentServiceConfig {
+impl RegistryServiceConfig {
     pub fn static_config(&self) -> Option<StaticComponentServiceConfig> {
         match self {
-            ComponentServiceConfig::Static(config) => Some(config.clone()),
-            ComponentServiceConfig::Dynamic(_) => None,
+            RegistryServiceConfig::Static(config) => Some(config.clone()),
+            RegistryServiceConfig::Dynamic(_) => None,
         }
     }
 }
 
-impl SafeDisplay for ComponentServiceConfig {
+impl SafeDisplay for RegistryServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         match self {
-            ComponentServiceConfig::Static(inner) => {
+            RegistryServiceConfig::Static(inner) => {
                 let _ = writeln!(&mut result, "static:");
                 let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
             }
-            ComponentServiceConfig::Dynamic(inner) => {
-                let _ = writeln!(&mut result, "dynamic:");
-                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            RegistryServiceConfig::Dynamic(_) => {
+                let _ = writeln!(&mut result, "dynamic");
             }
         }
         result
@@ -131,7 +128,6 @@ impl SafeDisplay for ComponentServiceConfig {
 pub struct StaticComponentServiceConfig {
     pub host: String,
     pub port: u16,
-    pub access_token: Uuid,
 }
 
 impl StaticComponentServiceConfig {
@@ -150,19 +146,6 @@ impl SafeDisplay for StaticComponentServiceConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access_token: ****");
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DynamicComponentServiceConfig {
-    pub access_token: Uuid,
-}
-
-impl SafeDisplay for DynamicComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
         let _ = writeln!(&mut result, "access_token: ****");
         result
     }
@@ -194,7 +177,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             tracing: TracingConfig::local_dev("component-compilation-service"),
-            component_service: Default::default(),
+            registry_service: Default::default(),
             compiled_component_service: Default::default(),
             blob_storage: BlobStorageConfig::default_local_file_system(),
             compile_worker: Default::default(),
@@ -224,22 +207,11 @@ impl Default for StaticComponentServiceConfig {
         Self {
             host: "localhost".to_owned(),
             port: 9090,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
         }
     }
 }
 
-impl Default for DynamicComponentServiceConfig {
-    fn default() -> Self {
-        Self {
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
-        }
-    }
-}
-
-impl Default for ComponentServiceConfig {
+impl Default for RegistryServiceConfig {
     fn default() -> Self {
         Self::Static(Default::default())
     }

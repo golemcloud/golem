@@ -14,14 +14,25 @@
 
 use crate::components::redis::Redis;
 use crate::config::TestDependencies;
-use crate::dsl::{build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended};
+use crate::dsl::{
+    build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended, WorkerLogEventStream,
+};
 use crate::model::IFSEntry;
+use anyhow::{anyhow, Context};
 use applying::Apply;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::stream::SplitStream;
+use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
+};
+use golem_client::model::{
+    CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
+};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
@@ -30,20 +41,27 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::WorkerMetadataDto;
-use golem_common::model::{ComponentFileSystemNode, IdempotencyKey};
+use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{
+    FlatComponentFileSystemNode, WorkerCreationRequest, WorkerMetadataDto, WorkerUpdateMode,
+};
+use golem_common::model::{IdempotencyKey, WorkerEvent};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::fs::File;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::oneshot::Sender;
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::protocol::frame::Payload;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -52,10 +70,22 @@ pub struct TestDependenciesTestDsl<Deps> {
     pub account_id: AccountId,
     pub account_email: String,
     pub token: TokenSecret,
+    pub auto_deploy_enabled: bool,
+}
+
+impl<Deps> TestDependenciesTestDsl<Deps> {
+    pub fn with_auto_deploy(self, enabled: bool) -> Self {
+        Self {
+            auto_deploy_enabled: enabled,
+            ..self
+        }
+    }
 }
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
+    type WorkerInvocationResult<T> = anyhow::Result<T>;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis()
     }
@@ -124,6 +154,8 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
 
         let client = self.deps.registry_service().client(&self.token).await;
 
+        let agent_types = extract_agent_types(&source_path, false, true).await?;
+
         let component = client
             .create_component(
                 &environment_id.0,
@@ -134,21 +166,28 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                     dynamic_linking,
                     env,
                     plugins,
-                    agent_types: vec![],
+                    agent_types,
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
             )
             .await?;
 
+        if self.auto_deploy_enabled {
+            // deploy environment to make component visible
+            self.deploy_environment(&component.environment_id).await?;
+        }
+
         Ok(component)
     }
 
     async fn get_latest_component_version(
         &self,
-        _component_id: &ComponentId,
+        component_id: &ComponentId,
     ) -> anyhow::Result<ComponentDto> {
-        unimplemented!()
+        let client = self.deps.registry_service().client(&self.token).await;
+        let component = client.get_component(&component_id.0).await?;
+        Ok(component)
     }
 
     async fn update_component_with(
@@ -211,172 +250,450 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
             )
             .await?;
 
+        if self.auto_deploy_enabled {
+            // deploy environment to make component visible
+            self.deploy_environment(&component.environment_id).await?;
+        }
+
         Ok(component)
     }
 
     async fn try_start_worker_with(
         &self,
-        _component_id: &ComponentId,
-        _name: &str,
-        _args: Vec<String>,
-        _env: HashMap<String, String>,
-        _wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
-        unimplemented!()
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
+    ) -> anyhow::Result<WorkerId> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let wasi_config_vars: BTreeMap<String, String> = wasi_config_vars.into_iter().collect();
+        let response = client
+            .launch_new_worker(
+                &component_id.0,
+                &WorkerCreationRequest {
+                    name: name.to_string(),
+                    args,
+                    env,
+                    wasi_config_vars: wasi_config_vars.into(),
+                },
+            )
+            .await?;
+
+        Ok(response.worker_id)
+    }
+
+    async fn start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
+    ) -> anyhow::Result<WorkerId> {
+        self.try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+            .await
     }
 
     async fn invoke_with_key(
         &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: &IdempotencyKey,
-        _function_name: &str,
-        _params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
-        unimplemented!()
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .invoke_function(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                Some(&idempotency_key.value),
+                function_name,
+                &InvokeParameters {
+                    params: params
+                        .into_iter()
+                        .map(|p| p.try_into())
+                        .collect::<Result<_, _>>()
+                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     async fn invoke_and_await_with_key(
         &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: &IdempotencyKey,
-        _function_name: &str,
-        _params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<Vec<Value>, WorkerExecutorError>> {
-        unimplemented!()
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Vec<Value>> {
+        Ok(self
+            .invoke_and_await_typed_with_key(worker_id, idempotency_key, function_name, params)
+            .await?
+            .into_iter()
+            .map(|v| v.value)
+            .collect())
     }
 
     async fn invoke_and_await_typed_with_key(
         &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: &IdempotencyKey,
-        _function_name: &str,
-        _params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
-        unimplemented!()
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Option<ValueAndType>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .invoke_and_await_function(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                Some(&idempotency_key.value),
+                function_name,
+                &InvokeParameters {
+                    params: params
+                        .into_iter()
+                        .map(|p| p.try_into())
+                        .collect::<Result<_, _>>()
+                        .map_err(|e| anyhow!("Failed converting params: {e}"))?,
+                },
+            )
+            .await?;
+        Ok(result.result)
     }
 
-    async fn revert(
+    async fn invoke_and_await_json_with_key(
         &self,
-        _worker_id: &WorkerId,
-        _target: RevertWorkerTarget,
-    ) -> anyhow::Result<()> {
-        unimplemented!()
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> anyhow::Result<Option<ValueAndType>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .invoke_and_await_function(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                Some(&idempotency_key.value),
+                function_name,
+                &InvokeParameters {
+                    params: params
+                        .into_iter()
+                        .map(|value| OptionallyValueAndTypeJson { typ: None, value })
+                        .collect(),
+                },
+            )
+            .await?;
+        Ok(result.result)
+    }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .revert_worker(&worker_id.component_id.0, &worker_id.worker_name, &target)
+            .await?;
+        Ok(())
     }
 
     async fn get_oplog(
         &self,
-        _worker_id: &WorkerId,
-        _from: OplogIndex,
+        worker_id: &WorkerId,
+        from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let response = client
+                .get_oplog(
+                    &worker_id.component_id.0,
+                    &worker_id.worker_name,
+                    Some(from.as_u64()),
+                    100,
+                    cursor.as_ref(),
+                    None,
+                )
+                .await?;
+
+            result.extend(response.entries);
+            match response.next {
+                None => break,
+                Some(next_cursor) => cursor = Some(next_cursor),
+            }
+        }
+
+        Ok(result)
     }
 
     async fn search_oplog(
         &self,
-        _worker_id: &WorkerId,
-        _query: &str,
+        worker_id: &WorkerId,
+        query: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let response = client
+                .get_oplog(
+                    &worker_id.component_id.0,
+                    &worker_id.worker_name,
+                    None,
+                    100,
+                    cursor.as_ref(),
+                    Some(query),
+                )
+                .await?;
+
+            result.extend(response.entries);
+            match response.next {
+                None => break,
+                Some(next_cursor) => cursor = Some(next_cursor),
+            }
+        }
+
+        Ok(result)
     }
 
     async fn interrupt_with_optional_recovery(
         &self,
-        _worker_id: &WorkerId,
-        _recover_immediately: bool,
+        worker_id: &WorkerId,
+        recover_immediately: bool,
     ) -> anyhow::Result<()> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .interrupt_worker(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                Some(recover_immediately),
+            )
+            .await?;
+        Ok(())
     }
 
-    async fn resume(&self, _worker_id: &WorkerId, _force: bool) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn resume(&self, worker_id: &WorkerId, _force: bool) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .resume_worker(&worker_id.component_id.0, &worker_id.worker_name)
+            .await?;
+        Ok(())
     }
 
-    async fn complete_promise(
+    async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .complete_promise(
+                &promise_id.worker_id.component_id.0,
+                &promise_id.worker_id.worker_name,
+                &CompleteParameters {
+                    oplog_idx: promise_id.oplog_idx.as_u64(),
+                    data,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn make_worker_log_event_stream(
         &self,
-        _promise_id: &PromiseId,
-        _data: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        unimplemented!()
-    }
-
-    async fn capture_output(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
-        unimplemented!()
-    }
-
-    async fn capture_output_with_termination(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
-        unimplemented!()
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<impl WorkerLogEventStream> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let stream = HttpWorkerLogEventStream::new(Arc::new(client), worker_id).await?;
+        Ok(stream)
     }
 
     async fn auto_update_worker(
         &self,
-        _worker_id: &WorkerId,
-        _target_version: ComponentRevision,
+        worker_id: &WorkerId,
+        target_version: ComponentRevision,
     ) -> anyhow::Result<()> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .update_worker(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                &UpdateWorkerRequest {
+                    mode: WorkerUpdateMode::Automatic,
+                    target_version: target_version.0,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     async fn manual_update_worker(
         &self,
-        _worker_id: &WorkerId,
-        _target_version: ComponentRevision,
+        worker_id: &WorkerId,
+        target_version: ComponentRevision,
     ) -> anyhow::Result<()> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .update_worker(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                &UpdateWorkerRequest {
+                    mode: WorkerUpdateMode::Manual,
+                    target_version: target_version.0,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
-    async fn delete_worker(&self, _worker_id: &WorkerId) -> anyhow::Result<()> {
-        unimplemented!()
+    async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .delete_worker(&worker_id.component_id.0, &worker_id.worker_name)
+            .await?;
+        Ok(())
     }
 
-    async fn get_worker_metadata(
-        &self,
-        _worker_id: &WorkerId,
-    ) -> anyhow::Result<WorkerMetadataDto> {
-        unimplemented!()
+    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .get_worker_metadata(&worker_id.component_id.0, &worker_id.worker_name)
+            .await?;
+        Ok(result)
     }
 
     async fn get_workers_metadata(
         &self,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-        _cursor: ScanCursor,
-        _count: u64,
-        _precise: bool,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
     ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
-        unimplemented!()
-    }
-
-    async fn get_running_workers_metadata(
-        &self,
-        _component_id: &ComponentId,
-        _filter: Option<WorkerFilter>,
-    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .find_workers_metadata(
+                &component_id.0,
+                &WorkersMetadataRequest {
+                    filter,
+                    cursor: Some(cursor),
+                    count: Some(count),
+                    precise: Some(precise),
+                },
+            )
+            .await?;
+        Ok((result.cursor, result.workers))
     }
 
     async fn cancel_invocation(
         &self,
-        _worker_id: &WorkerId,
-        _idempotency_key: &IdempotencyKey,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
-        unimplemented!()
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .cancel_invocation(
+                &worker_id.component_id.0,
+                &worker_id.worker_name,
+                &idempotency_key.value,
+            )
+            .await?;
+        Ok(result.canceled)
     }
 
     async fn get_file_system_node(
         &self,
-        _worker_id: &WorkerId,
-        _path: &str,
-    ) -> anyhow::Result<Vec<ComponentFileSystemNode>> {
-        unimplemented!()
+        worker_id: &WorkerId,
+        path: &str,
+    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .get_files(&worker_id.component_id.0, &worker_id.worker_name, path)
+            .await?;
+        Ok(result.nodes)
     }
 
-    async fn get_file_contents(&self, _worker_id: &WorkerId, _path: &str) -> anyhow::Result<Bytes> {
-        unimplemented!()
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        let result = client
+            .get_file_content(&worker_id.component_id.0, &worker_id.worker_name, path)
+            .await?;
+        Ok(result)
     }
 }
 
@@ -388,5 +705,87 @@ impl<Deps: TestDependencies> TestDslExtended for TestDependenciesTestDsl<Deps> {
 
     async fn registry_service_client(&self) -> RegistryServiceClientLive {
         self.deps.registry_service().client(&self.token).await
+    }
+}
+
+struct HttpWorkerLogEventStream {
+    read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+}
+
+impl HttpWorkerLogEventStream {
+    async fn new(client: Arc<WorkerClientLive>, worker_id: &WorkerId) -> anyhow::Result<Self> {
+        let url = format!(
+            "ws://{}:{}/v1/components/{}/workers/{}/connect",
+            client.context.base_url.host().unwrap(),
+            client.context.base_url.port_or_known_default().unwrap(),
+            worker_id.component_id.0,
+            worker_id.worker_name,
+        );
+
+        let mut connection_request = url
+            .into_client_request()
+            .context("Failed to create request")?;
+
+        {
+            let headers = connection_request.headers_mut();
+
+            if let Some(bearer_token) = client.context.bearer_token() {
+                headers.insert("Authorization", format!("Bearer {bearer_token}").parse()?);
+            }
+        }
+
+        let (stream, _) = tokio_tungstenite::connect_async_tls_with_config(
+            connection_request,
+            None,
+            false,
+            Some(Connector::Plain),
+        )
+        .await?;
+        let (mut write, read) = stream.split();
+
+        static PING_HELLO: &str = "hello";
+        tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                match write
+                    .send(Message::Ping(Payload::from(PING_HELLO.as_bytes())))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(error) => break error,
+                };
+            }
+        });
+
+        Ok(Self { read })
+    }
+}
+
+#[async_trait]
+impl WorkerLogEventStream for HttpWorkerLogEventStream {
+    async fn message(&mut self) -> anyhow::Result<Option<LogEvent>> {
+        match self.read.next().await {
+            Some(Ok(message)) => match message {
+                Message::Text(payload) => Ok(Some(
+                    serde_json::from_str::<WorkerEvent>(payload.as_str())?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                )),
+                Message::Binary(payload) => Ok(Some(
+                    serde_json::from_slice::<WorkerEvent>(payload.as_slice())?
+                        .try_into()
+                        .map_err(|error: String| anyhow!(error))?,
+                )),
+                Message::Ping(_) => Box::pin(self.message()).await,
+                Message::Pong(_) => Box::pin(self.message()).await,
+                Message::Close(_) => Ok(None),
+                Message::Frame(_) => {
+                    panic!("Raw frames should not be received")
+                }
+            },
+            Some(Err(error)) => Err(anyhow!(error)),
+            None => Ok(None),
+        }
     }
 }

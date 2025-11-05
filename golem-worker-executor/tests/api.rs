@@ -2848,7 +2848,7 @@ async fn counter_resource_test_1(
 
     let metadata1 = executor.get_worker_metadata(&worker_id).await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "rpc:counters-exports/api.{[drop]counter}",
@@ -2857,7 +2857,7 @@ async fn counter_resource_test_1(
                 typ: analysed_type::u64(),
             }],
         )
-        .await?;
+        .await??;
 
     let result2 = executor
         .invoke_and_await(
@@ -2865,7 +2865,7 @@ async fn counter_resource_test_1(
             "rpc:counters-exports/api.{get-all-dropped}",
             vec![],
         )
-        .await?;
+        .await??;
 
     let metadata2 = executor.get_worker_metadata(&worker_id).await?;
 
@@ -2873,10 +2873,10 @@ async fn counter_resource_test_1(
 
     check!(
         result2
-            == Ok(vec![Value::List(vec![Value::Tuple(vec![
+            == vec![Value::List(vec![Value::Tuple(vec![
                 Value::String("counter1".to_string()),
                 Value::U64(5)
-            ])])])
+            ])])]
     );
 
     let ts = Timestamp::now_utc();

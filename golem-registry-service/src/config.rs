@@ -20,6 +20,7 @@ use golem_common::model::auth::AccountRole;
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
+use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -38,8 +39,8 @@ pub struct RegistryServiceConfig {
     pub login: LoginConfig,
     pub cors_origin_regex: String,
     pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig,
+    pub component_compilation: ComponentCompilationConfig,
     pub blob_storage: BlobStorageConfig,
-
     pub plans: PlansConfig,
     pub accounts: AccountsConfig,
 }
@@ -88,6 +89,7 @@ impl Default for RegistryServiceConfig {
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
+            component_compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             plans: PlansConfig::default(),
             accounts: AccountsConfig::default(),
@@ -276,9 +278,11 @@ impl Default for PlansConfig {
                 env_limit: 40,
                 component_limit: 100,
                 worker_limit: 10000,
+                worker_connection_limit: 100,
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000,
                 monthly_upload_limit: 1000000000,
+                max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
             },
         );
 
@@ -293,9 +297,77 @@ pub struct PrecreatedPlan {
     pub env_limit: i64,
     pub component_limit: i64,
     pub worker_limit: i64,
+    pub worker_connection_limit: i64,
     pub storage_limit: i64,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i64,
+    pub max_memory_per_worker: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum ComponentCompilationConfig {
+    Enabled(ComponentCompilationEnabledConfig),
+    Disabled(Empty),
+}
+
+impl SafeDisplay for ComponentCompilationConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ComponentCompilationConfig::Enabled(inner) => {
+                let _ = writeln!(&mut result, "enabled:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            ComponentCompilationConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
+}
+
+impl Default for ComponentCompilationConfig {
+    fn default() -> Self {
+        Self::Enabled(ComponentCompilationEnabledConfig {
+            host: "localhost".to_string(),
+            port: 9091,
+            retries: RetryConfig::default(),
+            connect_timeout: std::time::Duration::from_secs(10),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentCompilationEnabledConfig {
+    pub host: String,
+    pub port: u16,
+    pub retries: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: std::time::Duration,
+}
+
+impl SafeDisplay for ComponentCompilationEnabledConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
+impl ComponentCompilationEnabledConfig {
+    pub fn uri(&self) -> Uri {
+        Uri::builder()
+            .scheme("http")
+            .authority(format!("{}:{}", self.host, self.port).as_str())
+            .path_and_query("/")
+            .build()
+            .expect("Failed to build ComponentCompilationService URI")
+    }
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

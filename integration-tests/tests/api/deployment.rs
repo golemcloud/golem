@@ -29,7 +29,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -66,7 +66,8 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         let fetched_deployment = client
             .get_environment_deployed_deployment_plan(&env.id.0, deployment.revision.0)
             .await?;
-        assert!(fetched_deployment == plan);
+        assert!(fetched_deployment.deployment_hash == plan.deployment_hash);
+        assert!(fetched_deployment.components == plan.components);
     }
 
     Ok(())
@@ -75,7 +76,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 #[test]
 #[tracing::instrument]
 async fn fail_with_400_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -108,7 +109,7 @@ async fn fail_with_400_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
 async fn get_component_version_from_previous_deployment(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 

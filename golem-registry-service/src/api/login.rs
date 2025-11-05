@@ -60,7 +60,7 @@ impl LoginApi {
     /// - `accountId` is the account's identifier, can be used on the account API
     /// - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
     ///
-    #[oai(path = "/v1/oauth2", method = "post", operation_id = "login_oauth2")]
+    #[oai(path = "/oauth2", method = "post", operation_id = "login_oauth2")]
     async fn oauth2(
         &self,
         /// Currently only `github` is supported.

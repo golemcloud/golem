@@ -3651,8 +3651,8 @@ components:
       discriminator:
         propertyName: type
         mapping:
-          revertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
-          revertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
+          RevertToOplogIndex: '#/components/schemas/RevertWorkerTarget_RevertToOplogIndex'
+          RevertLastInvocations: '#/components/schemas/RevertWorkerTarget_RevertLastInvocations'
     RevertWorkerTarget_RevertLastInvocations:
       allOf:
       - type: object
@@ -3662,8 +3662,8 @@ components:
           type:
             type: string
             enum:
-            - revertLastInvocations
-            example: revertLastInvocations
+            - RevertLastInvocations
+            example: RevertLastInvocations
       - $ref: '#/components/schemas/RevertLastInvocations'
     RevertWorkerTarget_RevertToOplogIndex:
       allOf:
@@ -3674,8 +3674,8 @@ components:
           type:
             type: string
             enum:
-            - revertToOplogIndex
-            example: revertToOplogIndex
+            - RevertToOplogIndex
+            example: RevertToOplogIndex
       - $ref: '#/components/schemas/RevertToOplogIndex'
     ScanCursor:
       type: object
@@ -4456,8 +4456,8 @@ components:
     WorkerUpdateMode:
       type: string
       enum:
-      - Automatic
-      - Manual
+      - automatic
+      - manual
     WorkerVersionFilter:
       type: object
       title: WorkerVersionFilter

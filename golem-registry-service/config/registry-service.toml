@@ -27,6 +27,21 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[component_compilation]
+type = "Enabled"
+
+[component_compilation.config]
+connect_timeout = "10s"
+host = "localhost"
+port = 9091
+
+[component_compilation.config.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
 [component_transformer_plugin_caller.retries]
 max_attempts = 5
 max_delay = "2s"
@@ -59,10 +74,12 @@ webflow_state_expiry = [300, 0]
 app_limit = 10
 component_limit = 100
 env_limit = 40
+max_memory_per_worker = 1073741824
 monthly_gas_limit = 1000000000000
 monthly_upload_limit = 1000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 storage_limit = 500000000
+worker_connection_limit = 100
 worker_limit = 10000
 
 [tracing]

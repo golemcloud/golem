@@ -47,11 +47,25 @@ mod protobuf {
         }
     }
 
+    impl From<ErrorBody> for golem_api_grpc::proto::golem::common::ErrorBody {
+        fn from(value: ErrorBody) -> Self {
+            Self { error: value.error }
+        }
+    }
+
     impl From<golem_api_grpc::proto::golem::common::ErrorsBody> for ErrorsBody {
         fn from(value: golem_api_grpc::proto::golem::common::ErrorsBody) -> Self {
             Self {
                 errors: value.errors,
                 cause: None,
+            }
+        }
+    }
+
+    impl From<ErrorsBody> for golem_api_grpc::proto::golem::common::ErrorsBody {
+        fn from(value: ErrorsBody) -> Self {
+            Self {
+                errors: value.errors,
             }
         }
     }

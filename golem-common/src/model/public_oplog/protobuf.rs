@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::PublicOplogEntryWithIndex;
 use crate::model::component::{ComponentRevision, PluginPriority};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
@@ -1293,5 +1294,33 @@ fn decode_public_span_data(
         }
 
         result
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
+    for PublicOplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogEntryWithIndex,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: OplogIndex::from_u64(value.oplog_index),
+            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<PublicOplogEntryWithIndex>
+    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: value.oplog_index.into(),
+            entry: Some(value.entry.try_into()?),
+        })
     }
 }

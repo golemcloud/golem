@@ -17,7 +17,7 @@ use crate::metrics::record_compilation_time;
 use crate::model::*;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::RegistryServiceConfig;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
@@ -112,10 +112,11 @@ impl CompileWorker {
             config.host, config.port
         );
 
-        let client = GrpcRegistryService::new(&RemoteServiceConfig {
+        let client = GrpcRegistryService::new(&RegistryServiceConfig {
             host: config.host,
             port: config.port,
             retries: self.config.retries.clone(),
+            ..Default::default()
         });
 
         self.client.lock().await.replace(client);

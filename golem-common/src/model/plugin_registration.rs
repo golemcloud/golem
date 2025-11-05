@@ -74,21 +74,6 @@ declare_unions! {
 mod protobuf {
     use super::*;
 
-    impl From<ComponentTransformerPluginSpec>
-        for golem_api_grpc::proto::golem::component::ComponentTransformerDefinition
-    {
-        fn from(value: ComponentTransformerPluginSpec) -> Self {
-            Self {
-                provided_wit_package: value.provided_wit_package,
-                json_schema: value
-                    .json_schema
-                    .map(|js| serde_json::to_string(&js).expect("Failed to serialize json schema")),
-                validate_url: value.validate_url,
-                transform_url: value.transform_url,
-            }
-        }
-    }
-
     impl TryFrom<golem_api_grpc::proto::golem::component::ComponentTransformerDefinition>
         for ComponentTransformerPluginSpec
     {
@@ -107,6 +92,21 @@ mod protobuf {
                 validate_url: value.validate_url,
                 transform_url: value.transform_url,
             })
+        }
+    }
+
+    impl From<ComponentTransformerPluginSpec>
+        for golem_api_grpc::proto::golem::component::ComponentTransformerDefinition
+    {
+        fn from(value: ComponentTransformerPluginSpec) -> Self {
+            Self {
+                provided_wit_package: value.provided_wit_package,
+                json_schema: value.json_schema.map(|js| {
+                    serde_json::to_string(&js).expect("Failed serializing json schema to string")
+                }),
+                validate_url: value.validate_url,
+                transform_url: value.transform_url,
+            }
         }
     }
 

@@ -522,7 +522,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
@@ -580,7 +580,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())

@@ -33,8 +33,16 @@ declare_structs! {
         pub version: String
     }
 
-    /// Summary of all entities tracked by the deployment
+    /// Planned deployment including the current revision
     pub struct DeploymentPlan {
+        pub current_deployment_revision: Option<DeploymentRevision>,
+        pub deployment_hash: Hash,
+        pub components: Vec<DeploymentPlanComponentEntry>,
+        // TODO: http_api_definitons, http_api_deployments
+    }
+
+    /// Summary of all entities tracked by the deployment
+    pub struct DeploymentSummary {
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
         // TODO: http_api_definitons, http_api_deployments

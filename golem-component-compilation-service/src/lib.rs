@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ComponentServiceConfig;
+use crate::config::RegistryServiceConfig;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_service_base::config::BlobStorageConfig;
@@ -100,7 +100,7 @@ pub async fn run(
 
     let compilation_service = ComponentCompilationService::new(
         config.compile_worker,
-        config.component_service.clone(),
+        config.registry_service.clone(),
         engine,
         compiled_component,
     )
@@ -114,7 +114,7 @@ pub async fn run(
     let grpc_port = start_grpc_server(
         address,
         compilation_service,
-        config.component_service,
+        config.registry_service,
         join_set,
     )
     .await?;
@@ -130,7 +130,7 @@ pub async fn run(
 async fn start_grpc_server(
     addr: SocketAddr,
     service: Arc<ComponentCompilationService>,
-    component_service_config: ComponentServiceConfig,
+    component_service_config: RegistryServiceConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

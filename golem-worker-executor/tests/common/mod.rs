@@ -20,10 +20,13 @@ pub mod plugins;
 use self::component_service::ComponentServiceLocalFileSystem;
 use self::plugins::PluginsUnavailable;
 use crate::{LastUniqueId, WorkerExecutorTestDependencies};
-use anyhow::Error;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
+};
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountId, PlanId};
 use golem_common::model::agent::AgentId;
@@ -38,13 +41,16 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{
     OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
 };
+use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, RetryConfig, TransactionId,
-    WorkerId, WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, RetryConfig, TransactionId, WorkerFilter, WorkerId,
+    WorkerStatusRecord,
 };
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
@@ -162,6 +168,37 @@ impl TestWorkerExecutor {
                 HashSet::new(),
             )
             .await
+    }
+
+    pub async fn get_running_workers_metadata(
+        &self,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
+        let response = self
+            .client
+            .clone()
+            .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
+                component_id: Some(component_id.clone().into()),
+                filter: filter.map(|f| f.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await
+            .expect("Failed to get running workers metadata")
+            .into_inner();
+
+        match response.result {
+            None => panic!("No response from get_running_workers_metadata"),
+            Some(get_running_workers_metadata_response::Result::Success(success)) => Ok(success
+                .workers
+                .into_iter()
+                .map(|w| w.try_into())
+                .collect::<Result<_, _>>()
+                .map_err(|e| anyhow!("Failed converting worker metadata: {e}"))?),
+            Some(get_running_workers_metadata_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to get worker metadata: {error:?}"))
+            }
+        }
     }
 }
 
@@ -896,13 +933,18 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_plugins(&self, _golem_config: &GolemConfig) -> Arc<dyn PluginsService> {
+    fn create_plugins(
+        &self,
+        _golem_config: &GolemConfig,
+        _registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn PluginsService> {
         Arc::new(PluginsUnavailable)
     }
 
     fn create_component_service(
         &self,
         _golem_config: &GolemConfig,
+        _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
         Arc::new(ComponentServiceLocalFileSystem::new(
@@ -939,8 +981,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
+        let resource_limits =
+            resource_limits::configured(&golem_config.resource_limits, registry_service);
         let extra_deps = AdditionalTestDeps::new();
         let rdbms_service: Arc<dyn rdbms::RdbmsService> = Arc::new(TestRdmsService::new(
             rdbms_service.clone(),

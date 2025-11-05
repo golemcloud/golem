@@ -17,9 +17,7 @@ use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::RetryConfig;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::cmp::{max, min};
@@ -66,6 +64,18 @@ pub trait ResourceLimits: Send + Sync {
     async fn get_max_memory(&self, account_id: &AccountId) -> Result<usize, WorkerExecutorError>;
 }
 
+pub fn configured(
+    config: &ResourceLimitsConfig,
+    registry_service: Arc<dyn RegistryService>,
+) -> Arc<dyn ResourceLimits> {
+    match config {
+        ResourceLimitsConfig::Grpc(config) => {
+            ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
+        }
+        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CurrentResourceLimitsEntry {
     limits: CurrentResourceLimits,
@@ -77,7 +87,7 @@ pub struct CurrentResourceLimitsEntry {
 /// - caches this information for a given amount of time
 /// - periodically sends batched patches to the Cloud Services to update the account's resources as
 pub struct ResourceLimitsGrpc {
-    client: GrpcRegistryService,
+    client: Arc<dyn RegistryService>,
     current_limits: scc::HashMap<AccountId, CurrentResourceLimitsEntry>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -129,19 +139,12 @@ impl ResourceLimitsGrpc {
         updates
     }
 
-    pub async fn new(
-        host: String,
-        port: u16,
-        retry_config: RetryConfig,
+    pub fn new(
+        registry_service: Arc<dyn RegistryService>,
         batch_update_interval: Duration,
     ) -> Arc<Self> {
-        let client = GrpcRegistryService::new(&RemoteServiceConfig {
-            host,
-            port,
-            retries: retry_config,
-        });
         let svc = Self {
-            client,
+            client: registry_service,
             current_limits: scc::HashMap::new(),
             background_handle: Arc::new(Mutex::new(None)),
         };
@@ -303,73 +306,5 @@ impl ResourceLimits for ResourceLimitsDisabled {
 
     async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
         Ok(usize::MAX)
-    }
-}
-
-pub async fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Send + Sync> {
-    match config {
-        ResourceLimitsConfig::Grpc(config) => {
-            ResourceLimitsGrpc::new(
-                config.host.clone(),
-                config.port,
-                config.retries.clone(),
-                config.batch_update_interval,
-            )
-            .await
-        }
-        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
-    }
-}
-
-#[cfg(test)]
-pub struct ResourceLimitsMock {}
-
-#[cfg(test)]
-impl Default for ResourceLimitsMock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-impl ResourceLimitsMock {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-#[cfg(test)]
-#[async_trait]
-impl ResourceLimits for ResourceLimitsMock {
-    async fn borrow_fuel(
-        &self,
-        _account_id: &AccountId,
-        _amount: i64,
-    ) -> Result<i64, WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    fn borrow_fuel_sync(&self, _account_id: &AccountId, _amount: i64) -> Option<i64> {
-        unimplemented!()
-    }
-
-    async fn return_fuel(
-        &self,
-        _account_id: &AccountId,
-        _remaining: i64,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    async fn update_last_known_limits(
-        &self,
-        _account_id: &AccountId,
-        _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        unimplemented!()
-    }
-
-    async fn get_max_memory(&self, _account_id: &AccountId) -> Result<usize, WorkerExecutorError> {
-        unimplemented!()
     }
 }

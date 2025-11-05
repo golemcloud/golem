@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// pub mod auth;
-// pub mod limit;
 pub mod registry;
-// pub mod plugin;
 
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, HasConfigExamples};
@@ -23,16 +20,20 @@ use golem_common::model::RetryConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
+use std::time::Duration;
 use url::Url;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RemoteServiceConfig {
+pub struct RegistryServiceConfig {
     pub host: String,
     pub port: u16,
     pub retries: RetryConfig,
+    pub max_message_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
-impl RemoteServiceConfig {
+impl RegistryServiceConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
             .expect("Failed to parse service URL")
@@ -48,7 +49,7 @@ impl RemoteServiceConfig {
     }
 }
 
-impl SafeDisplay for RemoteServiceConfig {
+impl SafeDisplay for RegistryServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
@@ -56,22 +57,26 @@ impl SafeDisplay for RemoteServiceConfig {
         let _ = writeln!(&mut result, "access_token: ****");
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
+        let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
         result
     }
 }
 
-impl Default for RemoteServiceConfig {
+impl Default for RegistryServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
             port: 8080,
             retries: RetryConfig::default(),
+            max_message_size: 50 * 1024 * 1024,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
 
-impl HasConfigExamples<RemoteServiceConfig> for RemoteServiceConfig {
-    fn examples() -> Vec<ConfigExample<RemoteServiceConfig>> {
+impl HasConfigExamples<RegistryServiceConfig> for RegistryServiceConfig {
+    fn examples() -> Vec<ConfigExample<RegistryServiceConfig>> {
         vec![]
     }
 }

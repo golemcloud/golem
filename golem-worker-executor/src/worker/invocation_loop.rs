@@ -32,13 +32,14 @@ use golem_common::model::component::{ComponentFilePath, ComponentRevision, Compo
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
-    GetFileSystemNodeResult, OplogIndex,
+    OplogIndex,
 };
 use golem_common::model::{
     IdempotencyKey, OwnedWorkerId, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::Value;
 use std::collections::VecDeque;

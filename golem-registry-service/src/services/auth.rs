@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::repo::account::AccountRepo;
-use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
+use crate::repo::model::account::{
+    AccountBySecretRecord, AccountExtRevisionRecord, AccountRepoError,
+};
+use anyhow::anyhow;
 use chrono::Utc;
-use golem_common::model::account::Account;
+use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
@@ -51,7 +54,7 @@ impl AuthService {
         Self { account_repo }
     }
 
-    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
+    pub async fn authenticate_user(&self, token: TokenSecret) -> Result<UserAuthCtx, AuthError> {
         let record: AccountBySecretRecord = self
             .account_repo
             .get_by_secret(&token.0)
@@ -68,10 +71,44 @@ impl AuthService {
 
         let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
 
-        Ok(AuthCtx::User(UserAuthCtx {
+        Ok(UserAuthCtx {
             account_id: account.id,
             account_roles,
             account_plan_id: account.plan_id,
-        }))
+        })
+    }
+
+    pub async fn auth_ctx_for_account_id(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<UserAuthCtx, AuthError> {
+        // special action only available for system tasks that need to impersonate a user
+        if !auth.is_system() {
+            return Err(AuthError::InternalError(anyhow!(
+                "Attempted impersonating user as non-system user"
+            )));
+        };
+
+        let record: AccountExtRevisionRecord = self
+            .account_repo
+            .get_by_id(&account_id.0)
+            .await?
+            .ok_or(AuthError::CouldNotAuthenticate)?;
+
+        let account: Account = record.try_into()?;
+
+        let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
+
+        Ok(UserAuthCtx {
+            account_id: account.id,
+            account_roles,
+            account_plan_id: account.plan_id,
+        })
+    }
+
+    pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
+        let user = self.authenticate_user(token).await?;
+        Ok(AuthCtx::User(user))
     }
 }

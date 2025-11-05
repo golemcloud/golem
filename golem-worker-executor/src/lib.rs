@@ -72,6 +72,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::redis::RedisPool;
+use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -92,7 +93,6 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tracing::{info, Instrument};
-use uuid::Uuid;
 use wasmtime::component::Linker;
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
@@ -162,11 +162,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(grpc_port)
     }
 
-    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService>;
+    fn create_plugins(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn PluginsService>;
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService>;
 
@@ -200,6 +205,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -381,13 +387,21 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
-    let plugins = bootstrap.create_plugins(&golem_config);
 
-    let component_service = bootstrap.create_component_service(&golem_config, blob_storage.clone());
+    let registry_service = Arc::new(GrpcRegistryService::new(&golem_config.registry_service));
+
+    let plugins = bootstrap.create_plugins(&golem_config, registry_service.clone());
+
+    let component_service = bootstrap.create_component_service(
+        &golem_config,
+        registry_service.clone(),
+        blob_storage.clone(),
+    );
 
     let agent_type_service = services::agent_types::configured(
         &golem_config.agent_types_service,
         component_service.clone(),
+        registry_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());
@@ -467,13 +481,12 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let worker_proxy: Arc<dyn WorkerProxy> = Arc::new(RemoteWorkerProxy::new(
         golem_config.public_worker_api.uri(),
-        golem_config
-            .public_worker_api
-            .access_token
-            .parse::<Uuid>()
-            .expect("Access token must be an UUID"),
         golem_config.public_worker_api.retries.clone(),
         golem_config.public_worker_api.connect_timeout,
+        golem_config.public_worker_api.auth_cache_size,
+        golem_config.public_worker_api.auth_cache_ttl,
+        golem_config.public_worker_api.auth_cache_eviction_period,
+        registry_service.clone(),
     ));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService> =
@@ -547,6 +560,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             plugins,
             oplog_processor_plugin,
             agent_type_service,
+            registry_service,
         )
         .await?;
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::account::AccountError;
+use crate::services::account_usage::error::LimitExceededError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
@@ -68,36 +69,36 @@ impl ApiError {
 impl ApiErrorDetails for ApiError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
-            ApiError::BadRequest(_) => "BadRequest",
-            ApiError::NotFound(_) => "NotFound",
-            ApiError::Unauthorized(_) => "Unauthorized",
-            ApiError::InternalError(_) => "InternalError",
-            ApiError::Conflict(_) => "Conflict",
-            ApiError::Forbidden(_) => "Forbidden",
-            ApiError::LimitExceeded(_) => "LimitExceeded",
+            Self::BadRequest(_) => "BadRequest",
+            Self::NotFound(_) => "NotFound",
+            Self::Unauthorized(_) => "Unauthorized",
+            Self::InternalError(_) => "InternalError",
+            Self::Conflict(_) => "Conflict",
+            Self::Forbidden(_) => "Forbidden",
+            Self::LimitExceeded(_) => "LimitExceeded",
         }
     }
 
     fn is_expected(&self) -> bool {
         match &self {
-            ApiError::BadRequest(_) => true,
-            ApiError::NotFound(_) => true,
-            ApiError::Unauthorized(_) => true,
-            ApiError::InternalError(_) => false,
-            ApiError::Forbidden(_) => true,
-            ApiError::Conflict(_) => true,
-            ApiError::LimitExceeded(_) => true,
+            Self::BadRequest(_) => true,
+            Self::NotFound(_) => true,
+            Self::Unauthorized(_) => true,
+            Self::InternalError(_) => false,
+            Self::Forbidden(_) => true,
+            Self::Conflict(_) => true,
+            Self::LimitExceeded(_) => true,
         }
     }
 
     fn take_cause(&mut self) -> Option<anyhow::Error> {
         match self {
-            ApiError::BadRequest(inner) => inner.cause.take(),
-            ApiError::NotFound(inner) => inner.cause.take(),
-            ApiError::Unauthorized(inner) => inner.cause.take(),
-            ApiError::InternalError(inner) => inner.cause.take(),
-            ApiError::Forbidden(inner) => inner.cause.take(),
-            ApiError::Conflict(inner) => inner.cause.take(),
+            Self::BadRequest(inner) => inner.cause.take(),
+            Self::NotFound(inner) => inner.cause.take(),
+            Self::Unauthorized(inner) => inner.cause.take(),
+            Self::InternalError(inner) => inner.cause.take(),
+            Self::Forbidden(inner) => inner.cause.take(),
+            Self::Conflict(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
         }
     }
@@ -106,6 +107,15 @@ impl ApiErrorDetails for ApiError {
 impl From<AuthorizationError> for ApiError {
     fn from(value: AuthorizationError) -> Self {
         Self::Forbidden(Json(ErrorBody {
+            error: value.to_string(),
+            cause: None,
+        }))
+    }
+}
+
+impl From<LimitExceededError> for ApiError {
+    fn from(value: LimitExceededError) -> Self {
+        Self::LimitExceeded(Json(ErrorBody {
             error: value.to_string(),
             cause: None,
         }))
@@ -142,7 +152,7 @@ impl From<AccountError> for ApiError {
         match value {
             AccountError::Unauthorized(inner) => inner.into(),
 
-            AccountError::AccountNotFound(_) => {
+            AccountError::AccountNotFound(_) | AccountError::AccountByEmailNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -175,6 +185,8 @@ impl From<ApplicationError> for ApiError {
 
             ApplicationError::Unauthorized(inner) => inner.into(),
 
+            ApplicationError::LimitExceeded(inner) => inner.into(),
+
             ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("ApplicationError")),
@@ -199,6 +211,8 @@ impl From<EnvironmentError> for ApiError {
             }
 
             EnvironmentError::Unauthorized(inner) => inner.into(),
+
+            EnvironmentError::LimitExceeded(inner) => inner.into(),
 
             EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -228,11 +242,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::LimitExceeded { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
-
             ComponentError::AlreadyExists(_) => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
@@ -270,6 +279,8 @@ impl From<ComponentError> for ApiError {
             }
 
             ComponentError::Unauthorized(inner) => inner.into(),
+
+            ComponentError::LimitExceeded(inner) => inner.into(),
 
             ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,

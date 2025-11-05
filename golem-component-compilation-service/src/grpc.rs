@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{ComponentServiceConfig, StaticComponentServiceConfig};
+use crate::config::{RegistryServiceConfig, StaticComponentServiceConfig};
 use crate::service::ComponentCompilationService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
@@ -34,13 +34,13 @@ use tracing::Instrument;
 #[derive(Clone)]
 pub struct CompileGrpcService {
     service: Arc<ComponentCompilationService>,
-    component_service_config: ComponentServiceConfig,
+    component_service_config: RegistryServiceConfig,
 }
 
 impl CompileGrpcService {
     pub fn new(
         service: Arc<ComponentCompilationService>,
-        component_service_config: ComponentServiceConfig,
+        component_service_config: RegistryServiceConfig,
     ) -> Self {
         Self {
             service,
@@ -70,11 +70,10 @@ impl GrpcCompilationServer for CompileGrpcService {
             remote_addr,
             component_service_port,
         ) {
-            (ComponentServiceConfig::Dynamic(config), Some(addr), Some(port)) => {
+            (RegistryServiceConfig::Dynamic(_), Some(addr), Some(port)) => {
                 Some(StaticComponentServiceConfig {
                     host: addr.ip().to_string(),
                     port: port as u16,
-                    access_token: config.access_token,
                 })
             }
             _ => None,
