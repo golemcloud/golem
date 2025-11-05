@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use http::{HeaderName, HeaderValue, Version};
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
+use desert_rust::BinaryCodec;
 use crate::durable_host::serialized::SerializableError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use wasmtime_wasi_http::bindings::http::types::{
@@ -27,7 +26,7 @@ use wasmtime_wasi_http::bindings::http::types::{
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, BinaryCodec)]
 pub enum SerializedHttpVersion {
     Http09,
     /// `HTTP/1.0`
@@ -72,7 +71,8 @@ impl From<SerializedHttpVersion> for Version {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum SerializableResponse {
     Pending,
     HeadersReceived(SerializableResponseHeaders),
@@ -80,7 +80,8 @@ pub enum SerializableResponse {
     InternalError(Option<SerializableError>),
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableResponseHeaders {
     pub status: u16,
     pub headers: HashMap<String, Vec<u8>>,
@@ -121,7 +122,8 @@ impl TryFrom<SerializableResponseHeaders> for HostIncomingResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableTlsAlertReceivedPayload {
     pub alert_id: Option<u8>,
     pub alert_message: Option<String>,
@@ -145,7 +147,8 @@ impl From<SerializableTlsAlertReceivedPayload> for TlsAlertReceivedPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableDnsErrorPayload {
     pub rcode: Option<String>,
     pub info_code: Option<u16>,
@@ -169,7 +172,8 @@ impl From<SerializableDnsErrorPayload> for DnsErrorPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableFieldSizePayload {
     pub field_name: Option<String>,
     pub field_size: Option<u32>,
@@ -193,7 +197,8 @@ impl From<SerializableFieldSizePayload> for FieldSizePayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum SerializableErrorCode {
     DnsTimeout,
     DnsError(SerializableDnsErrorPayload),
@@ -392,7 +397,8 @@ impl From<SerializableErrorCode> for ErrorCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum SerializableHttpMethod {
     Get,
     Post,
@@ -440,7 +446,8 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableHttpRequest {
     pub uri: String,
     pub method: SerializableHttpMethod,

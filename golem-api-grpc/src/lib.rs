@@ -19,10 +19,10 @@ test_r::enable!();
 pub mod proto {
     use self::golem::worker::{WasiConfigVars, WasiConfigVarsEntry};
     use crate::proto::golem::worker::UpdateMode;
-    use bincode::de::Decoder;
-    use bincode::enc::Encoder;
-    use bincode::error::{DecodeError, EncodeError};
-    use bincode::{Decode, Encode};
+    use desert_rust::{
+        BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+        SerializationContext,
+    };
     use golem_wasm::analysis::{
         analysed_type, AnalysedExport, AnalysedFunction, AnalysedFunctionParameter,
         AnalysedFunctionResult, AnalysedInstance, AnalysedType,
@@ -190,21 +190,27 @@ pub mod proto {
         }
     }
 
-    impl Encode for UpdateMode {
-        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+    impl BinarySerializer for UpdateMode {
+        fn serialize<Output: BinaryOutput>(
+            &self,
+            context: &mut SerializationContext<Output>,
+        ) -> desert_rust::Result<()> {
             match self {
-                UpdateMode::Automatic => 0u8.encode(encoder),
-                UpdateMode::Manual => 1u8.encode(encoder),
+                UpdateMode::Automatic => 0u8.serialize(context),
+                UpdateMode::Manual => 1u8.serialize(context),
             }
         }
     }
 
-    impl<Context> Decode<Context> for UpdateMode {
-        fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-            match Decode::decode(decoder)? {
+    impl BinaryDeserializer for UpdateMode {
+        fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+            match u8::deserialize(context)? {
                 0u8 => Ok(UpdateMode::Automatic),
                 1u8 => Ok(UpdateMode::Manual),
-                _ => Err(DecodeError::Other("Invalid UpdateMode")),
+                other => Err(desert_rust::Error::InvalidConstructorId {
+                    constructor_id: other as u32,
+                    type_name: "UpdateMode".to_string(),
+                }),
             }
         }
     }

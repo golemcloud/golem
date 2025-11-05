@@ -39,7 +39,6 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsIntoValueAndType;
 use crate::services::rpc::RpcError;
 use async_trait::async_trait;
-use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::agent::{AgentId, DataValue, RegisteredAgentType};
 use golem_common::model::lucene::Query;
@@ -71,6 +70,7 @@ use golem_wasm::analysis::AnalysedFunctionParameter;
 use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
+use desert_rust::BinaryDeserializer;
 use uuid::Uuid;
 
 pub struct PublicOplogChunk {
@@ -803,7 +803,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
     }
 }
 
-fn try_deserialize<T: Decode<()>>(
+fn try_deserialize<T: BinaryDeserializer>(
     oplog_idx: OplogIndex,
     what: &str,
     data: &[u8],

@@ -17,8 +17,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-
+use desert_rust::BinaryCodec;
 use golem_common::model::ProjectId;
 
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
@@ -417,7 +416,8 @@ impl BlobStoreService for DefaultBlobStoreService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,

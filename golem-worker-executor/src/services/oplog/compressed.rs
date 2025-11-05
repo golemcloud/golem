@@ -16,7 +16,6 @@ use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId};
@@ -24,6 +23,7 @@ use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use desert_rust::BinaryCodec;
 use tokio::sync::RwLock;
 
 #[derive(Debug)]
@@ -366,7 +366,8 @@ impl OplogArchive for CompressedOplogArchive {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
 pub struct CompressedOplogChunk {
     pub count: u64,
     pub compressed_data: Vec<u8>,

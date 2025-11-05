@@ -15,14 +15,15 @@
 pub mod http;
 
 use crate::gateway_binding::GatewayBinding;
-use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fmt::Display;
+use desert_rust::BinaryCodec;
 
 // Common to API definitions regardless of different protocols
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec, NewType)]
+#[desert(transparent)]
 pub struct ApiDefinitionId(pub String);
 
 impl From<String> for ApiDefinitionId {
@@ -37,7 +38,8 @@ impl Display for ApiDefinitionId {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec, NewType)]
+#[desert(transparent)]
 pub struct ApiVersion(pub String);
 
 impl ApiVersion {

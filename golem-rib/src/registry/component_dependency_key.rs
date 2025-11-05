@@ -13,80 +13,17 @@
 // limitations under the License.
 
 use std::fmt::{Display, Formatter};
+use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct ComponentDependencyKey {
     pub component_name: String,
     pub component_id: Uuid,
     pub component_version: u64,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
-}
-
-impl bincode::Encode for ComponentDependencyKey {
-    fn encode<E: bincode::enc::Encoder>(
-        &self,
-        encoder: &mut E,
-    ) -> Result<(), bincode::error::EncodeError> {
-        use bincode::enc::write::Writer;
-
-        encoder.writer().write(self.component_name.as_bytes())?;
-        self.component_id.as_bytes().encode(encoder)?;
-        self.component_version.encode(encoder)?;
-        Option::<String>::encode(&self.root_package_name, encoder)?;
-        Option::<String>::encode(&self.root_package_version, encoder)?;
-
-        Ok(())
-    }
-}
-
-impl<Context> bincode::Decode<Context> for ComponentDependencyKey {
-    fn decode<D: bincode::de::Decoder>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        use bincode::de::read::Reader;
-
-        let component_name = String::decode(decoder)?;
-        let mut bytes = [0u8; 16];
-        decoder.reader().read(&mut bytes)?;
-        let component_id = Uuid::from_bytes(bytes);
-        let component_version = u64::decode(decoder)?;
-        let root_package_name = Option::<String>::decode(decoder)?;
-        let root_package_version = Option::<String>::decode(decoder)?;
-
-        Ok(ComponentDependencyKey {
-            component_name,
-            component_version,
-            component_id,
-            root_package_name,
-            root_package_version,
-        })
-    }
-}
-
-impl<'de, Context> bincode::BorrowDecode<'de, Context> for ComponentDependencyKey {
-    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        use bincode::de::read::Reader;
-
-        let component_name = String::borrow_decode(decoder)?;
-        let mut bytes = [0u8; 16];
-        decoder.reader().read(&mut bytes)?;
-        let component_id = Uuid::from_bytes(bytes);
-        let component_version = u64::borrow_decode(decoder)?;
-        let root_package_name = Option::<String>::borrow_decode(decoder)?;
-        let root_package_version = Option::<String>::borrow_decode(decoder)?;
-
-        Ok(ComponentDependencyKey {
-            component_name,
-            component_id,
-            component_version,
-            root_package_name,
-            root_package_version,
-        })
-    }
 }
 
 impl Display for ComponentDependencyKey {

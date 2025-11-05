@@ -14,14 +14,15 @@
 
 use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
 use bigdecimal::BigDecimal;
-use bincode::{Decode, Encode};
 use bit_vec::BitVec;
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum DbColumnType {
     Boolean,
     Tinyint,
@@ -112,28 +113,27 @@ impl RdbmsIntoValueAndType for DbColumnType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum DbValue {
     Boolean(bool),
     Tinyint(i8),
     Smallint(i16),
     Mediumint(i32),
-    /// s24
     Int(i32),
     Bigint(i64),
     TinyintUnsigned(u8),
     SmallintUnsigned(u16),
     MediumintUnsigned(u32),
-    /// u24
     IntUnsigned(u32),
     BigintUnsigned(u64),
     Float(f32),
     Double(f64),
-    Decimal(#[bincode(with_serde)] BigDecimal),
-    Date(#[bincode(with_serde)] chrono::NaiveDate),
-    Datetime(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
-    Timestamp(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
-    Time(#[bincode(with_serde)] chrono::NaiveTime),
+    Decimal(BigDecimal),
+    Date(chrono::NaiveDate),
+    Datetime(chrono::DateTime<chrono::Utc>),
+    Timestamp(chrono::DateTime<chrono::Utc>),
+    Time(chrono::NaiveTime),
     Year(u16),
     Fixchar(String),
     Varchar(String),
@@ -149,7 +149,7 @@ pub enum DbValue {
     Longblob(Vec<u8>),
     Enumeration(String),
     Set(String),
-    Bit(#[bincode(with_serde)] BitVec),
+    Bit(BitVec),
     Json(String),
     Null,
 }
@@ -207,7 +207,8 @@ impl RdbmsIntoValueAndType for DbValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
@@ -252,15 +253,15 @@ pub mod tests {
     use crate::services::rdbms::{DbResult, DbRow, RdbmsIntoValueAndType};
     use assert2::check;
     use bigdecimal::BigDecimal;
-    use bincode::{Decode, Encode};
     use bit_vec::BitVec;
+    use desert_rust::BinaryCodec;
     use golem_common::serialization::{serialize, try_deserialize};
     use serde_json::json;
     use std::str::FromStr;
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_bincode<T: Encode + Decode<()> + PartialEq>(value: T) {
+    fn check_serialization<T: BinaryCodec + PartialEq>(value: T) {
         let bin_value = serialize(&value).unwrap().to_vec();
         let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
@@ -275,7 +276,7 @@ pub mod tests {
     #[test]
     fn test_db_values_conversions() {
         for value in get_test_db_values() {
-            check_bincode(value.clone());
+            check_serialization(value.clone());
             check_type_and_value(value);
         }
     }
@@ -283,7 +284,7 @@ pub mod tests {
     #[test]
     fn test_db_column_types_conversions() {
         for value in get_test_db_column_types() {
-            check_bincode(value.clone());
+            check_serialization(value.clone());
             check_type_and_value(value);
         }
     }
@@ -297,7 +298,7 @@ pub mod tests {
             }],
         );
 
-        check_bincode(value.clone());
+        check_serialization(value.clone());
         check_type_and_value(value);
     }
 

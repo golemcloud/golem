@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use std::fmt::Display;
-
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(transparent)]
 pub struct Path(pub Vec<PathComponent>);
 
 impl Path {
@@ -59,13 +59,16 @@ impl Display for Path {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(transparent)]
 pub struct Index(pub usize);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(transparent)]
 pub struct KeyName(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub enum PathComponent {
     Index(Index),
     KeyName(KeyName),

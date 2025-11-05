@@ -16,10 +16,11 @@ use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
 use crate::type_inference::TypeHint;
 use crate::{Expr, InferredExpr, InstructionId};
-use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
+use desert_rust::BinaryCodec;
 
-#[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Default, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct RibByteCode {
     pub instructions: Vec<RibIR>,
 }

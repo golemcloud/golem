@@ -15,49 +15,15 @@
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
-        #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
+        #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
         #[derive(serde::Serialize, serde::Deserialize)]
         #[serde(transparent)]
+        #[desert(transparent)]
         pub struct $name(pub Uuid);
 
         impl $name {
             pub fn new_v4() -> $name {
                 Self(Uuid::new_v4())
-            }
-        }
-
-        impl bincode::Encode for $name {
-            fn encode<E: bincode::enc::Encoder>(
-                &self,
-                encoder: &mut E,
-            ) -> Result<(), bincode::error::EncodeError> {
-                use bincode::enc::write::Writer;
-
-                encoder.writer().write(self.0.as_bytes())
-            }
-        }
-
-        impl<Context> bincode::Decode<Context> for $name {
-            fn decode<D: bincode::de::Decoder<Context = Context>>(
-                decoder: &mut D,
-            ) -> Result<Self, bincode::error::DecodeError> {
-                use bincode::de::read::Reader;
-
-                let mut bytes = [0u8; 16];
-                decoder.reader().read(&mut bytes)?;
-                Ok(Self(Uuid::from_bytes(bytes)))
-            }
-        }
-
-        impl<'de, Context> bincode::BorrowDecode<'de, Context> for $name {
-            fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
-                decoder: &mut D,
-            ) -> Result<Self, bincode::error::DecodeError> {
-                use bincode::de::read::Reader;
-
-                let mut bytes = [0u8; 16];
-                decoder.reader().read(&mut bytes)?;
-                Ok(Self(Uuid::from_bytes(bytes)))
             }
         }
 

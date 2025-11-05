@@ -37,7 +37,7 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -89,7 +89,8 @@ pub trait Rpc: Send + Sync {
     ) -> Result<(), RpcError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },

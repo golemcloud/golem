@@ -14,13 +14,13 @@
 
 use crate::replayable_stream::ErasedReplayableStream;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 pub mod fs;
 pub mod memory;
@@ -325,7 +325,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
-    pub async fn get<T: Decode<()>>(
+    pub async fn get<T: BinaryDeserializer>(
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
@@ -336,7 +336,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         }
     }
 
-    pub async fn put<T: Encode>(
+    pub async fn put<T: BinarySerializer>(
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,

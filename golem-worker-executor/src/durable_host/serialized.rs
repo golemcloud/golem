@@ -16,7 +16,6 @@ use crate::services::rdbms::Error as RdbmsError;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use anyhow::anyhow;
-use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type::str;
@@ -28,12 +27,14 @@ use std::net::IpAddr;
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
+use desert_rust::BinaryCodec;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::{filesystem, sockets};
 use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableDateTime {
     pub seconds: u64,
     pub nanoseconds: u32,
@@ -100,7 +101,8 @@ impl From<DateTime<Utc>> for SerializableDateTime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum SerializableError {
     Generic { message: String },
     FsError { code: u8 },
@@ -534,7 +536,8 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -595,7 +598,8 @@ impl From<SerializableError> for RdbmsError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum SerializableIpAddress {
     IPv4 { address: [u8; 4] },
     IPv6 { address: [u16; 8] },
@@ -660,7 +664,8 @@ impl FromValue for SerializableIpAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(transparent)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
@@ -675,7 +680,8 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,

@@ -16,7 +16,6 @@ use crate::services::rdbms::{
     get_bound_analysed_type, get_bound_value, AnalysedTypeMerger, RdbmsIntoValueAndType,
 };
 use bigdecimal::BigDecimal;
-use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{IntoValue, Value, ValueAndType};
@@ -27,13 +26,15 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::ops::Bound;
+use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
 pub trait NamedType {
     fn name(&self) -> String;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct EnumerationType {
     pub name: String,
 }
@@ -56,7 +57,8 @@ impl Display for EnumerationType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct CompositeType {
     pub name: String,
     pub attributes: Vec<(String, DbColumnType)>,
@@ -181,7 +183,8 @@ impl AnalysedTypeMerger for CompositeType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct DomainType {
     pub name: String,
     pub base_type: Box<DbColumnType>,
@@ -261,7 +264,8 @@ impl AnalysedTypeMerger for DomainType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct RangeType {
     pub name: String,
     pub base_type: Box<DbColumnType>,
@@ -341,7 +345,8 @@ impl AnalysedTypeMerger for RangeType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct ValuesRange<T> {
     pub start: Bound<T>,
     pub end: Bound<T>,
@@ -418,7 +423,8 @@ impl<T: IntoValue> IntoValue for ValuesRange<T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct Interval {
     pub months: i32,
     pub days: i32,
@@ -441,9 +447,9 @@ impl Display for Interval {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct TimeTz {
-    #[bincode(with_serde)]
     pub time: chrono::NaiveTime,
     pub offset: i32,
 }
@@ -463,7 +469,8 @@ impl Display for TimeTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct Enumeration {
     pub name: String,
     pub value: String,
@@ -487,7 +494,8 @@ impl Display for Enumeration {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct Composite {
     pub name: String,
     pub values: Vec<DbValue>,
@@ -568,7 +576,8 @@ impl AnalysedTypeMerger for Composite {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct Domain {
     pub name: String,
     pub value: Box<DbValue>,
@@ -648,7 +657,8 @@ impl AnalysedTypeMerger for Domain {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct Range {
     pub name: String,
     pub value: Box<ValuesRange<DbValue>>,
@@ -779,7 +789,8 @@ impl AnalysedTypeMerger for Range {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum DbColumnType {
     Character,
     Int2,
@@ -1104,7 +1115,8 @@ impl AnalysedTypeMerger for DbColumnType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum DbValue {
     Character(i8),
     Int2(i16),
@@ -1112,12 +1124,12 @@ pub enum DbValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
-    Numeric(#[bincode(with_serde)] BigDecimal),
+    Numeric(BigDecimal),
     Boolean(bool),
-    Timestamp(#[bincode(with_serde)] chrono::NaiveDateTime),
-    Timestamptz(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
-    Date(#[bincode(with_serde)] chrono::NaiveDate),
-    Time(#[bincode(with_serde)] chrono::NaiveTime),
+    Timestamp(chrono::NaiveDateTime),
+    Timestamptz(chrono::DateTime<chrono::Utc>),
+    Date(chrono::NaiveDate),
+    Time(chrono::NaiveTime),
     Timetz(TimeTz),
     Interval(Interval),
     Text(String),
@@ -1128,18 +1140,18 @@ pub enum DbValue {
     Jsonb(String),
     Jsonpath(String),
     Xml(String),
-    Uuid(#[bincode(with_serde)] Uuid),
-    Inet(#[bincode(with_serde)] IpAddr),
-    Cidr(#[bincode(with_serde)] IpAddr),
-    Macaddr(#[bincode(with_serde)] MacAddress),
-    Bit(#[bincode(with_serde)] BitVec),
-    Varbit(#[bincode(with_serde)] BitVec),
+    Uuid(Uuid),
+    Inet(IpAddr),
+    Cidr(IpAddr),
+    Macaddr(MacAddress),
+    Bit(BitVec),
+    Varbit(BitVec),
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
-    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>),
-    Tsrange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDateTime>),
-    Tstzrange(#[bincode(with_serde)] ValuesRange<chrono::DateTime<chrono::Utc>>),
-    Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),
+    Numrange(ValuesRange<BigDecimal>),
+    Tsrange(ValuesRange<chrono::NaiveDateTime>),
+    Tstzrange(ValuesRange<chrono::DateTime<chrono::Utc>>),
+    Daterange(ValuesRange<chrono::NaiveDate>),
     Money(i64),
     Oid(u32),
     Enumeration(Enumeration),
@@ -1519,7 +1531,8 @@ impl AnalysedTypeMerger for DbValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
@@ -1595,17 +1608,17 @@ pub mod tests {
     use crate::services::rdbms::{AnalysedTypeMerger, DbResult, DbRow, RdbmsIntoValueAndType};
     use assert2::check;
     use bigdecimal::BigDecimal;
-    use bincode::{Decode, Encode};
     use bit_vec::BitVec;
     use golem_common::serialization::{serialize, try_deserialize};
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use desert_rust::BinaryCodec;
     use test_r::test;
     use uuid::Uuid;
 
-    fn check_bincode<T: Encode + Decode<()> + PartialEq>(value: T) {
+    fn check_serialization<T: BinaryCodec + PartialEq>(value: T) {
         let bin_value = serialize(&value).unwrap().to_vec();
         let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
         check!(value2.unwrap() == value);
@@ -1650,7 +1663,7 @@ pub mod tests {
         let values = get_test_db_values();
 
         for value in values {
-            check_bincode(value.clone());
+            check_serialization(value.clone());
             check_type_and_value(value);
         }
     }
@@ -1660,7 +1673,7 @@ pub mod tests {
         let values = get_test_db_column_types();
 
         for value in values {
-            check_bincode(value.clone());
+            check_serialization(value.clone());
             check_type_and_value(value);
         }
     }
@@ -1674,7 +1687,7 @@ pub mod tests {
             }],
         );
 
-        check_bincode(value.clone());
+        check_serialization(value.clone());
         check_type_and_value(value);
     }
 

@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, InferredExpr, RibCompilationError};
-use bincode::{Decode, Encode};
 use golem_wasm::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use desert_rust::BinaryCodec;
 
 // RibInputTypeInfo refers to the required global inputs to a RibScript
 // with its type information. Example: `request` variable which should be of the type `Record`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]

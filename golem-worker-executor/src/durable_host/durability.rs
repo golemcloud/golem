@@ -23,7 +23,6 @@ use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
 use golem_common::model::Timestamp;
@@ -32,6 +31,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
@@ -578,9 +578,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     where
         Ok: Clone,
         Err: From<SErr> + From<WorkerExecutorError> + Send + Sync,
-        SIn: Debug + Encode + Send + Sync,
-        SErr: Debug + Encode + for<'a> From<&'a Err> + From<WorkerExecutorError> + Send + Sync,
-        SOk: Debug + Encode + From<Ok> + Send + Sync,
+        SIn: Debug + BinarySerializer + Send + Sync,
+        SErr: Debug + BinarySerializer + for<'a> From<&'a Err> + From<WorkerExecutorError> + Send + Sync,
+        SOk: Debug + BinarySerializer + From<Ok> + Send + Sync,
     {
         let serializable_result: Result<SOk, SErr> = result
             .as_ref()
@@ -604,9 +604,9 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         result: Result<SOk, SErr>,
     ) -> Result<(), WorkerExecutorError>
     where
-        SIn: Debug + Encode + Send + Sync,
-        SOk: Debug + Encode + Send + Sync,
-        SErr: Debug + Encode + Send + Sync,
+        SIn: Debug + BinarySerializer + Send + Sync,
+        SOk: Debug + BinarySerializer + Send + Sync,
+        SErr: Debug + BinarySerializer + Send + Sync,
     {
         if self.durable_execution_state.snapshotting_mode.is_none() {
             let function_name = self.function_name();
@@ -679,8 +679,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         ctx: &mut impl DurabilityHost,
     ) -> Result<Result<SOk, SErr>, WorkerExecutorError>
     where
-        SOk: Decode<()>,
-        SErr: Decode<()>,
+        SOk: BinaryDeserializer,
+        SErr: BinaryDeserializer,
     {
         let (bytes, _) = self.replay_raw(ctx).await?;
         let result: Result<SOk, SErr> = try_deserialize(&bytes)
@@ -695,8 +695,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     where
         Ok: From<SOk>,
         Err: From<SErr> + From<WorkerExecutorError>,
-        SErr: Debug + Encode + Decode<()> + From<WorkerExecutorError> + Send + Sync,
-        SOk: Debug + Encode + Decode<()> + Send + Sync,
+        SErr: Debug + BinarySerializer + BinaryDeserializer + From<WorkerExecutorError> + Send + Sync,
+        SOk: Debug + BinarySerializer + BinaryDeserializer + Send + Sync,
     {
         Self::replay_serializable(self, ctx)
             .await?

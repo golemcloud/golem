@@ -15,10 +15,10 @@
 use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::newtype_uuid;
-use bincode::{Decode, Encode};
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
 newtype_uuid!(
@@ -49,12 +49,12 @@ newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ShardId {
@@ -125,14 +125,14 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     Eq,
     PartialEq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     poem_openapi::Object,
     IntoValue,
     FromValue,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerId {
@@ -248,14 +248,14 @@ impl AsRef<WorkerId> for &WorkerId {
     Eq,
     PartialEq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     IntoValue,
     FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
@@ -284,8 +284,7 @@ impl Display for PromiseId {
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Default,
     poem_openapi::NewType,
     serde::Serialize,
@@ -293,6 +292,7 @@ impl Display for PromiseId {
     golem_wasm_derive::IntoValue,
     golem_wasm_derive::FromValue,
 )]
+#[desert(transparent)]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {
@@ -350,8 +350,7 @@ impl From<OplogIndex> for u64 {
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Default,
     poem_openapi::NewType,
     serde::Serialize,
@@ -359,6 +358,7 @@ impl From<OplogIndex> for u64 {
     IntoValue,
     FromValue,
 )]
+#[desert(transparent)]
 pub struct TransactionId(pub(crate) String);
 
 impl TransactionId {

@@ -21,8 +21,9 @@ golem-wasm = { workspace = true }
 
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
-bincode = { workspace = true }
 combine = { workspace = true }
+desert_rust = { workspace = true }
+lazy_static = { workspace = true }
 poem-openapi = { workspace = true, optional = true }
 prost = { workspace = true }
 prost-types = { workspace = true }

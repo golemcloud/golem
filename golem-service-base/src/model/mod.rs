@@ -15,7 +15,6 @@
 pub mod auth;
 
 use applying::Apply;
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -34,6 +33,7 @@ use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
+use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -487,8 +487,9 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue, FromValue,
+    Debug, Clone, PartialEq, Eq, BinaryCodec, Serialize, Deserialize, Union, IntoValue, FromValue,
 )]
+#[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
 pub enum RevertWorkerTarget {
@@ -535,14 +536,14 @@ impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWo
     Hash,
     Ord,
     PartialOrd,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     Object,
     IntoValue,
     FromValue,
 )]
+#[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct RevertToOplogIndex {
@@ -573,14 +574,14 @@ impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertTo
     Hash,
     Ord,
     PartialOrd,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     Object,
     IntoValue,
     FromValue,
 )]
+#[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct RevertLastInvocations {

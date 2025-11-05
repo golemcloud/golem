@@ -16,9 +16,8 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
-
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
@@ -332,7 +331,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Appends an entry to the given key with the given id, serializing the value first
-    pub async fn append<V: Encode>(
+    pub async fn append<V: BinarySerializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -374,7 +373,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Appends multiple entries to the given key with the given id, serializing the value first
-    pub async fn append_many<V: Encode>(
+    pub async fn append_many<V: BinarySerializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -397,7 +396,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Reads a closed range of entries from the index of the given key, deserializing each entry
-    pub async fn read<V: Decode<()>>(
+    pub async fn read<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -462,7 +461,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the first entry in the index of the given key, deserializing the value
-    pub async fn first<V: Decode<()>>(
+    pub async fn first<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -511,7 +510,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the last entry in the index of the given key, deserializing the value
-    pub async fn last<V: Decode<()>>(
+    pub async fn last<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -564,7 +563,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry, deserializing the value
-    pub async fn closest<V: Decode<()>>(
+    pub async fn closest<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,

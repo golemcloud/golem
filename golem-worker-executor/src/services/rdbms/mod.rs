@@ -21,7 +21,7 @@ use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
-use bincode::{BorrowDecode, Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_common::model::TransactionId;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -37,17 +37,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType:
-    Debug + Display + Default + PartialEq + Encode + Decode<()> + Clone + Send
-{
+pub trait RdbmsType: Debug + Display + Default + PartialEq + BinaryCodec + Clone + Send {
     type DbColumn: Clone
         + Send
         + Sync
         + PartialEq
         + Debug
-        + Decode<()>
-        + for<'de> BorrowDecode<'de, ()>
-        + Encode
+        + BinaryCodec
         + RdbmsIntoValueAndType
         + 'static;
     type DbValue: Clone
@@ -55,9 +51,7 @@ pub trait RdbmsType:
         + Sync
         + PartialEq
         + Debug
-        + Decode<()>
-        + for<'de> BorrowDecode<'de, ()>
-        + Encode
+        + BinaryCodec
         + RdbmsIntoValueAndType
         + 'static;
 }
@@ -221,9 +215,9 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub struct RdbmsPoolKey {
-    #[bincode(with_serde)]
     pub address: Url,
 }
 
@@ -294,7 +288,8 @@ impl Display for RdbmsPoolKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct DbRow<T: 'static> {
     pub values: Vec<T>,
 }
@@ -361,35 +356,10 @@ pub trait DbResultStream<T: RdbmsType> {
     async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
 }
 
-#[derive(Clone, Debug, PartialEq, Encode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
 pub struct DbResult<T: RdbmsType + 'static> {
     pub columns: Vec<T::DbColumn>,
     pub rows: Vec<DbRow<T::DbValue>>,
-}
-
-impl<T: RdbmsType + 'static> Decode<()> for DbResult<T> {
-    fn decode<D: bincode::de::Decoder<Context = ()>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            columns: bincode::Decode::decode(decoder)?,
-            rows: bincode::Decode::decode(decoder)?,
-        })
-    }
-}
-
-impl<'de, T: RdbmsType + 'static> BorrowDecode<'de, ()> for DbResult<T>
-where
-    T: bincode::de::BorrowDecode<'de, ()>,
-{
-    fn borrow_decode<__D: bincode::de::BorrowDecoder<'de, Context = ()>>(
-        decoder: &mut __D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            columns: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-            rows: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-        })
-    }
 }
 
 impl<T: RdbmsType> DbResult<T> {
@@ -439,7 +409,8 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum Error {
     ConnectionFailure(String),
     QueryParameterFailure(String),

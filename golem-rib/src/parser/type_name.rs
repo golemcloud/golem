@@ -15,7 +15,6 @@
 use crate::parser::errors::RibParseError;
 use crate::rib_source_span::GetSourcePosition;
 use crate::{InferredNumber, InferredType, TypeInternal};
-use bincode::{Decode, Encode};
 use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::{attempt, between, choice, optional, sep_by, Parser};
@@ -23,6 +22,7 @@ use combine::{parser, ParseError};
 use golem_wasm::analysis::{AnalysedType, TypeResult};
 use std::fmt::Display;
 use std::ops::Deref;
+use desert_rust::BinaryCodec;
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.
@@ -32,7 +32,8 @@ use std::ops::Deref;
 // Any compilation or interpreter error messages will also be using `TypeName` to show the type of the expression
 // for which we convert AnalysedType or InferredType back to TypeName. If `InferredType` cannot be converted to `TypeName`, we explain the error displaying
 // the original expression, and there is no point displaying `InferredType` to the user.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, BinaryCodec, Ord, PartialOrd)]
+#[desert(evolution())]
 pub enum TypeName {
     Bool,
     S8,

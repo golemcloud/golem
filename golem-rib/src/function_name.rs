@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::position::Stream;
 use combine::{eof, EasyParser, Parser};
+use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::fmt::Display;
 
 #[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
@@ -37,33 +36,31 @@ impl std::fmt::Debug for SemVer {
     }
 }
 
-impl Encode for SemVer {
-    fn encode<E: bincode::enc::Encoder>(
+impl BinarySerializer for SemVer {
+    fn serialize<Output: BinaryOutput>(
         &self,
-        encoder: &mut E,
-    ) -> Result<(), bincode::error::EncodeError> {
-        self.0.major.encode(encoder)?;
-        self.0.minor.encode(encoder)?;
-        self.0.patch.encode(encoder)?;
-        self.0.pre.as_str().encode(encoder)?;
-        self.0.build.as_str().encode(encoder)?;
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        BinarySerializer::serialize(&self.0.major, context)?;
+        BinarySerializer::serialize(&self.0.minor, context)?;
+        BinarySerializer::serialize(&self.0.patch, context)?;
+        BinarySerializer::serialize(&self.0.pre.as_str(), context)?;
+        BinarySerializer::serialize(&self.0.build.as_str(), context)?;
         Ok(())
     }
 }
 
-impl<Context> Decode<Context> for SemVer {
-    fn decode<D: bincode::de::Decoder<Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        let major = u64::decode(decoder)?;
-        let minor = u64::decode(decoder)?;
-        let patch = u64::decode(decoder)?;
-        let pre_str = String::decode(decoder)?;
-        let build_str = String::decode(decoder)?;
+impl BinaryDeserializer for SemVer {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let major = <u64 as BinaryDeserializer>::deserialize(context)?;
+        let minor = <u64 as BinaryDeserializer>::deserialize(context)?;
+        let patch = <u64 as BinaryDeserializer>::deserialize(context)?;
+        let pre_str = <std::string::String as BinaryDeserializer>::deserialize(context)?;
+        let build_str = <std::string::String as BinaryDeserializer>::deserialize(context)?;
         let pre = Prerelease::new(&pre_str)
-            .map_err(|_| bincode::error::DecodeError::OtherString("Invalid prerelease".into()))?;
+            .map_err(|_| desert_rust::Error::DeserializationFailure("Invalid prerelease".into()))?;
         let build = BuildMetadata::new(&build_str).map_err(|_| {
-            bincode::error::DecodeError::OtherString("Invalid build metadata".into())
+            desert_rust::Error::DeserializationFailure("Invalid build metadata".into())
         })?;
 
         Ok(SemVer(semver::Version {
@@ -76,31 +73,8 @@ impl<Context> Decode<Context> for SemVer {
     }
 }
 
-impl<'de, Context> BorrowDecode<'de, Context> for SemVer {
-    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        let major = u64::borrow_decode(decoder)?;
-        let minor = u64::borrow_decode(decoder)?;
-        let patch = u64::borrow_decode(decoder)?;
-        let pre_str = <Cow<'de, str> as BorrowDecode<Context>>::borrow_decode(decoder)?;
-        let build_str = <Cow<'de, str> as BorrowDecode<Context>>::borrow_decode(decoder)?;
-        let pre = Prerelease::new(&pre_str)
-            .map_err(|_| bincode::error::DecodeError::OtherString("Invalid prerelease".into()))?;
-        let build = BuildMetadata::new(&build_str).map_err(|_| {
-            bincode::error::DecodeError::OtherString("Invalid build metadata".into())
-        })?;
-        Ok(SemVer(semver::Version {
-            major,
-            minor,
-            patch,
-            pre,
-            build,
-        }))
-    }
-}
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Encode, Decode, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, BinaryCodec, Ord, PartialOrd)]
+#[desert(evolution())]
 pub enum ParsedFunctionSite {
     Global,
     Interface {
@@ -213,7 +187,8 @@ impl DynamicParsedFunctionReference {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub enum ParsedFunctionReference {
     Function { function: String },
     RawResourceConstructor { resource: String },
@@ -350,7 +325,8 @@ impl Display for DynamicParsedFunctionName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,
@@ -368,7 +344,7 @@ impl<'de> Deserialize<'de> for ParsedFunctionName {
     where
         D: serde::Deserializer<'de>,
     {
-        let function_name = String::deserialize(deserializer)?;
+        let function_name = <String as Deserialize>::deserialize(deserializer)?;
         ParsedFunctionName::parse(function_name).map_err(serde::de::Error::custom)
     }
 }

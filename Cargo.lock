@@ -1770,6 +1770,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
+name = "castaway"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1835,6 +1844,16 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf 0.12.1",
 ]
 
 [[package]]
@@ -2968,6 +2987,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "desert_core"
+version = "0.1.0"
+dependencies = [
+ "bigdecimal",
+ "bit-vec 0.6.3",
+ "bytes 1.10.1",
+ "castaway",
+ "chrono",
+ "chrono-tz",
+ "flate2",
+ "hashbrown 0.16.0",
+ "lazy_static 1.5.0",
+ "mac_address",
+ "nonempty-collections",
+ "once_cell",
+ "serde_json",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "desert_macro"
+version = "0.1.0"
+dependencies = [
+ "bytes 1.10.1",
+ "desert_core",
+ "lazy_static 1.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
+]
+
+[[package]]
+name = "desert_rust"
+version = "0.1.0"
+dependencies = [
+ "desert_core",
+ "desert_macro",
+]
+
+[[package]]
 name = "dialoguer"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3638,6 +3698,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4117,8 +4183,8 @@ dependencies = [
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
- "bincode",
  "cargo_metadata 0.21.0",
+ "desert_rust",
  "golem-rib",
  "golem-wasm",
  "miette",
@@ -4143,7 +4209,6 @@ dependencies = [
  "auditable-serde",
  "axum 0.7.9",
  "base64 0.22.1",
- "bincode",
  "blake3",
  "bytes 1.10.1",
  "camino",
@@ -4156,6 +4221,7 @@ dependencies = [
  "clap_complete",
  "cli-table",
  "colored",
+ "desert_rust",
  "dirs 4.0.0",
  "flate2",
  "fs_extra",
@@ -4183,7 +4249,7 @@ dependencies = [
  "nanoid",
  "native-tls",
  "nondestructive",
- "phf",
+ "phf 0.11.3",
  "pretty_assertions",
  "pretty_env_logger",
  "prettyplease",
@@ -4267,12 +4333,12 @@ dependencies = [
  "assert2",
  "async-trait",
  "base64 0.22.1",
- "bincode",
  "bytes 1.10.1",
  "chrono",
  "combine",
  "console-subscriber",
  "derive_more",
+ "desert_rust",
  "figment",
  "fred",
  "golem-api-grpc",
@@ -4282,6 +4348,7 @@ dependencies = [
  "heck 0.5.0",
  "http 1.3.1",
  "humantime-serde",
+ "ident-mash",
  "iso8601-timestamp",
  "itertools 0.14.0",
  "lazy_static 1.5.0",
@@ -4361,12 +4428,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "async_zip",
- "bincode",
  "bytes 1.10.1",
  "chrono",
  "conditional-trait-gen",
  "console-subscriber",
  "darling 0.20.11",
+ "desert_rust",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4425,8 +4492,8 @@ dependencies = [
  "async-dropper-simple",
  "async-trait",
  "axum-jrpc",
- "bincode",
  "bytes 1.10.1",
+ "desert_rust",
  "futures",
  "gethostname",
  "golem-api-grpc",
@@ -4484,10 +4551,11 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bigdecimal",
- "bincode",
  "cargo_metadata 0.21.0",
  "combine",
+ "desert_rust",
  "golem-wasm",
+ "lazy_static 1.5.0",
  "miette",
  "poem-openapi",
  "prost 0.14.1",
@@ -4540,11 +4608,11 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum 0.7.9",
- "bincode",
  "bitflags 2.10.0",
  "bytes 1.10.1",
  "chrono",
  "conditional-trait-gen",
+ "desert_rust",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4595,8 +4663,8 @@ dependencies = [
  "anyhow",
  "async-rwlock",
  "async-trait",
- "bincode",
  "bytes 1.10.1",
+ "desert_rust",
  "fred",
  "futures",
  "golem-api-grpc",
@@ -4699,11 +4767,12 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "bigdecimal",
- "bincode",
  "bit-vec 0.6.3",
  "chrono",
+ "desert_rust",
  "golem-wasm-derive",
  "itertools 0.14.0",
+ "lazy_static 1.5.0",
  "miette",
  "poem-openapi",
  "pretty_assertions",
@@ -4754,12 +4823,12 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "bigdecimal",
- "bincode",
  "bit-vec 0.6.3",
  "bytes 1.10.1",
  "cap-std",
  "cap-time-ext",
  "chrono",
+ "desert_rust",
  "drop-stream",
  "evicting_cache_map",
  "figment",
@@ -4833,13 +4902,13 @@ dependencies = [
  "assert2",
  "async-trait",
  "bigdecimal",
- "bincode",
  "bytes 1.10.1",
  "chrono",
  "conditional-trait-gen",
  "criterion",
  "darling 0.20.11",
  "derive_more",
+ "desert_rust",
  "fastrand",
  "figment",
  "fred",
@@ -5021,7 +5090,7 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
  "serde",
 ]
 
@@ -5030,6 +5099,11 @@ name = "hashbrown"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -5594,6 +5668,18 @@ name = "id-arena"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25a2bc672d1148e28034f176e01fffebb08b35768468cc954630da77a1449005"
+
+[[package]]
+name = "ident-mash"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea561fea97e1734bd1572acfc8e5baf19ca3d3934e7de2932fc7a1c4e3b909f6"
+dependencies = [
+ "convert_case 0.6.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
+]
 
 [[package]]
 name = "ident_case"
@@ -7776,7 +7862,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
  "phf_macros",
- "phf_shared",
+ "phf_shared 0.11.3",
+]
+
+[[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared 0.12.1",
 ]
 
 [[package]]
@@ -7785,7 +7880,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.11.3",
  "rand 0.8.5",
 ]
 
@@ -7796,7 +7891,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
 dependencies = [
  "phf_generator",
- "phf_shared",
+ "phf_shared 0.11.3",
  "proc-macro2",
  "quote",
  "syn 2.0.108",
@@ -7807,6 +7902,15 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
 dependencies = [
  "siphasher",
 ]

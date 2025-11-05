@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use crate::type_parameter_parser::type_parameter;
-use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
 use std::fmt;
 use std::fmt::Display;
+use desert_rust::BinaryCodec;
 
 // The type parameter which can be part of instance creation or worker function call
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum TypeParameter {
     Interface(InterfaceName),
     PackageName(PackageName),
@@ -67,7 +68,8 @@ impl Display for TypeParameter {
 }
 
 // foo@1.0.0
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct InterfaceName {
     pub name: String,
     pub version: Option<String>,
@@ -84,7 +86,8 @@ impl Display for InterfaceName {
 }
 
 // ns2:pkg2@1.0.0
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct PackageName {
     pub namespace: String,
     pub package_name: String,
@@ -102,7 +105,8 @@ impl Display for PackageName {
 }
 
 // ns2:pkg2/foo@1.0.0
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, Encode, Decode)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct FullyQualifiedInterfaceName {
     pub package_name: PackageName,
     pub interface_name: InterfaceName,

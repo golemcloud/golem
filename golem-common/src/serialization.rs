@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
 use bytes::{BufMut, Bytes, BytesMut};
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 /// serde_json - no longer supported
 pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
@@ -21,25 +21,31 @@ pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 /// bincode 2 with bincode::config::standard()
 pub const SERIALIZATION_VERSION_V2: u8 = 2u8;
 
-pub fn serialize_with_version<T: Encode>(value: &T, version: u8) -> Result<Bytes, String> {
-    let data = bincode::encode_to_vec(value, bincode::config::standard())
+/// desert
+pub const SERIALIZATION_VERSION_V3: u8 = 3u8;
+
+pub fn serialize_with_version<T: BinarySerializer>(
+    value: &T,
+    version: u8,
+) -> Result<Bytes, String> {
+    let data = desert_rust::serialize_to_bytes(value)
         .map_err(|e| format!("Failed to serialize value: {e}"))?;
-    let mut bytes = BytesMut::new();
+    let mut bytes = BytesMut::with_capacity(data.len() + 1);
     bytes.put_u8(version);
-    bytes.extend_from_slice(&data);
+    bytes.extend(data);
     Ok(bytes.freeze())
 }
 
-pub fn serialize<T: Encode>(value: &T) -> Result<Bytes, String> {
+pub fn serialize<T: BinarySerializer>(value: &T) -> Result<Bytes, String> {
     serialize_with_version(value, SERIALIZATION_VERSION_V2)
 }
 
-pub fn deserialize<T: Decode<()>>(bytes: &[u8]) -> Result<T, String> {
+pub fn deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, String> {
     let (version, data) = bytes.split_at(1);
     deserialize_with_version(data, version[0])
 }
 
-pub fn try_deserialize<T: Decode<()>>(bytes: &[u8]) -> Result<Option<T>, String> {
+pub fn try_deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<Option<T>, String> {
     if bytes.is_empty() {
         Ok(None)
     } else {
@@ -48,7 +54,10 @@ pub fn try_deserialize<T: Decode<()>>(bytes: &[u8]) -> Result<Option<T>, String>
     }
 }
 
-pub fn deserialize_with_version<T: Decode<()>>(data: &[u8], version: u8) -> Result<T, String> {
+pub fn deserialize_with_version<T: BinaryDeserializer>(
+    data: &[u8],
+    version: u8,
+) -> Result<T, String> {
     match try_deserialize_with_version(data, version)? {
         Some(value) => Ok(value),
         None => {
@@ -62,7 +71,7 @@ pub fn deserialize_with_version<T: Decode<()>>(data: &[u8], version: u8) -> Resu
     }
 }
 
-pub fn try_deserialize_with_version<T: Decode<()>>(
+pub fn try_deserialize_with_version<T: BinaryDeserializer>(
     data: &[u8],
     version: u8,
 ) -> Result<Option<T>, String> {
@@ -71,10 +80,11 @@ pub fn try_deserialize_with_version<T: Decode<()>>(
             panic!("Support for v1 serialization format has been dropped");
         }
         SERIALIZATION_VERSION_V2 => {
-            let (entry, _) = bincode::decode_from_slice(data, bincode::config::standard())
-                .map_err(|e| format!("Failed to deserialize value: {e}"))?;
-            Ok(Some(entry))
+            panic!("Support for v2 serialization format has been dropped");
         }
+        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
+            .map_err(|err| err.to_string())
+            .map(Some),
         _ => Ok(None),
     }
 }
@@ -82,14 +92,14 @@ pub fn try_deserialize_with_version<T: Decode<()>>(
 #[cfg(test)]
 mod tests {
     use crate::model::ComponentId;
-    use bincode::{Decode, Encode};
+    use desert_rust::BinaryCodec;
     use rand::distr::Alphanumeric;
     use rand::Rng;
     use serde::{Deserialize, Serialize};
     use test_r::test;
     use tracing::info;
 
-    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
     enum Example {
         First(String),
         Second { x: i64, y: bool, z: Box<Example> },

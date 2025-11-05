@@ -20,7 +20,6 @@ use crate::storage::keyvalue::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
@@ -29,6 +28,7 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
+use desert_rust::BinaryCodec;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
@@ -377,7 +377,8 @@ fn get_promise_result_redis_key(promise_id: &PromiseId) -> String {
     format!("{}:completed", promise_id.to_redis_key())
 }
 
-#[derive(Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Debug, Eq, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum RedisPromiseState {
     Pending,
     Complete(Vec<u8>),

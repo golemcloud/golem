@@ -33,7 +33,6 @@ use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use crate::service::gateway::BoxConversionContext;
-use bincode::{Decode, Encode};
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -50,6 +49,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use Iterator;
+use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -286,7 +286,8 @@ impl CompiledHttpApiDefinition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec, Enum)]
+#[desert(evolution())]
 pub enum MethodPattern {
     Get,
     Connect,
@@ -426,15 +427,18 @@ impl<'de> Deserialize<'de> for MethodPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(transparent)]
 pub struct LiteralInfo(pub String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct VarInfo {
     pub key_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct QueryInfo {
     pub key_name: String,
 }
@@ -445,7 +449,8 @@ impl Display for QueryInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct AllPathPatterns {
     pub path_patterns: Vec<PathPattern>,
     pub query_params: Vec<QueryInfo>,
@@ -523,7 +528,8 @@ impl Serialize for AllPathPatterns {
 }
 
 /// Invariant: PathPattern::CatchAllVar is only allowed at the end of the path
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub enum PathPattern {
     Literal(LiteralInfo),
     Var(VarInfo),

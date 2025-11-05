@@ -32,10 +32,10 @@ use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker}
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bincode::de::Decoder;
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::Decode;
+use desert_rust::{
+    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
@@ -1338,26 +1338,31 @@ impl GetAgentsEntry {
     }
 }
 
-impl bincode::Encode for ForkResult {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+impl BinarySerializer for ForkResult {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> Result<(), desert_rust::Error> {
         match self {
-            ForkResult::Original => bincode::Encode::encode(&0u8, encoder),
-            ForkResult::Forked => bincode::Encode::encode(&1u8, encoder),
+            ForkResult::Original => <u8 as BinarySerializer>::serialize(&0u8, context),
+            ForkResult::Forked => <u8 as BinarySerializer>::serialize(&1u8, context),
         }
     }
 }
 
-impl<Context> Decode<Context> for ForkResult {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let value = <u8 as Decode<Context>>::decode(decoder)?;
+impl BinaryDeserializer for ForkResult {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> Result<Self, desert_rust::Error> {
+        let value = <u8 as BinaryDeserializer>::deserialize(context)?;
         match value {
             0 => Ok(ForkResult::Original),
             1 => Ok(ForkResult::Forked),
-            _ => Err(DecodeError::Other("Invalid ForkResult")),
+            other => Err(desert_rust::Error::InvalidConstructorId {
+                constructor_id: other as u32,
+                type_name: "ForkResult".to_string(),
+            }),
         }
     }
 }
-
 #[derive(Clone)]
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,

@@ -43,13 +43,15 @@ use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::Hash;
 use std::sync::Arc;
+use desert_rust::BinaryCodec;
 use tracing::{error, info};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
 #[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
+    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, BinaryCodec,
 )]
+#[desert(evolution())]
 pub struct ApiDefinitionIdWithVersion {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,

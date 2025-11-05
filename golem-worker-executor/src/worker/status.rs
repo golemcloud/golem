@@ -768,8 +768,8 @@ mod test {
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
     };
     use async_trait::async_trait;
-    use bincode::Encode;
     use bytes::Bytes;
+    use desert_rust::{BinaryDeserializer, BinarySerializer};
     use golem_common::base_model::OplogIndex;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::{
@@ -1173,7 +1173,7 @@ mod test {
             self
         }
 
-        pub fn exported_function_invoked<R: Encode>(
+        pub fn exported_function_invoked<R: BinarySerializer>(
             self,
             function_name: &str,
             request: &R,
@@ -1200,7 +1200,7 @@ mod test {
             )
         }
 
-        pub fn exported_function_completed<R: Encode>(
+        pub fn exported_function_completed<R: BinarySerializer>(
             self,
             response: &R,
             idempotency_key: IdempotencyKey,
@@ -1222,7 +1222,7 @@ mod test {
             )
         }
 
-        pub fn imported_function_invoked<I: Encode, O: Encode>(
+        pub fn imported_function_invoked<I: BinarySerializer, O: BinaryDeserializer>(
             self,
             name: &str,
             i: &I,

@@ -14,7 +14,6 @@
 
 use crate::grpc::authorised_grpc_request;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
@@ -40,6 +39,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
+use desert_rust::BinaryCodec;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
@@ -112,7 +112,8 @@ pub trait WorkerProxy: Send + Sync {
     ) -> Result<bool, WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),

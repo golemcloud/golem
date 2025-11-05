@@ -14,7 +14,6 @@
 
 use crate::model::ExecutionStatus;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 pub use blob::BlobOplogArchiveService;
 use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
@@ -39,6 +38,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 mod blob;
 mod compressed;
@@ -232,7 +232,7 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    async fn add_imported_function_invoked<I: Encode + Sync, O: Encode + Sync>(
+    async fn add_imported_function_invoked<I: BinarySerializer + Sync, O: BinarySerializer + Sync>(
         &self,
         function_name: String,
         request: &I,
@@ -271,7 +271,7 @@ pub trait OplogOps: Oplog {
         Ok(entry)
     }
 
-    async fn add_exported_function_invoked<R: Encode + Sync>(
+    async fn add_exported_function_invoked<R: BinarySerializer + Sync>(
         &self,
         function_name: String,
         request: &R,
@@ -295,7 +295,7 @@ pub trait OplogOps: Oplog {
         Ok(entry)
     }
 
-    async fn add_exported_function_completed<R: Encode + Sync>(
+    async fn add_exported_function_completed<R: BinarySerializer + Sync>(
         &self,
         response: &R,
         consumed_fuel: i64,
@@ -339,7 +339,7 @@ pub trait OplogOps: Oplog {
         }
     }
 
-    async fn get_payload_of_entry<T: Decode<()>>(
+    async fn get_payload_of_entry<T: BinaryDeserializer>(
         &self,
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {

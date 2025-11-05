@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod oplog_macro;
+
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
@@ -20,12 +22,7 @@ use crate::model::{
     WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
-use bincode::de::read::Reader;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::write::Writer;
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
+use crate::oplog_entry;
 use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
@@ -34,6 +31,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
 pub struct OplogIndexRange {
@@ -126,7 +124,8 @@ impl From<AtomicOplogIndex> for OplogIndex {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(transparent)]
 pub struct PayloadId(pub Uuid);
 
 impl Default for PayloadId {
@@ -147,30 +146,6 @@ impl Display for PayloadId {
     }
 }
 
-impl Encode for PayloadId {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        encoder.writer().write(self.0.as_bytes())
-    }
-}
-
-impl<Context> Decode<Context> for PayloadId {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let mut bytes = [0u8; 16];
-        decoder.reader().read(&mut bytes)?;
-        Ok(Self(Uuid::from_bytes(bytes)))
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for PayloadId {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let mut bytes = [0u8; 16];
-        decoder.reader().read(&mut bytes)?;
-        Ok(Self(Uuid::from_bytes(bytes)))
-    }
-}
-
 #[derive(
     Debug,
     Clone,
@@ -180,14 +155,14 @@ impl<'de, Context> BorrowDecode<'de, Context> for PayloadId {
     PartialEq,
     Eq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     IntoValue,
     FromValue,
     poem_openapi::NewType,
 )]
+#[desert(transparent)]
 pub struct WorkerResourceId(pub u64);
 
 impl WorkerResourceId {
@@ -210,8 +185,7 @@ impl Display for WorkerResourceId {
     Clone,
     Debug,
     PartialEq,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     IntoValue,
@@ -230,7 +204,8 @@ pub enum LogLevel {
     Critical,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum SpanData {
     LocalSpan {
         span_id: SpanId,
@@ -287,8 +262,7 @@ impl SpanData {
     Debug,
     PartialOrd,
     PartialEq,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     IntoValue,
@@ -301,7 +275,52 @@ pub enum PersistenceLevel {
     Smart,
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+oplog_entry! {
+    /// The worker has completed an invocation
+    ExportedFunctionCompleted {
+        hint: false
+        raw {
+            response: OplogPayload,
+            consumed_fuel: i64,
+        }
+        public {
+            response: Option<golem_wasm::ValueAndType>,
+            consumed_fuel: i64,
+        }
+    },
+    /// Worker suspended
+    Suspend {
+        hint: true
+        raw {}
+        public {}
+    },
+    /// Worker failed
+    Error {
+        hint: true
+        raw {
+            error: WorkerError,
+            /// Points to the oplog index where the retry should start from. Normally this can be just the
+            /// current oplog index (after the last persisted side-effect). When failing in an atomic region
+            /// or batched remote writes, this should point to the start of the region.
+            /// When counting the number of retries for a specific error, the error entries are grouped by this index.
+            retry_from: OplogIndex,
+        }
+        public {
+            error: String,
+            #[wit_field(skip)]
+            retry_from: OplogIndex,
+        }
+    }
+}
+
+impl OplogEntry2 {
+    fn test() {
+        let o = Self::error(WorkerError::OutOfMemory, OplogIndex::INITIAL);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum OplogEntry {
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
@@ -1011,7 +1030,8 @@ impl OplogEntry {
 }
 
 /// Describes a pending update
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
     Automatic { target_version: ComponentVersion },
@@ -1032,14 +1052,16 @@ impl UpdateDescription {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct TimestampedUpdateDescription {
     pub timestamp: Timestamp,
     pub oplog_index: OplogIndex,
     pub description: UpdateDescription,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum OplogPayload {
     /// Load the payload from the given byte array
     Inline(Vec<u8>),
@@ -1051,7 +1073,8 @@ pub enum OplogPayload {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
@@ -1075,7 +1098,8 @@ pub enum DurableFunctionType {
 }
 
 /// Describes the error that occurred in the worker
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerError {
     Unknown(String),
     InvalidRequest(String),

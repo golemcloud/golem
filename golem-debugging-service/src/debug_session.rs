@@ -14,7 +14,7 @@
 
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
-use bincode::Encode;
+use desert_rust::BinarySerializer;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
@@ -1469,7 +1469,7 @@ fn create_uuid_payload(value_and_type: ValueAndType) -> Result<OplogPayload, Str
     create_oplog_payload(&payload)
 }
 
-fn create_oplog_payload<T: Encode>(payload: &T) -> Result<OplogPayload, String> {
+fn create_oplog_payload<T: BinarySerializer>(payload: &T) -> Result<OplogPayload, String> {
     let serialized = golem_common::serialization::serialize(payload).map_err(|e| e.to_string())?;
     Ok(OplogPayload::Inline(serialized.to_vec()))
 }

@@ -37,10 +37,7 @@ use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::SafeDisplay;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
+use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
 use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
@@ -125,7 +122,7 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
             iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
         } else {
             // For non-human-readable formats we assume it was an i64 representing milliseconds from epoch
-            let timestamp = i64::deserialize(deserializer)?;
+            let timestamp = <i64 as Deserialize>::deserialize(deserializer)?;
             Ok(Timestamp(
                 iso8601_timestamp::Timestamp::UNIX_EPOCH
                     .add(Duration::from_millis(timestamp as u64)),
@@ -134,30 +131,24 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
     }
 }
 
-impl bincode::Encode for Timestamp {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        (self
-            .0
-            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
-            .whole_milliseconds() as i64)
-            .encode(encoder)
+impl BinarySerializer for Timestamp {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        BinarySerializer::serialize(
+            &(self
+                .0
+                .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
+                .whole_milliseconds() as i64),
+            context,
+        )
     }
 }
 
-impl<Context> bincode::Decode<Context> for Timestamp {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let timestamp: i64 = bincode::Decode::decode(decoder)?;
-        Ok(Timestamp(
-            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
-        ))
-    }
-}
-
-impl<'de, Context> bincode::BorrowDecode<'de, Context> for Timestamp {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let timestamp: i64 = bincode::BorrowDecode::borrow_decode(decoder)?;
+impl BinaryDeserializer for Timestamp {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let timestamp: i64 = BinaryDeserializer::deserialize(context)?;
         Ok(Timestamp(
             iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
         ))
@@ -207,7 +198,8 @@ impl FromValue for Timestamp {
 }
 
 /// Associates a worker-id with its owner project
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct OwnedWorkerId {
     pub project_id: ProjectId,
     pub worker_id: WorkerId,
@@ -251,7 +243,8 @@ impl AsRef<WorkerId> for OwnedWorkerId {
 }
 
 /// Actions that can be scheduled to be executed at a given point in time
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
@@ -316,7 +309,8 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
 pub struct ScheduleId {
     pub timestamp: i64,
     pub action: ScheduledAction,
@@ -441,7 +435,8 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[derive(Clone, Debug, BinaryCodec, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[desert(evolution())]
 #[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
@@ -489,7 +484,7 @@ impl Serialize for IdempotencyKey {
     where
         S: Serializer,
     {
-        self.value.serialize(serializer)
+        Serialize::serialize(&self.value, serializer)
     }
 }
 
@@ -498,7 +493,7 @@ impl<'de> Deserialize<'de> for IdempotencyKey {
     where
         D: Deserializer<'de>,
     {
-        let value = String::deserialize(deserializer)?;
+        let value = <std::string::String as Deserialize>::deserialize(deserializer)?;
         Ok(IdempotencyKey { value })
     }
 }
@@ -572,7 +567,8 @@ impl IntoValue for WorkerMetadata {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 #[serde(rename_all = "camelCase")]
 #[derive(poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
@@ -582,7 +578,8 @@ pub struct WorkerResourceDescription {
     pub resource_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct RetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]
@@ -614,7 +611,8 @@ impl SafeDisplay for RetryConfig {
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, PartialEq, Encode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub skipped_regions: DeletedRegions,
@@ -638,57 +636,6 @@ pub struct WorkerStatusRecord {
     /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
     /// the last invocation boundary.
     pub current_retry_count: HashMap<OplogIndex, u32>,
-}
-
-impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        Ok(Self {
-            status: Decode::decode(decoder)?,
-            skipped_regions: Decode::decode(decoder)?,
-            overridden_retry_config: Decode::decode(decoder)?,
-            pending_invocations: Decode::decode(decoder)?,
-            pending_updates: Decode::decode(decoder)?,
-            failed_updates: Decode::decode(decoder)?,
-            successful_updates: Decode::decode(decoder)?,
-            invocation_results: Decode::decode(decoder)?,
-            current_idempotency_key: Decode::decode(decoder)?,
-            component_version: Decode::decode(decoder)?,
-            component_size: Decode::decode(decoder)?,
-            total_linear_memory_size: Decode::decode(decoder)?,
-            owned_resources: Decode::decode(decoder)?,
-            oplog_idx: Decode::decode(decoder)?,
-            active_plugins: Decode::decode(decoder)?,
-            deleted_regions: Decode::decode(decoder)?,
-            component_version_for_replay: Decode::decode(decoder)?,
-            current_retry_count: Decode::decode(decoder)?,
-        })
-    }
-}
-impl<'de, Context> BorrowDecode<'de, Context> for WorkerStatusRecord {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        Ok(Self {
-            status: BorrowDecode::borrow_decode(decoder)?,
-            skipped_regions: BorrowDecode::borrow_decode(decoder)?,
-            overridden_retry_config: BorrowDecode::borrow_decode(decoder)?,
-            pending_invocations: BorrowDecode::borrow_decode(decoder)?,
-            pending_updates: BorrowDecode::borrow_decode(decoder)?,
-            failed_updates: BorrowDecode::borrow_decode(decoder)?,
-            successful_updates: BorrowDecode::borrow_decode(decoder)?,
-            invocation_results: BorrowDecode::borrow_decode(decoder)?,
-            current_idempotency_key: BorrowDecode::borrow_decode(decoder)?,
-            component_version: BorrowDecode::borrow_decode(decoder)?,
-            component_size: BorrowDecode::borrow_decode(decoder)?,
-            total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
-            owned_resources: BorrowDecode::borrow_decode(decoder)?,
-            oplog_idx: BorrowDecode::borrow_decode(decoder)?,
-            active_plugins: BorrowDecode::borrow_decode(decoder)?,
-            deleted_regions: BorrowDecode::borrow_decode(decoder)?,
-            component_version_for_replay: BorrowDecode::borrow_decode(decoder)?,
-            current_retry_count: BorrowDecode::borrow_decode(decoder)?,
-        })
-    }
 }
 
 impl Default for WorkerStatusRecord {
@@ -716,14 +663,16 @@ impl Default for WorkerStatusRecord {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
@@ -741,11 +690,11 @@ pub struct SuccessfulUpdateRecord {
     Hash,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
     poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum WorkerStatus {
     /// The worker is running an invoked function
     Running,
@@ -839,79 +788,8 @@ impl From<WorkerStatus> for i32 {
     }
 }
 
-/// Internal representation of `WorkerInvocation` to support backward compatibility
-/// in its binary format.
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
-enum SerializedWorkerInvocation {
-    ExportedFunctionV1 {
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-    },
-    ManualUpdate {
-        target_version: ComponentVersion,
-    },
-    ExportedFunction {
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
-    },
-}
-
-impl From<WorkerInvocation> for SerializedWorkerInvocation {
-    fn from(value: WorkerInvocation) -> Self {
-        match value {
-            WorkerInvocation::ManualUpdate { target_version } => {
-                Self::ManualUpdate { target_version }
-            }
-            WorkerInvocation::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            },
-        }
-    }
-}
-
-impl From<SerializedWorkerInvocation> for WorkerInvocation {
-    fn from(value: SerializedWorkerInvocation) -> Self {
-        match value {
-            SerializedWorkerInvocation::ExportedFunctionV1 {
-                idempotency_key,
-                full_function_name,
-                function_input,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context: InvocationContextStack::fresh(),
-            },
-            SerializedWorkerInvocation::ManualUpdate { target_version } => {
-                Self::ManualUpdate { target_version }
-            }
-            SerializedWorkerInvocation::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerInvocation {
     ManualUpdate {
         target_version: ComponentVersion,
@@ -953,30 +831,8 @@ impl WorkerInvocation {
     }
 }
 
-impl Encode for WorkerInvocation {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        let serialized: SerializedWorkerInvocation = self.clone().into();
-        serialized.encode(encoder)
-    }
-}
-
-impl<Context> Decode<Context> for WorkerInvocation {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let serialized: SerializedWorkerInvocation = Decode::decode(decoder)?;
-        Ok(serialized.into())
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for WorkerInvocation {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let serialized: SerializedWorkerInvocation = BorrowDecode::borrow_decode(decoder)?;
-        Ok(serialized.into())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct TimestampedWorkerInvocation {
     pub timestamp: Timestamp,
     pub invocation: WorkerInvocation,
@@ -993,12 +849,12 @@ pub struct TimestampedWorkerInvocation {
     PartialEq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
     FromValue,
 )]
 #[serde(transparent)]
+#[desert(transparent)]
 pub struct AccountId {
     pub value: String,
 }
@@ -1026,8 +882,9 @@ impl Display for AccountId {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNameFilter {
@@ -1048,8 +905,9 @@ impl Display for WorkerNameFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerStatusFilter {
@@ -1070,10 +928,11 @@ impl Display for WorkerStatusFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
     pub value: ComponentVersion,
@@ -1092,10 +951,11 @@ impl Display for WorkerVersionFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerCreatedAtFilter {
     pub comparator: FilterComparator,
     pub value: Timestamp,
@@ -1114,10 +974,11 @@ impl Display for WorkerCreatedAtFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerEnvFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -1141,8 +1002,9 @@ impl Display for WorkerEnvFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerWasiConfigVarsFilter {
@@ -1172,8 +1034,9 @@ impl Display for WorkerWasiConfigVarsFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerAndFilter {
@@ -1201,8 +1064,9 @@ impl Display for WorkerAndFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerOrFilter {
@@ -1230,8 +1094,9 @@ impl Display for WorkerOrFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNotFilter {
@@ -1253,8 +1118,9 @@ impl Display for WorkerNotFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Union,
 )]
+#[desert(evolution())]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum WorkerFilter {
@@ -1489,8 +1355,9 @@ impl FromStr for WorkerFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum StringFilterComparator {
     Equal,
     NotEqual,
@@ -1573,8 +1440,9 @@ impl Display for StringFilterComparator {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum FilterComparator {
     Equal,
     NotEqual,
@@ -1662,11 +1530,11 @@ impl From<FilterComparator> for i32 {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     Default,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ScanCursor {
@@ -1718,7 +1586,8 @@ impl FromStr for ScanCursor {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]
+#[desert(evolution())]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -1828,8 +1697,7 @@ impl Display for WorkerEvent {
     PartialEq,
     Eq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Serialize,
     Deserialize,
     poem_openapi::Enum,
@@ -1945,7 +1813,7 @@ impl Serialize for ComponentFilePath {
     where
         S: Serializer,
     {
-        String::serialize(&self.to_string(), serializer)
+        Serialize::serialize(&self.to_string(), serializer)
     }
 }
 
@@ -1954,7 +1822,7 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     where
         D: Deserializer<'de>,
     {
-        let str = String::deserialize(deserializer)?;
+        let str = <std::string::String as Deserialize>::deserialize(deserializer)?;
         Self::from_abs_str(&str).map_err(de::Error::custom)
     }
 }
@@ -2063,8 +1931,9 @@ pub struct ComponentFileSystemNode {
 
 // Custom Deserialize is replaced with Simple Deserialize
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize, poem_openapi::Enum,
+    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]
 pub enum GatewayBindingType {
@@ -2133,6 +2002,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::str::FromStr;
     use std::vec;
+    use desert_rust::BinaryCodec;
     use test_r::test;
 
     use crate::model::oplog::OplogIndex;
@@ -2142,7 +2012,6 @@ mod tests {
         StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
         WorkerStatusRecord,
     };
-    use bincode::{Decode, Encode};
 
     use serde::{Deserialize, Serialize};
 
@@ -2157,7 +2026,8 @@ mod tests {
         assert_eq!(ts2, ts);
     }
 
-    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+    #[desert(evolution())]
     struct ExampleWithAccountId {
         account_id: AccountId,
     }
