@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::{Expr, ExprVisitor, InferredExpr, RibCompilationError};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use desert_rust::BinaryCodec;
 
 // RibInputTypeInfo refers to the required global inputs to a RibScript
 // with its type information. Example: `request` variable which should be of the type `Record`.

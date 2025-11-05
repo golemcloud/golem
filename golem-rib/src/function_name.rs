@@ -14,7 +14,10 @@
 
 use combine::stream::position::Stream;
 use combine::{eof, EasyParser, Parser};
-use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;

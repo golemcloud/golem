@@ -15,6 +15,7 @@
 use crate::error::ShardManagerError;
 use crate::rebalancing::Rebalance;
 use core::cmp::Ordering;
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
 use http::Uri;
@@ -25,7 +26,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::{fmt, vec};
-use desert_rust::BinaryCodec;
 use tonic::transport::Endpoint;
 use tracing::{error, warn};
 

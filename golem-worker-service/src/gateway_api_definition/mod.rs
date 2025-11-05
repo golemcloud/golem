@@ -15,11 +15,11 @@
 pub mod http;
 
 use crate::gateway_binding::GatewayBinding;
+use desert_rust::BinaryCodec;
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fmt::Display;
-use desert_rust::BinaryCodec;
 
 // Common to API definitions regardless of different protocols
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryCodec, NewType)]

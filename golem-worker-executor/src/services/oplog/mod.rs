@@ -17,6 +17,7 @@ use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -38,7 +39,6 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 mod blob;
 mod compressed;
@@ -232,7 +232,10 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    async fn add_imported_function_invoked<I: BinarySerializer + Sync, O: BinarySerializer + Sync>(
+    async fn add_imported_function_invoked<
+        I: BinarySerializer + Sync,
+        O: BinarySerializer + Sync,
+    >(
         &self,
         function_name: String,
         request: &I,

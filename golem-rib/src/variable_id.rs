@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use desert_rust::BinaryCodec;
 
 #[derive(
     Hash, Eq, Debug, Clone, PartialEq, Ord, PartialOrd, Serialize, Deserialize, BinaryCodec,

@@ -42,11 +42,11 @@ use golem_client::model::Account;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
 };
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
 use golem_common::model::plugin::PluginWasmFileKey;
-use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId,

@@ -15,12 +15,12 @@
 use crate::replayable_stream::ErasedReplayableStream;
 use async_trait::async_trait;
 use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 pub mod fs;
 pub mod memory;

@@ -18,6 +18,7 @@ pub mod plugin;
 
 pub use self::component::*;
 pub use self::conflict::*;
+use desert_rust::BinaryCodec;
 use golem_common::base_model::ComponentVersion;
 use golem_common::model::agent::AgentTypes;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -28,7 +29,6 @@ use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{Multipart, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use desert_rust::BinaryCodec;
 
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]

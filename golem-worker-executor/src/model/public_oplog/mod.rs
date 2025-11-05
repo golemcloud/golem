@@ -39,23 +39,28 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::RdbmsIntoValueAndType;
 use crate::services::rpc::RpcError;
 use async_trait::async_trait;
+use desert_rust::BinaryDeserializer;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::agent::{AgentId, DataValue, RegisteredAgentType};
 use golem_common::model::lucene::Query;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
-use golem_common::model::public_oplog::{
-    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
-    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
-    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
-    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
-    PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
-    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
-    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
-    TimestampParameter,
+use golem_common::model::oplog::public_oplog_entry::{
+    ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
+    BeginRemoteWriteParams, CancelPendingInvocationParams, ChangePersistenceLevelParams,
+    ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
+    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, ImportedFunctionInvokedParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
+    PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
+};
+use golem_common::model::oplog::{
+    ExportedFunctionParameters, ManualUpdateParameters, OplogEntry, OplogIndex,
+    PluginInstallationDescription, PublicAttribute, PublicExternalSpanData, PublicLocalSpanData,
+    PublicOplogEntry, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
+    SnapshotBasedUpdateParameters, SpanData, UpdateDescription,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
@@ -70,7 +75,6 @@ use golem_wasm::analysis::AnalysedFunctionParameter;
 use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use desert_rust::BinaryDeserializer;
 use uuid::Uuid;
 
 pub struct PublicOplogChunk {
@@ -287,7 +291,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     );
                     initial_plugins.insert(desc);
                 }
-                Ok(PublicOplogEntry::Create(CreateParameters {
+                Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     worker_id,
                     component_version,
@@ -328,7 +332,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     &response_bytes,
                 )?;
                 Ok(PublicOplogEntry::ImportedFunctionInvoked(
-                    ImportedFunctionInvokedParameters {
+                    ImportedFunctionInvokedParams {
                         timestamp,
                         function_name,
                         request,
@@ -376,7 +380,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .collect();
 
                 Ok(PublicOplogEntry::ExportedFunctionInvoked(
-                    ExportedFunctionInvokedParameters {
+                    ExportedFunctionInvokedParams {
                         timestamp,
                         function_name,
                         request,
@@ -401,7 +405,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     &payload_bytes,
                 )?;
                 Ok(PublicOplogEntry::ExportedFunctionCompleted(
-                    ExportedFunctionCompletedParameters {
+                    ExportedFunctionCompletedParams {
                         timestamp,
                         response: value_and_type,
                         consumed_fuel,
@@ -409,61 +413,57 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 ))
             }
             OplogEntry::Suspend { timestamp } => {
-                Ok(PublicOplogEntry::Suspend(TimestampParameter { timestamp }))
+                Ok(PublicOplogEntry::Suspend(SuspendParams { timestamp }))
             }
             OplogEntry::Error {
                 timestamp,
                 error,
                 retry_from,
-            } => Ok(PublicOplogEntry::Error(ErrorParameters {
+            } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
                 error: error.to_string(""),
                 retry_from,
             })),
-            OplogEntry::NoOp { timestamp } => {
-                Ok(PublicOplogEntry::NoOp(TimestampParameter { timestamp }))
-            }
+            OplogEntry::NoOp { timestamp } => Ok(PublicOplogEntry::NoOp(NoOpParams { timestamp })),
             OplogEntry::Jump { timestamp, jump } => {
-                Ok(PublicOplogEntry::Jump(JumpParameters { timestamp, jump }))
+                Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump }))
             }
             OplogEntry::Interrupted { timestamp } => {
-                Ok(PublicOplogEntry::Interrupted(TimestampParameter {
+                Ok(PublicOplogEntry::Interrupted(InterruptedParams {
                     timestamp,
                 }))
             }
             OplogEntry::Exited { timestamp } => {
-                Ok(PublicOplogEntry::Exited(TimestampParameter { timestamp }))
+                Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
             }
             OplogEntry::ChangeRetryPolicy {
                 timestamp,
                 new_policy,
             } => Ok(PublicOplogEntry::ChangeRetryPolicy(
-                ChangeRetryPolicyParameters {
+                ChangeRetryPolicyParams {
                     timestamp,
                     new_policy: new_policy.into(),
                 },
             )),
-            OplogEntry::BeginAtomicRegion { timestamp } => {
-                Ok(PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
-                    timestamp,
-                }))
-            }
+            OplogEntry::BeginAtomicRegion { timestamp } => Ok(PublicOplogEntry::BeginAtomicRegion(
+                BeginAtomicRegionParams { timestamp },
+            )),
             OplogEntry::EndAtomicRegion {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
+            } => Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
                 timestamp,
                 begin_index,
             })),
             OplogEntry::BeginRemoteWrite { timestamp } => {
-                Ok(PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
+                Ok(PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
                     timestamp,
                 }))
             }
             OplogEntry::EndRemoteWrite {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
+            } => Ok(PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
                 timestamp,
                 begin_index,
             })),
@@ -528,7 +528,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     }
                 };
                 Ok(PublicOplogEntry::PendingWorkerInvocation(
-                    PendingWorkerInvocationParameters {
+                    PendingWorkerInvocationParams {
                         timestamp,
                         invocation,
                     },
@@ -552,7 +552,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         })
                     }
                 };
-                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
+                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParams {
                     timestamp,
                     target_version,
                     description: public_description,
@@ -586,26 +586,24 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     );
                     new_plugins.insert(desc);
                 }
-                Ok(PublicOplogEntry::SuccessfulUpdate(
-                    SuccessfulUpdateParameters {
-                        timestamp,
-                        target_version,
-                        new_component_size,
-                        new_active_plugins: new_plugins,
-                    },
-                ))
+                Ok(PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
+                    timestamp,
+                    target_version,
+                    new_component_size,
+                    new_active_plugins: new_plugins,
+                }))
             }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_version,
                 details,
-            } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+            } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_version,
                 details,
             })),
             OplogEntry::GrowMemory { timestamp, delta } => {
-                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParameters {
+                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {
                     timestamp,
                     delta,
                 }))
@@ -614,7 +612,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 id,
                 resource_type_id,
-            } => Ok(PublicOplogEntry::CreateResource(ResourceParameters {
+            } => Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
                 timestamp,
                 id,
                 name: resource_type_id.name,
@@ -624,7 +622,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 id,
                 resource_type_id,
-            } => Ok(PublicOplogEntry::DropResource(ResourceParameters {
+            } => Ok(PublicOplogEntry::DropResource(DropResourceParams {
                 timestamp,
                 id,
                 name: resource_type_id.name,
@@ -636,14 +634,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 level,
                 context,
                 message,
-            } => Ok(PublicOplogEntry::Log(LogParameters {
+            } => Ok(PublicOplogEntry::Log(LogParams {
                 timestamp,
                 level,
                 context,
                 message,
             })),
             OplogEntry::Restart { timestamp } => {
-                Ok(PublicOplogEntry::Restart(TimestampParameter { timestamp }))
+                Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
             }
             OplogEntry::ActivatePlugin { timestamp, plugin } => {
                 let project_owner = projects
@@ -663,7 +661,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     definition,
                     installation,
                 );
-                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
+                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
                     timestamp,
                     plugin: desc,
                 }))
@@ -686,25 +684,23 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     definition,
                     installation,
                 );
-                Ok(PublicOplogEntry::DeactivatePlugin(
-                    DeactivatePluginParameters {
-                        timestamp,
-                        plugin: desc,
-                    },
-                ))
+                Ok(PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
+                    timestamp,
+                    plugin: desc,
+                }))
             }
             OplogEntry::Revert {
                 timestamp,
                 dropped_region,
-            } => Ok(PublicOplogEntry::Revert(RevertParameters {
+            } => Ok(PublicOplogEntry::Revert(RevertParams {
                 timestamp,
                 dropped_region,
             })),
             OplogEntry::CancelPendingInvocation {
                 timestamp,
                 idempotency_key,
-            } => Ok(PublicOplogEntry::CancelInvocation(
-                CancelInvocationParameters {
+            } => Ok(PublicOplogEntry::CancelPendingInvocation(
+                CancelPendingInvocationParams {
                     timestamp,
                     idempotency_key,
                 },
@@ -715,7 +711,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 parent_id,
                 linked_context_id,
                 attributes,
-            } => Ok(PublicOplogEntry::StartSpan(StartSpanParameters {
+            } => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
                 timestamp,
                 span_id,
                 parent_id,
@@ -729,7 +725,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .collect(),
             })),
             OplogEntry::FinishSpan { timestamp, span_id } => {
-                Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
+                Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
                     timestamp,
                     span_id,
                 }))
@@ -739,16 +735,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 span_id,
                 key,
                 value,
-            } => Ok(PublicOplogEntry::SetSpanAttribute(
-                SetSpanAttributeParameters {
-                    timestamp,
-                    span_id,
-                    key,
-                    value: value.into(),
-                },
-            )),
+            } => Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
+                timestamp,
+                span_id,
+                key,
+                value: value.into(),
+            })),
             OplogEntry::ChangePersistenceLevel { timestamp, level } => Ok(
-                PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParameters {
+                PublicOplogEntry::ChangePersistenceLevel(ChangePersistenceLevelParams {
                     timestamp,
                     persistence_level: level,
                 }),
@@ -758,7 +752,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 transaction_id,
                 ..
             } => Ok(PublicOplogEntry::BeginRemoteTransaction(
-                BeginRemoteTransactionParameters {
+                BeginRemoteTransactionParams {
                     timestamp,
                     transaction_id,
                 },
@@ -767,7 +761,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(PublicOplogEntry::PreCommitRemoteTransaction(
-                RemoteTransactionParameters {
+                PreCommitRemoteTransactionParams {
                     timestamp,
                     begin_index,
                 },
@@ -776,7 +770,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
-                RemoteTransactionParameters {
+                PreRollbackRemoteTransactionParams {
                     timestamp,
                     begin_index,
                 },
@@ -785,7 +779,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
-                RemoteTransactionParameters {
+                CommittedRemoteTransactionParams {
                     timestamp,
                     begin_index,
                 },
@@ -794,7 +788,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 begin_index,
             } => Ok(PublicOplogEntry::RolledBackRemoteTransaction(
-                RemoteTransactionParameters {
+                RolledBackRemoteTransactionParams {
                     timestamp,
                     begin_index,
                 },

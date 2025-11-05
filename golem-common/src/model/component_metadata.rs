@@ -17,6 +17,7 @@ use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
 use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -29,7 +30,6 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use desert_rust::BinaryCodec;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
 #[derive(Clone, Default, BinaryCodec)]
@@ -696,9 +696,7 @@ pub struct InvokableFunction {
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 #[desert(evolution())]

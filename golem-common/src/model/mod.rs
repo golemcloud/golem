@@ -27,7 +27,6 @@ pub mod plugin;
 mod poem;
 pub mod project;
 pub mod protobuf;
-pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
 pub mod worker;
@@ -37,7 +36,10 @@ use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::SafeDisplay;
-use desert_rust::{BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, SerializationContext};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
 use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
@@ -84,6 +86,10 @@ impl Timestamp {
         self.0
             .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
             .whole_milliseconds() as u64
+    }
+
+    pub fn rounded(self) -> Self {
+        Self::from(self.to_millis())
     }
 }
 
@@ -1524,15 +1530,7 @@ impl From<FilterComparator> for i32 {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    BinaryCodec,
-    Default,
-    poem_openapi::Object,
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Default, poem_openapi::Object,
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
@@ -1691,16 +1689,7 @@ impl Display for WorkerEvent {
 }
 
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    BinaryCodec,
-    Serialize,
-    Deserialize,
-    poem_openapi::Enum,
+    Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize, poem_openapi::Enum,
 )]
 #[repr(i32)]
 pub enum ComponentType {
@@ -1999,10 +1988,10 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 
 #[cfg(test)]
 mod tests {
+    use desert_rust::BinaryCodec;
     use std::collections::BTreeMap;
     use std::str::FromStr;
     use std::vec;
-    use desert_rust::BinaryCodec;
     use test_r::test;
 
     use crate::model::oplog::OplogIndex;

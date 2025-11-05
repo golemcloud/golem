@@ -16,8 +16,8 @@ use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
 use crate::type_inference::TypeHint;
 use crate::{Expr, InferredExpr, InstructionId};
-use std::fmt::{Display, Formatter};
 use desert_rust::BinaryCodec;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Default, PartialEq, BinaryCodec)]
 #[desert(evolution())]

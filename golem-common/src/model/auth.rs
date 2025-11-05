@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::model::{AccountId, ProjectId};
+use desert_rust::BinaryCodec;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use desert_rust::BinaryCodec;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;

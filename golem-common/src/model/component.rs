@@ -16,10 +16,10 @@ use super::ProjectId;
 use crate::base_model::{ComponentId, ComponentVersion};
 use crate::model::AccountId;
 use core::fmt;
+use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
-use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

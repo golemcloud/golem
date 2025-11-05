@@ -29,11 +29,12 @@ use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PersistenceLevel};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, OplogPayload, PersistenceLevel, PublicOplogEntry,
+};
 use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
-use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
     ProjectId, ScanCursor, ShardId, WorkerId, WorkerMetadata, WorkerStatusRecord,

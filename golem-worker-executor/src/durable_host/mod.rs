@@ -1684,13 +1684,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if is_live {
             self.public_state
                 .worker()
-                .add_to_oplog(OplogEntry::start_span(
-                    span.start().unwrap_or(Timestamp::now_utc()),
-                    span.span_id().clone(),
-                    Some(parent.clone()),
-                    span.linked_context().map(|link| link.span_id().clone()),
-                    HashMap::from_iter(initial_attributes.iter().cloned()),
-                ))
+                .add_to_oplog(OplogEntry::StartSpan {
+                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
+                    span_id: span.span_id().clone(),
+                    parent_id: Some(parent.clone()),
+                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
+                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()),
+                })
                 .await;
         }
 

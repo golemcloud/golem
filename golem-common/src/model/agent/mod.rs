@@ -42,13 +42,13 @@ use crate::model::component_metadata::ComponentMetadata;
 use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use desert_rust::BinaryCodec;
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.

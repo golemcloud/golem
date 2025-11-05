@@ -17,9 +17,9 @@ pub mod types;
 
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::{Rdbms, RdbmsType};
+use desert_rust::BinaryCodec;
 use std::fmt::Display;
 use std::sync::Arc;
-use desert_rust::BinaryCodec;
 
 pub(crate) const MYSQL: &str = "mysql";
 

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use desert_rust::BinaryCodec;
 use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::services::rpc::RpcError;
+use desert_rust::BinaryCodec;
 use golem_common::model::agent::DataValue;
 use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
 use golem_wasm::{ValueAndType, WitValue};

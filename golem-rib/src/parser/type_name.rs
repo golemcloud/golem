@@ -19,10 +19,10 @@ use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::{AnalysedType, TypeResult};
 use std::fmt::Display;
 use std::ops::Deref;
-use desert_rust::BinaryCodec;
 
 // Rib grammar uses it's own `TypeName` instead of relying from any other crates to annotate types (Example: 1: u32, let x: u32 = 1;),
 // and sticks on to the  Display instance that aligns with what we see in WIT.

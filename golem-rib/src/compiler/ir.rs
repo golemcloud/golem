@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use desert_rust::BinaryCodec;
 use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, ParsedFunctionSite, VariableId};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::ValueAndType;
 use serde::{Deserialize, Serialize};

@@ -17,14 +17,14 @@ use async_trait::async_trait;
 use desert_rust::BinarySerializer;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::auth::Namespace;
+use golem_common::model::oplog::public_oplog_entry::{
+    CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
+    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, LogParams,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
-use golem_common::model::public_oplog::{
-    CreateParameters, ExportedFunctionCompletedParameters, FailedUpdateParameters,
-    GrowMemoryParameters, ImportedFunctionInvokedParameters, LogParameters,
-    PublicDurableFunctionType, PublicOplogEntry, ResourceParameters,
-};
+use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry};
 use golem_common::model::{
     ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId,
     RetryConfig, WorkerId, WorkerMetadata,
@@ -199,7 +199,7 @@ impl Serialize for DebugSessionId {
     where
         S: serde::Serializer,
     {
-        self.0.to_string().serialize(serializer)
+        Serialize::serialize(&self.0.to_string(), serializer)
     }
 }
 
@@ -237,7 +237,7 @@ fn get_oplog_entry_from_public_oplog_entry(
     public_oplog_entry: PublicOplogEntry,
 ) -> Result<OplogEntry, String> {
     match public_oplog_entry {
-        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
+        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
             timestamp,
             consumed_fuel,
             response,
@@ -252,7 +252,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             })
         }
 
-        PublicOplogEntry::Create(CreateParameters {
+        PublicOplogEntry::Create(CreateParams {
             timestamp,
             worker_id,
             component_version,
@@ -282,7 +282,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|x| x.installation_id)
                 .collect(),
         }),
-        PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
+        PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
             timestamp,
             function_name,
             response,
@@ -419,7 +419,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 new_active_plugins: plugin_installation_ids,
             })
         }
-        PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+        PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp,
             target_version,
             details,
@@ -428,10 +428,10 @@ fn get_oplog_entry_from_public_oplog_entry(
             target_version,
             details,
         }),
-        PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
+        PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
             Ok(OplogEntry::GrowMemory { timestamp, delta })
         }
-        PublicOplogEntry::CreateResource(ResourceParameters {
+        PublicOplogEntry::CreateResource(CreateResourceParams {
             timestamp,
             id,
             owner,
@@ -441,7 +441,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             id,
             resource_type_id: ResourceTypeId { owner, name },
         }),
-        PublicOplogEntry::DropResource(ResourceParameters {
+        PublicOplogEntry::DropResource(DropResourceParams {
             timestamp,
             id,
             owner,
@@ -451,7 +451,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             id,
             resource_type_id: ResourceTypeId { owner, name },
         }),
-        PublicOplogEntry::Log(LogParameters {
+        PublicOplogEntry::Log(LogParams {
             timestamp,
             level,
             context,
@@ -481,7 +481,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             timestamp: revert_params.timestamp,
             dropped_region: revert_params.dropped_region,
         }),
-        PublicOplogEntry::CancelInvocation(cancel_invocation_params) => {
+        PublicOplogEntry::CancelPendingInvocation(cancel_invocation_params) => {
             Ok(OplogEntry::CancelPendingInvocation {
                 timestamp: cancel_invocation_params.timestamp,
                 idempotency_key: cancel_invocation_params.idempotency_key,

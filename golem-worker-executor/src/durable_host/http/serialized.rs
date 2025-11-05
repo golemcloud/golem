@@ -14,12 +14,12 @@
 
 use http::{HeaderName, HeaderValue, Version};
 
+use crate::durable_host::serialized::SerializableError;
+use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use desert_rust::BinaryCodec;
-use crate::durable_host::serialized::SerializableError;
-use golem_wasm_derive::{FromValue, IntoValue};
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };

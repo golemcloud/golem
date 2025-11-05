@@ -29,6 +29,7 @@ use crate::service::gateway::api_definition_validator::{
 use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use async_trait::async_trait;
 use chrono::Utc;
+use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::auth::{AuthCtx, Namespace};
 use golem_common::model::component::VersionedComponentId;
@@ -43,14 +44,11 @@ use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::Hash;
 use std::sync::Arc;
-use desert_rust::BinaryCodec;
 use tracing::{error, info};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
-#[derive(
-    Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, BinaryCodec,
-)]
+#[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, BinaryCodec)]
 #[desert(evolution())]
 pub struct ApiDefinitionIdWithVersion {
     pub id: ApiDefinitionId,

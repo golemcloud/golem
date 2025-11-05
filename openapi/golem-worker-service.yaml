@@ -3234,18 +3234,6 @@ paths:
       operationId: create
 components:
   schemas:
-    ActivatePluginParameters:
-      type: object
-      title: ActivatePluginParameters
-      required:
-      - timestamp
-      - plugin
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        plugin:
-          $ref: '#/components/schemas/PluginInstallationDescription'
     ActivatePluginResponse:
       type: object
       title: ActivatePluginResponse
@@ -3646,30 +3634,6 @@ components:
           type: string
         subdomain:
           type: string
-    BeginRemoteTransactionParameters:
-      type: object
-      title: BeginRemoteTransactionParameters
-      required:
-      - timestamp
-      - transactionId
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        transactionId:
-          type: string
-    CancelInvocationParameters:
-      type: object
-      title: CancelInvocationParameters
-      required:
-      - timestamp
-      - idempotencyKey
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        idempotencyKey:
-          type: string
     CancelInvocationResponse:
       type: object
       title: CancelInvocationResponse
@@ -3715,30 +3679,6 @@ components:
           type: string
         certificatePrivateKey:
           type: string
-    ChangePersistenceLevelParameters:
-      type: object
-      title: ChangePersistenceLevelParameters
-      required:
-      - timestamp
-      - persistenceLevel
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        persistenceLevel:
-          $ref: '#/components/schemas/PersistenceLevel'
-    ChangeRetryPolicyParameters:
-      type: object
-      title: ChangeRetryPolicyParameters
-      required:
-      - timestamp
-      - newPolicy
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        newPolicy:
-          $ref: '#/components/schemas/PublicRetryConfig'
     CompleteParameters:
       type: object
       title: CompleteParameters
@@ -3759,71 +3699,6 @@ components:
       enum:
       - read-only
       - read-write
-    CreateParameters:
-      type: object
-      title: CreateParameters
-      required:
-      - timestamp
-      - workerId
-      - componentVersion
-      - args
-      - env
-      - projectId
-      - createdBy
-      - wasiConfigVars
-      - componentSize
-      - initialTotalLinearMemorySize
-      - initialActivePlugins
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        componentVersion:
-          type: integer
-          format: uint64
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        projectId:
-          type: string
-          format: uuid
-        createdBy:
-          type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
-        parent:
-          $ref: '#/components/schemas/WorkerId'
-        componentSize:
-          type: integer
-          format: uint64
-        initialTotalLinearMemorySize:
-          type: integer
-          format: uint64
-        initialActivePlugins:
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallationDescription'
-    DeactivatePluginParameters:
-      type: object
-      title: DeactivatePluginParameters
-      required:
-      - timestamp
-      - plugin
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        plugin:
-          $ref: '#/components/schemas/PluginInstallationDescription'
     DeactivatePluginResponse:
       type: object
       title: DeactivatePluginResponse
@@ -3845,19 +3720,6 @@ components:
     Empty:
       type: object
       title: Empty
-    EndRegionParameters:
-      type: object
-      title: EndRegionParameters
-      required:
-      - timestamp
-      - beginIndex
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        beginIndex:
-          type: integer
-          format: uint64
     ErrorBody:
       type: object
       title: ErrorBody
@@ -3876,22 +3738,6 @@ components:
           type: string
         workerError:
           $ref: '#/components/schemas/WorkerErrorDetails'
-    ErrorParameters:
-      type: object
-      title: ErrorParameters
-      required:
-      - timestamp
-      - error
-      - retryFrom
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        error:
-          type: string
-        retryFrom:
-          type: integer
-          format: uint64
     ErrorsBody:
       type: object
       title: ErrorsBody
@@ -3902,56 +3748,6 @@ components:
           type: array
           items:
             type: string
-    ExportedFunctionCompletedParameters:
-      type: object
-      title: ExportedFunctionCompletedParameters
-      required:
-      - timestamp
-      - consumedFuel
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        response:
-          $ref: '#/components/schemas/ValueAndType'
-        consumedFuel:
-          type: integer
-          format: int64
-    ExportedFunctionInvokedParameters:
-      type: object
-      title: ExportedFunctionInvokedParameters
-      required:
-      - timestamp
-      - functionName
-      - request
-      - idempotencyKey
-      - traceId
-      - traceStates
-      - invocationContext
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        functionName:
-          type: string
-        request:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-        idempotencyKey:
-          type: string
-        traceId:
-          type: string
-        traceStates:
-          type: array
-          items:
-            type: string
-        invocationContext:
-          type: array
-          items:
-            type: array
-            items:
-              $ref: '#/components/schemas/PublicSpanData'
     ExportedFunctionParameters:
       type: object
       title: ExportedFunctionParameters
@@ -4009,21 +3805,6 @@ components:
           format: uint64
         details:
           type: string
-    FailedUpdateParameters:
-      type: object
-      title: FailedUpdateParameters
-      required:
-      - timestamp
-      - targetVersion
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        targetVersion:
-          type: integer
-          format: uint64
-        details:
-          type: string
     FilterComparator:
       type: string
       enum:
@@ -4033,18 +3814,6 @@ components:
       - Greater
       - LessEqual
       - Less
-    FinishSpanParameters:
-      type: object
-      title: FinishSpanParameters
-      required:
-      - timestamp
-      - spanId
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
     FlatComponentFileSystemNode:
       type: object
       title: FlatComponentFileSystemNode
@@ -4165,19 +3934,6 @@ components:
         lastIndex:
           type: integer
           format: uint64
-    GrowMemoryParameters:
-      type: object
-      title: GrowMemoryParameters
-      required:
-      - timestamp
-      - delta
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        delta:
-          type: integer
-          format: uint64
     HealthcheckResponse:
       type: object
       title: HealthcheckResponse
@@ -4247,27 +4003,6 @@ components:
         maxAge:
           type: integer
           format: uint64
-    ImportedFunctionInvokedParameters:
-      type: object
-      title: ImportedFunctionInvokedParameters
-      required:
-      - timestamp
-      - functionName
-      - request
-      - response
-      - durableFunctionType
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        functionName:
-          type: string
-        request:
-          $ref: '#/components/schemas/ValueAndType'
-        response:
-          $ref: '#/components/schemas/ValueAndType'
-        durableFunctionType:
-          $ref: '#/components/schemas/PublicDurableFunctionType'
     InterruptResponse:
       type: object
       title: InterruptResponse
@@ -4290,18 +4025,6 @@ components:
       properties:
         result:
           $ref: '#/components/schemas/ValueAndType'
-    JumpParameters:
-      type: object
-      title: JumpParameters
-      required:
-      - timestamp
-      - jump
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        jump:
-          $ref: '#/components/schemas/OplogRegion'
     LogLevel:
       type: string
       description: Worker log levels including the special stdout and stderr channels
@@ -4314,24 +4037,6 @@ components:
       - Warn
       - Error
       - Critical
-    LogParameters:
-      type: object
-      title: LogParameters
-      required:
-      - timestamp
-      - level
-      - context
-      - message
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        level:
-          $ref: '#/components/schemas/LogLevel'
-        context:
-          type: string
-        message:
-          type: string
     ManualUpdateParameters:
       type: object
       title: ManualUpdateParameters
@@ -4427,34 +4132,6 @@ components:
         targetVersion:
           type: integer
           format: uint64
-    PendingUpdateParameters:
-      type: object
-      title: PendingUpdateParameters
-      required:
-      - timestamp
-      - target_version
-      - description
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        target_version:
-          type: integer
-          format: uint64
-        description:
-          $ref: '#/components/schemas/PublicUpdateDescription'
-    PendingWorkerInvocationParameters:
-      type: object
-      title: PendingWorkerInvocationParameters
-      required:
-      - timestamp
-      - invocation
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        invocation:
-          $ref: '#/components/schemas/PublicWorkerInvocation'
     PersistenceLevel:
       type: string
       enum:
@@ -4611,93 +4288,84 @@ components:
           type: boolean
     PublicOplogEntry:
       type: object
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
       oneOf:
-      - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ErrorParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_JumpParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ChangeRetryPolicyParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       discriminator:
         propertyName: type
         mapping:
-          Create: '#/components/schemas/PublicOplogEntry_CreateParameters'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
-          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
-          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
-          Suspend: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Error: '#/components/schemas/PublicOplogEntry_ErrorParameters'
-          NoOp: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Jump: '#/components/schemas/PublicOplogEntry_JumpParameters'
-          Interrupted: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Exited: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
-          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
-          PendingUpdate: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
-          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
-          FailedUpdate: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
-          GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
-          CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          Log: '#/components/schemas/PublicOplogEntry_LogParameters'
-          Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
-          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
-          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
-          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
-          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
-          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-          BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
-          PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
+          Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
+          Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+          NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
+          Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
+          Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
+          Exited: '#/components/schemas/PublicOplogEntry_r#ExitedParams'
+          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_r#ChangeRetryPolicyParams'
+          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_r#BeginAtomicRegionParams'
+          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_r#EndAtomicRegionParams'
+          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_r#BeginRemoteWriteParams'
+          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
+          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
+          PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
+          FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
+          GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
+          DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
+          Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
+          Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+          Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
+          ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
+          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
+          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
+          Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
+          CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
+          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
+          StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
+          FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
+          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
+          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_r#ChangePersistenceLevelParams'
+          BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
+          PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
+          PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
+          CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#CommittedRemoteTransactionParams'
+          RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
     PublicOplogEntryWithIndex:
       type: object
       title: PublicOplogEntryWithIndex
@@ -4710,16 +4378,7 @@ components:
           format: uint64
         entry:
           $ref: '#/components/schemas/PublicOplogEntry'
-    PublicOplogEntry_ActivatePluginParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+    PublicOplogEntry_r#ActivatePluginParams:
       allOf:
       - type: object
         required:
@@ -4730,17 +4389,20 @@ components:
             enum:
             - ActivatePlugin
             example: ActivatePlugin
-      - $ref: '#/components/schemas/ActivatePluginParameters'
-    PublicOplogEntry_BeginRemoteTransactionParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#BeginAtomicRegionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - BeginAtomicRegion
+            example: BeginAtomicRegion
+      - $ref: '#/components/schemas/r#BeginAtomicRegionParams'
+    PublicOplogEntry_r#BeginRemoteTransactionParams:
       allOf:
       - type: object
         required:
@@ -4751,17 +4413,8 @@ components:
             enum:
             - BeginRemoteTransaction
             example: BeginRemoteTransaction
-      - $ref: '#/components/schemas/BeginRemoteTransactionParameters'
-    PublicOplogEntry_CancelInvocationParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#BeginRemoteTransactionParams'
+    PublicOplogEntry_r#BeginRemoteWriteParams:
       allOf:
       - type: object
         required:
@@ -4770,19 +4423,22 @@ components:
           type:
             type: string
             enum:
-            - CancelInvocation
-            example: CancelInvocation
-      - $ref: '#/components/schemas/CancelInvocationParameters'
-    PublicOplogEntry_ChangePersistenceLevelParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+            - BeginRemoteWrite
+            example: BeginRemoteWrite
+      - $ref: '#/components/schemas/r#BeginRemoteWriteParams'
+    PublicOplogEntry_r#CancelPendingInvocationParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CancelPendingInvocation
+            example: CancelPendingInvocation
+      - $ref: '#/components/schemas/r#CancelPendingInvocationParams'
+    PublicOplogEntry_r#ChangePersistenceLevelParams:
       allOf:
       - type: object
         required:
@@ -4793,17 +4449,8 @@ components:
             enum:
             - ChangePersistenceLevel
             example: ChangePersistenceLevel
-      - $ref: '#/components/schemas/ChangePersistenceLevelParameters'
-    PublicOplogEntry_ChangeRetryPolicyParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#ChangePersistenceLevelParams'
+    PublicOplogEntry_r#ChangeRetryPolicyParams:
       allOf:
       - type: object
         required:
@@ -4814,17 +4461,20 @@ components:
             enum:
             - ChangeRetryPolicy
             example: ChangeRetryPolicy
-      - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
-    PublicOplogEntry_CreateParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#ChangeRetryPolicyParams'
+    PublicOplogEntry_r#CommittedRemoteTransactionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CommittedRemoteTransaction
+            example: CommittedRemoteTransaction
+      - $ref: '#/components/schemas/r#CommittedRemoteTransactionParams'
+    PublicOplogEntry_r#CreateParams:
       allOf:
       - type: object
         required:
@@ -4835,17 +4485,20 @@ components:
             enum:
             - Create
             example: Create
-      - $ref: '#/components/schemas/CreateParameters'
-    PublicOplogEntry_DeactivatePluginParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#CreateParams'
+    PublicOplogEntry_r#CreateResourceParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CreateResource
+            example: CreateResource
+      - $ref: '#/components/schemas/r#CreateResourceParams'
+    PublicOplogEntry_r#DeactivatePluginParams:
       allOf:
       - type: object
         required:
@@ -4856,290 +4509,8 @@ components:
             enum:
             - DeactivatePlugin
             example: DeactivatePlugin
-      - $ref: '#/components/schemas/DeactivatePluginParameters'
-    PublicOplogEntry_EndRegionParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - EndRemoteWrite
-            example: EndRemoteWrite
-      - $ref: '#/components/schemas/EndRegionParameters'
-    PublicOplogEntry_ErrorParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Error
-            example: Error
-      - $ref: '#/components/schemas/ErrorParameters'
-    PublicOplogEntry_ExportedFunctionCompletedParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ExportedFunctionCompleted
-            example: ExportedFunctionCompleted
-      - $ref: '#/components/schemas/ExportedFunctionCompletedParameters'
-    PublicOplogEntry_ExportedFunctionInvokedParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ExportedFunctionInvoked
-            example: ExportedFunctionInvoked
-      - $ref: '#/components/schemas/ExportedFunctionInvokedParameters'
-    PublicOplogEntry_FailedUpdateParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FailedUpdate
-            example: FailedUpdate
-      - $ref: '#/components/schemas/FailedUpdateParameters'
-    PublicOplogEntry_FinishSpanParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FinishSpan
-            example: FinishSpan
-      - $ref: '#/components/schemas/FinishSpanParameters'
-    PublicOplogEntry_GrowMemoryParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - GrowMemory
-            example: GrowMemory
-      - $ref: '#/components/schemas/GrowMemoryParameters'
-    PublicOplogEntry_ImportedFunctionInvokedParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - ImportedFunctionInvoked
-            example: ImportedFunctionInvoked
-      - $ref: '#/components/schemas/ImportedFunctionInvokedParameters'
-    PublicOplogEntry_JumpParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Jump
-            example: Jump
-      - $ref: '#/components/schemas/JumpParameters'
-    PublicOplogEntry_LogParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Log
-            example: Log
-      - $ref: '#/components/schemas/LogParameters'
-    PublicOplogEntry_PendingUpdateParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - PendingUpdate
-            example: PendingUpdate
-      - $ref: '#/components/schemas/PendingUpdateParameters'
-    PublicOplogEntry_PendingWorkerInvocationParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - PendingWorkerInvocation
-            example: PendingWorkerInvocation
-      - $ref: '#/components/schemas/PendingWorkerInvocationParameters'
-    PublicOplogEntry_RemoteTransactionParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - RolledBackRemoteTransaction
-            example: RolledBackRemoteTransaction
-      - $ref: '#/components/schemas/RemoteTransactionParameters'
-    PublicOplogEntry_ResourceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#DeactivatePluginParams'
+    PublicOplogEntry_r#DropResourceParams:
       allOf:
       - type: object
         required:
@@ -5150,17 +4521,8 @@ components:
             enum:
             - DropResource
             example: DropResource
-      - $ref: '#/components/schemas/ResourceParameters'
-    PublicOplogEntry_RevertParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+      - $ref: '#/components/schemas/r#DropResourceParams'
+    PublicOplogEntry_r#EndAtomicRegionParams:
       allOf:
       - type: object
         required:
@@ -5169,19 +4531,10 @@ components:
           type:
             type: string
             enum:
-            - Revert
-            example: Revert
-      - $ref: '#/components/schemas/RevertParameters'
-    PublicOplogEntry_SetSpanAttributeParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+            - EndAtomicRegion
+            example: EndAtomicRegion
+      - $ref: '#/components/schemas/r#EndAtomicRegionParams'
+    PublicOplogEntry_r#EndRemoteWriteParams:
       allOf:
       - type: object
         required:
@@ -5190,19 +4543,10 @@ components:
           type:
             type: string
             enum:
-            - SetSpanAttribute
-            example: SetSpanAttribute
-      - $ref: '#/components/schemas/SetSpanAttributeParameters'
-    PublicOplogEntry_StartSpanParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+            - EndRemoteWrite
+            example: EndRemoteWrite
+      - $ref: '#/components/schemas/r#EndRemoteWriteParams'
+    PublicOplogEntry_r#ErrorParams:
       allOf:
       - type: object
         required:
@@ -5211,19 +4555,10 @@ components:
           type:
             type: string
             enum:
-            - StartSpan
-            example: StartSpan
-      - $ref: '#/components/schemas/StartSpanParameters'
-    PublicOplogEntry_SuccessfulUpdateParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+            - Error
+            example: Error
+      - $ref: '#/components/schemas/r#ErrorParams'
+    PublicOplogEntry_r#ExitedParams:
       allOf:
       - type: object
         required:
@@ -5232,19 +4567,178 @@ components:
           type:
             type: string
             enum:
-            - SuccessfulUpdate
-            example: SuccessfulUpdate
-      - $ref: '#/components/schemas/SuccessfulUpdateParameters'
-    PublicOplogEntry_TimestampParameter:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
+            - Exited
+            example: Exited
+      - $ref: '#/components/schemas/r#ExitedParams'
+    PublicOplogEntry_r#ExportedFunctionCompletedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ExportedFunctionCompleted
+            example: ExportedFunctionCompleted
+      - $ref: '#/components/schemas/r#ExportedFunctionCompletedParams'
+    PublicOplogEntry_r#ExportedFunctionInvokedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ExportedFunctionInvoked
+            example: ExportedFunctionInvoked
+      - $ref: '#/components/schemas/r#ExportedFunctionInvokedParams'
+    PublicOplogEntry_r#FailedUpdateParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FailedUpdate
+            example: FailedUpdate
+      - $ref: '#/components/schemas/r#FailedUpdateParams'
+    PublicOplogEntry_r#FinishSpanParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FinishSpan
+            example: FinishSpan
+      - $ref: '#/components/schemas/r#FinishSpanParams'
+    PublicOplogEntry_r#GrowMemoryParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - GrowMemory
+            example: GrowMemory
+      - $ref: '#/components/schemas/r#GrowMemoryParams'
+    PublicOplogEntry_r#ImportedFunctionInvokedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ImportedFunctionInvoked
+            example: ImportedFunctionInvoked
+      - $ref: '#/components/schemas/r#ImportedFunctionInvokedParams'
+    PublicOplogEntry_r#InterruptedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Interrupted
+            example: Interrupted
+      - $ref: '#/components/schemas/r#InterruptedParams'
+    PublicOplogEntry_r#JumpParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Jump
+            example: Jump
+      - $ref: '#/components/schemas/r#JumpParams'
+    PublicOplogEntry_r#LogParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Log
+            example: Log
+      - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#NoOpParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - NoOp
+            example: NoOp
+      - $ref: '#/components/schemas/r#NoOpParams'
+    PublicOplogEntry_r#PendingUpdateParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PendingUpdate
+            example: PendingUpdate
+      - $ref: '#/components/schemas/r#PendingUpdateParams'
+    PublicOplogEntry_r#PendingWorkerInvocationParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PendingWorkerInvocation
+            example: PendingWorkerInvocation
+      - $ref: '#/components/schemas/r#PendingWorkerInvocationParams'
+    PublicOplogEntry_r#PreCommitRemoteTransactionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PreCommitRemoteTransaction
+            example: PreCommitRemoteTransaction
+      - $ref: '#/components/schemas/r#PreCommitRemoteTransactionParams'
+    PublicOplogEntry_r#PreRollbackRemoteTransactionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PreRollbackRemoteTransaction
+            example: PreRollbackRemoteTransaction
+      - $ref: '#/components/schemas/r#PreRollbackRemoteTransactionParams'
+    PublicOplogEntry_r#RestartParams:
       allOf:
       - type: object
         required:
@@ -5255,7 +4749,79 @@ components:
             enum:
             - Restart
             example: Restart
-      - $ref: '#/components/schemas/TimestampParameter'
+      - $ref: '#/components/schemas/r#RestartParams'
+    PublicOplogEntry_r#RevertParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Revert
+            example: Revert
+      - $ref: '#/components/schemas/r#RevertParams'
+    PublicOplogEntry_r#RolledBackRemoteTransactionParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - RolledBackRemoteTransaction
+            example: RolledBackRemoteTransaction
+      - $ref: '#/components/schemas/r#RolledBackRemoteTransactionParams'
+    PublicOplogEntry_r#SetSpanAttributeParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SetSpanAttribute
+            example: SetSpanAttribute
+      - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+    PublicOplogEntry_r#StartSpanParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - StartSpan
+            example: StartSpan
+      - $ref: '#/components/schemas/r#StartSpanParams'
+    PublicOplogEntry_r#SuccessfulUpdateParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SuccessfulUpdate
+            example: SuccessfulUpdate
+      - $ref: '#/components/schemas/r#SuccessfulUpdateParams'
+    PublicOplogEntry_r#SuspendParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Suspend
+            example: Suspend
+      - $ref: '#/components/schemas/r#SuspendParams'
     PublicRetryConfig:
       type: object
       title: PublicRetryConfig
@@ -5382,19 +4948,6 @@ components:
             - ManualUpdate
             example: ManualUpdate
       - $ref: '#/components/schemas/ManualUpdateParameters'
-    RemoteTransactionParameters:
-      type: object
-      title: RemoteTransactionParameters
-      required:
-      - timestamp
-      - beginIndex
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        beginIndex:
-          type: integer
-          format: uint64
     ResolvedGatewayBindingComponent:
       type: object
       title: ResolvedGatewayBindingComponent
@@ -5407,25 +4960,6 @@ components:
         version:
           type: integer
           format: uint64
-    ResourceParameters:
-      type: object
-      title: ResourceParameters
-      required:
-      - timestamp
-      - id
-      - name
-      - owner
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        id:
-          type: integer
-          format: uint64
-        name:
-          type: string
-        owner:
-          type: string
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -5438,18 +4972,6 @@ components:
         numberOfInvocations:
           type: integer
           format: uint64
-    RevertParameters:
-      type: object
-      title: RevertParameters
-      required:
-      - timestamp
-      - droppedRegion
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        droppedRegion:
-          $ref: '#/components/schemas/OplogRegion'
     RevertToOplogIndex:
       type: object
       title: RevertToOplogIndex
@@ -5584,24 +5106,6 @@ components:
           type: array
           items:
             type: string
-    SetSpanAttributeParameters:
-      type: object
-      title: SetSpanAttributeParameters
-      required:
-      - timestamp
-      - spanId
-      - key
-      - value
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        key:
-          type: string
-        value:
-          $ref: '#/components/schemas/PublicAttributeValue'
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -5613,27 +5117,6 @@ components:
           items:
             type: integer
             format: uint8
-    StartSpanParameters:
-      type: object
-      title: StartSpanParameters
-      required:
-      - timestamp
-      - spanId
-      - attributes
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        parentId:
-          type: string
-        linkedContext:
-          type: string
-        attributes:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublicAttribute'
     StringAttributeValue:
       type: object
       title: StringAttributeValue
@@ -5663,37 +5146,6 @@ components:
         targetVersion:
           type: integer
           format: uint64
-    SuccessfulUpdateParameters:
-      type: object
-      title: SuccessfulUpdateParameters
-      required:
-      - timestamp
-      - target_version
-      - new_component_size
-      - new_active_plugins
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        target_version:
-          type: integer
-          format: uint64
-        new_component_size:
-          type: integer
-          format: uint64
-        new_active_plugins:
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallationDescription'
-    TimestampParameter:
-      type: object
-      title: TimestampParameter
-      required:
-      - timestamp
-      properties:
-        timestamp:
-          type: string
-          format: date-time
     TypeBool:
       type: object
       title: TypeBool
@@ -6413,6 +5865,568 @@ components:
         index:
           type: integer
           format: uint64
+    r#ActivatePluginParams:
+      type: object
+      title: r#ActivatePluginParams
+      required:
+      - timestamp
+      - plugin
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+    r#BeginAtomicRegionParams:
+      type: object
+      title: r#BeginAtomicRegionParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#BeginRemoteTransactionParams:
+      type: object
+      title: r#BeginRemoteTransactionParams
+      required:
+      - timestamp
+      - transactionId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        transactionId:
+          type: string
+    r#BeginRemoteWriteParams:
+      type: object
+      title: r#BeginRemoteWriteParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#CancelPendingInvocationParams:
+      type: object
+      title: r#CancelPendingInvocationParams
+      required:
+      - timestamp
+      - idempotencyKey
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+    r#ChangePersistenceLevelParams:
+      type: object
+      title: r#ChangePersistenceLevelParams
+      required:
+      - timestamp
+      - persistenceLevel
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        persistenceLevel:
+          $ref: '#/components/schemas/PersistenceLevel'
+    r#ChangeRetryPolicyParams:
+      type: object
+      title: r#ChangeRetryPolicyParams
+      required:
+      - timestamp
+      - newPolicy
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        newPolicy:
+          $ref: '#/components/schemas/PublicRetryConfig'
+    r#CommittedRemoteTransactionParams:
+      type: object
+      title: r#CommittedRemoteTransactionParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#CreateParams:
+      type: object
+      title: r#CreateParams
+      required:
+      - timestamp
+      - workerId
+      - componentVersion
+      - args
+      - env
+      - projectId
+      - createdBy
+      - wasiConfigVars
+      - componentSize
+      - initialTotalLinearMemorySize
+      - initialActivePlugins
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        componentVersion:
+          type: integer
+          format: uint64
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        parent:
+          $ref: '#/components/schemas/WorkerId'
+        componentSize:
+          type: integer
+          format: uint64
+        initialTotalLinearMemorySize:
+          type: integer
+          format: uint64
+        initialActivePlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
+    r#CreateResourceParams:
+      type: object
+      title: r#CreateResourceParams
+      required:
+      - timestamp
+      - id
+      - name
+      - owner
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        owner:
+          type: string
+    r#DeactivatePluginParams:
+      type: object
+      title: r#DeactivatePluginParams
+      required:
+      - timestamp
+      - plugin
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        plugin:
+          $ref: '#/components/schemas/PluginInstallationDescription'
+    r#DropResourceParams:
+      type: object
+      title: r#DropResourceParams
+      required:
+      - timestamp
+      - id
+      - name
+      - owner
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        owner:
+          type: string
+    r#EndAtomicRegionParams:
+      type: object
+      title: r#EndAtomicRegionParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#EndRemoteWriteParams:
+      type: object
+      title: r#EndRemoteWriteParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#ErrorParams:
+      type: object
+      title: r#ErrorParams
+      required:
+      - timestamp
+      - error
+      - retryFrom
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: string
+        retryFrom:
+          type: integer
+          format: uint64
+    r#ExitedParams:
+      type: object
+      title: r#ExitedParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#ExportedFunctionCompletedParams:
+      type: object
+      title: r#ExportedFunctionCompletedParams
+      required:
+      - timestamp
+      - consumedFuel
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        consumedFuel:
+          type: integer
+          format: int64
+    r#ExportedFunctionInvokedParams:
+      type: object
+      title: r#ExportedFunctionInvokedParams
+      required:
+      - timestamp
+      - functionName
+      - request
+      - idempotencyKey
+      - traceId
+      - traceStates
+      - invocationContext
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        functionName:
+          type: string
+        request:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+        idempotencyKey:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+    r#FailedUpdateParams:
+      type: object
+      title: r#FailedUpdateParams
+      required:
+      - timestamp
+      - targetVersion
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        details:
+          type: string
+    r#FinishSpanParams:
+      type: object
+      title: r#FinishSpanParams
+      required:
+      - timestamp
+      - spanId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+    r#GrowMemoryParams:
+      type: object
+      title: r#GrowMemoryParams
+      required:
+      - timestamp
+      - delta
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: uint64
+    r#ImportedFunctionInvokedParams:
+      type: object
+      title: r#ImportedFunctionInvokedParams
+      required:
+      - timestamp
+      - functionName
+      - request
+      - response
+      - durableFunctionType
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        functionName:
+          type: string
+        request:
+          $ref: '#/components/schemas/ValueAndType'
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
+    r#InterruptedParams:
+      type: object
+      title: r#InterruptedParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#JumpParams:
+      type: object
+      title: r#JumpParams
+      required:
+      - timestamp
+      - jump
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        jump:
+          $ref: '#/components/schemas/OplogRegion'
+    r#LogParams:
+      type: object
+      title: r#LogParams
+      required:
+      - timestamp
+      - level
+      - context
+      - message
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          $ref: '#/components/schemas/LogLevel'
+        context:
+          type: string
+        message:
+          type: string
+    r#NoOpParams:
+      type: object
+      title: r#NoOpParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#PendingUpdateParams:
+      type: object
+      title: r#PendingUpdateParams
+      required:
+      - timestamp
+      - targetVersion
+      - description
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/PublicUpdateDescription'
+    r#PendingWorkerInvocationParams:
+      type: object
+      title: r#PendingWorkerInvocationParams
+      required:
+      - timestamp
+      - invocation
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicWorkerInvocation'
+    r#PreCommitRemoteTransactionParams:
+      type: object
+      title: r#PreCommitRemoteTransactionParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#PreRollbackRemoteTransactionParams:
+      type: object
+      title: r#PreRollbackRemoteTransactionParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#RestartParams:
+      type: object
+      title: r#RestartParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+    r#RevertParams:
+      type: object
+      title: r#RevertParams
+      required:
+      - timestamp
+      - droppedRegion
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        droppedRegion:
+          $ref: '#/components/schemas/OplogRegion'
+    r#RolledBackRemoteTransactionParams:
+      type: object
+      title: r#RolledBackRemoteTransactionParams
+      required:
+      - timestamp
+      - beginIndex
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        beginIndex:
+          type: integer
+          format: uint64
+    r#SetSpanAttributeParams:
+      type: object
+      title: r#SetSpanAttributeParams
+      required:
+      - timestamp
+      - spanId
+      - key
+      - value
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/PublicAttributeValue'
+    r#StartSpanParams:
+      type: object
+      title: r#StartSpanParams
+      required:
+      - timestamp
+      - spanId
+      - attributes
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        spanId:
+          type: string
+        parentId:
+          type: string
+        linkedContext:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+    r#SuccessfulUpdateParams:
+      type: object
+      title: r#SuccessfulUpdateParams
+      required:
+      - timestamp
+      - targetVersion
+      - newComponentSize
+      - newActivePlugins
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        targetVersion:
+          type: integer
+          format: uint64
+        newComponentSize:
+          type: integer
+          format: uint64
+        newActivePlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
+    r#SuspendParams:
+      type: object
+      title: r#SuspendParams
+      required:
+      - timestamp
+      properties:
+        timestamp:
+          type: string
+          format: date-time
   securitySchemes:
     Cookie:
       type: apiKey

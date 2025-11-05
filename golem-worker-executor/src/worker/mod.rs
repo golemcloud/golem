@@ -1541,7 +1541,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.last_known_status.component_version,
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.wasi_config_vars.clone(),
                     initial_worker_metadata.project_id.clone(),
                     initial_worker_metadata.created_by.clone(),
                     initial_worker_metadata.parent.clone(),
@@ -1553,6 +1552,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
+                    initial_worker_metadata.wasi_config_vars.clone(),
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));

@@ -17,6 +17,7 @@ use crate::services::rdbms::{
 };
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -26,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
 use std::ops::Bound;
-use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
 pub trait NamedType {
@@ -1609,12 +1609,12 @@ pub mod tests {
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
+    use desert_rust::BinaryCodec;
     use golem_common::serialization::{serialize, try_deserialize};
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use desert_rust::BinaryCodec;
     use test_r::test;
     use uuid::Uuid;
 

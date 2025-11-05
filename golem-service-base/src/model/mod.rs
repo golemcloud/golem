@@ -15,12 +15,13 @@
 pub mod auth;
 
 use applying::Apply;
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
@@ -33,7 +34,6 @@ use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]

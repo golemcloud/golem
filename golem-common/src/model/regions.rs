@@ -12,18 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::OplogIndex;
+use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
+use range_set_blaze::RangeSetBlaze;
+use serde::{Deserialize, Serialize};
 use std::collections::btree_map::{IntoValues, Values};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
-use desert_rust::BinaryCodec;
-use crate::model::oplog::OplogIndex;
-use range_set_blaze::RangeSetBlaze;
-use serde::{Deserialize, Serialize};
 
 #[derive(
-    Clone, Debug, Eq, PartialEq, BinaryCodec, Serialize, Deserialize, poem_openapi::Object,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    poem_openapi::Object,
+    IntoValue,
+    FromValue,
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]

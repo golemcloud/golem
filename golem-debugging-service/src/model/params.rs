@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::PublicOplogEntry;
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{LogLevel, Timestamp, WorkerId};
 use golem_worker_executor::model::event::InternalWorkerEvent;
 use serde::{Deserialize, Serialize};

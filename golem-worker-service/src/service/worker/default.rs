@@ -34,7 +34,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::auth::{Namespace, TokenSecret};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,

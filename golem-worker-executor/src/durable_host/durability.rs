@@ -24,6 +24,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
@@ -31,7 +32,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
-use desert_rust::{BinaryDeserializer, BinarySerializer};
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
@@ -579,7 +579,12 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         Ok: Clone,
         Err: From<SErr> + From<WorkerExecutorError> + Send + Sync,
         SIn: Debug + BinarySerializer + Send + Sync,
-        SErr: Debug + BinarySerializer + for<'a> From<&'a Err> + From<WorkerExecutorError> + Send + Sync,
+        SErr: Debug
+            + BinarySerializer
+            + for<'a> From<&'a Err>
+            + From<WorkerExecutorError>
+            + Send
+            + Sync,
         SOk: Debug + BinarySerializer + From<Ok> + Send + Sync,
     {
         let serializable_result: Result<SOk, SErr> = result
@@ -695,7 +700,8 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     where
         Ok: From<SOk>,
         Err: From<SErr> + From<WorkerExecutorError>,
-        SErr: Debug + BinarySerializer + BinaryDeserializer + From<WorkerExecutorError> + Send + Sync,
+        SErr:
+            Debug + BinarySerializer + BinaryDeserializer + From<WorkerExecutorError> + Send + Sync,
         SOk: Debug + BinarySerializer + BinaryDeserializer + Send + Sync,
     {
         Self::replay_serializable(self, ctx)

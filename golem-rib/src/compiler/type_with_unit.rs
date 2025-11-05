@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use desert_rust::BinaryCodec;
 use crate::{GetTypeHint, InferredType, InstanceType, TypeInternal};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{bool, field, record, str, tuple};
 use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,

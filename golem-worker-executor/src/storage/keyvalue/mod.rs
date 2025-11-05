@@ -18,10 +18,10 @@ pub mod sqlite;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::ProjectId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
-use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 #[async_trait]
 pub trait KeyValueStorage: Debug {

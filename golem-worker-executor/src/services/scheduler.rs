@@ -461,6 +461,7 @@ mod tests {
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
     use chrono::DateTime;
+    use desert_rust::BinarySerializer;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
@@ -474,7 +475,6 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
-    use desert_rust::BinarySerializer;
     use test_r::test;
     use uuid::Uuid;
 

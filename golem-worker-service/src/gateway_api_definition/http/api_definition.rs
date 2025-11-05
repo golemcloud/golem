@@ -33,6 +33,7 @@ use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use crate::service::gateway::BoxConversionContext;
+use desert_rust::BinaryCodec;
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -49,7 +50,6 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use Iterator;
-use desert_rust::BinaryCodec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {

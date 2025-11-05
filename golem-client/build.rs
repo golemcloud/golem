@@ -76,10 +76,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PluginInstallationAction",
                 "golem_common::model::plugin::PluginInstallationAction",
             ),
-            (
-                "OplogCursor",
-                "golem_common::model::public_oplog::OplogCursor",
-            ),
+            ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
             ("OplogRegion", "golem_common::model::regions::OplogRegion"),
             (
                 "ProjectActions",
@@ -92,7 +89,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("PromiseId", "golem_common::model::PromiseId"),
             (
                 "PublicOplogEntry",
-                "golem_common::model::public_oplog::PublicOplogEntry",
+                "golem_common::model::oplog::PublicOplogEntry",
             ),
             (
                 "RegisteredAgentType",

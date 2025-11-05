@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::PublicAttributeValue;
 use crate::model::oplog::SpanData;
-use crate::model::public_oplog::PublicAttributeValue;
 use crate::model::Timestamp;
 use desert_rust::adt::{AdtDeserializer, AdtMetadata, AdtSerializer};
 use desert_rust::{
@@ -95,7 +95,10 @@ impl<'de> Deserialize<'de> for TraceId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(<std::string::String as Deserialize>::deserialize(deserializer)?).map_err(Error::custom)
+        Self::from_string(<std::string::String as Deserialize>::deserialize(
+            deserializer,
+        )?)
+        .map_err(Error::custom)
     }
 }
 
@@ -215,7 +218,10 @@ impl<'de> Deserialize<'de> for SpanId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(<std::string::String as Deserialize>::deserialize(deserializer)?).map_err(Error::custom)
+        Self::from_string(<std::string::String as Deserialize>::deserialize(
+            deserializer,
+        )?)
+        .map_err(Error::custom)
     }
 }
 

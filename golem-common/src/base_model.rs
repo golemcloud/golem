@@ -15,10 +15,10 @@
 use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::newtype_uuid;
+use desert_rust::BinaryCodec;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use desert_rust::BinaryCodec;
 use uuid::Uuid;
 
 newtype_uuid!(

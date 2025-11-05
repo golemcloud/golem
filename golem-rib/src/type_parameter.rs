@@ -15,9 +15,9 @@
 use crate::type_parameter_parser::type_parameter;
 use combine::stream::position;
 use combine::EasyParser;
+use desert_rust::BinaryCodec;
 use std::fmt;
 use std::fmt::Display;
-use desert_rust::BinaryCodec;
 
 // The type parameter which can be part of instance creation or worker function call
 #[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]

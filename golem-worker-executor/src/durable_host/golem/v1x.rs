@@ -200,7 +200,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_oplog_index(&mut self) -> anyhow::Result<golem_api_1_x::oplog::OplogIndex> {
         self.observe_function_call("golem::api", "get_oplog_index");
         if self.state.is_live() {
-            self.state.oplog.add(OplogEntry::nop()).await;
+            self.state.oplog.add(OplogEntry::no_op()).await;
             Ok(self.state.current_oplog_index().await.into())
         } else {
             let (oplog_index, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::NoOp)?;
