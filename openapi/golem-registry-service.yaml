@@ -7951,7 +7951,7 @@ components:
       - versionCheck
       - securityOverrides
       - ownerAccountId
-      - rolesFromShares
+      - rolesFromActiveShares
       properties:
         id:
           type: string
@@ -7973,9 +7973,11 @@ components:
         ownerAccountId:
           type: string
           format: uuid
-        rolesFromShares:
+        rolesFromActiveShares:
           type: array
-          description: Roles in the environment that were given to the current user by shares. The owner always has full access.
+          description: |-
+            Roles in the environment that were given to the current user by shares. The owner always has full access.
+            Note that even if getting a deleted environment only non-deleted shares are considered.
           items:
             $ref: '#/components/schemas/EnvironmentRole'
         currentDeployment:
