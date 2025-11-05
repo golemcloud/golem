@@ -164,7 +164,7 @@ pub struct EnvBasedTestDependencies {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
-    registry_service: Arc<dyn RegistryService>, // cloud_service: Arc<dyn CloudService>,
+    registry_service: Arc<dyn RegistryService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
