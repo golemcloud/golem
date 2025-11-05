@@ -284,7 +284,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     // TODO: https://github.com/golemcloud/golem/issues/2274
     //run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-err}", &["err"]).await;
-    
+
     let result_complex_arg = r#"
     ok({
         id: "res_comp",
@@ -300,28 +300,26 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     "#;
 
     run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
-    //
-    // run_and_assert(&ctx, "fun-option", &["some(\"optional value\")"]).await;
-    //
-    // let option_complex_arg = r#"
-    // some({
-    //     id: "opt_comp",
-    //     simple: {
-    //         name: "opt_inner",
-    //         value: 8.88,
-    //         flag: true,
-    //         symbol: 'p'
-    //     },
-    //     list: [],
-    //     map: {},
-    //     option: none,
-    //     result: err("error in nested")
-    // })
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-option-complex", &[option_complex_arg]).await;
-    //
-    // run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
+
+    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-option}", &["some(\"optional value\")"]).await;
+
+    let option_complex_arg = r#"
+    some({
+        id: "opt_comp",
+        simple: {
+            name: "opt_inner",
+            value: 8.88,
+            flag: true,
+        },
+        list: [],
+        option: none,
+        result: err("error in nested")
+    })
+    "#;
+
+    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-option-complex}", &[option_complex_arg]).await;
+
+    run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
 }
 
 #[test]
