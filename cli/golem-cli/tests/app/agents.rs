@@ -272,32 +272,34 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     "#;
 
     run_and_assert(&ctx, "fun-struct-complex", &[complex_struct_arg]).await;
-    //
-    // run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
-    //
-    // run_and_assert(&ctx, "fun-result", &["ok(\"success\")"]).await;
-    //
-    // run_and_assert(&ctx, "fun-result-unit-left", &["ok"]).await;
-    //
-    // run_and_assert(&ctx, "fun-result-unit-right", &["err"]).await;
-    //
-    // let result_complex_arg = r#"
-    // ok({
-    //     id: "res_comp",
-    //     simple: {
-    //         name: "res_inner",
-    //         value: 7.77,
-    //         flag: false,
-    //         symbol: 'r'
-    //     },
-    //     list: [],
-    //     map: {},
-    //     option: none,
-    //     result: ok("result in nested")
-    // })
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
+
+    run_and_assert(&ctx, "fun-simple-enum", &["i64(-12345)"]).await;
+
+    // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
+    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result}", &["ok(\"success\")"]).await;
+    run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result}", &["err(\"failed\")"]).await;
+
+    // TODO: https://github.com/golemcloud/golem/issues/2274
+    // run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-ok}", &["ok"]).await;
+
+    // TODO: https://github.com/golemcloud/golem/issues/2274
+    //run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-err}", &["err"]).await;
+    
+    let result_complex_arg = r#"
+    ok({
+        id: "res_comp",
+        simple: {
+            name: "res_inner",
+            value: 7.77,
+            flag: false,
+        },
+        list: [],
+        option: none,
+        result: ok("result in nested")
+    })
+    "#;
+
+    run_and_assert(&ctx, "fun-result-complex", &[result_complex_arg]).await;
     //
     // run_and_assert(&ctx, "fun-option", &["some(\"optional value\")"]).await;
     //

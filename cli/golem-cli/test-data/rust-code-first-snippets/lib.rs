@@ -55,9 +55,9 @@ trait BarAgent {
 
     fn fun_result(&mut self, result: Result<String, String>) -> Result<String, String>;
 
-    fn fun_result_unit_left(&mut self, result: Result<(), String>) -> Result<(), String>;
+    fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String>;
 
-    fn fun_result_unit_right(&mut self, result: Result<String, ()>) -> Result<String, ()>;
+    fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
     fn fun_result_complex(
         &mut self,
@@ -178,11 +178,11 @@ impl BarAgent for BarAgentImpl {
         result
     }
 
-    fn fun_result_unit_left(&mut self, result: Result<(), String>) -> Result<(), String> {
+    fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String> {
         result
     }
 
-    fn fun_result_unit_right(&mut self, result: Result<String, ()>) -> Result<String, ()> {
+    fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()> {
         result
     }
 
