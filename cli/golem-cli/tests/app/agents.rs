@@ -147,38 +147,36 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun-boolean", &["true"]).await;
 
-    // let all_primitives_arg = r#"
-    // {
-    //     u8v: 42,
-    //     u16v: 42,
-    //     u32v: 42,
-    //     u64v: 42,
-    //     i8v: -42,
-    //     i16v: -42,
-    //     i32v: -42,
-    //     i64v: -42,
-    //     f32v: 3.14,
-    //     f64v: 3.1415926535,
-    //     boolv: true,
-    //     charv: 'a',
-    //     stringv: "sample"
-    // }
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-all-primitives", &[all_primitives_arg]).await;
-    //
-    // run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
-    //
-    // let collections_arg = r#"
-    // {
-    //     list-u8: [1, 2, 3, 4, 5],
-    //     list-str: ["foo", "bar", "baz"],
-    //     map-num: { "a": 1.1, "b": 2.2, "c": 3.3 },
-    //     map-text: { "1": "one", "2": "two", "3": "three" }
-    // }
-    // "#;
-    //
-    // run_and_assert(&ctx, "fun-collections", &[collections_arg]).await;
+    let all_primitives_arg = r#"
+    {
+        u8v: 42,
+        u16v: 42,
+        u32v: 42,
+        u64v: 42,
+        i8v: -42,
+        i16v: -42,
+        i32v: -42,
+        i64v: -42,
+        f32v: 3.14,
+        f64v: 3.1415926535,
+        boolv: true,
+        charv: 'a',
+        stringv: "sample"
+    }
+    "#;
+
+    run_and_assert(&ctx, "fun-all-primitives", &[all_primitives_arg]).await;
+
+    run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
+
+    let collections_arg = r#"
+    {
+        list-u8: [1, 2, 3, 4, 5],
+        list-str: ["foo", "bar", "baz"],
+    }
+    "#;
+
+    run_and_assert(&ctx, "fun-collections", &[collections_arg]).await;
     //
     // let simple_struct_arg = r#"
     // {

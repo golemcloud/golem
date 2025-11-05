@@ -15,8 +15,7 @@ pub struct AllPrimitives {
     pub f32v: f32,
     pub f64v: f64,
     pub boolv: bool,
-    // https://github.com/golemcloud/golem/issues/2272
-    //pub charv: char, // TODO; moonbit failing when adding char
+    //pub charv: char, // TODO; https://github.com/golemcloud/golem/issues/2272
     pub stringv: String,
 }
 
@@ -43,8 +42,9 @@ pub struct Tuples {
 pub struct Collections {
     pub list_u8: Vec<u8>,
     pub list_str: Vec<String>,
-    pub map_num: HashMap<String, f64>,
-    pub map_text: HashMap<i32, String>,
+    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // pub map_num: HashMap<String, f64>,
+    // pub map_text: HashMap<i32, String>,
 }
 
 #[derive(Schema)]
@@ -52,8 +52,7 @@ pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
     pub flag: bool,
-    // https://github.com/golemcloud/golem/issues/2272
-    //pub symbol: char, // TODO; moonbit failing when adding char
+    //pub symbol: char, // TODO; https://github.com/golemcloud/golem/issues/2272
 }
 
 #[derive(Schema)]
@@ -61,7 +60,8 @@ pub struct NestedStruct {
     pub id: String,
     pub simple: SimpleStruct,
     pub list: Vec<SimpleStruct>,
-    pub map: HashMap<String, f64>,
+    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // pub map: HashMap<String, f64>,
     pub option: Option<String>,
     pub result: Result<String, String>,
 }
@@ -73,8 +73,7 @@ pub enum SimpleEnum {
     F32(f32),
     F64(f64),
     Bool(bool),
-    // https://github.com/golemcloud/golem/issues/2272
-    // Char(char), //TODO; moonbit failing when adding char
+    // Char(char), //TODO; https://github.com/golemcloud/golem/issues/2272
     String(String),
     Struct(SimpleStruct),
     Unit,
@@ -90,7 +89,8 @@ pub enum EnumWithOnlyLiterals {
 #[derive(Schema)]
 pub enum EnumWithCollections {
     Vec(Vec<u8>),
-    Map(HashMap<String, f64>),
+    // TODO; https://github.com/golemcloud/golem/issues/2273
+    // Map(HashMap<String, f64>),
     Tuple((String, f64)),
     Bound(Bound<u8>),
 }
@@ -102,7 +102,8 @@ pub enum ComplexEnum {
     ListOfStructs(Vec<SimpleStruct>),
     Option(Option<String>),
     Result(Result<String, String>),
-    Map(HashMap<String, f64>),
+    // TODO; https://github.com/golemcloud/golem/issues/2273
+    //Map(HashMap<String, f64>),
     Bound(Bound<String>),
     Tuple((String, f64, bool)),
     UnitA,
