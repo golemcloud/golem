@@ -287,7 +287,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                         a.account_id = $1
                         AND a.deleted_at IS NULL
                         AND ap.deleted_at IS NULL
-                    ORDER BY name
+                    ORDER BY r.name
                 "#})
                 .bind(owner_account_id),
             )
