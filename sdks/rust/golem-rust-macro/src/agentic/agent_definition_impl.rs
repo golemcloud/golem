@@ -14,7 +14,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemTrait, Signature};
+use syn::{ItemTrait};
 
 use crate::agentic::helpers::{
     InputParamType, OutputParamType, convert_to_kebab, get_input_param_type, get_output_param_type
@@ -278,6 +278,10 @@ fn get_agent_type(
                        // #remote_trait_name {}
                     }
 
+                    pub fn get_id(&self) -> String {
+                        self.agent_id.agent_id.clone()
+                    }
+
                     #method_impls
 
 
@@ -355,8 +359,6 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                 }
             };
 
-            let method_parameters: Vec<_> = method.sig.inputs.iter().collect();
-
             let inputs: Vec<_> = method.sig.inputs.iter().collect();
 
             let input_idents: Vec<_> = method.sig
@@ -380,22 +382,62 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                 syn::ReturnType::Type(_, ty) => quote! { #ty },
                 syn::ReturnType::Default => quote! { () },
             };
-        
-           Some(quote!{
-              pub fn #method_name(#(#inputs),*) -> #return_type {
-                let wit_values: Vec<golem_rust::wasm_rpc::WitValue> = 
-                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+            // Depending on the input parameter type and output parameter type generate different implementations
+            let input_parameter_type = get_input_param_type(&method.sig);
 
-                let result: Result<golem_rust::wasm_rpc::WitValue, String> = wasm_rpc.invoke_and_await(
-                    #remote_method_name_token,
-                    &wit_values
-                );
+            let output_parameter_type = get_output_param_type(&method.sig);
 
-                todo!()
-              }
-           })
+            match (input_parameter_type, output_parameter_type) {
+                
+                (InputParamType::Tuple, OutputParamType::Tuple) =>
+                    Some(quote!{
+                        pub fn #method_name(#(#inputs),*) -> #return_type {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> = 
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+          
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+          
+                          // Change to async later
+                          let result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke_and_await(
+                              #remote_method_name_token,
+                              &wit_values
+                          );
+
+                          let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(result.expect("RPC call failed"));
+                          let element_schema = <#return_type as golem_rust::agentic::Schema>::get_type();
+
+                          <#return_type as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to convert ElementValue to return type")
+
+                        }
+                     }),
+                  (InputParamType::Tuple, OutputParamType::Multimodal) => {
+                    Some(quote!{
+                        pub fn #method_name(#(#inputs),*) -> #return_type {
+
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> = 
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed to serialize")),*];
+          
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+          
+                          // Change to async later
+                          let result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke_and_await(
+                              #remote_method_name_token,
+                              &wit_values
+                          );
+
+                          // If its multimodal, we cannot use Schema instance directly, we need to enumerate the values from multimodal
+                          // and apply them separately.
+                          todo!("Multimodal output parameter handling not implemented yet");
+                        }
+                     })
+                  },
+                _ => {
+                    None
+                }
+
+            }
+    
         } else {
             None
         }

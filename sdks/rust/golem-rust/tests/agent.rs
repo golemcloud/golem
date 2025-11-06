@@ -40,12 +40,9 @@ mod tests {
         fn new(id: UserId) -> Self {
             // Retrieve remote foo client and then it's agent id
             let foo_client = FooClient::get(id);
-            let id = &foo_client.agent_id;
             let result = foo_client.get_name();
 
-            EchoImpl {
-                _id: id.to_string(),
-            }
+            EchoImpl { _id: result }
         }
         fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
