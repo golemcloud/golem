@@ -256,7 +256,7 @@ fn get_agent_type(
         InputParamType::Tuple => {
             let remote_client = quote! {
                 pub struct #remote_trait_name {
-                    agent_id: String
+                    agent_id: golem_rust::wasm_rpc::AgentId,
                 }
 
                 impl #remote_trait_name {
@@ -268,8 +268,10 @@ fn get_agent_type(
 
                          let data_value  = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values);
 
-                         let agent_id =
+                         let agent_id_string =
                            golem_rust::golem_agentic::golem::agent::host::make_agent_id(#type_name, &data_value).expect("Internal Error: Failed to make agent id");
+
+                         let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
                         #remote_trait_name { agent_id: agent_id }
 
@@ -327,6 +329,15 @@ fn get_agent_type(
 fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macro2::TokenStream {
     let method_impls = tr.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(method) = item {
+
+            if let syn::ReturnType::Type(_, ty) = &method.sig.output {
+                if let syn::Type::Path(type_path) = &**ty {
+                    if type_path.path.segments.last().unwrap().ident == "Self" {
+                        return None;
+                    }
+                }
+            }
+            
             let method_name = &method.sig.ident;
             let agent_type_name_kebab = convert_to_kebab(&agent_type_name);
             let method_name_str_kebab = convert_to_kebab(&method_name.to_string());
@@ -364,9 +375,6 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             })
             .collect();
 
-            let element_values = quote! {
-                vec![#(golem_rust::agentic::Schema::to_element_value(#input_idents)),*]
-            };
 
             let return_type = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -375,8 +383,15 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
         
            Some(quote!{
               pub fn #method_name(#(#inputs),*) -> #return_type {
-                let element_values: Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue> = 
-                  vec![#(golem_rust::agentic::Schema::to_element_value(#input_idents).expect("Failed")),*];
+                let wit_values: Vec<golem_rust::wasm_rpc::WitValue> = 
+                  vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+
+                let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+
+                let result: Result<golem_rust::wasm_rpc::WitValue, String> = wasm_rpc.invoke_and_await(
+                    #remote_method_name_token,
+                    &wit_values
+                );
 
                 todo!()
               }
