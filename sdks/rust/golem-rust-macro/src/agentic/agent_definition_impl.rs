@@ -23,7 +23,7 @@ use crate::agentic::helpers::{
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
 
-    let agent_type = get_agent_type(&item_trait);
+    let (agent_type, remote_client) = get_agent_type(&item_trait);
 
     let register_fn_name = get_register_function_ident(&item_trait);
 
@@ -40,6 +40,7 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
     let result = quote! {
         #item_trait
         #register_fn
+        #remote_client
 
     };
 
@@ -56,8 +57,11 @@ fn get_register_function_ident(item_trait: &ItemTrait) -> proc_macro2::Ident {
     format_ident!("__register_agent_type_{}", register_fn_suffix)
 }
 
-fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
-    let type_name = item_trait.ident.to_string();
+fn get_agent_type(
+    item_trait: &syn::ItemTrait,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    let trait_ident = &item_trait.ident;
+    let type_name = trait_ident.to_string();
 
     let mut constructor_methods = vec![];
 
@@ -190,9 +194,16 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     });
 
-    let mut constructor_parameter_types: Vec<proc_macro2::TokenStream> = vec![];
+    // It holds the name and type of the constructor parmeters with schema
+    let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
     let mut constructor_param_type = InputParamType::Tuple;
+
+    // name and type of the constructor params
+    let mut constructor_param_defs = vec![];
+
+    // just the parmaeter identities
+    let mut constructor_param_idents = vec![];
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_param_type = get_input_param_type(&ctor_fn.sig);
@@ -202,12 +213,24 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                 for input in &ctor_fn.sig.inputs {
                     if let syn::FnArg::Typed(pat_type) = input {
                         let param_name = match &*pat_type.pat {
-                            syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
+                            syn::Pat::Ident(pat_ident) => {
+                                let param_ident = &pat_ident.ident;
+                                let ty = &pat_type.ty;
+                                constructor_param_defs.push(quote! {
+                                    #param_ident: #ty
+                                });
+
+                                constructor_param_idents.push(quote! {
+                                    #param_ident
+                                });
+
+                                pat_ident.ident.to_string()
+                            }
                             _ => "_".to_string(),
                         };
 
                         let ty = &pat_type.ty;
-                        constructor_parameter_types.push(quote! {
+                        constructor_parameters_with_schema.push(quote! {
                             (#param_name.to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
                         });
                     }
@@ -223,12 +246,51 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     }
 
+    let remote_trait_name = format_ident!("{}Client", item_trait.ident);
+
+    let remote_client = match constructor_param_type {
+        // If constructor parameter is tuple we can generate the remote client
+        InputParamType::Tuple => {
+            let remote_client = quote! {
+                pub struct #remote_trait_name {
+                    agent_id: String
+                }
+
+                impl #remote_trait_name {
+                    pub fn get(#(#constructor_param_defs), *) -> #remote_trait_name {
+                        let agent_type =
+                           golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
+
+                         let element_values = vec![#(golem_rust::agentic::Schema::to_element_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+
+                         let data_value  = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values);
+
+                         let agent_id =
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(#type_name, &data_value).expect("Internal Error: Failed to make agent id");
+
+                        #remote_trait_name { agent_id: agent_id }
+
+                       // #remote_trait_name {}
+                    }
+                }
+
+            };
+
+            remote_client
+        }
+        InputParamType::Multimodal => {
+            // TODO; Once multimodal representation is decided,
+            // We can almost copy paste the above tokens expect for picking only 1 constructor parameter, and enumerate and get DataValue::Multimodal
+            quote! {}
+        }
+    };
+
     let agent_constructor_input_schema = match constructor_param_type {
         InputParamType::Tuple => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameter_types),*])
+            golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameters_with_schema),*])
         },
         InputParamType::Multimodal => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameter_types),*])
+            golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameters_with_schema),*])
         },
     };
 
@@ -240,13 +302,16 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     };
 
-    quote! {
-        golem_rust::golem_agentic::golem::agent::common::AgentType {
-            type_name: #type_name.to_string(),
-            description: "".to_string(),
-            methods: vec![#(#methods),*],
-            dependencies: vec![],
-            constructor: #agent_constructor,
-        }
-    }
+    (
+        quote! {
+            golem_rust::golem_agentic::golem::agent::common::AgentType {
+                type_name: #type_name.to_string(),
+                description: "".to_string(),
+                methods: vec![#(#methods),*],
+                dependencies: vec![],
+                constructor: #agent_constructor,
+            }
+        },
+        remote_client,
+    )
 }

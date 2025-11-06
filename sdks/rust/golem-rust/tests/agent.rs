@@ -20,6 +20,7 @@ mod tests {
 
     #[agent_definition]
     trait Echo {
+        // TODO: While this is a valid rust syntax, there will still be warnings about unused constructor variables
         fn new(init: UserId) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
@@ -31,12 +32,16 @@ mod tests {
     }
 
     struct EchoImpl {
-        _id: UserId,
+        _id: String,
     }
 
     #[agent_implementation]
     impl Echo for EchoImpl {
         fn new(id: UserId) -> Self {
+            // Retrieve remote foo client and then it's agent id
+            let foo_client = FooClient::get(id);
+            let id = foo_client.agent_id;
+
             EchoImpl { _id: id }
         }
         fn echo_mut(&mut self, message: String) -> String {
@@ -65,6 +70,27 @@ mod tests {
 
         fn echo_option(&self, option: Option<String>) -> Option<String> {
             option
+        }
+    }
+
+    #[agent_definition]
+    trait Foo {
+        fn new(user_id: UserId) -> Self;
+        fn get_name(&self) -> String;
+    }
+
+    struct FooImpl {
+        user_id: UserId,
+    }
+
+    #[agent_implementation]
+    impl Foo for FooImpl {
+        fn new(user_id: UserId) -> Self {
+            FooImpl { user_id }
+        }
+
+        fn get_name(&self) -> String {
+            self.user_id.id.clone()
         }
     }
 
