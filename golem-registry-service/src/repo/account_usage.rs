@@ -405,7 +405,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id
-                WHERE a.account_id = $1
+                WHERE a.account_id = $1 AND a.deleted_at IS NULL
             "#})
                 .bind(account_id),
             )

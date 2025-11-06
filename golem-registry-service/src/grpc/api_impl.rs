@@ -261,7 +261,7 @@ impl RegistryServiceGrpcApi {
 
         let result = self
             .component_service
-            .download_component_wasm(&component_id, version, &auth_ctx)
+            .download_component_wasm(&component_id, version, true, &auth_ctx)
             .await?;
         Ok(result)
     }
@@ -284,7 +284,7 @@ impl RegistryServiceGrpcApi {
 
         let component = self
             .component_service
-            .get_component_revision(&component_id, version, &auth_ctx)
+            .get_component_revision(&component_id, version, true, &auth_ctx)
             .await?;
 
         Ok(GetComponentMetadataSuccessResponse {

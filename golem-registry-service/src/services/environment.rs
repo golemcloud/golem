@@ -147,11 +147,11 @@ impl EnvironmentService {
         update: EnvironmentUpdate,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let mut environment = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::UpdateEnvironment,
         )?;
 
@@ -188,11 +188,11 @@ impl EnvironmentService {
         environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentError> {
-        let mut environment = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironment,
         )?;
 
@@ -218,6 +218,7 @@ impl EnvironmentService {
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
@@ -225,6 +226,7 @@ impl EnvironmentService {
             .get_by_id(
                 &environment_id.0,
                 &auth.account_id().0,
+                include_deleted,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -235,7 +237,7 @@ impl EnvironmentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
         .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
@@ -263,7 +265,7 @@ impl EnvironmentService {
 
         auth.authorize_environment_action(
             &result.owner_account_id,
-            &result.roles_from_shares,
+            &result.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
         .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
@@ -279,13 +281,14 @@ impl EnvironmentService {
         &self,
         environment_id: &EnvironmentId,
         action: EnvironmentAction,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let environment: Environment = self.get(environment_id, auth).await?;
+        let environment: Environment = self.get(environment_id, include_deleted, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             action,
         )?;
 

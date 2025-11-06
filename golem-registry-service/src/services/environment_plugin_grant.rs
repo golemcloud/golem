@@ -92,7 +92,7 @@ impl EnvironmentPluginGrantService {
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
         let environment = self
             .environment_service
-            .get(&environment_id, auth)
+            .get(&environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -115,7 +115,7 @@ impl EnvironmentPluginGrantService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
 
@@ -156,7 +156,7 @@ impl EnvironmentPluginGrantService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironmentPluginGrant,
         )?;
 
@@ -181,7 +181,7 @@ impl EnvironmentPluginGrantService {
         // see EnvironmentService::list_in_application for a better pattern
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -192,7 +192,7 @@ impl EnvironmentPluginGrantService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )?;
 
@@ -234,7 +234,7 @@ impl EnvironmentPluginGrantService {
 
         let environment = self
             .environment_service
-            .get(&grant.environment_id, auth)
+            .get(&grant.environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
@@ -247,7 +247,7 @@ impl EnvironmentPluginGrantService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironmentPluginGrant,
         )?;
 

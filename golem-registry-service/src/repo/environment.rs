@@ -48,6 +48,7 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         environment_id: &Uuid,
         actor: &Uuid,
+        include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
@@ -143,10 +144,11 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         &self,
         environment_id: &Uuid,
         actor: &Uuid,
+        include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         self.repo
-            .get_by_id(environment_id, actor, override_visibility)
+            .get_by_id(environment_id, actor, include_deleted, override_visibility)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -363,6 +365,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         &self,
         environment_id: &Uuid,
         actor: &Uuid,
+        include_deleted: bool,
         override_visibility: bool,
     ) -> Result<Option<EnvironmentExtRevisionRecord>, EnvironmentRepoError> {
         let result = self
@@ -392,6 +395,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     LEFT JOIN environment_shares es
                         ON es.environment_id = e.environment_id
                         AND es.grantee_account_id = $2
+                        -- only join shares if the environment itself is not deleted
+                        AND (
+                            a.deleted_at IS NULL
+                            AND ap.deleted_at IS NULL
+                            AND e.deleted_at IS NULL
+                        )
                         AND es.deleted_at IS NULL
                     LEFT JOIN environment_share_revisions esr
                         ON esr.environment_share_id = es.environment_share_id
@@ -408,17 +417,23 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                     WHERE
                         e.environment_id = $1
-                        AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
-                        AND e.deleted_at IS NULL
                         AND (
                             $3
+                            OR (
+                                a.deleted_at IS NULL
+                                AND ap.deleted_at IS NULL
+                                AND e.deleted_at IS NULL
+                            )
+                        )
+                        AND (
+                            $4
                             OR a.account_id = $2
                             OR esr.roles IS NOT NULL
                         )
                 "# })
                 .bind(environment_id)
                 .bind(actor)
+                .bind(include_deleted)
                 .bind(override_visibility),
             )
             .await?;

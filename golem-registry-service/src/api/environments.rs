@@ -101,7 +101,10 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        let environment = self.environment_service.get(&environment_id, &auth).await?;
+        let environment = self
+            .environment_service
+            .get(&environment_id, false, &auth)
+            .await?;
         Ok(Json(environment))
     }
 
