@@ -12,6 +12,7 @@ path = "src/lib.rs"
 proc-macro = true
 
 [dependencies]
+convert_case = {version = "0.4"}
 heck = "0.5.0"
 proc-macro2 = "1"
 quote = "1"

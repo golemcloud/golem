@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use convert_case::{Case, Casing};
+
 pub enum InputParamType {
     Tuple,
     Multimodal,
@@ -50,4 +52,8 @@ pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
         }
     }
     OutputParamType::Tuple
+}
+
+pub fn convert_to_kebab(s: &str) -> String {
+    s.to_case(Case::Kebab)
 }

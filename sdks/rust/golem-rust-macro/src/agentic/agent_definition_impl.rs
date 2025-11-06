@@ -14,10 +14,10 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::ItemTrait;
+use syn::{ItemTrait, Signature};
 
 use crate::agentic::helpers::{
-    get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
+    InputParamType, OutputParamType, convert_to_kebab, get_input_param_type, get_output_param_type
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -115,6 +115,7 @@ fn get_agent_type(
 
             let mut input_parameters = vec![];
             let mut output_parameters = vec![];
+            
 
             let input_param_type = get_input_param_type(&trait_fn.sig);
             let output_param_type = get_output_param_type(&trait_fn.sig);
@@ -248,6 +249,8 @@ fn get_agent_type(
 
     let remote_trait_name = format_ident!("{}Client", item_trait.ident);
 
+    let method_impls = get_remote_method_impls(item_trait, type_name.clone());
+
     let remote_client = match constructor_param_type {
         // If constructor parameter is tuple we can generate the remote client
         InputParamType::Tuple => {
@@ -272,6 +275,10 @@ fn get_agent_type(
 
                        // #remote_trait_name {}
                     }
+
+                    #method_impls
+
+
                 }
 
             };
@@ -314,4 +321,73 @@ fn get_agent_type(
         },
         remote_client,
     )
+}
+
+
+fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macro2::TokenStream {
+    let method_impls = tr.items.iter().filter_map(|item| {
+        if let syn::TraitItem::Fn(method) = item {
+            let method_name = &method.sig.ident;
+            let agent_type_name_kebab = convert_to_kebab(&agent_type_name);
+            let method_name_str_kebab = convert_to_kebab(&method_name.to_string());
+
+            // To form remote method name, we convert this back to kebab-case similar to TS
+            let remote_method_name = format!(
+                "{}.{{{}}}",
+                agent_type_name_kebab,
+                method_name_str_kebab
+            );
+
+            let remote_method_name_token = {
+                quote! {
+                   #remote_method_name
+                }
+            };
+
+            let method_parameters: Vec<_> = method.sig.inputs.iter().collect();
+
+            let inputs: Vec<_> = method.sig.inputs.iter().collect();
+
+            let input_idents: Vec<_> = method.sig
+                .inputs
+                .iter()
+                .filter_map(|arg| {
+                    if let syn::FnArg::Typed(pat_type) = arg {
+                        if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                            Some(pat_ident.ident.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+            })
+            .collect();
+
+            let element_values = quote! {
+                vec![#(golem_rust::agentic::Schema::to_element_value(#input_idents)),*]
+            };
+
+            let return_type = match &method.sig.output {
+                syn::ReturnType::Type(_, ty) => quote! { #ty },
+                syn::ReturnType::Default => quote! { () },
+            };
+        
+           Some(quote!{
+              pub fn #method_name(#(#inputs),*) -> #return_type {
+                let element_values: Vec<golem_rust::golem_agentic::golem::agent::common::ElementValue> = 
+                  vec![#(golem_rust::agentic::Schema::to_element_value(#input_idents).expect("Failed")),*];
+
+                todo!()
+              }
+           })
+        } else {
+            None
+        }
+
+    }).collect::<Vec<_>>();
+
+    quote! {
+        #(#method_impls)*
+    }
 }
