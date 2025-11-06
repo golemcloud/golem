@@ -12,10 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bindings::golem::agent::host::RegisteredAgentType;
 use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::AgentId;
 
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;

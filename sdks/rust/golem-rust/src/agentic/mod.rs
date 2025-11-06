@@ -13,16 +13,16 @@
 // limitations under the License.
 
 pub use agent::*;
-pub use schema::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use errors::*;
 pub use resolved_agent::*;
+pub use schema::*;
 
 mod agent;
-mod schema;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
 mod errors;
 mod resolved_agent;
+mod schema;

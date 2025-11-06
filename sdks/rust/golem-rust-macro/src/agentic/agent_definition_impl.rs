@@ -14,10 +14,10 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemTrait};
+use syn::ItemTrait;
 
 use crate::agentic::helpers::{
-    InputParamType, OutputParamType, convert_to_kebab, get_input_param_type, get_output_param_type
+    convert_to_kebab, get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -328,7 +328,6 @@ fn get_agent_type(
         remote_client,
     )
 }
-
 
 fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macro2::TokenStream {
     let method_impls = tr.items.iter().filter_map(|item| {
