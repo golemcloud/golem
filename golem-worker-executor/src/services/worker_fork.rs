@@ -42,7 +42,10 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequest, HostRequestGolemApiFork, HostResponse,
+    HostResponseGolemApiFork, OplogIndex, OplogIndexRange,
+};
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::read_only_lock;
@@ -560,20 +563,16 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // durability.persist will write an ImportedFunctionInvoked entry persisting ForkResult::Original
         // we write an alternative version of that entry to the new oplog, so it is going to return with
         // ForkResult::Forked in the other worker
-        let serialized_input = serialize(&target_worker_id.worker_name).map_err(|err| {
-            WorkerExecutorError::runtime(format!("failed to serialize worker name for persisting durable function invocation: {err}"))
-        })?.to_vec();
-
-        let forked: Result<ForkResult, SerializableError> = Ok(ForkResult::Forked);
-        let serialized_response = serialize(&forked).map_err(|err| {
-            WorkerExecutorError::runtime(format!("failed to serialize fork result for persisting durable function invocation: {err}"))
-        })?.to_vec();
 
         let _ = new_oplog
-            .add_raw_imported_function_invoked(
+            .add_imported_function_invoked(
                 "golem::api::fork".to_string(),
-                &serialized_input,
-                &serialized_response,
+                &HostRequest::GolemApiFork(HostRequestGolemApiFork {
+                    name: target_worker_id.worker_name,
+                }),
+                &HostResponse::GolemApiFork(HostResponseGolemApiFork {
+                    result: Ok(golem_common::model::ForkResult::Forked),
+                }),
                 DurableFunctionType::WriteRemote,
             )
             .await

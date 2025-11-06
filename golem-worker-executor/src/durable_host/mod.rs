@@ -981,7 +981,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .data_mut()
                     .get_public_state()
                     .oplog()
-                    .get_upload_description_payload(&description)
+                    .get_upload_description_payload(description)
                     .await
                 {
                     Ok(Some(data)) => {
@@ -3266,7 +3266,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {

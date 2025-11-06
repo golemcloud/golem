@@ -14,12 +14,97 @@
 
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::PayloadId;
+use crate::model::{ForkResult, ObjectMetadata, SerializableDateTime, SerializableFileTimes};
+use crate::oplog_payload;
+use crate::serialization::serialize;
 use desert_rust::{
     BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
+use golem_wasm::{IntoValueAndType, ValueAndType};
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::Debug;
-use golem_wasm::ValueAndType;
+
+oplog_payload! {
+    HostRequest => {
+        NoInput {},
+        BlobStoreContainer {
+            container: String
+        },
+        BlobStoreContainerAndObject {
+            container: String,
+            object: String
+        },
+        BlobStoreContainerAndObjects {
+            container: String,
+            objects: Vec<String>
+        },
+        BlobStoreGetData {
+            container: String,
+            object: String,
+            begin: u64,
+            end: u64,
+        },
+        BlobStoreWriteData {
+            container: String,
+            object: String,
+            length: u64
+        },
+        BlobStoreCopyOrMove {
+            source_container: String,
+            source_object: String,
+            target_container: String,
+            target_object: String
+        },
+        MonotonicClockDuration {
+            duration_in_nanos: u64
+        },
+        FileSystemPath {
+            path: String
+        },
+        GolemApiFork {
+            name: String,
+        },
+    }
+}
+
+oplog_payload! {
+    HostResponse => {
+        BlobStoreUnit {
+            result: Result<(), String>,
+        },
+        BlobStoreGetData {
+            result: Result<Vec<u8>, String>,
+        },
+        BlobStoreListObjects {
+            result: Result<Vec<String>, String>
+        },
+        BlobStoreContains {
+            result: Result<bool, String>
+        },
+        BlobStoreObjectMetadata {
+            result: Result<ObjectMetadata, String>
+        },
+        BlobStoreTimestamp {
+            result: Result<u64, String>
+        },
+        BlobStoreOptionalTimestamp {
+            result: Result<Option<u64>, String>
+        },
+        MonotonicClockTimestamp {
+            nanos: u64
+        },
+        WallClock {
+            time: SerializableDateTime,
+        },
+        FileSystemStat {
+            result: Result<SerializableFileTimes, String>,
+        },
+        GolemApiFork {
+            result: Result<ForkResult, String>,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
@@ -29,6 +114,25 @@ pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     },
+}
+
+impl<T: BinaryCodec + Debug + Clone + PartialEq> OplogPayload<T> {
+    pub fn try_into_raw(self) -> Result<RawOplogPayload, String> {
+        match self {
+            OplogPayload::Inline(data) => {
+                let bytes = serialize(&data)?;
+                Ok(RawOplogPayload::SerializedInline(bytes))
+            }
+            OplogPayload::SerializedInline(bytes) => Ok(RawOplogPayload::SerializedInline(bytes)),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => Ok(RawOplogPayload::External {
+                payload_id,
+                md5_hash,
+            }),
+        }
+    }
 }
 
 impl<T: BinaryCodec + Debug + Clone + PartialEq> BinarySerializer for OplogPayload<T> {
@@ -81,12 +185,28 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> BinaryDeserializer for OplogPay
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub enum HostRequest {
-    Custom(ValueAndType)
+/// Untyped version of OplogPayload
+pub enum RawOplogPayload {
+    SerializedInline(Vec<u8>),
+    External {
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-pub enum HostResponse {
-    Custom(ValueAndType)
+impl RawOplogPayload {
+    pub fn into_payload<T: BinaryCodec + Debug + Clone + PartialEq>(
+        self,
+    ) -> Result<OplogPayload<T>, String> {
+        match self {
+            RawOplogPayload::SerializedInline(bytes) => Ok(OplogPayload::SerializedInline(bytes)),
+            RawOplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => Ok(OplogPayload::External {
+                payload_id,
+                md5_hash,
+            }),
+        }
+    }
 }

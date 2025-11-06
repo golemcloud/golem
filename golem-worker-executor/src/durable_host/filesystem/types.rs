@@ -29,13 +29,13 @@ use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use golem_common::model::oplog::DurableFunctionType;
-
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes,
 };
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::{DurableFunctionType, HostRequestFileSystemPath};
+use golem_common::model::{SerializableDateTime, SerializableFileTimes};
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
@@ -183,7 +183,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::<SerializableFileTimes, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "filesystem::types::descriptor",
             "stat",
@@ -197,14 +197,25 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(d) => d.path.clone(),
         };
 
-        let mut stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await?;
-        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+        let stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await;
+        let stat = match stat {
+            Ok(mut stat) => {
+                stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+                Ok(stat)
+            }
+            Err(fs_error) => Err(fs_error
+                .downcast_ref()
+                .cloned()
+                .ok_or_else(|| fs_error.to_string())),
+        };
 
         let times = if durability.is_live() {
             durability
                 .persist(
                     self,
-                    path.to_string_lossy().to_string(),
+                    HostRequestFileSystemPath {
+                        path: path.to_string_lossy().to_string(),
+                    },
                     Ok(SerializableFileTimes {
                         data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
                         data_modification_timestamp: stat

@@ -443,28 +443,21 @@ impl ReplayState {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
-                match &oplog_entry {
+                match oplog_entry {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
                         idempotency_key,
                         trace_id,
                         trace_states: trace_state,
                         invocation_context: spans,
+                        request,
                         ..
                     } => {
-                        let request: Vec<golem_wasm::protobuf::Val> = self
+                        let request = self
                             .oplog
-                            .get_payload_of_entry(&oplog_entry)
+                            .download_payload(request)
                             .await
-                            .expect("failed to deserialize function request payload")
-                            .unwrap();
-                        let request = request
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect::<Vec<Value>>();
+                            .expect("failed to deserialize function request payload");
 
                         let invocation_context =
                             InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);

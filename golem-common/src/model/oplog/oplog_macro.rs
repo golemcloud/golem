@@ -96,3 +96,58 @@ macro_rules! oplog_entry {
         }
     }
 }
+
+#[macro_export]
+macro_rules! oplog_payload {
+        ( $typename:ident => {
+                $($(#[$casemeta:meta])* $case:ident {
+                    $($(#[$meta:meta])* $field:ident: $typ:ty),* $(,)?
+                }),* $(,)?
+        }) => {
+
+        #[derive(Clone, Debug, PartialEq, BinaryCodec)]
+        pub enum $typename {
+            Custom(golem_wasm::ValueAndType),
+            $($(#[$casemeta])* $case(
+                ident_mash::mash! {
+                    inner_name = $typename + $case => $inner_name
+                }
+            )),*,
+        }
+
+        impl IntoValueAndType for $typename {
+            fn into_value_and_type(self) -> ValueAndType {
+                match self {
+                    $(Self::$case(value) => value.into_value_and_type()),*,
+                    Self::Custom(value_and_type) => value_and_type,
+                }
+            }
+        }
+
+        $(ident_mash::mash! {
+            inner_name = $typename + $case =>
+
+            #[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+            pub struct $inner_name {
+                $( $(#[$meta])* pub $field: $typ ),*
+            }
+
+            impl From<$inner_name> for $typename {
+                fn from(value: $inner_name) -> Self {
+                    Self::$case(value)
+                }
+            }
+
+            impl TryFrom<$typename> for $inner_name {
+                type Error = String;
+
+                fn try_from(value: $typename) -> Result<Self, Self::Error> {
+                    match value {
+                        $typename::$case(value) => Ok(value),
+                        other => Err(format!("Expected {}, got {other:?}", stringify!($case))),
+                    }
+                }
+            }
+        })*
+    }
+}

@@ -15,25 +15,32 @@
 use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput, HostResponseWallClock};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
-        let durability = Durability::<SerializableDateTime, SerializableError>::new(
-            self,
-            "wall_clock",
-            "now",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let durability =
+            Durability::new(self, "wall_clock", "now", DurableFunctionType::ReadLocal).await?;
 
-        if durability.is_live() {
-            let result = Host::now(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = Host::now(&mut self.as_wasi_view()).await?;
+
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseWallClock {
+                        seconds: result.seconds,
+                        nanos: result.nanoseconds,
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.into())
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
@@ -45,11 +52,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        if durability.is_live() {
-            let result = Host::resolution(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = Host::resolution(&mut self.as_wasi_view()).await?;
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseWallClock {
+                        seconds: result.seconds,
+                        nanos: result.nanoseconds,
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.into())
     }
 }

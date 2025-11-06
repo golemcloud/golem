@@ -32,74 +32,33 @@ use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::{filesystem, sockets};
 use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
-
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct SerializableDateTime {
-    pub seconds: u64,
-    pub nanoseconds: u32,
-}
-
-impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
-impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
-    fn from(value: SerializableDateTime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
-impl From<SerializableDateTime> for SystemTime {
-    fn from(value: SerializableDateTime) -> Self {
-        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds, value.nanoseconds))
-    }
-}
-
-impl From<SystemTime> for SerializableDateTime {
-    fn from(value: SystemTime) -> Self {
-        let duration = value.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        Self {
-            seconds: duration.as_secs(),
-            nanoseconds: duration.subsec_nanos(),
-        }
-    }
-}
-
-impl From<SerializableDateTime> for cap_std::time::SystemTime {
-    fn from(value: SerializableDateTime) -> Self {
-        cap_std::time::SystemTime::from_std(value.into())
-    }
-}
-
-impl From<cap_std::time::SystemTime> for SerializableDateTime {
-    fn from(value: cap_std::time::SystemTime) -> Self {
-        Self::from(value.into_std())
-    }
-}
-
-impl From<SerializableDateTime> for DateTime<Utc> {
-    fn from(value: SerializableDateTime) -> Self {
-        Self::from_timestamp(value.seconds as i64, value.nanoseconds).expect("not a valid datetime")
-    }
-}
-
-impl From<DateTime<Utc>> for SerializableDateTime {
-    fn from(value: DateTime<Utc>) -> Self {
-        Self {
-            seconds: value.timestamp() as u64,
-            nanoseconds: value.nanosecond(),
-        }
-    }
-}
+//
+// impl From<SerializableDateTime> for cap_std::time::SystemTime {
+//     fn from(value: SerializableDateTime) -> Self {
+//         cap_std::time::SystemTime::from_std(value.into())
+//     }
+// }
+//
+// impl From<cap_std::time::SystemTime> for SerializableDateTime {
+//     fn from(value: cap_std::time::SystemTime) -> Self {
+//         Self::from(value.into_std())
+//     }
+// }
+//
+// impl From<SerializableDateTime> for DateTime<Utc> {
+//     fn from(value: SerializableDateTime) -> Self {
+//         Self::from_timestamp(value.seconds as i64, value.nanoseconds).expect("not a valid datetime")
+//     }
+// }
+//
+// impl From<DateTime<Utc>> for SerializableDateTime {
+//     fn from(value: DateTime<Utc>) -> Self {
+//         Self {
+//             seconds: value.timestamp() as u64,
+//             nanoseconds: value.nanosecond(),
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
@@ -678,13 +637,6 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     fn from(value: SerializableIpAddresses) -> Self {
         value.0.into_iter().map(|v| v.into()).collect()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct SerializableFileTimes {
-    pub data_access_timestamp: Option<SerializableDateTime>,
-    pub data_modification_timestamp: Option<SerializableDateTime>,
 }
 
 #[cfg(test)]

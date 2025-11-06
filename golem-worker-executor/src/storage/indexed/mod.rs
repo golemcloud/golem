@@ -16,7 +16,6 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::serialization::{deserialize, serialize};
 
@@ -82,7 +81,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String>;
 
     /// Appends multiple entries to the given key with the given id
@@ -93,7 +92,7 @@ pub trait IndexedStorage: Debug + Sync {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-        pairs: &[(u64, Bytes)],
+        pairs: Vec<(u64, Vec<u8>)>,
     ) -> Result<(), String> {
         for (id, value) in pairs {
             self.append(
@@ -102,7 +101,7 @@ pub trait IndexedStorage: Debug + Sync {
                 entity_name,
                 namespace.clone(),
                 key,
-                *id,
+                id,
                 value,
             )
             .await?;
@@ -138,7 +137,7 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String>;
+    ) -> Result<Vec<(u64, Vec<u8>)>, String>;
 
     /// Gets the first entry in the index of the given key
     async fn first(
@@ -148,7 +147,7 @@ pub trait IndexedStorage: Debug + Sync {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Gets the last entry in the index of the given key
     async fn last(
@@ -158,7 +157,7 @@ pub trait IndexedStorage: Debug + Sync {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry.
@@ -170,7 +169,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
@@ -346,7 +345,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 id,
-                &serialize(value)?,
+                serialize(value)?,
             )
             .await
     }
@@ -357,7 +356,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         self.storage
             .append(
@@ -390,7 +389,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 self.entity_name,
                 namespace,
                 key,
-                &serialized_pairs,
+                serialized_pairs,
             )
             .await
     }
@@ -429,7 +428,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         from: u64,
         count: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         self.storage
             .read(
                 self.svc_name,
@@ -448,7 +447,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .first(
                 self.svc_name,
@@ -497,7 +496,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .last(
                 self.svc_name,
@@ -548,7 +547,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .closest(
                 self.svc_name,

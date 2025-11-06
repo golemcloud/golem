@@ -67,7 +67,7 @@ impl RedisIndexedStorage {
         svc_name: &'static str,
         entity_name: &'static str,
         items: Vec<HashMap<String, HashMap<String, Bytes>>>,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let mut result = Vec::new();
         for item in items {
             for (id, value) in item {
@@ -75,7 +75,7 @@ impl RedisIndexedStorage {
                 for (key, value) in value {
                     if key == Self::KEY {
                         record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
+                        result.push((id, value.to_vec()));
                     }
                 }
             }
@@ -161,7 +161,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
@@ -175,7 +175,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 id.to_string(),
                 (
                     Key::from(Self::KEY),
-                    Value::Bytes(Bytes::copy_from_slice(value)),
+                    Value::Bytes(Bytes::from(value)),
                 ),
             )
             .await
@@ -190,7 +190,7 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-        pairs: &[(u64, Bytes)],
+        pairs: Vec<(u64, Vec<u8>)>,
     ) -> Result<(), String> {
         if !pairs.is_empty() {
             let mut redis_pairs = Vec::with_capacity(pairs.len());
@@ -198,7 +198,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 record_redis_serialized_size(svc_name, entity_name, value.len());
                 redis_pairs.push((
                     id.to_string(),
-                    (Key::from(Self::KEY), Value::Bytes(value.clone())),
+                    (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
                 ));
             }
 
@@ -253,7 +253,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -272,7 +272,7 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -291,7 +291,7 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -311,7 +311,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)

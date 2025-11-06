@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bytes::{BufMut, Bytes, BytesMut};
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 
 /// serde_json - no longer supported
@@ -27,17 +26,17 @@ pub const SERIALIZATION_VERSION_V3: u8 = 3u8;
 pub fn serialize_with_version<T: BinarySerializer>(
     value: &T,
     version: u8,
-) -> Result<Bytes, String> {
-    let data = desert_rust::serialize_to_bytes(value)
+) -> Result<Vec<u8>, String> {
+    let data = desert_rust::serialize_to_byte_vec(value)
         .map_err(|e| format!("Failed to serialize value: {e}"))?;
-    let mut bytes = BytesMut::with_capacity(data.len() + 1);
-    bytes.put_u8(version);
-    bytes.extend(data);
-    Ok(bytes.freeze())
+    let mut result = Vec::with_capacity(data.len() + 1);
+    result.push(version);
+    result.extend(data);
+    Ok(result)
 }
 
-pub fn serialize<T: BinarySerializer>(value: &T) -> Result<Bytes, String> {
-    serialize_with_version(value, SERIALIZATION_VERSION_V2)
+pub fn serialize<T: BinarySerializer>(value: &T) -> Result<Vec<u8>, String> {
+    serialize_with_version(value, SERIALIZATION_VERSION_V3)
 }
 
 pub fn deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, String> {

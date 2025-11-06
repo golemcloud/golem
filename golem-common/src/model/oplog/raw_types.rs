@@ -23,6 +23,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
+use crate::model::oplog::OplogPayload;
 
 pub struct OplogIndexRange {
     current: u64,
@@ -275,7 +276,7 @@ pub enum UpdateDescription {
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_version: ComponentVersion,
-        payload: OplogPayload,
+        payload: OplogPayload<Vec<u8>>,
     },
 }
 

@@ -27,11 +27,8 @@ use crate::workerctx::WorkerCtx;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_mutex::Mutex;
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, OplogPayload, PersistenceLevel, PublicOplogEntry,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload};
 use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
@@ -582,20 +579,12 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn upload_payload(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String> {
-        self.inner.upload_payload(owned_worker_id, data).await
+    async fn upload_raw_payload(&self, owned_worker_id: &OwnedWorkerId, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.inner.upload_raw_payload(owned_worker_id, data).await
     }
 
-    async fn download_payload(
-        &self,
-        owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String> {
-        self.inner.download_payload(owned_worker_id, payload).await
+    async fn download_raw_payload(&self, owned_worker_id: &OwnedWorkerId, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
+        self.inner.download_raw_payload(owned_worker_id, payload_id, md5_hash).await
     }
 }
 
@@ -719,12 +708,12 @@ impl Oplog for ForwardingOplog {
         self.inner.length().await
     }
 
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
-        self.inner.upload_payload(data).await
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.inner.upload_raw_payload(data).await
     }
 
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
-        self.inner.download_payload(payload).await
+    async fn download_raw_payload(&self, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
+        self.inner.download_raw_payload(payload_id, md5_hash).await
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {

@@ -409,20 +409,11 @@ impl BlobStoreService for DefaultBlobStoreService {
                 "write_data",
                 BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
-                &data,
+                data,
             )
             .await
             .map_err(|err| anyhow!(err))
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct ObjectMetadata {
-    pub name: String,
-    pub container: String,
-    pub created_at: u64,
-    pub size: u64,
 }
 
 #[cfg(test)]

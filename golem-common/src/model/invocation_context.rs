@@ -824,23 +824,23 @@ impl InvocationContextStack {
     }
 
     pub fn from_oplog_data(
-        trace_id: &TraceId,
-        trace_states: &[String],
-        spans: &[SpanData],
+        trace_id: TraceId,
+        trace_states: Vec<String>,
+        spans: Vec<SpanData>,
     ) -> Self {
         if spans.is_empty() {
             let root = InvocationContextSpan::local().build();
             Self {
-                trace_id: trace_id.clone(),
+                trace_id,
                 spans: NEVec::new(root),
-                trace_states: trace_states.to_vec(),
+                trace_states,
             }
         } else {
             let mut result_spans = Vec::new();
-            for span_data in spans.iter().rev() {
+            for span_data in spans.into_iter().rev() {
                 let result_span = match span_data {
                     SpanData::ExternalSpan { span_id } => {
-                        InvocationContextSpan::external_parent(span_id.clone())
+                        InvocationContextSpan::external_parent(span_id)
                     }
                     SpanData::LocalSpan {
                         span_id,
@@ -850,19 +850,15 @@ impl InvocationContextStack {
                         attributes,
                         inherited,
                     } => InvocationContextSpan::local()
-                        .with_span_id(span_id.clone())
-                        .with_start(*start)
-                        .parent(
-                            parent_id
-                                .as_ref()
-                                .and_then(|_| result_spans.first().cloned()),
-                        )
-                        .with_attributes(attributes.clone())
-                        .with_inherited(*inherited)
-                        .linked_context(linked_context.as_ref().map(|linked_spans| {
+                        .with_span_id(span_id)
+                        .with_start(start)
+                        .parent(parent_id.and_then(|_| result_spans.first().cloned()))
+                        .with_attributes(attributes)
+                        .with_inherited(inherited)
+                        .linked_context(linked_context.map(|linked_spans| {
                             let linked_stack = InvocationContextStack::from_oplog_data(
-                                trace_id,
-                                trace_states,
+                                trace_id.clone(),
+                                trace_states.clone(),
                                 linked_spans,
                             );
                             linked_stack.spans.first().clone()

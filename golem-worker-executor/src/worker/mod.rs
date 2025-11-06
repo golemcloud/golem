@@ -2096,9 +2096,9 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::ExportedFunctionCompleted { .. } => {
+                OplogEntry::ExportedFunctionCompleted { response, .. } => {
                     let value: Option<ValueAndType> =
-                        services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+                        services.oplog().download_payload(response).await.expect("failed to deserialize function response payload");
 
                     Ok(value)
                 }

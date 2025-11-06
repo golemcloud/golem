@@ -14,17 +14,19 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::oplog::CommitLevel;
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
+    HostResponseMonotonicClockTimestamp,
+};
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::<Instant, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "monotonic_clock",
             "now",
@@ -32,16 +34,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        if durability.is_live() {
-            let result = Host::now(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result_in_nanos = Host::now(&mut self.as_wasi_view()).await?;
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.nanos)
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::<Instant, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "monotonic_clock",
             "resolution",
@@ -49,24 +59,32 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        if durability.is_live() {
-            let result = Host::resolution(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result_in_nanos = Host::resolution(&mut self.as_wasi_view()).await?;
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.nanos)
     }
 
     async fn subscribe_instant(&mut self, when: Instant) -> anyhow::Result<Resource<Pollable>> {
-        self.observe_function_call("clocks::monotonic_clock", "subscribe_instant");
+        self.observe_function_call("monotonic_clock", "subscribe_instant");
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 
     async fn subscribe_duration(
         &mut self,
-        duration: Duration,
+        duration_in_nanos: Duration,
     ) -> anyhow::Result<Resource<Pollable>> {
-        let durability = Durability::<Instant, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "monotonic_clock",
             "subscribe_duration",
@@ -76,8 +94,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let now = {
             if durability.is_live() {
-                let result = Host::now(&mut self.as_wasi_view()).await;
-                durability.persist(self, duration, result).await
+                let result_in_nanos = Host::now(&mut self.as_wasi_view()).await?;
+                durability
+                    .persist(
+                        self,
+                        HostRequestMonotonicClockDuration { duration_in_nanos },
+                        HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                    )
+                    .await
             } else {
                 durability.replay(self).await
             }
@@ -87,7 +111,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await;
-        let when = now.saturating_add(duration);
+        let when = now.nanos.saturating_add(duration_in_nanos);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }
 }

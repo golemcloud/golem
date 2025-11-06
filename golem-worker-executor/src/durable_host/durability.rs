@@ -16,7 +16,6 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::TrapType;
 use crate::preview2::golem::durability::durability;
-use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use crate::worker::RetryDecision;
@@ -25,7 +24,9 @@ use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, PersistenceLevel};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, PersistenceLevel,
+};
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -48,17 +49,9 @@ pub struct DurableExecutionState {
 pub struct PersistedDurableFunctionInvocation {
     timestamp: Timestamp,
     function_name: String,
-    response: Vec<u8>,
+    response: HostResponse,
     function_type: DurableFunctionType,
     oplog_entry_version: OplogEntryVersion,
-}
-
-impl PersistedDurableFunctionInvocation {
-    pub fn response_as_value_and_type(&self) -> Result<ValueAndType, WorkerExecutorError> {
-        deserialize(&self.response).map_err(|err| {
-            WorkerExecutorError::runtime(format!("Failed to deserialize payload: {err}"))
-        })
-    }
 }
 
 #[async_trait]
@@ -95,21 +88,8 @@ pub trait DurabilityHost {
     async fn persist_durable_function_invocation(
         &self,
         function_name: String,
-        request: &[u8],
-        response: &[u8],
-        function_type: DurableFunctionType,
-    );
-
-    /// Writes a record to the worker's oplog representing a durable function invocation
-    ///
-    /// The request and response are defined as pairs of value and type, which makes it
-    /// self-describing for observers of oplogs. This is the recommended way to persist
-    /// third-party function invocations.
-    async fn persist_typed_durable_function_invocation(
-        &self,
-        function_name: String,
-        request: ValueAndType,
-        response: ValueAndType,
+        request: &HostRequest,
+        response: &HostResponse,
         function_type: DurableFunctionType,
     );
 
@@ -179,7 +159,7 @@ impl From<PersistedDurableFunctionInvocation> for durability::PersistedDurableFu
         durability::PersistedDurableFunctionInvocation {
             timestamp: value.timestamp.into(),
             function_name: value.function_name,
-            response: value.response,
+            response: value.response.into_value_and_type().into(),
             function_type: value.function_type.into(),
             entry_version: value.oplog_entry_version.into(),
         }
@@ -286,33 +266,15 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     async fn persist_durable_function_invocation(
         &mut self,
         function_name: String,
-        request: Vec<u8>,
-        response: Vec<u8>,
+        request: durability::ValueAndType,
+        response: durability::ValueAndType,
         function_type: durability::DurableFunctionType,
     ) -> anyhow::Result<()> {
         DurabilityHost::persist_durable_function_invocation(
             self,
             function_name,
-            &request,
-            &response,
-            function_type.into(),
-        )
-        .await;
-        Ok(())
-    }
-
-    async fn persist_typed_durable_function_invocation(
-        &mut self,
-        function_name: String,
-        request: durability::ValueAndType,
-        response: durability::ValueAndType,
-        function_type: durability::DurableFunctionType,
-    ) -> anyhow::Result<()> {
-        DurabilityHost::persist_typed_durable_function_invocation(
-            self,
-            function_name,
-            request.into(),
-            response.into(),
+            &HostRequest::Custom(request.into()),
+            &HostResponse::Custom(response.into()),
             function_type.into(),
         )
         .await;
@@ -324,21 +286,6 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<durability::PersistedDurableFunctionInvocation> {
         let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
         Ok(invocation.into())
-    }
-
-    async fn read_persisted_typed_durable_function_invocation(
-        &mut self,
-    ) -> anyhow::Result<PersistedTypedDurableFunctionInvocation> {
-        let invocation = DurabilityHost::read_persisted_durable_function_invocation(self).await?;
-        let response = invocation.response_as_value_and_type()?;
-        let untyped: durability::PersistedDurableFunctionInvocation = invocation.into();
-        Ok(PersistedTypedDurableFunctionInvocation {
-            timestamp: untyped.timestamp,
-            function_name: untyped.function_name,
-            response: response.into(),
-            function_type: untyped.function_type,
-            entry_version: untyped.entry_version,
-        })
     }
 }
 
@@ -391,38 +338,14 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     async fn persist_durable_function_invocation(
         &self,
         function_name: String,
-        request: &[u8],
-        response: &[u8],
+        request: &HostRequest,
+        response: &HostResponse,
         function_type: DurableFunctionType,
     ) {
         self.public_state
             .worker()
             .oplog()
-            .add_raw_imported_function_invoked(function_name, request, response, function_type)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to serialize and store durable function invocation: {err}")
-            });
-    }
-
-    async fn persist_typed_durable_function_invocation(
-        &self,
-        function_name: String,
-        request: ValueAndType,
-        response: ValueAndType,
-        function_type: DurableFunctionType,
-    ) {
-        let request = serialize(&request).unwrap_or_else(|err| {
-                panic!("failed to serialize request ({request:?}) for persisting durable function invocation: {err}")
-            }).to_vec();
-        let response = serialize(&response).unwrap_or_else(|err| {
-                panic!("failed to serialize response ({response:?}) for persisting durable function invocation: {err}")
-            }).to_vec();
-
-        self.public_state
-            .worker()
-            .oplog()
-            .add_raw_imported_function_invoked(function_name, &request, &response, function_type)
+            .add_imported_function_invoked(function_name, &request, &response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -441,20 +364,25 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::ImportedFunctionInvoked
             )?;
+            let payload = match oplog_entry {
+                OplogEntry::ImportedFunctionInvoked { response, .. } => Ok(response),
+                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "ImportedFunctionInvoked",
+                    format!("{oplog_entry:?}"),
+                )),
+            }?;
 
-            let bytes = self
+            let response = self
                 .public_state
                 .worker()
                 .oplog()
-                .get_raw_payload_of_entry(&oplog_entry)
+                .download_payload(payload)
                 .await
                 .map_err(|err| {
-                    WorkerExecutorError::unexpected_oplog_entry(
-                        "ImportedFunctionInvoked payload",
-                        err,
-                    )
-                })?
-                .unwrap();
+                    WorkerExecutorError::runtime(format!(
+                        "ImportedFunctionInvoked payload cannot be downloaded: {err}"
+                    ))
+                })?;
 
             match oplog_entry {
                 OplogEntry::ImportedFunctionInvoked {
@@ -465,7 +393,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 } => Ok(PersistedDurableFunctionInvocation {
                     timestamp,
                     function_name,
-                    response: bytes.to_vec(),
+                    response,
                     function_type: durable_function_type,
                     oplog_entry_version: OplogEntryVersion::V2,
                 }),
@@ -514,17 +442,15 @@ pub enum OplogEntryVersion {
     V2,
 }
 
-pub struct Durability<SOk, SErr> {
+pub struct Durability {
     interface: &'static str,
     function: &'static str,
     function_type: DurableFunctionType,
     begin_index: OplogIndex,
     durable_execution_state: DurableExecutionState,
-    _sok: PhantomData<SOk>,
-    _serr: PhantomData<SErr>,
 }
 
-impl<SOk, SErr> Durability<SOk, SErr> {
+impl Durability {
     pub async fn new(
         ctx: &mut impl DurabilityHost,
         interface: &'static str,
@@ -542,8 +468,6 @@ impl<SOk, SErr> Durability<SOk, SErr> {
             function_type,
             begin_index,
             durable_execution_state,
-            _sok: PhantomData,
-            _serr: PhantomData,
         })
     }
 
@@ -569,105 +493,61 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         }
     }
 
-    pub async fn persist<SIn, Ok, Err>(
+    pub async fn persist<Req, Resp>(
         &self,
         ctx: &mut impl DurabilityHost,
-        input: SIn,
-        result: Result<Ok, Err>,
-    ) -> Result<Ok, Err>
+        request: Req,
+        response: Resp,
+    ) -> Result<Resp, WorkerExecutorError>
     where
-        Ok: Clone,
-        Err: From<SErr> + From<WorkerExecutorError> + Send + Sync,
-        SIn: Debug + BinarySerializer + Send + Sync,
-        SErr: Debug
-            + BinarySerializer
-            + for<'a> From<&'a Err>
-            + From<WorkerExecutorError>
-            + Send
-            + Sync,
-        SOk: Debug + BinarySerializer + From<Ok> + Send + Sync,
+        Req: Into<HostRequest>,
+        Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>,
     {
-        let serializable_result: Result<SOk, SErr> = result
-            .as_ref()
-            .map(|result| result.clone().into())
-            .map_err(|err| err.into());
-
-        self.persist_serializable(ctx, input, serializable_result)
-            .await
-            .map_err(|err| {
-                let err: SErr = err.into();
-                let err: Err = err.into();
-                err
-            })?;
-        result
+        let response = self
+            .persist_raw(ctx, request.into(), response.into())
+            .await?;
+        Ok(response.try_into().unwrap()) // Assuming converting to HostResponse and back always succeeds
     }
 
-    pub async fn persist_serializable<SIn>(
+    pub async fn persist_raw(
         &self,
         ctx: &mut impl DurabilityHost,
-        input: SIn,
-        result: Result<SOk, SErr>,
-    ) -> Result<(), WorkerExecutorError>
-    where
-        SIn: Debug + BinarySerializer + Send + Sync,
-        SOk: Debug + BinarySerializer + Send + Sync,
-        SErr: Debug + BinarySerializer + Send + Sync,
-    {
+        request: HostRequest,
+        response: HostResponse,
+    ) -> Result<HostResponse, WorkerExecutorError> {
         if self.durable_execution_state.snapshotting_mode.is_none() {
             let function_name = self.function_name();
-            let serialized_input = serialize(&input).unwrap_or_else(|err| {
-                panic!("failed to serialize input ({input:?}) for persisting durable function invocation: {err}")
-            }).to_vec();
-            let serialized_result = serialize(&result).unwrap_or_else(|err| {
-                panic!("failed to serialize result ({result:?}) for persisting durable function invocation: {err}")
-            }).to_vec();
 
             ctx.persist_durable_function_invocation(
                 function_name.to_string(),
-                &serialized_input,
-                &serialized_result,
+                &request,
+                &response,
                 self.function_type.clone(),
             )
             .await;
             ctx.end_durable_function(&self.function_type, self.begin_index, false)
                 .await?;
         }
-        Ok(())
+        Ok(response)
     }
 
-    pub async fn persist_typed_value<SIn>(
+    pub async fn replay<Resp>(
         &self,
         ctx: &mut impl DurabilityHost,
-        input: SIn,
-        result: Result<SOk, SErr>,
-    ) -> Result<(), WorkerExecutorError>
+    ) -> Result<Resp, WorkerExecutorError>
     where
-        SIn: Debug + IntoValue + Send + Sync,
-        SOk: Debug + IntoValue + Send + Sync,
-        SErr: Debug + IntoValue + Send + Sync,
+        Resp: TryFrom<HostResponse, Error = String>,
     {
-        if self.durable_execution_state.snapshotting_mode.is_none() {
-            let function_name = self.function_name();
-            let input_value = input.into_value_and_type();
-            let result_value = result.into_value_and_type();
-
-            ctx.persist_typed_durable_function_invocation(
-                function_name.to_string(),
-                input_value,
-                result_value,
-                self.function_type.clone(),
-            )
-            .await;
-            ctx.end_durable_function(&self.function_type, self.begin_index, false)
-                .await?;
-        }
-        Ok(())
+        let response = self.replay_raw(ctx).await?;
+        response
+            .try_into()
+            .map_err(|err| WorkerExecutorError::unexpected_oplog_entry("HostResponse", err))
     }
 
     pub async fn replay_raw(
         &self,
         ctx: &mut impl DurabilityHost,
-    ) -> Result<(Bytes, OplogEntryVersion), WorkerExecutorError> {
+    ) -> Result<HostResponse, WorkerExecutorError> {
         let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
         let function_name = self.function_name();
@@ -676,38 +556,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
 
-        Ok((oplog_entry.response.into(), oplog_entry.oplog_entry_version))
-    }
-
-    pub async fn replay_serializable(
-        &self,
-        ctx: &mut impl DurabilityHost,
-    ) -> Result<Result<SOk, SErr>, WorkerExecutorError>
-    where
-        SOk: BinaryDeserializer,
-        SErr: BinaryDeserializer,
-    {
-        let (bytes, _) = self.replay_raw(ctx).await?;
-        let result: Result<SOk, SErr> = try_deserialize(&bytes)
-            .map_err(|err| {
-                WorkerExecutorError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
-            })?
-            .expect("Payload is empty");
-        Ok(result)
-    }
-
-    pub async fn replay<Ok, Err>(&self, ctx: &mut impl DurabilityHost) -> Result<Ok, Err>
-    where
-        Ok: From<SOk>,
-        Err: From<SErr> + From<WorkerExecutorError>,
-        SErr:
-            Debug + BinarySerializer + BinaryDeserializer + From<WorkerExecutorError> + Send + Sync,
-        SOk: Debug + BinarySerializer + BinaryDeserializer + Send + Sync,
-    {
-        Self::replay_serializable(self, ctx)
-            .await?
-            .map(|sok| sok.into())
-            .map_err(|serr| serr.into())
+        Ok(oplog_entry.response)
     }
 
     fn function_name(&self) -> String {

@@ -34,8 +34,13 @@ struct Key {
 
 #[derive(Debug, Clone)]
 enum Entry {
-    Directory { files: HashSet<String> },
-    File { data: Bytes, metadata: BlobMetadata },
+    Directory {
+        files: HashSet<String>,
+    },
+    File {
+        data: Vec<u8>,
+        metadata: BlobMetadata,
+    },
 }
 
 #[derive(Debug)]
@@ -65,7 +70,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -119,7 +124,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .data
             .read_async(&key, |_, entry| match entry {
                 Entry::File { data, .. } => {
-                    let stream = tokio_stream::once(Ok(data.clone()));
+                    let stream = tokio_stream::once(Ok(Bytes::from(data.clone())));
                     let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, String>> + Send>> =
                         Box::pin(stream);
                     Some(boxed)
@@ -169,7 +174,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
         let dir = path
             .parent()
@@ -193,10 +198,11 @@ impl BlobStorage for InMemoryBlobStorage {
             file: None,
         };
 
+        let size = data.len() as u64;
         let entry = Entry::File {
-            data: Bytes::copy_from_slice(data),
+            data,
             metadata: BlobMetadata {
-                size: data.len() as u64,
+                size,
                 last_modified_at: Timestamp::now_utc(),
             },
         };
@@ -241,11 +247,13 @@ impl BlobStorage for InMemoryBlobStorage {
         let data = stream
             .try_collect::<Vec<_>>()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .concat();
+        let size = data.len() as u64;
         let entry = Entry::File {
-            data: Bytes::from(data.concat()),
+            data,
             metadata: BlobMetadata {
-                size: data.iter().map(|b| b.len() as u64).sum(),
+                size,
                 last_modified_at: Timestamp::now_utc(),
             },
         };
