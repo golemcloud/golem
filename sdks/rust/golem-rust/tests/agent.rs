@@ -20,7 +20,6 @@ mod tests {
 
     #[agent_definition]
     trait Echo {
-        // TODO: While this is a valid rust syntax, there will still be warnings about unused constructor variables
         fn new(init: UserId) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
