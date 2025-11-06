@@ -43,8 +43,8 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{IntoValue, Value};
-use golem_wasm_derive::IntoValue;
+use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -183,6 +183,26 @@ impl IntoValue for Timestamp {
 
     fn get_type() -> AnalysedType {
         record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+    }
+}
+
+impl FromValue for Timestamp {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(fields) if fields.len() == 2 => {
+                let mut iter = fields.into_iter();
+                let seconds = u64::from_value(iter.next().unwrap())?;
+                let nanos = u32::from_value(iter.next().unwrap())?;
+                Ok(Self(
+                    iso8601_timestamp::Timestamp::UNIX_EPOCH
+                        .add(Duration::from_secs(seconds))
+                        .add(Duration::from_nanos(nanos as u64)),
+                ))
+            }
+            other => Err(format!(
+                "Expected a record with two fields for Timestamp, got {other:?}"
+            )),
+        }
     }
 }
 
@@ -357,6 +377,14 @@ impl RoutingTable {
     }
 }
 
+impl Display for RoutingTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Number of shards: {}", self.number_of_shards.value)?;
+        writeln!(f, "Pods used: {:?}", self.all())?;
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 pub struct RoutingTableEntry {
     shard_id: ShardId,
@@ -413,7 +441,7 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue)]
+#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue, FromValue)]
 #[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
@@ -968,6 +996,7 @@ pub struct TimestampedWorkerInvocation {
     Encode,
     Decode,
     IntoValue,
+    FromValue,
 )]
 #[serde(transparent)]
 pub struct AccountId {
@@ -1848,6 +1877,7 @@ impl FromStr for ComponentType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct Empty {}
 
 /// Key that can be used to identify a component file.

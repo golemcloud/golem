@@ -26,6 +26,7 @@ use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]
 pub trait PluginServiceClient: Send + Sync {
@@ -48,7 +49,7 @@ pub trait PluginServiceClient: Send + Sync {
 pub struct PluginServiceClientDefault {
     plugin_service_client: GrpcClient<
         golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient<
-            Channel,
+            OtelGrpcService<Channel>,
         >,
     >,
     retry_config: RetryConfig,

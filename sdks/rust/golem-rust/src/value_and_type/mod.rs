@@ -18,13 +18,13 @@
 pub mod type_builder;
 
 use crate::value_and_type::type_builder::WitTypeBuilderExtensions;
-use golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm_rpc::{WitType, WitValue, WitValueBuilderExtensions};
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::{WitType, WitValue, WitValueBuilderExtensions};
 use std::collections::Bound;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
+pub use golem_wasm::{NodeBuilder, WitValueExtractor};
 pub use type_builder::TypeNodeBuilder;
 
 /// Specific trait to convert a type into a pair of `WitValue` and `WitType`.
@@ -372,6 +372,36 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
         let mut builder = builder.result(None, None);
         builder = S::add_to_type_builder(builder.ok());
+        builder = builder.err_unit();
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for Result<(), ()> {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        match extractor.result() {
+            Some(Ok(Some(_))) => Err("Expected unit Ok case".to_string()),
+            Some(Ok(None)) => Ok(Ok(())),
+            Some(Err(Some(_))) => Err("Expected unit Err case".to_string()),
+            Some(Err(None)) => Ok(Err(())),
+            None => Err("Expected Result".to_string()),
+        }
+    }
+}
+
+impl IntoValue for Result<(), ()> {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        match self {
+            Ok(_) => builder.result_ok().finish().finish(),
+            Err(_) => builder.result_err().finish().finish(),
+        }
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let mut builder = builder.result(None, None);
+        builder = builder.ok_unit();
         builder = builder.err_unit();
         builder.finish()
     }

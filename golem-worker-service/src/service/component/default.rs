@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -58,6 +59,13 @@ pub trait ComponentService: Send + Sync {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
+
+    /// Gets the latest cached metadata of a given component, if any.
+    ///
+    /// This is guaranteed to not make any remote service calls, but not guaranteed it's returning
+    /// the most up-to-date information about which component version is the latest. If there is
+    /// no cached information about this component at all, it returns None.
+    async fn get_latest_cached_by_id(&self, component_id: &ComponentId) -> Option<Component>;
 
     async fn get_latest_by_name(
         &self,
@@ -127,7 +135,25 @@ impl ComponentService for CachedComponentService {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component> {
-        self.inner.get_latest_by_id(component_id, auth_ctx).await
+        let result = self.inner.get_latest_by_id(component_id, auth_ctx).await;
+        if let Ok(result) = &result {
+            self.store(result).await;
+        }
+        result
+    }
+
+    async fn get_latest_cached_by_id(&self, component_id: &ComponentId) -> Option<Component> {
+        let mut keys = self.cache.keys().await;
+        keys.retain(|id| &id.component_id == component_id);
+        keys.sort_by_key(|id| id.version);
+        for idx in (0..keys.len()).rev() {
+            let key = &keys[idx];
+            let metadata = self.cache.try_get(key).await;
+            if metadata.is_some() {
+                return metadata;
+            }
+        }
+        None
     }
 
     async fn get_latest_by_name(
@@ -136,9 +162,14 @@ impl ComponentService for CachedComponentService {
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component> {
-        self.inner
+        let result = self
+            .inner
             .get_latest_by_name(component_id, namespace, auth_ctx)
-            .await
+            .await;
+        if let Ok(result) = &result {
+            self.store(result).await;
+        }
+        result
     }
 
     async fn get_all_by_name(
@@ -147,9 +178,16 @@ impl ComponentService for CachedComponentService {
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Vec<Component>> {
-        self.inner
+        let results = self
+            .inner
             .get_all_by_name(component_id, namespace, auth_ctx)
-            .await
+            .await;
+        if let Ok(results) = &results {
+            for result in results {
+                self.store(result).await;
+            }
+        }
+        results
     }
 
     async fn create_or_update_constraints(
@@ -187,11 +225,21 @@ impl CachedComponentService {
             ),
         }
     }
+
+    async fn store(&self, component: &Component) {
+        let component_clone = component.clone();
+        let _ = self
+            .cache
+            .get_or_insert_simple(&component.versioned_component_id, move || async {
+                Ok(component_clone)
+            })
+            .await;
+    }
 }
 
 #[derive(Clone)]
 pub struct RemoteComponentService {
-    client: GrpcClient<ComponentServiceClient<Channel>>,
+    client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     retry_config: RetryConfig,
 }
 
@@ -435,6 +483,10 @@ impl ComponentService for RemoteComponentService {
             Self::is_retriable,
         )
         .await
+    }
+
+    async fn get_latest_cached_by_id(&self, _component_id: &ComponentId) -> Option<Component> {
+        None
     }
 
     async fn get_latest_by_name(

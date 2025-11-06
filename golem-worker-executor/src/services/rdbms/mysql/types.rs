@@ -18,10 +18,10 @@ use bincode::{Decode, Encode};
 use bit_vec::BitVec;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum DbColumnType {
     Boolean,
     Tinyint,
@@ -112,7 +112,7 @@ impl RdbmsIntoValueAndType for DbColumnType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub enum DbValue {
     Boolean(bool),
     Tinyint(i8),
@@ -207,7 +207,7 @@ impl RdbmsIntoValueAndType for DbValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue, FromValue)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,

@@ -26,9 +26,9 @@ pub mod bindings {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm_rpc::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm_rpc::wasi::clocks::wall_clock
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
+            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock
         }
     });
 }
@@ -44,9 +44,9 @@ pub mod load_snapshot {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm_rpc::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm_rpc::wasi::clocks::wall_clock,
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
+            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
 
             "golem:api/host@1.1.7": crate::bindings::golem::api::host,
             "golem:api/oplog@1.1.7": crate::bindings::golem::api::oplog,
@@ -90,9 +90,9 @@ pub mod save_snapshot {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm_rpc::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm_rpc::wasi::clocks::wall_clock,
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
+            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
 
             "golem:api/host@1.1.7": crate::bindings::golem::api::host,
             "golem:api/oplog@1.1.7": crate::bindings::golem::api::oplog,
@@ -136,7 +136,7 @@ pub mod golem_agentic {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
         }
     });
 
@@ -154,9 +154,9 @@ pub mod oplog_processor {
         generate_unused_types: true,
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
-            "wasi:io/poll@0.2.3": golem_wasm_rpc::wasi::io::poll,
-            "wasi:clocks/wall-clock@0.2.3": golem_wasm_rpc::wasi::clocks::wall_clock,
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
+            "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
+            "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
 
             "golem:api/host@1.1.7": crate::bindings::golem::api::host,
             "golem:api/oplog@1.1.7": crate::bindings::golem::api::oplog,
@@ -206,7 +206,7 @@ pub mod value_and_type;
 
 use bindings::golem::api::host::*;
 
-pub use golem_wasm_rpc as wasm_rpc;
+pub use golem_wasm as wasm_rpc;
 
 pub use bindings::golem::api::host::{fork, oplog_commit};
 pub use bindings::golem::api::host::{ForkResult, PersistenceLevel};

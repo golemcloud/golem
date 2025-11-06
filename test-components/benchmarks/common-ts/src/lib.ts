@@ -38,8 +38,8 @@ export function oplogHeavy(length: number, persistenceOn: boolean): number {
 
         let result = 0;
         for (let i = 0; i < length; i++) {
-            const time = Date.now();
-            result ^= time;
+            const value = Math.random();
+            result ^= value;
         }
         return result;
     });

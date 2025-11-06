@@ -4,6 +4,5 @@
   "appCommonSkipIfExists": "common-ts/golem.yaml",
   "requiresGolemHostWIT": false,
   "requiresWASI": false,
-  "witDepsPaths": [],
-  "transform": false
+  "witDepsPaths": []
 }

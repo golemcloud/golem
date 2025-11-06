@@ -18,7 +18,7 @@ use bincode::{Decode, Encode};
 use golem_common::model::agent::DataValue;
 use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
 use golem_wasm::{ValueAndType, WitValue};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableInvokeResultV1 {
@@ -76,7 +76,7 @@ pub struct EnrichedSerializableScheduleInvocationRequest {
     pub datetime: SerializableDateTime,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
 #[wit_transparent]
 pub struct SerializableScheduleId {
     pub data: Vec<u8>,

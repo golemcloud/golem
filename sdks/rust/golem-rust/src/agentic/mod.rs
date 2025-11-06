@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::AgentId;
+pub use agent::*;
+pub use agent_arg_schema::*;
+pub use agent_initiator::*;
+pub use agent_registry::*;
+pub use errors::*;
+pub use resolved_agent::*;
 
 mod agent;
+mod agent_arg_schema;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
-mod agent_type_name;
-
-pub struct ResolvedAgent {
-    pub agent: Box<dyn agent::Agent>,
-    pub id: AgentId,
-}
+mod errors;
+mod resolved_agent;
