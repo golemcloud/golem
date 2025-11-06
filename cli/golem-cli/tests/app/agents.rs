@@ -111,7 +111,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
         let uuid = Uuid::new_v4().to_string();
 
-        let agent_constructor = format!("rust:agent/bar-agent(some(\"{uuid}\"))");
+        let agent_constructor = format!("rust:agent/foo-agent(some(\"{uuid}\"))");
 
         let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
         cmd.extend_from_slice(args);
@@ -277,25 +277,25 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     // cli invoke gets confused with `fun-result` and `fun-result-unit-left` etc, and therefore fully qualified function name.
     run_and_assert(
         &ctx,
-        "rust:agent/bar-agent.{fun-result}",
+        "rust:agent/foo-agent.{fun-result}",
         &["ok(\"success\")"],
     )
     .await;
     run_and_assert(
         &ctx,
-        "rust:agent/bar-agent.{fun-result}",
+        "rust:agent/foo-agent.{fun-result}",
         &["err(\"failed\")"],
     )
     .await;
 
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    // run_and_assert(&ctx, "r4ust:agent/bar-agent.{fun-result-unit-ok}", &["ok"]).await;
+    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
 
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    //run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-err}", &["err"]).await;
+    //run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
 
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // run_and_assert(&ctx, "rust:agent/bar-agent.{fun-result-unit-both}", &["ok"]).await;
+    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
 
     let result_complex_arg = r#"
     ok({
@@ -315,7 +315,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(
         &ctx,
-        "rust:agent/bar-agent.{fun-option}",
+        "rust:agent/foo-agent.{fun-option}",
         &["some(\"optional value\")"],
     )
     .await;
@@ -336,7 +336,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(
         &ctx,
-        "rust:agent/bar-agent.{fun-option-complex}",
+        "rust:agent/foo-agent.{fun-option-complex}",
         &[option_complex_arg],
     )
     .await;

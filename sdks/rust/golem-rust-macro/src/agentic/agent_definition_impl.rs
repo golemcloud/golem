@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use heck::ToKebabCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
 
 use crate::agentic::helpers::{
-    convert_to_kebab, get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
+    get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -342,8 +343,8 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             }
             
             let method_name = &method.sig.ident;
-            let agent_type_name_kebab = convert_to_kebab(&agent_type_name);
-            let method_name_str_kebab = convert_to_kebab(&method_name.to_string());
+            let agent_type_name_kebab = agent_type_name.to_kebab_case();
+            let method_name_str_kebab = method_name.to_string().to_kebab_case();
 
             // To form remote method name, we convert this back to kebab-case similar to TS
             let remote_method_name = format!(
