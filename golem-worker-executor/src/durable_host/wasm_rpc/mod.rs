@@ -15,7 +15,6 @@
 pub mod serialized;
 
 use self::serialized::{SerializableScheduleId, SerializableScheduleInvocationRequest};
-use crate::durable_host::serialized::SerializableDateTime;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,

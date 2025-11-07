@@ -39,15 +39,17 @@ use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::SafeDisplay;
+use anyhow::anyhow;
 use desert_rust::{
-    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
+    DeserializationContext, SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
+use golem_wasm::analysis::analysed_type::{field, r#enum, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
-use http::Uri;
+use http::{HeaderName, HeaderValue, Uri, Version};
+use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
@@ -58,6 +60,14 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
+use wasmtime_wasi::p2::bindings::filesystem;
+use wasmtime_wasi::p2::FsError;
+use wasmtime_wasi::StreamError;
+use wasmtime_wasi_http::bindings::http::types::{
+    DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
+};
+use wasmtime_wasi_http::body::HostIncomingBody;
+use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
 
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
@@ -445,7 +455,7 @@ impl Display for ShardAssignment {
 }
 
 #[derive(Clone, Debug, BinaryCodec, Eq, Hash, PartialEq, IntoValue, FromValue)]
-#[desert(evolution())]
+#[desert(transparent)]
 #[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
@@ -502,7 +512,7 @@ impl<'de> Deserialize<'de> for IdempotencyKey {
     where
         D: Deserializer<'de>,
     {
-        let value = <std::string::String as Deserialize>::deserialize(deserializer)?;
+        let value = <String as Deserialize>::deserialize(deserializer)?;
         Ok(IdempotencyKey { value })
     }
 }
@@ -550,36 +560,9 @@ impl WorkerMetadata {
     }
 }
 
-impl IntoValue for WorkerMetadata {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.worker_id.into_value(),
-            self.args.into_value(),
-            self.env.into_value(),
-            self.wasi_config_vars.into_value(),
-            self.last_known_status.status.into_value(),
-            self.last_known_status.component_version.into_value(),
-            0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("worker-id", WorkerId::get_type()),
-            field("args", list(str())),
-            field("env", list(tuple(vec![str(), str()]))),
-            field("wasi-config-vars", HashMap::<String, String>::get_type()),
-            field("status", WorkerStatus::get_type()),
-            field("component-version", u64()),
-            field("retry-count", u64()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[serde(rename_all = "camelCase")]
-#[derive(poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
@@ -701,6 +684,7 @@ pub struct SuccessfulUpdateRecord {
     Deserialize,
     BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Enum,
 )]
 #[desert(evolution())]
@@ -890,9 +874,7 @@ impl Display for AccountId {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -913,9 +895,7 @@ impl Display for WorkerNameFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -936,9 +916,7 @@ impl Display for WorkerStatusFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[desert(evolution())]
@@ -959,9 +937,7 @@ impl Display for WorkerVersionFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[desert(evolution())]
@@ -982,9 +958,7 @@ impl Display for WorkerCreatedAtFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[desert(evolution())]
@@ -1010,9 +984,7 @@ impl Display for WorkerEnvFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -1042,9 +1014,7 @@ impl Display for WorkerWasiConfigVarsFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -1072,9 +1042,7 @@ impl Display for WorkerAndFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -1102,9 +1070,7 @@ impl Display for WorkerOrFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -1126,9 +1092,7 @@ impl Display for WorkerNotFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Union,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Union)]
 #[desert(evolution())]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -1532,9 +1496,7 @@ impl From<FilterComparator> for i32 {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Default, poem_openapi::Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Default, Object)]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -1734,7 +1696,7 @@ impl FromStr for ComponentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -1814,7 +1776,7 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
     where
         D: Deserializer<'de>,
     {
-        let str = <std::string::String as Deserialize>::deserialize(deserializer)?;
+        let str = <String as Deserialize>::deserialize(deserializer)?;
         Self::from_abs_str(&str).map_err(de::Error::custom)
     }
 }
@@ -1850,7 +1812,7 @@ impl ComponentFilePermissions {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InitialComponentFile {
@@ -1865,7 +1827,7 @@ impl InitialComponentFile {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Clone, Debug, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentFilePathWithPermissions {
@@ -1885,7 +1847,7 @@ impl Display for ComponentFilePathWithPermissions {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Clone, Debug, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentFilePathWithPermissionsList {
@@ -1997,60 +1959,120 @@ pub enum ForkResult {
     Forked,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, BinaryCodec, Serialize, Deserialize, Union, IntoValue, FromValue,
+)]
 #[desert(evolution())]
-pub struct ObjectMetadata {
-    pub name: String,
-    pub container: String,
-    pub created_at: u64,
-    pub size: u64,
+#[serde(rename_all = "camelCase")]
+#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
+pub enum RevertWorkerTarget {
+    RevertToOplogIndex(RevertToOplogIndex),
+    RevertLastInvocations(RevertLastInvocations),
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
+    type Error = String;
 
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct SerializableDateTime {
-    pub seconds: u64,
-    pub nanoseconds: u32,
-}
-
-impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for SerializableDateTime {
-    fn from(value: wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+    ) -> Result<Self, Self::Error> {
+        match value.target {
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
+                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
+            }
+            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
+                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
+            }
+            None => Err("Missing field: target".to_string()),
         }
     }
 }
 
-impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
-    fn from(value: SerializableDateTime) -> Self {
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
+impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
+    fn from(value: RevertWorkerTarget) -> Self {
+        match value {
+            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
+            },
+            RevertWorkerTarget::RevertLastInvocations(target) => Self {
+                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
+            },
         }
     }
 }
 
-impl From<SerializableDateTime> for SystemTime {
-    fn from(value: SerializableDateTime) -> Self {
-        SystemTime::UNIX_EPOCH.add(Duration::new(value.seconds, value.nanoseconds))
-    }
-}
-
-impl From<SystemTime> for SerializableDateTime {
-    fn from(value: SystemTime) -> Self {
-        let duration = value.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-        Self {
-            seconds: duration.as_secs(),
-            nanoseconds: duration.subsec_nanos(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    Object,
+    IntoValue,
+    FromValue,
+)]
 #[desert(evolution())]
-pub struct SerializableFileTimes {
-    pub data_access_timestamp: Option<SerializableDateTime>,
-    pub data_modification_timestamp: Option<SerializableDateTime>,
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct RevertToOplogIndex {
+    pub last_oplog_index: OplogIndex,
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
+        }
+    }
+}
+
+impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
+    fn from(value: RevertToOplogIndex) -> Self {
+        Self {
+            last_oplog_index: u64::from(value.last_oplog_index) as i64,
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    Object,
+    IntoValue,
+    FromValue,
+)]
+#[desert(evolution())]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct RevertLastInvocations {
+    pub number_of_invocations: u64,
+}
+
+impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
+    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as u64,
+        }
+    }
+}
+
+impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
+    fn from(value: RevertLastInvocations) -> Self {
+        Self {
+            number_of_invocations: value.number_of_invocations as i64,
+        }
+    }
 }

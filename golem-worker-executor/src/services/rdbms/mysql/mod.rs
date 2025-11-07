@@ -35,6 +35,18 @@ impl MysqlType {
 impl RdbmsType for MysqlType {
     type DbColumn = types::DbColumn;
     type DbValue = types::DbValue;
+
+    fn durability_connection_interface() -> &'static str {
+        "rdbms::mysql::db-connection"
+    }
+
+    fn durability_transaction_interface() -> &'static str {
+        "rdbms::mysql::db-transaction"
+    }
+
+    fn durability_result_stream_interface() -> &'static str {
+        "rdbms::mysql::db-result-stream"
+    }
 }
 
 impl Display for MysqlType {

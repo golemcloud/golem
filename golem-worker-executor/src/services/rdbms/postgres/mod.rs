@@ -35,6 +35,18 @@ impl PostgresType {
 impl RdbmsType for PostgresType {
     type DbColumn = types::DbColumn;
     type DbValue = types::DbValue;
+
+    fn durability_connection_interface() -> &'static str {
+        "rdbms::postgres::db-connection"
+    }
+
+    fn durability_transaction_interface() -> &'static str {
+        "rdbms::postgres::db-transaction"
+    }
+
+    fn durability_result_stream_interface() -> &'static str {
+        "rdbms::postgres::db-result-stream"
+    }
 }
 
 impl Display for PostgresType {

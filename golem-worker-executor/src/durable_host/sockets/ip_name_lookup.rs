@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
+use crate::durable_host::serialized::SerializableIpAddresses;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
@@ -62,7 +62,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let durability = Durability::<SerializableIpAddresses, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "sockets::ip_name_lookup",
             "resolve_addresses",
@@ -76,7 +76,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .try_trigger_retry(self, &result)
                 .await
                 .map_err(SocketError::trap)?;
-            durability.persist(self, name, result).await
+            durability.persist(self, HostRequestSocketsResolveName { name }, result).await
         } else {
             durability.replay(self).await
         };

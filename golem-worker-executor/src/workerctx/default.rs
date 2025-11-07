@@ -393,12 +393,12 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }

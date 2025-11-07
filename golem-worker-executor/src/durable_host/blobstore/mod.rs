@@ -25,7 +25,6 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::types::ContainerEntry;
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::preview2::wasi::blobstore::blobstore::{
     Container, ContainerName, Error, Host, ObjectId,

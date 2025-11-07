@@ -238,24 +238,23 @@ pub mod proto {
 
     impl IntoValue for UpdateMode {
         fn into_value(self) -> Value {
-            Value::String(match self {
-                UpdateMode::Automatic => "Automatic".to_string(),
-                UpdateMode::Manual => "Manual".to_string(),
-            })
+            match self {
+                UpdateMode::Automatic => Value::Enum(0),
+                UpdateMode::Manual => Value::Enum(1),
+            }
         }
 
         fn get_type() -> AnalysedType {
-            analysed_type::str()
+            analysed_type::r#enum(&["automatic", "snapshot-based"])
         }
     }
 
     impl FromValue for UpdateMode {
         fn from_value(value: Value) -> Result<Self, String> {
-            let str = String::from_value(value)?;
-            match str.as_str() {
-                "Automatic" => Ok(Self::Automatic),
-                "Manual" => Ok(Self::Manual),
-                other => Err(format!("Invalid update mode: {other}")),
+            match value {
+                Value::Enum(0) => Ok(UpdateMode::Automatic),
+                Value::Enum(1) => Ok(UpdateMode::Manual),
+                _ => Err(format!("Unexpected value for UpdateMode: {value:?}")),
             }
         }
     }

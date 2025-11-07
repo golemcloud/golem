@@ -67,6 +67,15 @@ impl FromValue for u64 {
     }
 }
 
+impl FromValue for usize {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::U64(value) => Ok(value as usize),
+            _ => Err(format!("Expected usize value, got {value:?}")),
+        }
+    }
+}
+
 impl FromValue for i8 {
     fn from_value(value: Value) -> Result<Self, String> {
         match value {

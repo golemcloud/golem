@@ -18,10 +18,10 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use golem_common::model::oplog::types::ObjectMetadata;
 use golem_common::model::ProjectId;
 
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
-use golem_wasm_derive::{FromValue, IntoValue};
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]

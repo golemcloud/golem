@@ -90,6 +90,8 @@ pub trait PromiseService: Send + Sync {
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
+    /// Completes a promise with the given payload.
+    /// If the promise was not completed before, it returns true. If the promise was completed before, it returns false.
     async fn complete(
         &self,
         promise_id: PromiseId,

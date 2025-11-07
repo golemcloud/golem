@@ -29,11 +29,8 @@ use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters,
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
-};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, RevertWorkerTarget, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::{Value, ValueAndType, WitValue};
 use http::Uri;
 use std::collections::{BTreeMap, HashMap};

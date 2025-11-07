@@ -22,7 +22,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(Ok(self
             .state
             .wasi_config_vars
-            .read()?
+            .read()
+            .unwrap()
             .get(&key)
             .cloned()))
     }
@@ -31,7 +32,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(Ok(self
             .state
             .wasi_config_vars
-            .read()?
+            .read()
+            .unwrap()
             .clone()
             .into_iter()
             .collect()))

@@ -35,12 +35,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let result_in_nanos = Host::now(&mut self.as_wasi_view()).await?;
+            let nanos = Host::now(&mut self.as_wasi_view()).await?;
             durability
                 .persist(
                     self,
                     HostRequestNoInput {},
-                    HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                    HostResponseMonotonicClockTimestamp { nanos },
                 )
                 .await
         } else {
@@ -60,12 +60,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
-            let result_in_nanos = Host::resolution(&mut self.as_wasi_view()).await?;
+            let nanos = Host::resolution(&mut self.as_wasi_view()).await?;
             durability
                 .persist(
                     self,
                     HostRequestNoInput {},
-                    HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                    HostResponseMonotonicClockTimestamp { nanos },
                 )
                 .await
         } else {
@@ -94,12 +94,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let now = {
             if durability.is_live() {
-                let result_in_nanos = Host::now(&mut self.as_wasi_view()).await?;
+                let nanos = Host::now(&mut self.as_wasi_view()).await?;
                 durability
                     .persist(
                         self,
                         HostRequestMonotonicClockDuration { duration_in_nanos },
-                        HostResponseMonotonicClockTimestamp { result_in_nanos: nanos },
+                        HostResponseMonotonicClockTimestamp { nanos },
                     )
                     .await
             } else {

@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
 use golem_common::model::agent::bindings::golem::agent::common::AgentError;
 use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
 use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::model::agent::{AgentId, RegisteredAgentType};
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::agent::AgentId;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestNoInput,
+    HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
+};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<host::RegisteredAgentType>> {
-        let durability = Durability::<Vec<RegisteredAgentType>, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "golem_agent",
             "get_all_agent_types",
@@ -33,16 +36,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
         let result = if durability.is_live() {
             let project_id = &self.owned_worker_id.project_id;
-            let result = self.agent_types_service().get_all(project_id).await;
+            let result = self
+                .agent_types_service()
+                .get_all(project_id)
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, (), result).await
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseGolemAgentAgentTypes { result },
+                )
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(result) => Ok(result.into_iter().map(|r| r.into()).collect()),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(anyhow!(err)),
         }
     }
 
@@ -50,7 +63,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
     ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
-        let durability = Durability::<Option<RegisteredAgentType>, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "golem_agent",
             "get_agent_type",
@@ -62,18 +75,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .agent_types_service()
                 .get(project_id, &agent_type_name)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
             durability
-                .persist(self, agent_type_name.clone(), result)
+                .persist(
+                    self,
+                    HostRequestGolemAgentGetAgentType { agent_type_name },
+                    HostResponseGolemAgentAgentType { result },
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(result) => Ok(result.map(|r| r.into())),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(anyhow!(err)),
         }
     }
 

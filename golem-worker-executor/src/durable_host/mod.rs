@@ -35,7 +35,6 @@ mod sockets;
 pub mod wasm_rpc;
 
 use self::golem::v1x::GetPromiseResultEntry;
-use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
@@ -87,6 +86,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::types::SerializableHttpRequest;
 use golem_common::model::oplog::{
     DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
@@ -163,7 +163,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -1081,7 +1081,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .on_worker_update_succeeded(
-                                    &description,
+                                    target_version,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
@@ -1169,7 +1169,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let component_metadata = self.component_metadata().clone();
 
                             self.on_worker_update_succeeded(
-                                &pending_update.description,
+                                target_version,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
@@ -1344,11 +1344,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
-                .iter()
-                .map(|value| value.clone().into())
-                .collect();
-
             let stack = self.get_current_invocation_context().await;
 
             self.public_state
@@ -1356,7 +1351,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .oplog()
                 .add_exported_function_invoked(
                     full_function_name.to_string(),
-                    &proto_function_input,
+                    &function_input,
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
@@ -1586,11 +1581,10 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
-        let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
         let entry = OplogEntry::successful_update(
             target_version,

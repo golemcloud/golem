@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::http::serialized::{SerializableHttpMethod, SerializableHttpRequest};
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
@@ -30,6 +29,7 @@ use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
+use golem_common::model::oplog::types::{SerializableHttpMethod, SerializableHttpRequest};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn handle(

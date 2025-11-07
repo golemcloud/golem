@@ -857,7 +857,15 @@ pub struct AgentTypes {
 }
 
 #[derive(
-    Debug, Clone, BinaryCodec, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[desert(evolution())]
 #[oai(rename_all = "camelCase")]

@@ -12,26 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed};
 use wasmtime_wasi::p2::bindings::random::insecure_seed::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {
-        let durability = Durability::<(u64, u64), SerializableError>::new(
+        let durability = Durability::new(
             self,
-            "golem random::insecure_seed",
+            "random::insecure_seed",
             "insecure_seed",
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        if durability.is_live() {
-            let result = Host::insecure_seed(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = Host::insecure_seed(&mut self.as_wasi_view()).await?; // this supposed to never fail
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseRandomSeed {
+                        lo: result.0,
+                        hi: result.1,
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok((result.lo, result.hi))
     }
 }

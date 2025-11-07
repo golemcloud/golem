@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::preview2::golem_api_1_x::host::ForkResult;
-use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -343,7 +341,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
-        agent_types: Arc<dyn AgentTypesService>,
+        agent_types: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {

@@ -12,18 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod types;
+
+use crate::model::agent::RegisteredAgentType;
+use crate::model::oplog::payload::types::{
+    FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
+};
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::PayloadId;
-use crate::model::{ForkResult, ObjectMetadata, SerializableDateTime, SerializableFileTimes};
+use crate::model::{
+    ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
+};
 use crate::oplog_payload;
 use crate::serialization::serialize;
 use desert_rust::{
     BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
+use std::collections::HashMap;
 use std::fmt::Debug;
+use uuid::Uuid;
+use crate::model::oplog::types::{AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableIpAddresses, SerializableStreamError};
 
 oplog_payload! {
     HostRequest => {
@@ -62,8 +74,70 @@ oplog_payload! {
         FileSystemPath {
             path: String
         },
+        GolemApiAgentId {
+            agent_id: WorkerId
+        },
+        GolemApiComponentSlug {
+            component_slug: String
+        },
+        GolemApiComponentSlugAndAgentName {
+            component_slug: String,
+            agent_name: String
+        },
         GolemApiFork {
             name: String,
+        },
+        GolemApiForkAgent {
+            source_agent_id: WorkerId,
+            target_agent_id: WorkerId,
+            oplog_index_cut_off: OplogIndex
+        },
+        GolemApiPromiseId {
+            promise_id: PromiseId
+        },
+        GolemApiRevertAgent {
+            agent_id: WorkerId,
+            target: RevertWorkerTarget
+        },
+        GolemApiUpdateAgent {
+            agent_id: WorkerId,
+            target_version: ComponentVersion,
+            mode: UpdateMode
+        },
+        GolemAgentGetAgentType {
+            agent_type_name: String
+        },
+        HttpRequest {
+            request: SerializableHttpRequest
+        },
+        KVBucket {
+            bucket: String
+        },
+        KVBucketAndKey {
+            bucket: String,
+            key: String
+        },
+        KVBucketAndKeys {
+            bucket: String,
+            keys: Vec<String>
+        },
+        KVBucketKeyAndSize {
+            bucket: String,
+            key: String,
+            length: usize
+        },
+        KVBucketAndKeySizePairs {
+            bucket: String,
+            keys: Vec<(String, usize)>,
+        },
+        PollCount {
+            count: usize
+        },
+        RandomBytes {
+            length: u64
+        },
+        SocketsResolveName {
+            name: String
         },
     }
 }
@@ -98,10 +172,89 @@ oplog_payload! {
             time: SerializableDateTime,
         },
         FileSystemStat {
-            result: Result<SerializableFileTimes, String>,
+            result: Result<SerializableFileTimes, FileSystemError>,
+        },
+        GolemApiAgentId {
+            result: Result<Option<WorkerId>, String>
+        },
+        GolemApiAgentMetadata {
+            metadata: Option<AgentMetadataForGuests>
+        },
+        GolemApiSelfAgentMetadata {
+            metadata: AgentMetadataForGuests
+        },
+        GolemApiComponentId {
+            result: Result<Option<ComponentId>, String>
         },
         GolemApiFork {
             result: Result<ForkResult, String>,
+        },
+        GolemApiIdempotencyKey {
+            uuid: Uuid
+        },
+        GolemApiPromiseId {
+            promise_id: PromiseId
+        },
+        GolemApiPromiseCompletion {
+            completed: bool
+        },
+        GolemApiPromiseResult {
+            result: Option<Vec<u8>>
+        },
+        GolemApiUnit {
+            result: Result<(), String>,
+        },
+        GolemAgentAgentTypes {
+            result: Result<Vec<RegisteredAgentType>, String>
+        },
+        GolemAgentAgentType {
+            result: Result<Option<RegisteredAgentType>, String>
+        },
+        HttpFutureTrailersGet {
+            result:  Result<Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableHttpErrorCode>, ()>>, String>
+        },
+        HttpResponse {
+            response: SerializableHttpResponse
+        },
+        KVGet {
+            result: Result<Option<Vec<u8>>, String>
+        },
+        KVGetMany {
+            result: Result<Vec<Option<Vec<u8>>>, String>
+        },
+        KVDelete {
+            result: Result<bool, String>
+        },
+        KVKeys {
+            result: Result<Vec<String>, String>
+        },
+        KVUnit {
+            result: Result<(), String>
+        },
+        PollReady {
+            result: Result<bool, String>
+        },
+        PollResult {
+            result: Result<Vec<u32>, String>
+        },
+        RandomBytes {
+            bytes: Vec<u8>
+        },
+        RandomU64 {
+            value: u64
+        },
+        RandomSeed {
+            lo: u64,
+            hi: u64
+        },
+        SocketsResolveName {
+            result: Result<SerializableIpAddresses, SerializableSocketError>
+        },
+        StreamChunk {
+            result: Result<Vec<u8>, SerializableStreamError>
+        },
+        StreamSkip {
+            result: Result<u64, SerializableStreamError>
         }
     }
 }

@@ -14,14 +14,8 @@
 
 pub mod wit;
 
-use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
-};
-use crate::durable_host::rdbms::serialized::RdbmsRequest;
-use crate::durable_host::serialized::{
-    SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddresses,
-    SerializableStreamError,
-};
+use crate::durable_host::rdbms::rdbms::RdbmsRequest;
+use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
 use crate::durable_host::wasm_rpc::serialized::{
     EnrichedSerializableInvokeRequest, EnrichedSerializableScheduleInvocationRequest,
     SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
@@ -67,7 +61,6 @@ use golem_common::model::{
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };

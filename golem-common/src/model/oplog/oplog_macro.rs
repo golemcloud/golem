@@ -124,6 +124,12 @@ macro_rules! oplog_payload {
             }
         }
 
+        impl From<ValueAndType> for $typename {
+            fn from(value_and_type: ValueAndType) -> Self {
+                Self::Custom(value_and_type)
+            }
+        }
+
         $(ident_mash::mash! {
             inner_name = $typename + $case =>
 

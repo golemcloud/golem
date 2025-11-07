@@ -327,7 +327,7 @@ pub trait UpdateManagement {
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     );

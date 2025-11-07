@@ -12,42 +12,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestNoInput, HostRequestRandomBytes, HostResponseRandomBytes,
+    HostResponseRandomU64,
+};
 use wasmtime_wasi::p2::bindings::random::random::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn get_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
-        let durability = Durability::<Vec<u8>, SerializableError>::new(
+    async fn get_random_bytes(&mut self, length: u64) -> anyhow::Result<Vec<u8>> {
+        let durability = Durability::new(
             self,
-            "golem random",
+            "random",
             "get_random_bytes",
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        if durability.is_live() {
-            let result = Host::get_random_bytes(&mut self.as_wasi_view(), len).await;
-            durability.persist(self, len, result).await
+        let result = if durability.is_live() {
+            let bytes = Host::get_random_bytes(&mut self.as_wasi_view(), length).await?; // this supposed to never fail
+            durability
+                .persist(
+                    self,
+                    HostRequestRandomBytes { length },
+                    HostResponseRandomBytes { bytes },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.bytes)
     }
 
     async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
-        let durability = Durability::<u64, SerializableError>::new(
+        let durability = Durability::new(
             self,
-            "golem random",
+            "random",
             "get_random_u64",
             DurableFunctionType::ReadLocal,
         )
         .await?;
-        if durability.is_live() {
-            let result = Host::get_random_u64(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let value = Host::get_random_u64(&mut self.as_wasi_view()).await?; // this supposed to never fail
+            durability
+                .persist(self, HostRequestNoInput {}, HostResponseRandomU64 { value })
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.value)
     }
 }

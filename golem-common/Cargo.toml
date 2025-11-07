@@ -72,6 +72,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 wasmparser = { workspace = true }
 wit-parser = { workspace = true }
 wasm-wave = { workspace = true }

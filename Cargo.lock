@@ -4398,6 +4398,7 @@ dependencies = [
  "wasmparser 0.229.0",
  "wasmtime",
  "wasmtime-wasi",
+ "wasmtime-wasi-http",
  "wit-parser 0.235.0",
 ]
 

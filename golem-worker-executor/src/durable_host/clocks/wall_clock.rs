@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput, HostResponseWallClock};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
+use golem_common::model::oplog::types::SerializableDateTime;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
@@ -31,8 +31,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestNoInput {},
                     HostResponseWallClock {
-                        seconds: result.seconds,
-                        nanos: result.nanoseconds,
+                        time: SerializableDateTime {
+                            seconds: result.seconds,
+                            nanoseconds: result.nanoseconds,
+                        },
                     },
                 )
                 .await
@@ -44,7 +46,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        let durability = Durability::<SerializableDateTime, SerializableError>::new(
+        let durability = Durability::new(
             self,
             "wall_clock",
             "resolution",
@@ -59,8 +61,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self,
                     HostRequestNoInput {},
                     HostResponseWallClock {
-                        seconds: result.seconds,
-                        nanos: result.nanoseconds,
+                        time: SerializableDateTime {
+                            seconds: result.seconds,
+                            nanoseconds: result.nanoseconds,
+                        },
                     },
                 )
                 .await

@@ -54,6 +54,10 @@ pub trait RdbmsType: Debug + Display + Default + PartialEq + BinaryCodec + Clone
         + BinaryCodec
         + RdbmsIntoValueAndType
         + 'static;
+
+    fn durability_connection_interface() -> &'static str;
+    fn durability_transaction_interface() -> &'static str;
+    fn durability_result_stream_interface() -> &'static str;
 }
 
 #[derive(Clone)]
@@ -438,7 +442,7 @@ impl Error {
 }
 
 impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {msg}"),
             Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),

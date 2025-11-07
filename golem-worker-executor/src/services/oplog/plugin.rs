@@ -28,7 +28,9 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload,
+};
 use golem_common::model::plugin::{
     OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
@@ -48,6 +50,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
+use golem_common::model::oplog::types::AgentMetadataForGuests;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -264,7 +267,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         let function_name = "golem:api/oplog-processor@1.1.7.{process}".to_string();
 
         let val_worker_id = worker_metadata.worker_id.clone().into_value();
-        let val_metadata = worker_metadata.into_value();
+        let agent_metadata_for_guests: AgentMetadataForGuests = worker_metadata.into();
+        let val_metadata = agent_metadata_for_guests.into_value();
         let val_first_entry_index = initial_oplog_index.into_value();
         let val_entries = Value::List(
             entries
@@ -579,12 +583,23 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn upload_raw_payload(&self, owned_worker_id: &OwnedWorkerId, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+    async fn upload_raw_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
         self.inner.upload_raw_payload(owned_worker_id, data).await
     }
 
-    async fn download_raw_payload(&self, owned_worker_id: &OwnedWorkerId, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
-        self.inner.download_raw_payload(owned_worker_id, payload_id, md5_hash).await
+    async fn download_raw_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.inner
+            .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+            .await
     }
 }
 
@@ -712,7 +727,11 @@ impl Oplog for ForwardingOplog {
         self.inner.upload_raw_payload(data).await
     }
 
-    async fn download_raw_payload(&self, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
         self.inner.download_raw_payload(payload_id, md5_hash).await
     }
 

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
+use crate::durable_host::serialized::SerializableError;
 use crate::services::rpc::RpcError;
 use desert_rust::BinaryCodec;
 use golem_common::model::agent::DataValue;
-use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
+use golem_common::model::{IdempotencyKey, ScheduleId,  WorkerId};
 use golem_wasm::{ValueAndType, WitValue};
 use golem_wasm_derive::{FromValue, IntoValue};
 
