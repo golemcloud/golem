@@ -1482,7 +1482,7 @@ impl WorkerCommandHandler {
         show_skip: bool,
     ) -> anyhow::Result<usize> {
         let (workers, _) = self
-            .list_component_workers(component_name, &component_id, None, None, None, false)
+            .list_component_workers(component_name, component_id, None, None, None, false)
             .await?;
 
         if workers.is_empty() {

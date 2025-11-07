@@ -892,28 +892,26 @@ impl Layer for ComponentLayer {
                         presets.get(&selector.environment.0).into_iter().collect(),
                         Some(format!("app-env:{}", selector.environment.0)),
                     )
+                } else if selector.presets.is_empty() {
+                    (
+                        vec![presets.get(default_preset).ok_or_else(|| {
+                            format!(
+                                "Default preset '{}' for component layer '{}' not found!",
+                                default_preset.log_color_highlight(),
+                                self.id.to_string().log_color_highlight(),
+                            )
+                        })?],
+                        Some(default_preset.clone()),
+                    )
                 } else {
-                    if selector.presets.is_empty() {
-                        (
-                            vec![presets.get(default_preset).ok_or_else(|| {
-                                format!(
-                                    "Default preset '{}' for component layer '{}' not found!",
-                                    default_preset.log_color_highlight(),
-                                    self.id.to_string().log_color_highlight(),
-                                )
-                            })?],
-                            Some(default_preset.clone()),
-                        )
-                    } else {
-                        (
-                            selector
-                                .presets
-                                .iter()
-                                .filter_map(|preset| presets.get(&preset.0))
-                                .collect(),
-                            Some(selector.presets.iter().map(|p| &p.0).join(", ")),
-                        )
-                    }
+                    (
+                        selector
+                            .presets
+                            .iter()
+                            .filter_map(|preset| presets.get(&preset.0))
+                            .collect(),
+                        Some(selector.presets.iter().map(|p| &p.0).join(", ")),
+                    )
                 }
             }
         };
@@ -1008,11 +1006,9 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.component_type.apply_layer(
-                id,
-                selection,
-                properties.component_type.value().clone(),
-            );
+            value
+                .component_type
+                .apply_layer(id, selection, *properties.component_type.value());
 
             value.files.apply_layer(
                 id,
@@ -1294,7 +1290,7 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
-            component_type: merged.component_type.value().clone().unwrap_or_default(),
+            component_type: (*merged.component_type.value()).unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
@@ -2056,7 +2052,8 @@ mod app_builder {
             template: app_raw::ComponentTemplate,
         ) {
             validation.with_context(vec![("template", template_name.0.clone())], |validation| {
-                self.component_layer_store
+                if let Some(err) = self
+                    .component_layer_store
                     .add_layer(ComponentLayer {
                         id: ComponentLayerId::TemplateCommon(template_name.clone()),
                         parents: ComponentLayerId::parent_ids_from_raw_template_references(
@@ -2067,11 +2064,14 @@ mod app_builder {
                         ),
                     })
                     .err()
-                    .map(|err| validation.add_error(err.to_string()));
+                {
+                    validation.add_error(err.to_string())
+                }
 
                 let presets = PartitionedComponentPresets::new(template.presets);
 
-                self.component_layer_store
+                if let Some(err) = self
+                    .component_layer_store
                     .add_layer(ComponentLayer {
                         id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
                         parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
@@ -2088,9 +2088,12 @@ mod app_builder {
                         },
                     })
                     .err()
-                    .map(|err| validation.add_error(err.to_string()));
+                {
+                    validation.add_error(err.to_string())
+                }
 
-                self.component_layer_store
+                if let Some(err) = self
+                    .component_layer_store
                     .add_layer(ComponentLayer {
                         id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
                         parents: vec![ComponentLayerId::TemplateCustomPresets(
@@ -2108,7 +2111,9 @@ mod app_builder {
                         },
                     })
                     .err()
-                    .map(|err| validation.add_error(err.to_string()));
+                {
+                    validation.add_error(err.to_string())
+                }
             });
         }
 
@@ -2121,7 +2126,8 @@ mod app_builder {
             validation.with_context(
                 vec![("component", component_name.0.clone())],
                 |validation| {
-                    self.component_layer_store
+                    if let Some(err) = self
+                        .component_layer_store
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::ComponentCommon(component_name.clone()),
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
@@ -2132,7 +2138,9 @@ mod app_builder {
                             ),
                         })
                         .err()
-                        .map(|err| validation.add_error(err.to_string()));
+                    {
+                        validation.add_error(err.to_string())
+                    }
 
                     let presets = PartitionedComponentPresets::new(component.presets);
 
@@ -2141,7 +2149,8 @@ mod app_builder {
                             .insert(ComponentPresetName(preset_name.clone()));
                     });
 
-                    self.component_layer_store
+                    if let Some(err) = self
+                        .component_layer_store
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::ComponentCustomPresets(component_name.clone()),
                             parents: vec![ComponentLayerId::ComponentCommon(
@@ -2160,9 +2169,12 @@ mod app_builder {
                             },
                         })
                         .err()
-                        .map(|err| validation.add_error(err.to_string()));
+                    {
+                        validation.add_error(err.to_string())
+                    }
 
-                    self.component_layer_store
+                    if let Some(err) = self
+                        .component_layer_store
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::ComponentEnvironmentPresets(
                                 component_name.clone(),
@@ -2182,7 +2194,9 @@ mod app_builder {
                             },
                         })
                         .err()
-                        .map(|err| validation.add_error(err.to_string()));
+                    {
+                        validation.add_error(err.to_string())
+                    }
                 },
             );
         }
@@ -2289,10 +2303,10 @@ mod app_builder {
         fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
             for (component, deps) in &self.dependencies {
                 for target in deps {
-                    let invalid_source = !self.component_names_to_source.contains_key(&component);
+                    let invalid_source = !self.component_names_to_source.contains_key(component);
                     let invalid_target = match &target.source {
                         BinaryComponentSource::AppComponent { name } => {
-                            !self.component_names_to_source.contains_key(&name)
+                            !self.component_names_to_source.contains_key(name)
                         }
                         BinaryComponentSource::LocalFile { path } => {
                             !std::fs::exists(path).unwrap_or(false)

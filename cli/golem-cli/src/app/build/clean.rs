@@ -102,7 +102,7 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
         log_action("Cleaning", "application build dir");
         let _indent = LogIndent::new();
 
-        delete_path_logged("temp dir", &ctx.application.temp_dir())?;
+        delete_path_logged("temp dir", ctx.application.temp_dir())?;
     }
 
     Ok(())

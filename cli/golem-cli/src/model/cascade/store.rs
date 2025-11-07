@@ -36,7 +36,7 @@ impl<L: Layer> Store<L> {
     }
 
     pub fn add_layer(&mut self, layer: L) -> Result<(), StoreAddLayerError<L>> {
-        if self.layers.contains_key(&layer.id()) {
+        if self.layers.contains_key(layer.id()) {
             return Err(StoreAddLayerError::LayerAlreadyExists(layer.id().clone()));
         }
         self.layers.insert(layer.id().clone(), layer);

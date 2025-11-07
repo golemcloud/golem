@@ -235,7 +235,9 @@ pub struct InitialComponentFile {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
 pub enum Presets {
+    #[default]
     None,
     String(String),
     List(Vec<String>),
@@ -259,22 +261,18 @@ impl Presets {
     }
 
     fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
-        s.split(|c: char| matches!(c, ',' | '\n' | '\r'))
+        s.split([',', '\n', '\r'])
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(String::from)
     }
 }
 
-impl Default for Presets {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
 pub enum TemplateReferences {
+    #[default]
     None,
     String(String),
     List(Vec<String>),
@@ -298,16 +296,10 @@ impl TemplateReferences {
     }
 
     fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
-        s.split(|c: char| matches!(c, ',' | '\n' | '\r'))
+        s.split([',', '\n', '\r'])
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(String::from)
-    }
-}
-
-impl Default for TemplateReferences {
-    fn default() -> Self {
-        Self::None
     }
 }
 

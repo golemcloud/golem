@@ -84,7 +84,7 @@ impl<L: Layer, V> From<Option<V>> for OptionalProperty<L, V> {
 
 impl<V: Clone, L: Layer> From<Option<&V>> for OptionalProperty<L, V> {
     fn from(value: Option<&V>) -> Self {
-        value.map(|v| v.clone()).into()
+        value.cloned().into()
     }
 }
 
@@ -112,13 +112,13 @@ impl<V: Clone, L: Layer> Property<L> for OptionalProperty<L, V> {
                 self.value = Some(value.clone());
                 self.trace.push(OptionalPropertyTraceElem::Override {
                     id: id.clone(),
-                    selection: selection.map(|selection| selection.clone()),
+                    selection: selection.cloned(),
                     value,
                 })
             }
             None => self.trace.push(OptionalPropertyTraceElem::Skip {
                 id: id.clone(),
-                selection: selection.map(|selection| selection.clone()),
+                selection: selection.cloned(),
             }),
         }
     }
