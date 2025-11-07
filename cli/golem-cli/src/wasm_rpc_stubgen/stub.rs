@@ -18,6 +18,7 @@ use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
 use crate::wasm_rpc_stubgen::wit_generate::extract_exports_as_wit_dep;
 use crate::wasm_rpc_stubgen::wit_resolve::{PackageSource, ResolvedWitDir};
 use anyhow::{anyhow, Context};
+use golem_common::model::component::ComponentName;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use proc_macro2::Span;
@@ -28,7 +29,6 @@ use wit_parser::{
     Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve, Type,
     TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
-use golem_common::model::component::ComponentName;
 
 #[derive(Clone, Debug)]
 pub struct StubConfig {

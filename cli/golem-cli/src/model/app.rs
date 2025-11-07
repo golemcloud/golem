@@ -2,7 +2,6 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
-use crate::model::app_raw::{BuildCommand, ExternalCommand, TemplateReferences};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -777,7 +776,7 @@ impl ComponentLayerId {
     }
 
     fn parent_ids_from_raw_template_references(
-        parent_ids: TemplateReferences,
+        parent_ids: app_raw::TemplateReferences,
     ) -> Vec<ComponentLayerId> {
         parent_ids
             .into_vec()
@@ -1196,11 +1195,11 @@ impl<'a> Component<'a> {
             .is_some()
     }
 
-    pub fn custom_commands(&self) -> &BTreeMap<String, Vec<ExternalCommand>> {
+    pub fn custom_commands(&self) -> &BTreeMap<String, Vec<app_raw::ExternalCommand>> {
         &self.properties().custom_commands
     }
 
-    pub fn build_commands(&self) -> &Vec<BuildCommand> {
+    pub fn build_commands(&self) -> &Vec<app_raw::BuildCommand> {
         &self.properties().build
     }
 
@@ -1216,15 +1215,19 @@ pub struct ComponentLayerProperties {
     pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub linked_wasm: OptionalProperty<ComponentLayer, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub component_type: OptionalProperty<ComponentLayer, AppComponentType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
 }
@@ -1248,6 +1251,28 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
         }
+    }
+}
+
+impl ComponentLayerProperties {
+    pub fn compact_traces(&mut self) {
+        self.source_wit.compact_trace();
+        self.generated_wit.compact_trace();
+        self.component_wasm.compact_trace();
+        self.linked_wasm.compact_trace();
+        self.build.compact_trace();
+        self.custom_commands.compact_trace();
+        self.clean.compact_trace();
+        self.component_type.compact_trace();
+        self.files.compact_trace();
+        self.plugins.compact_trace();
+        self.env.compact_trace();
+    }
+
+    pub fn with_compacted_traces(&self) -> Self {
+        let mut props = self.clone();
+        props.compact_traces();
+        props
     }
 }
 

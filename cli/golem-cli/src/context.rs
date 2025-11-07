@@ -21,7 +21,7 @@ use crate::config::AuthenticationConfig;
 use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{set_log_output, LogOutput, Output};
-use crate::model::app::{AppBuildStep, ApplicationSourceMode};
+use crate::model::app::{AppBuildStep, ApplicationSourceMode, ComponentPresetName};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::Marker;
 use crate::model::environment::EnvironmentReference;
@@ -262,21 +262,31 @@ impl Context {
             new_reqwest_client(&client_config.file_download_http_client_config)?;
 
         let app_context_config = {
-            let selected_manifest_environment_name =
-                manifest_environment.as_ref().map(|(name, _)| name.clone());
-
-            selected_manifest_environment_name
+            manifest_environment
+                .as_ref()
                 .zip(manifest_environments)
-                .map(|(environment_name, environments)| {
-                    ApplicationContextConfig::new(
-                        &global_flags,
-                        environments,
-                        ComponentPresetSelector {
-                            environment: environment_name,
-                            presets: global_flags.preset.clone(),
-                        },
-                    )
-                })
+                .map(
+                    |((selected_environment_name, selected_environment), environments)| {
+                        ApplicationContextConfig::new(
+                            &global_flags,
+                            environments,
+                            ComponentPresetSelector {
+                                environment: selected_environment_name.clone(),
+                                presets: {
+                                    let mut presets = selected_environment
+                                        .component_presets
+                                        .clone()
+                                        .into_vec()
+                                        .into_iter()
+                                        .map(ComponentPresetName)
+                                        .collect::<Vec<_>>();
+                                    presets.extend(global_flags.preset.iter().cloned());
+                                    presets
+                                },
+                            },
+                        )
+                    },
+                )
         };
 
         Ok(Self {

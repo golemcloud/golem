@@ -55,14 +55,14 @@ pub enum VecPropertyTraceElem<L: Layer, T> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VecProperty<L: Layer, T: Serialize> {
-    vec: Vec<T>,
+    value: Vec<T>,
     trace: Vec<VecPropertyTraceElem<L, T>>,
 }
 
 impl<L: Layer, T: Serialize> Default for VecProperty<L, T> {
     fn default() -> Self {
         Self {
-            vec: vec![],
+            value: vec![],
             trace: vec![],
         }
     }
@@ -70,7 +70,10 @@ impl<L: Layer, T: Serialize> Default for VecProperty<L, T> {
 
 impl<L: Layer, T: Serialize> VecProperty<L, T> {
     pub fn new(vec: Vec<T>) -> Self {
-        Self { vec, trace: vec![] }
+        Self {
+            value: vec,
+            trace: vec![],
+        }
     }
 }
 
@@ -86,7 +89,7 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
     type TraceElem = VecPropertyTraceElem<L, T>;
 
     fn value(&self) -> &Self::Value {
-        &self.vec
+        &self.value
     }
 
     fn trace(&self) -> &[Self::TraceElem] {
@@ -102,7 +105,7 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
         let (mode, elems) = layer;
         match mode {
             VecMergeMode::Append => {
-                self.vec.extend(elems.clone());
+                self.value.extend(elems.clone());
                 self.trace.push(VecPropertyTraceElem::Append {
                     id: id.clone(),
                     selection: selection.cloned(),
@@ -111,8 +114,8 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
             }
             VecMergeMode::Prepend => {
                 let mut new_vec = elems.clone();
-                new_vec.extend(self.vec.clone());
-                self.vec = new_vec;
+                new_vec.extend(self.value.clone());
+                self.value = new_vec;
             }
             VecMergeMode::Replace => {
                 self.trace.push(VecPropertyTraceElem::Replace {
@@ -122,5 +125,15 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
                 });
             }
         }
+    }
+
+    fn compact_trace(&mut self) {
+        self.trace.retain(|elem| match elem {
+            VecPropertyTraceElem::Append { appended_elems, .. } => !appended_elems.is_empty(),
+            VecPropertyTraceElem::Prepend {
+                prepended_elems, ..
+            } => !prepended_elems.is_empty(),
+            VecPropertyTraceElem::Replace { .. } => true,
+        })
     }
 }

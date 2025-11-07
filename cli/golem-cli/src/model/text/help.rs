@@ -23,10 +23,10 @@ use crate::model::text::fmt::{
 use cli_table::Table;
 use colored::Colorize;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
-use golem_common::model::component::ComponentName;
 
 pub struct WorkerNameHelp;
 

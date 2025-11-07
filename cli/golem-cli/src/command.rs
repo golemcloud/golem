@@ -953,6 +953,7 @@ pub mod component {
             #[command(flatten)]
             build: BuildArgs,
         },
+        // TODO: atomic: drop this one, we only support global clean
         /// Clean component(s) based on the current directory or by selection
         Clean {
             #[command(flatten)]
@@ -1011,6 +1012,11 @@ pub mod component {
         },
         /// Diagnose possible tooling problems
         Diagnose {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentNames,
+        },
+        // TODO: atomic: find better name for this, maybe add to "app" and other entities
+        ManifestTrace {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },

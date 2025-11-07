@@ -32,4 +32,6 @@ pub trait Property<L: Layer> {
         selection: Option<&L::AppliedSelection>,
         layer: Self::PropertyLayer,
     );
+
+    fn compact_trace(&mut self);
 }

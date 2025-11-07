@@ -822,10 +822,7 @@ impl AppCommandHandler {
             );
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
-            diagnose(
-                app_ctx.application.component(component_name).source(),
-                None,
-            );
+            diagnose(app_ctx.application.component(component_name).source(), None);
         }
 
         Ok(())

@@ -60,14 +60,14 @@ pub enum MapPropertyTraceElem<L: Layer, K, V> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MapProperty<L: Layer, K: Serialize, V: Serialize> {
-    map: IndexMap<K, V>,
+    value: IndexMap<K, V>,
     trace: Vec<MapPropertyTraceElem<L, K, V>>,
 }
 
 impl<L: Layer, K: Serialize, V: Serialize> Default for MapProperty<L, K, V> {
     fn default() -> Self {
         Self {
-            map: IndexMap::new(),
+            value: IndexMap::new(),
             trace: vec![],
         }
     }
@@ -75,7 +75,7 @@ impl<L: Layer, K: Serialize, V: Serialize> Default for MapProperty<L, K, V> {
 
 impl<L: Layer, K: Serialize, V: Serialize> MapProperty<L, K, V> {
     pub fn new(map: IndexMap<K, V>) -> Self {
-        Self { map, trace: vec![] }
+        Self { value: map, trace: vec![] }
     }
 }
 
@@ -93,7 +93,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
     type TraceElem = MapPropertyTraceElem<L, K, V>;
 
     fn value(&self) -> &Self::Value {
-        &self.map
+        &self.value
     }
 
     fn trace(&self) -> &[Self::TraceElem] {
@@ -112,7 +112,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 let mut inserted_entries = IndexMap::new();
                 let mut updated_entries = IndexMap::new();
                 for (key, value) in map {
-                    if self.map.insert(key.clone(), value.clone()).is_some() {
+                    if self.value.insert(key.clone(), value.clone()).is_some() {
                         updated_entries.insert(key, value);
                     } else {
                         inserted_entries.insert(key, value);
@@ -126,7 +126,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 });
             }
             MapMergeMode::Replace => {
-                self.map = map.clone();
+                self.value = map.clone();
                 self.trace.push(MapPropertyTraceElem::Replace {
                     id: id.clone(),
                     selection: selection.cloned(),
@@ -136,7 +136,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
             MapMergeMode::Remove => {
                 let mut removed_entries = IndexMap::new();
                 for (key, _) in map {
-                    if let Some(value) = self.map.shift_remove(&key) {
+                    if let Some(value) = self.value.shift_remove(&key) {
                         removed_entries.insert(key, value);
                     }
                 }
@@ -147,5 +147,19 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 })
             }
         }
+    }
+
+    fn compact_trace(&mut self) {
+        self.trace.retain(|elem| match elem {
+            MapPropertyTraceElem::Upsert {
+                inserted_entries,
+                updated_entries,
+                ..
+            } => !inserted_entries.is_empty() || !updated_entries.is_empty(),
+            MapPropertyTraceElem::Replace { .. } => true,
+            MapPropertyTraceElem::Remove {
+                removed_entries, ..
+            } => !removed_entries.is_empty(),
+        })
     }
 }

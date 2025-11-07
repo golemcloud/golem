@@ -574,12 +574,16 @@ impl ResolvedWitApplication {
             }
         }
 
-        let source_wasm = std::fs::read(source_wit_dir)
-            .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
+        let source_wasm = std::fs::read(source_wit_dir).with_context(|| {
+            anyhow!(
+                "Failed to read the source WIT path as a file: {}",
+                source_wit_dir.log_color_error_highlight()
+            )
+        })?;
         let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
             anyhow!(
                 "Failed to decode the source WIT path as a WASM component: {}",
-                source_wit_dir.log_color_highlight()
+                source_wit_dir.log_color_error_highlight()
             )
         })?;
 

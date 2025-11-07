@@ -122,4 +122,11 @@ impl<V: Clone, L: Layer> Property<L> for OptionalProperty<L, V> {
             }),
         }
     }
+
+    fn compact_trace(&mut self) {
+        self.trace.retain(|elem| match elem {
+            OptionalPropertyTraceElem::Override { .. } => true,
+            OptionalPropertyTraceElem::Skip { .. } => false,
+        })
+    }
 }

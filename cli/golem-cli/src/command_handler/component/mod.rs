@@ -124,6 +124,9 @@ impl ComponentCommandHandler {
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await
             }
+            ComponentSubcommand::ManifestTrace { component_name } => {
+                self.cmd_manifest_trace(component_name).await
+            }
         }
     }
 
@@ -506,6 +509,32 @@ impl ComponentCommandHandler {
                 &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
+    }
+
+    // TODO: atomic: cleanup before release
+    async fn cmd_manifest_trace(
+        &self,
+        _component_names: ComponentOptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let component_names = app_ctx
+            .application
+            .component_names()
+            .cloned()
+            .collect::<Vec<_>>();
+        for component_name in component_names {
+            self.ctx.log_handler().log_serializable(
+                &app_ctx
+                    .application
+                    .component(&component_name)
+                    .layer_properties()
+                    .with_compacted_traces(),
+            )
+        }
+
+        Ok(())
     }
 
     async fn cmd_add_dependency(

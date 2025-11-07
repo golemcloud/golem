@@ -27,6 +27,7 @@ use golem_cli::wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_cli::wasm_rpc_stubgen::{
     GOLEM_RPC_WIT, GOLEM_RPC_WIT_VERSION, WASI_CLOCKS_WIT, WASI_IO_WIT, WASI_WIT_VERSION,
 };
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use semver::Version;
 use std::path::{Path, PathBuf};
@@ -34,7 +35,6 @@ use std::str::FromStr;
 use tempfile::TempDir;
 use wit_encoder::{packages_from_parsed, Package, PackageName};
 use wit_parser::Resolve;
-use golem_common::model::component::ComponentName;
 
 test_r::enable!();
 
