@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::AppComponentName;
+use crate::model::app::ComponentName;
 use crate::model::component::Component;
 use crate::model::deploy_diff::DiffSerialize;
 use crate::model::text::component::is_sensitive_env_var_name;
@@ -79,7 +79,7 @@ impl DiffableComponent {
 
     pub fn from_manifest(
         show_sensitive: bool,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         component_hash: String,
         component_type: ComponentType,
         files: BTreeMap<String, DiffableComponentFile>,

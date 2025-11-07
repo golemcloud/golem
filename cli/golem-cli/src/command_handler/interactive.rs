@@ -16,9 +16,7 @@ use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, Pr
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize};
-use crate::model::app::{
-    AppComponentName, BinaryComponentSource, DependencyType, HttpApiDeploymentSite,
-};
+use crate::model::app::{BinaryComponentSource, DependencyType, HttpApiDeploymentSite};
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_warn};
@@ -197,7 +195,7 @@ impl InteractiveHandler {
 
     pub fn confirm_plugin_installation_changes(
         &self,
-        component: &AppComponentName,
+        component: &ComponentName,
         rendered_steps: &[String],
     ) -> anyhow::Result<bool> {
         self.confirm(
@@ -313,19 +311,19 @@ impl InteractiveHandler {
 
     pub async fn create_component_dependency(
         &self,
-        component_name: Option<AppComponentName>,
-        target_component_name: Option<AppComponentName>,
+        component_name: Option<ComponentName>,
+        target_component_name: Option<ComponentName>,
         target_component_file: Option<PathBuf>,
         target_component_url: Option<Url>,
         dependency_type: Option<DependencyType>,
-    ) -> anyhow::Result<Option<(AppComponentName, BinaryComponentSource, DependencyType)>> {
+    ) -> anyhow::Result<Option<(ComponentName, BinaryComponentSource, DependencyType)>> {
         let component_type_by_name =
-            async |component_name: &AppComponentName| -> anyhow::Result<AppComponentType> {
+            async |component_name: &ComponentName| -> anyhow::Result<AppComponentType> {
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.some_or_err()?;
                 Ok(app_ctx
                     .application
-                    .component_properties(component_name, self.ctx.build_profile())
+                    .component(component_name)
                     .component_type())
             };
 
@@ -506,7 +504,7 @@ impl InteractiveHandler {
                                 dependency_type,
                                 app_ctx
                                     .application
-                                    .component_properties(component_name, self.ctx.build_profile())
+                                    .component(component_name)
                                     .component_type(),
                             )
                         })

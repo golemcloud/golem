@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
-use crate::model::cascade::store::Layer;
 use serde_derive::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,12 +22,14 @@ pub enum OptionalPropertyTraceElem<L: Layer, V> {
     #[serde(rename_all = "camelCase")]
     Override {
         id: L::Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
         selection: Option<L::AppliedSelection>,
         value: V,
     },
     #[serde(rename_all = "camelCase")]
     Skip {
         id: L::Id,
+        #[serde(skip_serializing_if = "Option::is_none")]
         selection: Option<L::AppliedSelection>,
     },
 }

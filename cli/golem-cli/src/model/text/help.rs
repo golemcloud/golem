@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::log::{logln, LogColorize};
-use crate::model::app::AppComponentName;
 use crate::model::component::{
     agent_interface_name, render_type, show_exported_functions, Component,
 };
@@ -27,6 +26,7 @@ use golem_common::model::agent::AgentId;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
+use golem_common::model::component::ComponentName;
 
 pub struct WorkerNameHelp;
 
@@ -167,7 +167,7 @@ impl MessageWithFields for ComponentNameHelp {
     }
 }
 
-pub struct AvailableComponentNamesHelp(pub Vec<AppComponentName>);
+pub struct AvailableComponentNamesHelp(pub Vec<ComponentName>);
 
 impl TextView for AvailableComponentNamesHelp {
     fn log(&self) {

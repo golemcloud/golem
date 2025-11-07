@@ -15,7 +15,7 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::app::DependentComponent;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
@@ -197,7 +197,7 @@ impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_>
 }
 
 pub struct ComponentGeneratorMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub generator_kind: &'a str,
 }
 
@@ -219,7 +219,7 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
 }
 
 pub struct LinkRpcMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
@@ -265,7 +265,7 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
 }
 
 pub struct AddMetadataMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub root_package_name: PackageName,
 }
 

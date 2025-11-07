@@ -17,7 +17,7 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::LogColorize;
-use crate::model::app::{AppComponentName, BuildProfileName, PluginInstallation};
+use crate::model::app::{ComponentName, BuildProfileName, PluginInstallation};
 use crate::model::component::Component;
 use anyhow::bail;
 use async_trait::async_trait;
@@ -46,7 +46,7 @@ impl PluginInstallationHandler {
     /// The returned `Component` is updated as plugin installation changes increase the component revision.
     pub async fn apply_plugin_installation_changes(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         build_profile_name: Option<&BuildProfileName>,
         component: Component,
     ) -> anyhow::Result<Component> {
@@ -184,7 +184,7 @@ impl PluginInstallationHandler {
     /// Get all the plugin installations for a given component from the app manifest
     async fn get_all_defined_installations(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         build_profile_name: Option<&BuildProfileName>,
     ) -> anyhow::Result<Vec<PluginInstallation>> {
         let app_ctx = self.ctx.app_context_lock().await;

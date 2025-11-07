@@ -22,7 +22,8 @@ use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{set_log_output, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
-use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
+use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
+use crate::model::app_raw::Marker;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::{app_raw, AccountDetails, PluginReference};
@@ -69,7 +70,7 @@ pub struct Context {
     */
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<(EnvironmentName, app_raw::Environment)>,
-    app_context_config: ApplicationContextConfig,
+    app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
     client_config: ClientConfig,
@@ -99,17 +100,6 @@ impl Context {
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
     ) -> anyhow::Result<Self> {
-        let format = global_flags.format;
-        let http_batch_size = global_flags.http_batch_size;
-        let auth_token = global_flags.auth_token;
-        let config_dir = global_flags.config_dir();
-        let show_sensitive = global_flags.show_sensitive;
-        let server_no_limit_change = global_flags.server_no_limit_change;
-        let dev_mode = global_flags.dev_mode;
-
-        let mut yes = global_flags.yes;
-        let mut deploy_args = DeployArgs::none();
-
         let (environment_reference, env_ref_can_be_builtin_server) = {
             if let Some(environment) = &global_flags.environment {
                 (Some(environment.clone()), false)
@@ -132,14 +122,13 @@ impl Context {
             }
         };
 
-        let app_context_config = ApplicationContextConfig::new(global_flags);
         let preloaded_app = ApplicationContext::preload_sources_and_get_environments(
-            app_context_config.app_source_mode(),
+            ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags),
         )?;
 
         if preloaded_app.loaded_with_warnings
             && log_output_for_help.is_none()
-            && !InteractiveHandler::confirm_manifest_profile_warning(yes)?
+            && !InteractiveHandler::confirm_manifest_profile_warning(global_flags.yes)?
         {
             bail!(NonSuccessfulExit);
         }
@@ -191,12 +180,14 @@ impl Context {
                 None => match &manifest_environments {
                     Some(environments) => environments
                         .iter()
-                        .find(|(_, env)| env.default == Some(true))
+                        .find(|(_, env)| env.default == Some(Marker))
                         .map(|(name, env)| (name.clone(), env.clone())),
                     None => None,
                 },
             };
 
+        let mut yes = global_flags.yes;
+        let mut deploy_args = DeployArgs::none();
         if let Some((_, environment)) = &manifest_environment {
             // TODO: atomic: use component presets
             /*
@@ -210,29 +201,30 @@ impl Context {
             */
 
             if let Some(cli) = environment.cli.as_ref() {
-                if cli.auto_confirm == Some(true) {
+                if cli.auto_confirm == Some(Marker) {
                     yes = true;
                 }
 
-                if cli.redeploy_agents == Some(true) {
+                if cli.redeploy_agents == Some(Marker) {
                     deploy_args.redeploy_agents = true;
                 }
 
-                if cli.redeploy_http_api == Some(true) {
+                if cli.redeploy_http_api == Some(Marker) {
                     deploy_args.redeploy_http_api = true;
                 }
 
-                if cli.redeploy_all == Some(true) {
+                if cli.redeploy_all == Some(Marker) {
                     deploy_args.redeploy_all = true;
                 }
 
-                if cli.reset == Some(true) {
+                if cli.reset == Some(Marker) {
                     deploy_args.reset = true;
                 }
             }
         }
 
-        let format = format
+        let format = global_flags
+            .format
             .or(manifest_environment
                 .as_ref()
                 .and_then(|(_, env)| env.cli.as_ref())
@@ -269,20 +261,38 @@ impl Context {
         let file_download_client =
             new_reqwest_client(&client_config.file_download_http_client_config)?;
 
+        let app_context_config = {
+            let selected_manifest_environment_name =
+                manifest_environment.as_ref().map(|(name, _)| name.clone());
+
+            selected_manifest_environment_name
+                .zip(manifest_environments)
+                .map(|(environment_name, environments)| {
+                    ApplicationContextConfig::new(
+                        &global_flags,
+                        environments,
+                        ComponentPresetSelector {
+                            environment: environment_name,
+                            presets: global_flags.preset.clone(),
+                        },
+                    )
+                })
+        };
+
         Ok(Self {
-            config_dir,
+            config_dir: global_flags.config_dir(),
             format,
             help_mode: log_output_for_help.is_some(),
             deploy_args,
             app_context_config,
-            http_batch_size: http_batch_size.unwrap_or(50),
-            auth_token_override: auth_token,
+            http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            auth_token_override: global_flags.auth_token,
             environment_reference,
             manifest_environment,
             yes,
-            dev_mode,
-            show_sensitive,
-            server_no_limit_change,
+            dev_mode: global_flags.dev_mode,
+            show_sensitive: global_flags.show_sensitive,
+            server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -358,10 +368,6 @@ impl Context {
     pub fn available_profile_names(&self) -> &BTreeSet<ProfileName> {
         // TODO: atomic: &self.available_profile_names
         todo!()
-    }
-
-    pub fn build_profile(&self) -> Option<&AppBuildProfileName> {
-        self.app_context_config.build_profile.as_ref()
     }
 
     pub fn application_name(&self) -> Option<ApplicationName> {
@@ -454,18 +460,15 @@ impl Context {
     ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
         state
-            .init(
-                &BTreeSet::new(), // TODO: atomic: &self.available_profile_names,
-                &self.app_context_config,
-                self.file_download_client.clone(),
-            )
+            .init(&self.app_context_config, &self.file_download_client)
             .await?;
         Ok(state)
     }
 
     pub async fn unload_app_context(&self) {
-        let mut state = self.app_context_state.write().await;
-        *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
+        // TODO: atomic: this should also redo env preload
+        // let mut state = self.app_context_state.write().await;
+        // *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
     }
 
     async fn set_app_ctx_init_config<T>(
@@ -783,9 +786,10 @@ impl GolemClients {
 }
 
 struct ApplicationContextConfig {
-    build_profile: Option<AppBuildProfileName>,
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
+    environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    component_presets: ComponentPresetSelector,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
@@ -793,14 +797,19 @@ struct ApplicationContextConfig {
 }
 
 impl ApplicationContextConfig {
-    pub fn new(global_flags: GolemCliGlobalFlags) -> Self {
+    pub fn new(
+        global_flags: &GolemCliGlobalFlags,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        component_presets: ComponentPresetSelector,
+    ) -> Self {
         Self {
-            build_profile: global_flags.build_profile.map(|bp| bp.0.into()),
-            app_manifest_path: global_flags.app_manifest_path,
+            app_manifest_path: global_flags.app_manifest_path.clone(),
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
+            environments,
+            component_presets,
             golem_rust_override: RustDependencyOverride {
-                path_override: global_flags.golem_rust_path,
-                version_override: global_flags.golem_rust_version,
+                path_override: global_flags.golem_rust_path.clone(),
+                version_override: global_flags.golem_rust_version.clone(),
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
@@ -815,6 +824,31 @@ impl ApplicationContextConfig {
             match &self.app_manifest_path {
                 Some(root_manifest) if !self.disable_app_manifest_discovery => {
                     ApplicationSourceMode::ByRootManifest(root_manifest.clone())
+                }
+                _ => ApplicationSourceMode::Automatic,
+            }
+        }
+    }
+
+    pub fn app_source_mode_from_global_flags(
+        global_flags: &GolemCliGlobalFlags,
+    ) -> ApplicationSourceMode {
+        Self::app_source_mode_from_flags(
+            global_flags.disable_app_manifest_discovery,
+            global_flags.app_manifest_path.as_deref(),
+        )
+    }
+
+    fn app_source_mode_from_flags(
+        disable_app_manifest_discovery: bool,
+        app_manifest_path: Option<&Path>,
+    ) -> ApplicationSourceMode {
+        if disable_app_manifest_discovery {
+            ApplicationSourceMode::None
+        } else {
+            match app_manifest_path {
+                Some(root_manifest) if !disable_app_manifest_discovery => {
+                    ApplicationSourceMode::ByRootManifest(root_manifest.to_path_buf())
                 }
                 _ => ApplicationSourceMode::Automatic,
             }
@@ -851,13 +885,17 @@ impl ApplicationContextState {
 
     async fn init(
         &mut self,
-        available_profile_names: &BTreeSet<ProfileName>,
-        config: &ApplicationContextConfig,
-        file_download_client: reqwest::Client,
+        config: &Option<ApplicationContextConfig>,
+        file_download_client: &reqwest::Client,
     ) -> anyhow::Result<()> {
         if self.app_context.is_some() {
             return Ok(());
         }
+
+        let Some(config) = config else {
+            self.app_context = Some(Ok(None));
+            return Ok(());
+        };
 
         let _log_output = self
             .silent_init
@@ -865,7 +903,6 @@ impl ApplicationContextState {
 
         let app_config = ApplicationConfig {
             skip_up_to_date_checks: self.skip_up_to_date_checks,
-            build_profile: config.build_profile.as_ref().map(|p| p.to_string().into()),
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
@@ -877,12 +914,13 @@ impl ApplicationContextState {
 
         self.app_context = Some(
             ApplicationContext::new(
-                available_profile_names,
                 self.app_source_mode
                     .take()
                     .expect("ApplicationContextState.app_source_mode is not set"),
                 app_config,
-                file_download_client,
+                config.environments.clone(),
+                config.component_presets.clone(),
+                file_download_client.clone(),
             )
             .await
             .map_err(Arc::new),

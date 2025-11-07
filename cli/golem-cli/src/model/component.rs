@@ -18,12 +18,12 @@ use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::AnalysedType;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;

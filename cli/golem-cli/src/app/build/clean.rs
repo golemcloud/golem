@@ -19,67 +19,41 @@ use std::path::PathBuf;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: clean is not selected_component_names aware yet!
 pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
     {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
-        let all_profiles = ctx.application.all_option_build_profiles();
         let paths = {
             let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
             for component_name in ctx.application.component_names() {
-                for profile in &all_profiles {
-                    paths.insert((
-                        "generated wit",
-                        ctx.application
-                            .component_generated_wit(component_name, profile.as_ref()),
-                    ));
-                    paths.insert((
-                        "component wasm",
-                        ctx.application
-                            .component_wasm(component_name, profile.as_ref()),
-                    ));
-                    paths.insert((
-                        "linked wasm",
-                        ctx.application
-                            .component_linked_wasm(component_name, profile.as_ref()),
-                    ));
+                let component = ctx.application.component(component_name);
+                let component_source_dir = component.source_dir();
 
-                    let properties = &ctx
-                        .application
-                        .component_properties(component_name, profile.as_ref());
+                paths.insert(("generated wit", component.generated_wit()));
+                paths.insert(("component wasm", component.wasm()));
+                paths.insert(("temp wasm", component.temp_linked_wasm()));
+                paths.insert(("linked wasm", component.final_linked_wasm()));
 
-                    for build_step in &properties.build {
-                        let build_dir = build_step
-                            .dir()
-                            .map(|dir| {
-                                ctx.application
-                                    .component_source_dir(component_name)
-                                    .join(dir)
-                            })
-                            .unwrap_or_else(|| {
-                                ctx.application
-                                    .component_source_dir(component_name)
-                                    .to_path_buf()
-                            });
+                for build_step in component.build_commands() {
+                    let build_dir = build_step
+                        .dir()
+                        .map(|dir| component_source_dir.join(dir))
+                        .unwrap_or_else(|| component_source_dir.to_path_buf());
 
-                        paths.extend(
-                            compile_and_collect_globs(&build_dir, &build_step.targets())?
-                                .into_iter()
-                                .map(|path| ("build output", path)),
-                        );
-                    }
-
-                    paths.extend(properties.clean.iter().map(|path| {
-                        (
-                            "clean target",
-                            ctx.application
-                                .component_source_dir(component_name)
-                                .join(path),
-                        )
-                    }));
+                    paths.extend(
+                        compile_and_collect_globs(&build_dir, &build_step.targets())?
+                            .into_iter()
+                            .map(|path| ("build output", path)),
+                    );
                 }
+
+                paths.extend(
+                    component
+                        .clean()
+                        .iter()
+                        .map(|path| ("clean target", component_source_dir.join(path))),
+                );
             }
             paths
         };
@@ -105,9 +79,10 @@ pub fn clean_app(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     );
                     let _indent = LogIndent::new();
 
-                    delete_path_logged("client wit", &ctx.application.client_wit(&dep.name))?;
+                    let dep_component = ctx.application.component(&dep.name);
+                    delete_path_logged("client wit", &dep_component.client_wit())?;
                     if dep.dep_type == DependencyType::StaticWasmRpc {
-                        delete_path_logged("client wasm", &ctx.application.client_wasm(&dep.name))?;
+                        delete_path_logged("client wasm", &dep_component.client_wasm())?;
                     }
                 }
             }

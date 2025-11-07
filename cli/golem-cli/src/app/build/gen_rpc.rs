@@ -18,9 +18,7 @@ use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
-use crate::model::app::{
-    AppComponentName, BinaryComponentSource, DependencyType, DependentAppComponent,
-};
+use crate::model::app::{BinaryComponentSource, DependencyType, DependentAppComponent};
 use crate::wasm_rpc_stubgen::cargo::regenerate_cargo_package_component;
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::wit_generate::{
@@ -28,6 +26,7 @@ use crate::wasm_rpc_stubgen::wit_generate::{
     extract_wasm_interface_as_wit_dep, AddClientAsDepConfig, UpdateCargoToml,
 };
 use anyhow::{anyhow, Context, Error};
+use golem_common::model::component::ComponentName;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -76,11 +75,10 @@ pub async fn gen_rpc(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
 
 async fn create_generated_base_wit(
     ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
 ) -> Result<bool, Error> {
-    let component_source_wit = ctx
-        .application
-        .component_source_wit(component_name, ctx.build_profile());
+    let component = ctx.application.component(component_name);
+    let component_source_wit = component.source_wit();
 
     if component_source_wit.is_dir() {
         let inputs = {
@@ -88,8 +86,7 @@ async fn create_generated_base_wit(
             inputs.push(component_source_wit.clone());
             inputs
         };
-        let component_generated_base_wit =
-            ctx.application.component_generated_base_wit(component_name);
+        let component_generated_base_wit = component.generated_base_wit();
         let task_result_marker = TaskResultMarker::new(
             &ctx.application.task_result_marker_dir(),
             ComponentGeneratorMarkerHash {
@@ -261,13 +258,12 @@ async fn create_generated_base_wit(
 
 fn create_generated_wit(
     ctx: &ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
 ) -> Result<bool, Error> {
-    let component_generated_base_wit = ctx.application.component_generated_base_wit(component_name);
+    let component = ctx.application.component(component_name);
+    let component_generated_base_wit = component.generated_base_wit();
     if component_generated_base_wit.exists() {
-        let component_generated_wit = ctx
-            .application
-            .component_generated_wit(component_name, ctx.build_profile());
+        let component_generated_wit = component.generated_wit();
         let task_result_marker = TaskResultMarker::new(
             &ctx.application.task_result_marker_dir(),
             ComponentGeneratorMarkerHash {
@@ -321,12 +317,10 @@ fn create_generated_wit(
 fn update_cargo_toml(
     ctx: &mut ApplicationContext,
     mut skip_up_to_date_checks: bool,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
 ) -> anyhow::Result<()> {
-    let component_source_wit = PathExtra::new(
-        ctx.application
-            .component_source_wit(component_name, ctx.build_profile()),
-    );
+    let component = ctx.application.component(component_name);
+    let component_source_wit = PathExtra::new(component.source_wit());
     let component_source_wit_parent = component_source_wit.parent().with_context(|| {
         anyhow!(
             "Failed to get parent for component {}",
@@ -358,22 +352,16 @@ fn update_cargo_toml(
 
     task_result_marker.result(regenerate_cargo_package_component(
         &cargo_toml,
-        &ctx.application
-            .component_generated_wit(component_name, ctx.build_profile()),
+        &component.generated_wit(),
         None,
     ))
 }
 
 async fn build_client(
     ctx: &mut ApplicationContext,
-    component: &DependentAppComponent,
+    dependent_component: &DependentAppComponent,
 ) -> anyhow::Result<bool> {
-    let stub_def = ctx.component_stub_def(
-        &component.name,
-        ctx.application
-            .component_properties(&component.name, ctx.build_profile())
-            .is_ephemeral(),
-    )?;
+    let stub_def = ctx.component_stub_def(&dependent_component.name)?;
     let client_wit_root = stub_def.client_wit_root();
 
     let client_dep_package_ids = stub_def.stub_dep_package_ids();
@@ -390,12 +378,14 @@ async fn build_client(
         })
         .collect();
 
-    let client_wasm = ctx.application.client_wasm(&component.name);
-    let client_wit = ctx.application.client_wit(&component.name);
+    let component = ctx.application.component(&dependent_component.name);
+    let client_wasm = component.client_wasm();
+    let client_wit = component.client_wit();
+
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ComponentGeneratorMarkerHash {
-            component_name: &component.name,
+            component_name: &dependent_component.name,
             generator_kind: "client",
         },
     )?;
@@ -404,7 +394,7 @@ async fn build_client(
         ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
         || client_sources,
         || {
-            if component.dep_type == DependencyType::StaticWasmRpc {
+            if dependent_component.dep_type == DependencyType::StaticWasmRpc {
                 vec![&client_wit, &client_wasm]
             } else {
                 vec![&client_wit]
@@ -414,19 +404,19 @@ async fn build_client(
         // TODO: message based on type
         log_skipping_up_to_date(format!(
             "generating WASM RPC client for {}",
-            component.name.as_str().log_color_highlight()
+            dependent_component.name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
         task_result_marker.result(
             async {
-                match component.dep_type {
+                match dependent_component.dep_type {
                     DependencyType::StaticWasmRpc => {
                         log_action(
                             "Building",
                             format!(
                                 "WASM RPC client for {}",
-                                component.name.as_str().log_color_highlight()
+                                dependent_component.name.as_str().log_color_highlight()
                             ),
                         );
 
@@ -447,12 +437,7 @@ async fn build_client(
 
                         let offline = ctx.config.offline;
                         commands::generate::build(
-                            ctx.component_stub_def(
-                                &component.name,
-                                ctx.application
-                                    .component_properties(&component.name, ctx.build_profile())
-                                    .is_ephemeral(),
-                            )?,
+                            ctx.component_stub_def(&dependent_component.name)?,
                             &client_wasm,
                             &client_wit,
                             offline,
@@ -470,7 +455,7 @@ async fn build_client(
                             "Generating",
                             format!(
                                 "WASM RPC client for {}",
-                                component.name.as_str().log_color_highlight()
+                                dependent_component.name.as_str().log_color_highlight()
                             ),
                         );
                         let _indent = LogIndent::new();
@@ -486,12 +471,7 @@ async fn build_client(
                         );
                         fs::create_dir_all(&client_wit_root)?;
 
-                        let stub_def = ctx.component_stub_def(
-                            &component.name,
-                            ctx.application
-                                .component_properties(&component.name, ctx.build_profile())
-                                .is_ephemeral(),
-                        )?;
+                        let stub_def = ctx.component_stub_def(&dependent_component.name)?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
                     DependencyType::Wasm => {
@@ -509,7 +489,7 @@ async fn build_client(
 
 fn add_client_deps(
     ctx: &ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let dependencies = ctx.application.component_dependencies(component_name);
     if dependencies.is_empty() {
@@ -538,11 +518,10 @@ fn add_client_deps(
                     );
                     let _indent = LogIndent::new();
 
+                    let dep_component = ctx.application.component(&dep_component.name);
                     add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
-                        client_wit_root: ctx.application.client_wit(&dep_component.name),
-                        dest_wit_root: ctx
-                            .application
-                            .component_generated_wit(component_name, ctx.build_profile()),
+                        client_wit_root: dep_component.client_wit(),
+                        dest_wit_root: dep_component.generated_wit(),
                         update_cargo_toml: UpdateCargoToml::NoUpdate,
                     })?
                 }

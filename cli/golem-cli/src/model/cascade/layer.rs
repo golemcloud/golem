@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::selector::Selector;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -20,8 +19,9 @@ use std::hash::Hash;
 pub trait Layer {
     type Id: Debug + Eq + Hash + Clone + Serialize;
     type Value: Debug + Default + Clone + Serialize;
-    type Selector: Debug + Selector;
+    type Selector;
     type AppliedSelection: Debug + Clone + Serialize;
+    type ApplyContext;
     type ApplyError;
 
     fn id(&self) -> &Self::Id;
@@ -30,7 +30,10 @@ pub trait Layer {
 
     fn apply_onto_parent(
         &self,
+        ctx: &Self::ApplyContext,
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError>;
+
+    fn root_id_to_context(id: &Self::Id) -> Self::ApplyContext;
 }

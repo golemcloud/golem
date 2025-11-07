@@ -13,15 +13,18 @@
 // limitations under the License.
 
 use crate::model::cascade::error::{StoreAddLayerError, StoreGetValueError};
-pub(crate) use crate::model::cascade::layer::Layer;
-use crate::model::cascade::selector::Selector;
-use std::cell::{Ref, RefCell};
+use crate::model::cascade::layer::Layer;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Store<L: Layer> {
     layers: HashMap<L::Id, L>,
-    value_cache: RefCell<HashMap<L::Id, HashMap<blake3::Hash, L::Value>>>,
+}
+
+impl<L: Layer> Default for Store<L> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // TODO: check for circular parents (either on add or on get, or have a separate validation step)
@@ -29,7 +32,6 @@ impl<L: Layer> Store<L> {
     pub fn new() -> Store<L> {
         Self {
             layers: HashMap::new(),
-            value_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -45,36 +47,23 @@ impl<L: Layer> Store<L> {
         &self,
         id: &L::Id,
         selector: &L::Selector,
-    ) -> Result<Ref<'_, L::Value>, StoreGetValueError<L>> {
-        let hash = selector.selector_hash();
-        self.value_hashed(id, selector, &hash)
+    ) -> Result<L::Value, StoreGetValueError<L>> {
+        self.value_internal(&L::root_id_to_context(id), id, selector)
     }
 
-    fn value_hashed(
+    fn value_internal(
         &self,
+        ctx: &L::ApplyContext,
         id: &L::Id,
         selector: &L::Selector,
-        selector_hash: &blake3::Hash,
-    ) -> Result<Ref<'_, L::Value>, StoreGetValueError<L>> {
-        {
-            let value_cache = self.value_cache.borrow();
-            if value_cache
-                .get(id)
-                .map(|v| v.contains_key(selector_hash))
-                .unwrap_or(false)
-            {
-                return Ok(Ref::map(value_cache, |value_cache| {
-                    value_cache.get(id).unwrap().get(selector_hash).unwrap()
-                }));
-            }
-        }
-
+    ) -> Result<L::Value, StoreGetValueError<L>> {
         let Some(layer) = self.layers.get(id) else {
             return Err(StoreGetValueError::LayerNotFound(id.clone()));
         };
 
         fn apply_layer<L: Layer>(
             store: &Store<L>,
+            ctx: &L::ApplyContext,
             selector: &L::Selector,
             layer: &L,
             value: &mut L::Value,
@@ -83,30 +72,15 @@ impl<L: Layer> Store<L> {
                 let Some(layer) = store.layers.get(layer_id) else {
                     return Err(StoreGetValueError::LayerNotFound(layer_id.clone()));
                 };
-                apply_layer(store, selector, layer, value)?;
+                apply_layer(store, ctx, selector, layer, value)?;
             }
-            if let Some(err) = layer.apply_onto_parent(selector, value).err() {
+            if let Some(err) = layer.apply_onto_parent(ctx, selector, value).err() {
                 return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
             };
             Ok(())
         }
         let mut value = L::Value::default();
-        apply_layer(self, selector, layer, &mut value)?;
-
-        {
-            let mut value_cache = self.value_cache.borrow_mut();
-            let value_cache = match value_cache.get_mut(id) {
-                Some(value_cache) => value_cache,
-                None => {
-                    value_cache.insert(id.clone(), HashMap::new());
-                    value_cache.get_mut(id).unwrap()
-                }
-            };
-            value_cache.insert(selector_hash.clone(), value);
-        }
-
-        Ok(Ref::map(self.value_cache.borrow(), |value_cache| {
-            value_cache.get(id).unwrap().get(selector_hash).unwrap()
-        }))
+        apply_layer(self, ctx, selector, layer, &mut value)?;
+        Ok(value)
     }
 }

@@ -635,7 +635,7 @@ impl AppCommandHandler {
 
             let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
             app_ctx.select_components(&ApplicationComponentSelectMode::Explicit(
-                found.into_iter().map(|m| m.option.into()).collect(),
+                found.into_iter().map(|m| ComponentName(m.option)).collect(),
             ))?
         }
         Ok(true)
@@ -823,7 +823,7 @@ impl AppCommandHandler {
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
             diagnose(
-                app_ctx.application.component_source_dir(component_name),
+                app_ctx.application.component(component_name).source(),
                 None,
             );
         }

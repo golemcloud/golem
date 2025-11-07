@@ -22,9 +22,10 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
 use crate::command::worker::AgentSubcommand;
-use crate::config::{BuildProfileName, ProfileName};
+use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
+use crate::model::app::ComponentPresetName;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::worker::WorkerName;
@@ -99,15 +100,18 @@ pub struct GolemCliGlobalFlags {
     pub format: Option<Format>,
 
     /// Select Golem environment by name
-    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102
+    )]
     pub environment: Option<EnvironmentReference>,
 
     /// Select "local" environment from the manifest, or target the builtin local server
-    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103)]
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
+    )]
     pub local: bool,
 
     /// Select "cloud" environment from the manifest, or target the cloud server
-    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104)]
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
+    )]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
@@ -118,10 +122,15 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'X', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
-    // TODO: atomic
-    /// Select build profile
-    #[arg(long, short = 'B', global = true, display_order = 107)]
-    pub build_profile: Option<BuildProfileName>,
+    /// Select custom component presets
+    #[arg(
+        long,
+        short = 'P',
+        global = true,
+        value_delimiter = ',',
+        display_order = 107
+    )]
+    pub preset: Vec<ComponentPresetName>,
 
     /// Select Golem profile by name
     #[arg(long, global = true, display_order = 108)]
@@ -203,9 +212,13 @@ impl GolemCliGlobalFlags {
             }
         }
 
-        if self.build_profile.is_none() {
-            if let Ok(build_profile) = std::env::var("GOLEM_BUILD_PROFILE") {
-                self.build_profile = Some(build_profile.into());
+        if self.preset.is_empty() {
+            if let Ok(preset) = std::env::var("GOLEM_PRESET") {
+                self.preset = preset
+                    .split(',')
+                    .map(|preset| preset.parse())
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(|err| anyhow!(err))?;
             }
         }
 
@@ -727,7 +740,8 @@ pub mod shared_args {
     #[derive(Debug, Args, Clone)]
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"])]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"]
+        )]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
@@ -736,10 +750,12 @@ pub mod shared_args {
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate agents and HTTP APIs
-        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
+        )]
         pub redeploy_all: bool,
         /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"]
+        )]
         pub reset: bool,
     }
 

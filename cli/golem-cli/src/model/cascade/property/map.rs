@@ -14,11 +14,12 @@
 
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
+use indexmap::IndexMap;
 use serde::Serialize;
-use std::collections::HashMap;
+use serde_derive::Deserialize;
 use std::hash::Hash;
 
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MapMergeMode {
     #[default]
@@ -33,45 +34,53 @@ pub enum MapPropertyTraceElem<L: Layer, K, V> {
     #[serde(rename_all = "camelCase")]
     Upsert {
         id: L::Id,
-        inserted_entries: HashMap<K, V>,
-        updated_entries: HashMap<K, V>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        #[serde(skip_serializing_if = "IndexMap::is_empty")]
+        inserted_entries: IndexMap<K, V>,
+        #[serde(skip_serializing_if = "IndexMap::is_empty")]
+        updated_entries: IndexMap<K, V>,
     },
     #[serde(rename_all = "camelCase")]
     Replace {
         id: L::Id,
-        new_entries: HashMap<K, V>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        new_entries: IndexMap<K, V>,
     },
     #[serde(rename_all = "camelCase")]
     Remove {
         id: L::Id,
-        removed_entries: HashMap<K, V>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        selection: Option<L::AppliedSelection>,
+        removed_entries: IndexMap<K, V>,
     },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MapProperty<L: Layer, K: Serialize, V: Serialize> {
-    map: HashMap<K, V>,
+    map: IndexMap<K, V>,
     trace: Vec<MapPropertyTraceElem<L, K, V>>,
 }
 
 impl<L: Layer, K: Serialize, V: Serialize> Default for MapProperty<L, K, V> {
     fn default() -> Self {
         Self {
-            map: HashMap::new(),
+            map: IndexMap::new(),
             trace: vec![],
         }
     }
 }
 
 impl<L: Layer, K: Serialize, V: Serialize> MapProperty<L, K, V> {
-    pub fn new(map: HashMap<K, V>) -> Self {
+    pub fn new(map: IndexMap<K, V>) -> Self {
         Self { map, trace: vec![] }
     }
 }
 
-impl<L: Layer, K: Serialize, V: Serialize> From<HashMap<K, V>> for MapProperty<L, K, V> {
-    fn from(value: HashMap<K, V>) -> Self {
+impl<L: Layer, K: Serialize, V: Serialize> From<IndexMap<K, V>> for MapProperty<L, K, V> {
+    fn from(value: IndexMap<K, V>) -> Self {
         Self::new(value)
     }
 }
@@ -79,8 +88,8 @@ impl<L: Layer, K: Serialize, V: Serialize> From<HashMap<K, V>> for MapProperty<L
 impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<L>
     for MapProperty<L, K, V>
 {
-    type Value = HashMap<K, V>;
-    type PropertyLayer = (MapMergeMode, HashMap<K, V>);
+    type Value = IndexMap<K, V>;
+    type PropertyLayer = (MapMergeMode, IndexMap<K, V>);
     type TraceElem = MapPropertyTraceElem<L, K, V>;
 
     fn value(&self) -> &Self::Value {
@@ -94,14 +103,14 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
     fn apply_layer(
         &mut self,
         id: &L::Id,
-        _selection: Option<&L::AppliedSelection>,
+        selection: Option<&L::AppliedSelection>,
         layer: Self::PropertyLayer,
     ) {
         let (mode, map) = layer;
         match mode {
             MapMergeMode::Upsert => {
-                let mut inserted_entries = HashMap::new();
-                let mut updated_entries = HashMap::new();
+                let mut inserted_entries = IndexMap::new();
+                let mut updated_entries = IndexMap::new();
                 for (key, value) in map {
                     if self.map.insert(key.clone(), value.clone()).is_some() {
                         updated_entries.insert(key, value);
@@ -111,6 +120,7 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 }
                 self.trace.push(MapPropertyTraceElem::Upsert {
                     id: id.clone(),
+                    selection: selection.cloned(),
                     inserted_entries,
                     updated_entries,
                 });
@@ -119,18 +129,20 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
                 self.map = map.clone();
                 self.trace.push(MapPropertyTraceElem::Replace {
                     id: id.clone(),
+                    selection: selection.cloned(),
                     new_entries: map,
                 })
             }
             MapMergeMode::Remove => {
-                let mut removed_entries = HashMap::new();
+                let mut removed_entries = IndexMap::new();
                 for (key, _) in map {
-                    if let Some(value) = self.map.remove(&key) {
+                    if let Some(value) = self.map.shift_remove(&key) {
                         removed_entries.insert(key, value);
                     }
                 }
                 self.trace.push(MapPropertyTraceElem::Remove {
                     id: id.clone(),
+                    selection: selection.cloned(),
                     removed_entries,
                 })
             }

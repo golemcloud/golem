@@ -938,11 +938,7 @@ impl WorkerCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let nodes = match clients
             .worker
-            .get_files(
-                &component.component_id.0,
-                &worker_name.0,
-                &path,
-            )
+            .get_files(&component.component_id.0, &worker_name.0, &path)
             .await
             .map_service_error()
         {
@@ -1016,11 +1012,7 @@ impl WorkerCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let file_contents = match clients
             .worker
-            .get_file_content(
-                &component.component_id.0,
-                &worker_name.0,
-                &path,
-            )
+            .get_file_content(&component.component_id.0, &worker_name.0, &path)
             .await
             .map_service_error()
         {
