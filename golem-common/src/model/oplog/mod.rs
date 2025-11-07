@@ -276,9 +276,7 @@ oplog_entry! {
         }
         public {
             function_name: String,
-            #[wit_field(convert = WitValue)]
             request: ValueAndType,
-            #[wit_field(convert = WitValue)]
             response: ValueAndType,
             durable_function_type: PublicDurableFunctionType,
         }
@@ -380,7 +378,6 @@ oplog_entry! {
         }
         public {
             function_name: String,
-            #[wit_field(convert_vec = WitValue)]
             request: Vec<ValueAndType>,
             idempotency_key: IdempotencyKey,
             trace_id: TraceId,

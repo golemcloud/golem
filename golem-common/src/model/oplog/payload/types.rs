@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
-use crate::model::{ComponentVersion, WorkerId, WorkerMetadata, WorkerStatus};
+use crate::model::{
+    ComponentVersion, IdempotencyKey, ScheduleId, WorkerId, WorkerMetadata, WorkerStatus,
+};
 use anyhow::anyhow;
 use desert_rust::{
     BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -21,7 +23,7 @@ use desert_rust::{
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm::{FromValue, IntoValue, Value, ValueAndType, WitValue};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use std::collections::{BTreeMap, HashMap};
@@ -32,7 +34,8 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
-use wasmtime_wasi::p2::FsError;
+use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
+use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
@@ -412,6 +415,219 @@ impl FromValue for SerializableFsErrorCode {
             )),
             _ => Err(format!(
                 "Invalid value for SerializableFsErrorCode: {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableSocketError {
+    ErrorCode(SerializableSocketErrorCode),
+    Generic(String),
+}
+
+impl SerializableSocketError {
+    pub fn from_result(result: Result<SocketErrorCode, String>) -> Self {
+        match result {
+            Ok(error_code) => Self::ErrorCode(SerializableSocketErrorCode(error_code)),
+            Err(msg) => SerializableSocketError::Generic(msg),
+        }
+    }
+}
+
+impl From<wasmtime_wasi::p2::SocketError> for SerializableSocketError {
+    fn from(value: SocketError) -> Self {
+        Self::from_result(value.downcast().map_err(|err| err.to_string()))
+    }
+}
+
+impl From<SerializableSocketError> for wasmtime_wasi::p2::SocketError {
+    fn from(value: SerializableSocketError) -> Self {
+        match value {
+            SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
+                error_code.into()
+            }
+            SerializableSocketError::Generic(error) => {
+                wasmtime_wasi::p2::SocketError::trap(anyhow!(error))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerializableSocketErrorCode(SocketErrorCode);
+
+impl BinarySerializer for SerializableSocketErrorCode {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        match &self.0 {
+            SocketErrorCode::Unknown => context.write_u8(0),
+            SocketErrorCode::AccessDenied => context.write_u8(1),
+            SocketErrorCode::NotSupported => context.write_u8(2),
+            SocketErrorCode::InvalidArgument => context.write_u8(3),
+            SocketErrorCode::OutOfMemory => context.write_u8(4),
+            SocketErrorCode::Timeout => context.write_u8(5),
+            SocketErrorCode::ConcurrencyConflict => context.write_u8(6),
+            SocketErrorCode::NotInProgress => context.write_u8(7),
+            SocketErrorCode::WouldBlock => context.write_u8(8),
+            SocketErrorCode::InvalidState => context.write_u8(9),
+            SocketErrorCode::NewSocketLimit => context.write_u8(10),
+            SocketErrorCode::AddressNotBindable => context.write_u8(11),
+            SocketErrorCode::AddressInUse => context.write_u8(12),
+            SocketErrorCode::RemoteUnreachable => context.write_u8(13),
+            SocketErrorCode::ConnectionRefused => context.write_u8(14),
+            SocketErrorCode::ConnectionReset => context.write_u8(15),
+            SocketErrorCode::ConnectionAborted => context.write_u8(16),
+            SocketErrorCode::DatagramTooLarge => context.write_u8(17),
+            SocketErrorCode::NameUnresolvable => context.write_u8(18),
+            SocketErrorCode::TemporaryResolverFailure => context.write_u8(19),
+            SocketErrorCode::PermanentResolverFailure => context.write_u8(20),
+        }
+        Ok(())
+    }
+}
+
+impl BinaryDeserializer for SerializableSocketErrorCode {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let tag = context.read_u8()?;
+        let error_code = match tag {
+            0 => SocketErrorCode::Unknown,
+            1 => SocketErrorCode::AccessDenied,
+            2 => SocketErrorCode::NotSupported,
+            3 => SocketErrorCode::InvalidArgument,
+            4 => SocketErrorCode::OutOfMemory,
+            5 => SocketErrorCode::Timeout,
+            6 => SocketErrorCode::ConcurrencyConflict,
+            7 => SocketErrorCode::NotInProgress,
+            8 => SocketErrorCode::WouldBlock,
+            9 => SocketErrorCode::InvalidState,
+            10 => SocketErrorCode::NewSocketLimit,
+            11 => SocketErrorCode::AddressNotBindable,
+            12 => SocketErrorCode::AddressInUse,
+            13 => SocketErrorCode::RemoteUnreachable,
+            14 => SocketErrorCode::ConnectionRefused,
+            15 => SocketErrorCode::ConnectionReset,
+            16 => SocketErrorCode::ConnectionAborted,
+            17 => SocketErrorCode::DatagramTooLarge,
+            18 => SocketErrorCode::NameUnresolvable,
+            19 => SocketErrorCode::TemporaryResolverFailure,
+            20 => SocketErrorCode::PermanentResolverFailure,
+            other => {
+                return Err(desert_rust::Error::DeserializationFailure(format!(
+                    "Invalid tag for SerializableSocketErrorCode: {other}"
+                )))
+            }
+        };
+        Ok(SerializableSocketErrorCode(error_code))
+    }
+}
+
+impl IntoValue for SerializableSocketErrorCode {
+    fn into_value(self) -> Value {
+        match &self.0 {
+            SocketErrorCode::Unknown => Value::Enum(0),
+            SocketErrorCode::AccessDenied => Value::Enum(1),
+            SocketErrorCode::NotSupported => Value::Enum(2),
+            SocketErrorCode::InvalidArgument => Value::Enum(3),
+            SocketErrorCode::OutOfMemory => Value::Enum(4),
+            SocketErrorCode::Timeout => Value::Enum(5),
+            SocketErrorCode::ConcurrencyConflict => Value::Enum(6),
+            SocketErrorCode::NotInProgress => Value::Enum(7),
+            SocketErrorCode::WouldBlock => Value::Enum(8),
+            SocketErrorCode::InvalidState => Value::Enum(9),
+            SocketErrorCode::NewSocketLimit => Value::Enum(10),
+            SocketErrorCode::AddressNotBindable => Value::Enum(11),
+            SocketErrorCode::AddressInUse => Value::Enum(12),
+            SocketErrorCode::RemoteUnreachable => Value::Enum(13),
+            SocketErrorCode::ConnectionRefused => Value::Enum(14),
+            SocketErrorCode::ConnectionReset => Value::Enum(15),
+            SocketErrorCode::ConnectionAborted => Value::Enum(16),
+            SocketErrorCode::DatagramTooLarge => Value::Enum(17),
+            SocketErrorCode::NameUnresolvable => Value::Enum(18),
+            SocketErrorCode::TemporaryResolverFailure => Value::Enum(19),
+            SocketErrorCode::PermanentResolverFailure => Value::Enum(20),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&[
+            "unknown",
+            "access-denied",
+            "not-supported",
+            "invalid-argument",
+            "out-of-memory",
+            "timeout",
+            "concurrency-conflict",
+            "not-in-progress",
+            "would-block",
+            "invalid-state",
+            "new-socket-limit",
+            "address-not-bindable",
+            "address-in-use",
+            "remote-unreachable",
+            "connection-refused",
+            "connection-reset",
+            "connection-aborted",
+            "datagram-too-large",
+            "name-unresolvable",
+            "temporary-resolver-failure",
+            "permanent-resolver-failure",
+        ])
+    }
+}
+
+impl FromValue for SerializableSocketErrorCode {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Enum(0) => Ok(SerializableSocketErrorCode(SocketErrorCode::Unknown)),
+            Value::Enum(1) => Ok(SerializableSocketErrorCode(SocketErrorCode::AccessDenied)),
+            Value::Enum(2) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotSupported)),
+            Value::Enum(3) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::InvalidArgument,
+            )),
+            Value::Enum(4) => Ok(SerializableSocketErrorCode(SocketErrorCode::OutOfMemory)),
+            Value::Enum(5) => Ok(SerializableSocketErrorCode(SocketErrorCode::Timeout)),
+            Value::Enum(6) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::ConcurrencyConflict,
+            )),
+            Value::Enum(7) => Ok(SerializableSocketErrorCode(SocketErrorCode::NotInProgress)),
+            Value::Enum(8) => Ok(SerializableSocketErrorCode(SocketErrorCode::WouldBlock)),
+            Value::Enum(9) => Ok(SerializableSocketErrorCode(SocketErrorCode::InvalidState)),
+            Value::Enum(10) => Ok(SerializableSocketErrorCode(SocketErrorCode::NewSocketLimit)),
+            Value::Enum(11) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::AddressNotBindable,
+            )),
+            Value::Enum(12) => Ok(SerializableSocketErrorCode(SocketErrorCode::AddressInUse)),
+            Value::Enum(13) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::RemoteUnreachable,
+            )),
+            Value::Enum(14) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::ConnectionRefused,
+            )),
+            Value::Enum(15) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::ConnectionReset,
+            )),
+            Value::Enum(16) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::ConnectionAborted,
+            )),
+            Value::Enum(17) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::DatagramTooLarge,
+            )),
+            Value::Enum(18) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::NameUnresolvable,
+            )),
+            Value::Enum(19) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::TemporaryResolverFailure,
+            )),
+            Value::Enum(20) => Ok(SerializableSocketErrorCode(
+                SocketErrorCode::PermanentResolverFailure,
+            )),
+            _ => Err(format!(
+                "Invalid value for SerializableSocketErrorCode: {:?}",
                 value
             )),
         }
@@ -902,8 +1118,8 @@ pub enum SerializableStreamError {
     Trap(String),
 }
 
-impl From<&StreamError> for SerializableStreamError {
-    fn from(value: &StreamError) -> Self {
+impl From<StreamError> for SerializableStreamError {
+    fn from(value: StreamError) -> Self {
         match value {
             StreamError::Closed => Self::Closed,
             StreamError::LastOperationFailed(e) => Self::LastOperationFailed(e.to_string()),
@@ -1003,5 +1219,51 @@ impl From<Vec<IpAddress>> for SerializableIpAddresses {
 impl From<SerializableIpAddresses> for Vec<IpAddress> {
     fn from(value: SerializableIpAddresses) -> Self {
         value.0.into_iter().map(|v| v.into()).collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableInvokeRequest {
+    pub remote_worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    pub function_params: Vec<ValueAndType>,
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SerializableInvokeResult {
+    Failed(String),
+    Pending,
+    Completed(Result<Option<ValueAndType>, SerializableRpcError>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableRpcError {
+    ProtocolError { details: String },
+    Denied { details: String },
+    NotFound { details: String },
+    RemoteInternalError { details: String },
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+#[wit_transparent]
+pub struct SerializableScheduleId {
+    pub data: Vec<u8>,
+}
+
+impl SerializableScheduleId {
+    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
+        let data = crate::serialization::serialize(schedule_id)
+            .unwrap()
+            .to_vec();
+        Self { data }
+    }
+
+    pub fn as_domain(&self) -> Result<ScheduleId, String> {
+        crate::serialization::deserialize(&self.data)
     }
 }

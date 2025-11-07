@@ -4367,6 +4367,7 @@ dependencies = [
  "poem-openapi",
  "pretty_assertions",
  "prometheus",
+ "proptest",
  "prost-types 0.14.1",
  "rand 0.9.2",
  "range-set-blaze",

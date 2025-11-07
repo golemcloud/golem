@@ -636,7 +636,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 )
                 .await
         } else {
-            durability.replay(self)
+            durability.replay(self).await
         }?;
 
         Ok(result.metadata.map(|metadata| metadata.into()))
@@ -684,7 +684,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        result.result.map_err(|err| err.into())
+        result.result.map_err(|err| anyhow!(err))
     }
 
     async fn revert_agent(
@@ -721,7 +721,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        result.result.map_err(|err| err.into())
+        result.result.map_err(|err| anyhow!(err))
     }
 
     async fn resolve_component_id(
@@ -761,7 +761,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         result
             .result
             .map(|opt| opt.map(golem_api_1_x::host::ComponentId::from))
-            .map_err(|err| err.into())
+            .map_err(|err| anyhow!(err))
     }
 
     async fn resolve_agent_id(
@@ -815,7 +815,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         result
             .result
             .map(|opt| opt.map(golem_api_1_x::host::AgentId::from))
-            .map_err(|err| err.into())
+            .map_err(|err| anyhow!(err))
     }
 
     async fn fork(&mut self, new_name: String) -> anyhow::Result<ForkResult> {
@@ -863,7 +863,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(result) => Ok(result.into()),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(anyhow!(err)),
         }
     }
 }

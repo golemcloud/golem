@@ -44,7 +44,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
     OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,

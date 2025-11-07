@@ -22,7 +22,7 @@ use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::oplog::{DurableFunctionType, HostRequest, HostRequestNoInput};
+use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput};
 use golem_common::model::{OplogIndex, TransactionId, WorkerId};
 use golem_wasm::IntoValueAndType;
 use std::marker::PhantomData;

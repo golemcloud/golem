@@ -42,7 +42,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        Ok(result.into())
+        Ok(result.time.into())
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
@@ -72,6 +72,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             durability.replay(self).await
         }?;
 
-        Ok(result.into())
+        Ok(result.time.into())
     }
 }

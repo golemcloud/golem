@@ -14,11 +14,16 @@
 
 pub mod types;
 
+#[cfg(test)]
+mod tests;
+
 use crate::model::agent::RegisteredAgentType;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
+    SerializableSocketError,
 };
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
+use crate::model::oplog::types::{AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses, SerializableRpcError, SerializableScheduleId, SerializableStreamError};
 use crate::model::oplog::PayloadId;
 use crate::model::{
     ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
@@ -35,7 +40,6 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use uuid::Uuid;
-use crate::model::oplog::types::{AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableIpAddresses, SerializableStreamError};
 
 oplog_payload! {
     HostRequest => {
@@ -106,6 +110,12 @@ oplog_payload! {
         },
         GolemAgentGetAgentType {
             agent_type_name: String
+        },
+        GolemRpcInvoke {
+            request: SerializableInvokeRequest
+        },
+        GolemRpcScheduledInvoke {
+            schedule_id: SerializableScheduleId
         },
         HttpRequest {
             request: SerializableHttpRequest
@@ -209,6 +219,9 @@ oplog_payload! {
         },
         GolemAgentAgentType {
             result: Result<Option<RegisteredAgentType>, String>
+        },
+        GolemRpcInvokeAndAwait {
+            result: Result<Option<ValueAndType>, SerializableRpcError>
         },
         HttpFutureTrailersGet {
             result:  Result<Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableHttpErrorCode>, ()>>, String>

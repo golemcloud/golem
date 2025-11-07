@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::analysis::AnalysedType;
 use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
 use crate::{Value, ValueAndType, WitValue};
 use bigdecimal::BigDecimal;
@@ -654,32 +655,32 @@ impl FromValue for crate::RpcError {
     }
 }
 
-impl FromValue for crate::ValueAndType {
-    fn from_value(value: Value) -> Result<Self, String> {
-        match value {
-            Value::Record(mut fields) if fields.len() == 2 => {
-                let value = crate::Value::from_value(fields.remove(0))?;
-                let typ = crate::analysis::AnalysedType::from_value(fields.remove(0))?;
-                Ok(crate::ValueAndType { value, typ })
-            }
-            _ => Err(format!(
-                "Expected Record with value and type for ValueAndType, got {value:?}"
-            )),
-        }
-    }
-}
-
-impl FromValue for crate::Value {
+impl FromValue for Value {
     fn from_value(value: Value) -> Result<Self, String> {
         let wit_value = WitValue::from_value(value)?;
         Ok(wit_value.into())
     }
 }
 
-impl FromValue for crate::analysis::AnalysedType {
+impl FromValue for AnalysedType {
     fn from_value(value: Value) -> Result<Self, String> {
         let wit_type: crate::WitType = crate::WitType::from_value(value)?;
         Ok(wit_type.into())
+    }
+}
+
+impl FromValue for ValueAndType {
+    fn from_value(value: Value) -> Result<Self, String> {
+        match value {
+            Value::Record(mut fields) if fields.len() == 2 => {
+                let value = Value::from_value(fields.remove(0))?;
+                let typ = AnalysedType::from_value(fields.remove(0))?;
+                Ok(ValueAndType { value, typ })
+            }
+            _ => Err(format!(
+                "Expected Record with value and type for ValueAndType, got {value:?}"
+            )),
+        }
     }
 }
 

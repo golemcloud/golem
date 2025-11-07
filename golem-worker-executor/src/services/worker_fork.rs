@@ -15,7 +15,6 @@
 use super::file_loader::FileLoader;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::preview2::golem_api_1_x::host::ForkResult;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -47,7 +46,6 @@ use golem_common::model::oplog::{
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::read_only_lock;
-use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -566,7 +564,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             .add_imported_function_invoked(
                 "golem::api::fork".to_string(),
                 &HostRequest::GolemApiFork(HostRequestGolemApiFork {
-                    name: target_worker_id.worker_name,
+                    name: target_worker_id.worker_name.clone(),
                 }),
                 &HostResponse::GolemApiFork(HostResponseGolemApiFork {
                     result: Ok(golem_common::model::ForkResult::Forked),

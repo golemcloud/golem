@@ -19,11 +19,15 @@ use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use desert_rust::BinaryCodec;
+use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostRequestHttpRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
+use golem_common::model::ScheduleId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -40,7 +44,6 @@ use wasmtime_wasi_http::bindings::wasi::http::types::{
 use wasmtime_wasi_http::get_fields;
 use wasmtime_wasi_http::types::FieldMap;
 use wasmtime_wasi_http::{HttpError, HttpResult};
-use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 
 impl<Ctx: WorkerCtx> HostFields for DurableWorkerCtx<Ctx> {
     fn new(&mut self) -> anyhow::Result<Resource<Fields>> {
@@ -644,6 +647,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 self.try_trigger_retry(anyhow!(err)).await?;
             }
 
+            let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
             if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
@@ -663,7 +667,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .await;
             }
 
-            if !matches!(serializable_response, SerializableHttpResponse::Pending) {
+            if !is_pending {
                 if let Ok(Some(Ok(Ok(resource)))) = &response {
                     let incoming_response_handle = resource.rep();
                     continue_http_request(
@@ -756,5 +760,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_error_code(&mut self, err: HttpError) -> wasmtime::Result<ErrorCode> {
         self.observe_function_call("http::types", "convert_error_code");
         Host::convert_error_code(&mut self.as_wasi_http_view(), err)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+#[wit_transparent]
+pub struct SerializableScheduleId {
+    pub data: Vec<u8>,
+}
+
+impl SerializableScheduleId {
+    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
+        let data = golem_common::serialization::serialize(schedule_id)
+            .unwrap()
+            .to_vec();
+        Self { data }
+    }
+
+    pub fn as_domain(&self) -> Result<ScheduleId, String> {
+        golem_common::serialization::deserialize(&self.data)
     }
 }

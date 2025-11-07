@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability.replay(self).await
             }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
+            end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "read");
@@ -118,7 +118,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability.replay(self).await
             }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
+            end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_read");
@@ -158,7 +158,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability.replay(self).await
             }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
+            end_http_request_if_closed(self, handle, &result.result).await?;
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "skip");
@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             } else {
                 durability.replay(self).await
             }?;
-            end_http_request_if_closed(self, handle, &result).await?;
+            end_http_request_if_closed(self, handle, &result.result).await?;
 
             result.result.map_err(StreamError::from)
         } else {
@@ -368,9 +368,9 @@ fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
 async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
-    result: &Result<T, StreamError>,
+    result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
-    if matches!(result, Err(StreamError::Closed)) {
+    if matches!(result, Err(SerializableStreamError::Closed)) {
         if let Some(state) = ctx.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
                 end_http_request(ctx, handle).await?;

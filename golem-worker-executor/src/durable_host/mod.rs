@@ -30,7 +30,6 @@ mod logging;
 mod random;
 pub mod rdbms;
 mod replay_state;
-pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
