@@ -19,7 +19,7 @@ members = [
     "golem-wasm",
     "golem-wasm-derive",
     # "cli/golem",
-    "cli/golem-cli",
+    # "cli/golem-cli",
     "cli/golem-templates",
 ]
 
