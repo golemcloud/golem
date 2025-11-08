@@ -11,16 +11,18 @@ use wasi_async_runtime::{block_on, Reactor};
 
 #[derive(Default)]
 pub struct State {
-    pub inner_state: RefCell<InnerState>,
+    pub agent_types: RefCell<AgentTypes>,
+    pub agent_instance: RefCell<AgentInstance>,
+    pub agent_initiators: RefCell<AgentInitiators>,
+    pub async_runtime: RefCell<AsyncRuntime>,
+    pub agent_id: RefCell<Option<AgentId>>,
 }
 
 #[derive(Default)]
-pub struct InnerState {
+pub struct AgentTypes {
     pub agent_types: HashMap<AgentTypeName, AgentType>,
-    pub agent_instance: Option<Arc<ResolvedAgent>>,
-    pub agent_initiators: HashMap<AgentTypeName, Arc<dyn AgentInitiator>>,
-    pub reactor: Option<Reactor>,
 }
+
 static mut STATE: Option<State> = None;
 
 #[allow(static_mut_refs)]
@@ -33,11 +35,26 @@ pub fn get_state() -> &'static State {
     }
 }
 
+#[derive(Default)]
+pub struct AgentInstance {
+    pub resolved_agent: Option<Arc<ResolvedAgent>>,
+}
+
+#[derive(Default)]
+pub struct AgentInitiators {
+    pub agent_initiators: HashMap<AgentTypeName, Arc<dyn AgentInitiator>>,
+}
+
+#[derive(Default)]
+pub struct AsyncRuntime {
+    pub reactor: Option<Reactor>,
+}
+
 pub fn get_all_agent_types() -> Vec<AgentType> {
     let state = get_state();
 
     state
-        .inner_state
+        .agent_types
         .borrow()
         .agent_types
         .values()
@@ -49,7 +66,7 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
     let state = get_state();
 
     state
-        .inner_state
+        .agent_types
         .borrow()
         .agent_types
         .get(agent_type_name)
@@ -58,7 +75,7 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: AgentType) {
     get_state()
-        .inner_state
+        .agent_types
         .borrow_mut()
         .agent_types
         .insert(agent_type_name, agent_type);
@@ -69,7 +86,7 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
     let agent_type_name = AgentTypeName(agent_type_name.to_string());
 
     state
-        .inner_state
+        .agent_initiators
         .borrow_mut()
         .agent_initiators
         .insert(agent_type_name, initiator);
@@ -77,8 +94,10 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
 
 pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
     let state = get_state();
+    let agent_id = resolved_agent.agent_id.clone();
 
-    state.inner_state.borrow_mut().agent_instance = Some(Arc::new(resolved_agent));
+    state.agent_instance.borrow_mut().resolved_agent = Some(Arc::new(resolved_agent));
+    state.agent_id.borrow_mut().replace(agent_id);
 }
 
 // To be used only in agent implementation
@@ -87,10 +106,12 @@ where
     F: FnOnce(Arc<ResolvedAgent>) -> Fut,
     Fut: Future<Output = R>,
 {
-    let agent_instance = {
-        let state = get_state().inner_state.borrow();
-        state.agent_instance.as_ref().unwrap().clone()
-    };
+    let agent_instance = get_state()
+        .agent_instance
+        .borrow()
+        .resolved_agent
+        .clone()
+        .unwrap();
 
     block_on(|reactor| async move {
         register_reactor(reactor);
@@ -102,24 +123,28 @@ pub fn with_agent_instance<F, R>(f: F) -> R
 where
     F: FnOnce(&ResolvedAgent) -> R,
 {
-    let state = get_state().inner_state.borrow();
-    let agent_instance = state.agent_instance.as_ref();
+    let agent_instance = get_state()
+        .agent_instance
+        .borrow()
+        .resolved_agent
+        .clone()
+        .unwrap();
 
-    f(agent_instance.as_ref().unwrap())
+    f(agent_instance.as_ref())
 }
 
 pub fn get_reactor() -> Reactor {
-    get_state().inner_state.borrow().reactor.clone().unwrap()
+    get_state().async_runtime.borrow().reactor.clone().unwrap()
 }
 
 pub fn register_reactor(reactor: Reactor) {
     let state = get_state();
 
-    state.inner_state.borrow_mut().reactor = Some(reactor);
+    state.async_runtime.borrow_mut().reactor = Some(reactor);
 }
 
 pub fn get_agent_id() -> AgentId {
-    with_agent_instance(|resolved_agent| resolved_agent.agent_id.clone())
+    get_state().agent_id.borrow().clone().unwrap()
 }
 
 pub fn get_constructor_parameter_type(
@@ -188,18 +213,18 @@ where
 {
     let state = get_state();
 
-    let inner_borrow = state.inner_state.borrow();
-
-    let initiator = inner_borrow
+    let agent_initiator = state
+        .agent_initiators
+        .borrow()
         .agent_initiators
         .get(agent_type_name)
-        .unwrap()
-        .clone();
+        .cloned()
+        .unwrap();
 
     block_on(|reactor| async move {
         register_reactor(reactor);
 
-        f(initiator).await
+        f(agent_initiator).await
     })
 }
 

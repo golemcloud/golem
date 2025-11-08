@@ -14,8 +14,7 @@
 
 use crate::{
     agentic::{
-        register_reactor, with_agent_initiator, with_agent_instance, with_agent_instance_async,
-        AgentTypeName,
+        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
     },
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
@@ -23,9 +22,6 @@ use crate::{
 use crate::agentic::agent_registry;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-
-use golem_wasm::analysis::analysed_type::str;
-use wasi_async_runtime::block_on;
 
 pub struct Component;
 

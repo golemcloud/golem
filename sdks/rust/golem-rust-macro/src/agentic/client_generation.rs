@@ -41,7 +41,7 @@ pub fn get_remote_client(
 
                     }
 
-                    pub fn get_id(&self) -> String {
+                    pub fn get_agent_id(&self) -> String {
                         self.agent_id.agent_id.clone()
                     }
 
@@ -75,16 +75,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
             let method_name = &method.sig.ident;
 
-            let agent_type_name_kebab = agent_type_name.to_kebab_case();
-
-            let method_name_str_kebab = method_name.to_string().to_kebab_case();
-
-            // To form remote method name, we convert this back to kebab-case similar to TS
-            let remote_method_name = format!(
-                "{}.{{{}}}",
-                agent_type_name_kebab,
-                method_name_str_kebab
-            );
+            let remote_method_name = rpc_invoke_method_name(&agent_type_name, &method_name.to_string());
 
             let remote_method_name_token = {
                 quote! {
@@ -206,4 +197,15 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
     quote! {
         #(#method_impls)*
     }
+}
+
+
+fn rpc_invoke_method_name(
+    agent_type_name: &str,
+    method_name: &str,
+) -> String {
+    let agent_type_name_kebab = agent_type_name.to_kebab_case();
+    let method_name_kebab = method_name.to_kebab_case();
+
+    format!("{}.{{{}}}", agent_type_name_kebab, method_name_kebab)
 }
