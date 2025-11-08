@@ -709,11 +709,11 @@ impl PartitionedComponentPresets {
 #[serde(rename_all = "camelCase")]
 pub enum ComponentLayerId {
     TemplateCommon(TemplateName),
-    TemplateCustomPresets(TemplateName),
     TemplateEnvironmentPresets(TemplateName),
+    TemplateCustomPresets(TemplateName),
     ComponentCommon(ComponentName),
-    ComponentCustomPresets(ComponentName),
     ComponentEnvironmentPresets(ComponentName),
+    ComponentCustomPresets(ComponentName),
 }
 
 impl Display for ComponentLayerId {
@@ -722,20 +722,20 @@ impl Display for ComponentLayerId {
             ComponentLayerId::TemplateCommon(template_name) => {
                 write!(f, "template:{template_name}:common")
             }
-            ComponentLayerId::TemplateCustomPresets(template_name) => {
-                write!(f, "template:{template_name}:custom-presets")
-            }
             ComponentLayerId::TemplateEnvironmentPresets(template_name) => {
                 write!(f, "template:{template_name}:environment-presets")
+            }
+            ComponentLayerId::TemplateCustomPresets(template_name) => {
+                write!(f, "template:{template_name}:custom-presets")
             }
             ComponentLayerId::ComponentCommon(component_name) => {
                 write!(f, "component:{component_name}:common")
             }
-            ComponentLayerId::ComponentCustomPresets(component_name) => {
-                write!(f, "component:{component_name}:custom-presets")
-            }
             ComponentLayerId::ComponentEnvironmentPresets(component_name) => {
                 write!(f, "component:{component_name}:environment-presets")
+            }
+            ComponentLayerId::ComponentCustomPresets(component_name) => {
+                write!(f, "component:{component_name}:custom-presets")
             }
         }
     }
@@ -745,11 +745,11 @@ impl ComponentLayerId {
     fn is_template(&self) -> bool {
         match self {
             ComponentLayerId::TemplateCommon(_)
-            | ComponentLayerId::TemplateCustomPresets(_)
-            | ComponentLayerId::TemplateEnvironmentPresets(_) => true,
+            | ComponentLayerId::TemplateEnvironmentPresets(_)
+            | ComponentLayerId::TemplateCustomPresets(_) => true,
             ComponentLayerId::ComponentCommon(_)
-            | ComponentLayerId::ComponentCustomPresets(_)
-            | ComponentLayerId::ComponentEnvironmentPresets(_) => false,
+            | ComponentLayerId::ComponentEnvironmentPresets(_)
+            | ComponentLayerId::ComponentCustomPresets(_) => false,
         }
     }
 
@@ -767,11 +767,11 @@ impl ComponentLayerId {
     fn component_name(&self) -> Option<&ComponentName> {
         match self {
             ComponentLayerId::TemplateCommon(_)
-            | ComponentLayerId::TemplateCustomPresets(_)
-            | ComponentLayerId::TemplateEnvironmentPresets(_) => None,
+            | ComponentLayerId::TemplateEnvironmentPresets(_)
+            | ComponentLayerId::TemplateCustomPresets(_) => None,
             ComponentLayerId::ComponentCommon(component_name)
-            | ComponentLayerId::ComponentCustomPresets(component_name)
-            | ComponentLayerId::ComponentEnvironmentPresets(component_name) => Some(component_name),
+            | ComponentLayerId::ComponentEnvironmentPresets(component_name)
+            | ComponentLayerId::ComponentCustomPresets(component_name) => Some(component_name),
         }
     }
 
@@ -781,7 +781,7 @@ impl ComponentLayerId {
         parent_ids
             .into_vec()
             .into_iter()
-            .map(|parent_id| Self::TemplateEnvironmentPresets(TemplateName(parent_id.to_string())))
+            .map(|parent_id| Self::TemplateCustomPresets(TemplateName(parent_id.to_string())))
             .collect()
     }
 }
@@ -2098,17 +2098,16 @@ mod app_builder {
                 if let Some(err) = self
                     .component_layer_store
                     .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
+                        id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
                         parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
                         properties: {
-                            match presets.default_custom_preset {
-                                Some(default_custom_preset) => {
-                                    ComponentLayerPropertiesKind::Presets {
-                                        presets: presets.custom_presets,
-                                        default_preset: default_custom_preset,
-                                    }
+                            if presets.env_presets.is_empty() {
+                                ComponentLayerPropertiesKind::Empty
+                            } else {
+                                ComponentLayerPropertiesKind::Presets {
+                                    presets: presets.env_presets,
+                                    default_preset: "".to_string(),
                                 }
-                                None => ComponentLayerPropertiesKind::Empty,
                             }
                         },
                     })
@@ -2120,18 +2119,19 @@ mod app_builder {
                 if let Some(err) = self
                     .component_layer_store
                     .add_layer(ComponentLayer {
-                        id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
-                        parents: vec![ComponentLayerId::TemplateCustomPresets(
+                        id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
+                        parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
                             template_name.clone(),
                         )],
                         properties: {
-                            if presets.env_presets.is_empty() {
-                                ComponentLayerPropertiesKind::Empty
-                            } else {
-                                ComponentLayerPropertiesKind::Presets {
-                                    presets: presets.env_presets,
-                                    default_preset: "".to_string(),
+                            match presets.default_custom_preset {
+                                Some(default_custom_preset) => {
+                                    ComponentLayerPropertiesKind::Presets {
+                                        presets: presets.custom_presets,
+                                        default_preset: default_custom_preset,
+                                    }
                                 }
+                                None => ComponentLayerPropertiesKind::Empty,
                             }
                         },
                     })
@@ -2177,19 +2177,20 @@ mod app_builder {
                     if let Some(err) = self
                         .component_layer_store
                         .add_layer(ComponentLayer {
-                            id: ComponentLayerId::ComponentCustomPresets(component_name.clone()),
+                            id: ComponentLayerId::ComponentEnvironmentPresets(
+                                component_name.clone(),
+                            ),
                             parents: vec![ComponentLayerId::ComponentCommon(
                                 component_name.clone(),
                             )],
                             properties: {
-                                match presets.default_custom_preset {
-                                    Some(default_custom_preset) => {
-                                        ComponentLayerPropertiesKind::Presets {
-                                            presets: presets.custom_presets,
-                                            default_preset: default_custom_preset,
-                                        }
+                                if presets.env_presets.is_empty() {
+                                    ComponentLayerPropertiesKind::Empty
+                                } else {
+                                    ComponentLayerPropertiesKind::Presets {
+                                        presets: presets.env_presets,
+                                        default_preset: "".to_string(),
                                     }
-                                    None => ComponentLayerPropertiesKind::Empty,
                                 }
                             },
                         })
@@ -2201,20 +2202,19 @@ mod app_builder {
                     if let Some(err) = self
                         .component_layer_store
                         .add_layer(ComponentLayer {
-                            id: ComponentLayerId::ComponentEnvironmentPresets(
-                                component_name.clone(),
-                            ),
-                            parents: vec![ComponentLayerId::ComponentCustomPresets(
+                            id: ComponentLayerId::ComponentCustomPresets(component_name.clone()),
+                            parents: vec![ComponentLayerId::ComponentEnvironmentPresets(
                                 component_name.clone(),
                             )],
                             properties: {
-                                if presets.env_presets.is_empty() {
-                                    ComponentLayerPropertiesKind::Empty
-                                } else {
-                                    ComponentLayerPropertiesKind::Presets {
-                                        presets: presets.env_presets,
-                                        default_preset: "".to_string(),
+                                match presets.default_custom_preset {
+                                    Some(default_custom_preset) => {
+                                        ComponentLayerPropertiesKind::Presets {
+                                            presets: presets.custom_presets,
+                                            default_preset: default_custom_preset,
+                                        }
                                     }
+                                    None => ComponentLayerPropertiesKind::Empty,
                                 }
                             },
                         })
