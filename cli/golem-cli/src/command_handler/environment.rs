@@ -16,7 +16,10 @@ use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::model::environment::{EnvironmentReference, ResolvedEnvironmentIdentity};
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+    ResolvedEnvironmentIdentitySource,
+};
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
 use golem_common::model::application::ApplicationId;
@@ -37,17 +40,23 @@ impl EnvironmentCommandHandler {
         todo!()
     }
 
-    pub async fn select_environment(
+    // TODO: atomic: recheck if and when we need to cache this
+    pub async fn resolve_environment(
         &self,
-        environment: Option<&EnvironmentReference>,
+        mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         let clients = self.ctx.golem_clients().await?;
-        let request_environment = environment;
-        match request_environment.or_else(|| self.ctx.default_environment()) {
-            Some(environment) => {
-                match environment {
-                    // NOTE: when only env is referenced, we auto create the application and the env
-                    //       if needed; this is used together with app manifest
+
+        match self.ctx.environment_reference() {
+            Some(environment_reference) => {
+                if !mode.allowed(environment_reference) {
+                    // TODO: atomic: message about manifest etc.
+                    todo!()
+                }
+
+                match environment_reference {
+                    // NOTE: when only the env name is included in the reference,
+                    //       we on-demand create the application and the env
                     EnvironmentReference::Environment { environment_name } => {
                         let application = self
                             .ctx
@@ -64,7 +73,9 @@ impl EnvironmentCommandHandler {
                                     )
                                     .await?;
                                 Ok(ResolvedEnvironmentIdentity {
-                                    resolved_from: request_environment.cloned(),
+                                    source: ResolvedEnvironmentIdentitySource::Reference(
+                                        environment_reference.clone(),
+                                    ),
                                     account_id: application.account_id,
                                     application_id: application.id,
                                     application_name: application.name,
@@ -103,7 +114,9 @@ impl EnvironmentCommandHandler {
                                     )
                                     .await?;
                                 Ok(ResolvedEnvironmentIdentity {
-                                    resolved_from: request_environment.cloned(),
+                                    source: ResolvedEnvironmentIdentitySource::Reference(
+                                        environment_reference.clone(),
+                                    ),
                                     account_id: application.account_id,
                                     application_id: application.id,
                                     application_name: application.name,
@@ -123,17 +136,54 @@ impl EnvironmentCommandHandler {
                     EnvironmentReference::AccountApplicationEnvironment { .. } => {
                         // TODO: atomic: use search / lookup API once available
                         // TODO: this mode should be dynamic on auto-creation based on the current account id
-                        //       and the usecase
+                        //       and the use case
                         todo!()
                     }
                 }
             }
             None => {
-                // TODO: atomic: show error about
-                //       - using an app manifest
-                //       - using flags
-                //       - using ENV VARS
-                todo!()
+                match self.ctx.manifest_environment_name() {
+                    Some(environment_name) => {
+                        let application = self
+                            .ctx
+                            .app_handler()
+                            .get_or_create_remote_application()
+                            .await?;
+
+                        match application {
+                            Some(application) => {
+                                let environment = self
+                                    .get_or_create_remote_environment(
+                                        &application.id,
+                                        environment_name,
+                                    )
+                                    .await?;
+                                Ok(ResolvedEnvironmentIdentity {
+                                    source: ResolvedEnvironmentIdentitySource::DefaultFromManifest,
+                                    account_id: application.account_id,
+                                    application_id: application.id,
+                                    application_name: application.name,
+                                    environment_id: environment.id,
+                                    environment_name: environment.name,
+                                })
+                            }
+                            None => {
+                                // TODO: atomic: show error about
+                                //       - using an app manifest
+                                //       - using flags
+                                //       - using ENV VARS
+                                todo!()
+                            }
+                        }
+                    }
+                    None => {
+                        // TODO: atomic: show error about
+                        //       - using an app manifest
+                        //       - using flags
+                        //       - using ENV VARS
+                        todo!()
+                    }
+                }
             }
         }
     }

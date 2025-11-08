@@ -25,6 +25,7 @@ use bincode::{Decode, Encode};
 use golem_wasm::IntoValue;
 use golem_wasm_derive::IntoValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +99,15 @@ declare_enums! {
     }
 }
 
+impl Display for FlatComponentFileSystemNodeKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FlatComponentFileSystemNodeKind::Directory => write!(f, "directory"),
+            FlatComponentFileSystemNodeKind::File => write!(f, "file"),
+        }
+    }
+}
+
 declare_unions! {
     pub enum UpdateRecord {
         PendingUpdate(PendingUpdate),
@@ -114,19 +124,19 @@ declare_unions! {
 
 declare_structs! {
     pub struct PendingUpdate {
-        timestamp: Timestamp,
-        target_version: ComponentRevision,
+        pub timestamp: Timestamp,
+        pub target_version: ComponentRevision,
     }
 
     pub struct SuccessfulUpdate {
-        timestamp: Timestamp,
-        target_version: ComponentRevision,
+        pub timestamp: Timestamp,
+        pub target_version: ComponentRevision,
     }
 
     pub struct FailedUpdate {
-        timestamp: Timestamp,
-        target_version: ComponentRevision,
-        details: Option<String>,
+        pub timestamp: Timestamp,
+        pub target_version: ComponentRevision,
+        pub details: Option<String>,
     }
 
     pub struct ExportedResourceMetadata {

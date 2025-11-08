@@ -28,6 +28,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
@@ -418,7 +419,7 @@ impl AppCommandHandler {
         let _environment = self
             .ctx
             .environment_handler()
-            .select_environment(None)
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
         // TODO: atomic
@@ -514,7 +515,7 @@ impl AppCommandHandler {
         let environment = self
             .ctx
             .environment_handler()
-            .select_environment(None)
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
         let mut components = Vec::with_capacity(selected_component_names.len());
@@ -634,7 +635,7 @@ impl AppCommandHandler {
 
             let _log_output = silent_selection.then(|| LogOutput::new(Output::TracingDebug));
             app_ctx.select_components(&ApplicationComponentSelectMode::Explicit(
-                found.into_iter().map(|m| m.option.into()).collect(),
+                found.into_iter().map(|m| ComponentName(m.option)).collect(),
             ))?
         }
         Ok(true)
@@ -821,10 +822,7 @@ impl AppCommandHandler {
             );
             let _indent = self.ctx.log_handler().nested_text_view_indent();
 
-            diagnose(
-                app_ctx.application.component_source_dir(component_name),
-                None,
-            );
+            diagnose(app_ctx.application.component(component_name).source(), None);
         }
 
         Ok(())

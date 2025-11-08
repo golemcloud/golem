@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::worker::WorkerName;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ impl TryUpdateAllWorkersResult {
 #[serde(rename_all = "camelCase")]
 pub struct WorkerUpdateAttempt {
     pub component_name: ComponentName,
-    pub target_version: u64,
+    pub target_revision: ComponentRevision,
     pub worker_name: WorkerName,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

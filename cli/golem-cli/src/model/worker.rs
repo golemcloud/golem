@@ -15,23 +15,23 @@
 use crate::command::shared_args::StreamArgs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
-use crate::model::environment::{EnvironmentReference, ResolvedEnvironmentIdentity};
-use chrono::{DateTime, Utc};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
+};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::{ExportedResourceInstanceDescription, UpdateRecord};
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{WorkerId, WorkerStatus};
+use golem_common::model::worker::UpdateRecord;
+use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use golem_wasm::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct WorkerName(pub String);
@@ -97,24 +97,21 @@ pub struct WorkerMetadataView {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     pub retry_count: u32,
 
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl TrimDateTime for WorkerMetadataView {
     fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
+        self
     }
 }
 
@@ -128,7 +125,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             args: value.args,
             env: value.env,
             status: value.status,
-            component_version: value.component_version,
+            component_revision: value.component_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value.updates,
@@ -150,24 +147,27 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: u64,
+    pub component_version: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub exported_resource_instances: HashMap<String, ExportedResourceInstanceDescription>,
+    pub exported_resource_instances: HashMap<String, WorkerResourceDescription>,
 }
 
 impl WorkerMetadata {
-    pub fn from(component_name: ComponentName, value: golem_client::model::WorkerMetadata) -> Self {
+    pub fn from(
+        component_name: ComponentName,
+        value: golem_client::model::WorkerMetadataDto,
+    ) -> Self {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            created_by: Uuid::nil().into(), // TODO: atomic: value.created_by
-            environment_id: value.project_id.into(), // TODO: atomic: value.environment_id
+            created_by: value.created_by,
+            environment_id: value.environment_id,
             args: value.args,
             env: value.env,
             status: value.status,
@@ -179,15 +179,12 @@ impl WorkerMetadata {
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            exported_resource_instances:  // TODO: atomic
-            /*
-            HashMap::from_iter(
-            value.exported_resource_instances.into_iter().map(|desc| {
-                let key = desc.key.resource_id.to_string();
-                (key, desc.description)
-            }),
-             */
-            todo!(),
+            exported_resource_instances: HashMap::from_iter(
+                value
+                    .exported_resource_instances
+                    .into_iter()
+                    .map(|desc| (desc.key.to_string(), desc.description)),
+            ),
         }
     }
 }
@@ -240,9 +237,10 @@ pub struct WorkerNameMatch {
 
 impl WorkerNameMatch {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
-        self.environment
-            .as_ref()
-            .and_then(|env| env.resolved_from.as_ref())
+        self.environment.as_ref().and_then(|env| match &env.source {
+            ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
+            ResolvedEnvironmentIdentitySource::DefaultFromManifest => None,
+        })
     }
 }
 

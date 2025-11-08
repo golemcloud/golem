@@ -1,16 +1,26 @@
-use crate::config::ProfileName;
 use crate::fs;
 use crate::log::LogColorize;
-use crate::model::app::app_builder::{build_application, build_profiles};
+use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
+use crate::model::cascade::property::optional::OptionalProperty;
+use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
+use crate::model::cascade::property::Property;
 use crate::model::component::AppComponentType;
 use crate::model::template::Template;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
-use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use anyhow::anyhow;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
+use golem_common::model::environment::EnvironmentName;
+use heck::{
+    ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
+    ToTitleCase, ToTrainCase, ToUpperCamelCase,
+};
+use indexmap::IndexMap;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -24,11 +34,12 @@ use strum_macros::EnumIter;
 use url::Url;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
+pub const DEFAULT_TEMP_DIR: &str = "golem-temp";
+pub const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug)]
 pub struct ApplicationConfig {
     pub skip_up_to_date_checks: bool,
-    pub build_profile: Option<BuildProfileName>,
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
@@ -61,11 +72,11 @@ pub enum ApplicationSourceMode {
 pub enum ApplicationComponentSelectMode {
     CurrentDir,
     All,
-    Explicit(Vec<AppComponentName>),
+    Explicit(Vec<ComponentName>),
 }
 
 impl ApplicationComponentSelectMode {
-    pub fn all_or_explicit(component_names: Vec<AppComponentName>) -> Self {
+    pub fn all_or_explicit(component_names: Vec<ComponentName>) -> Self {
         if component_names.is_empty() {
             ApplicationComponentSelectMode::All
         } else {
@@ -73,7 +84,7 @@ impl ApplicationComponentSelectMode {
         }
     }
 
-    pub fn current_dir_or_explicit(component_names: Vec<AppComponentName>) -> Self {
+    pub fn current_dir_or_explicit(component_names: Vec<ComponentName>) -> Self {
         if component_names.is_empty() {
             ApplicationComponentSelectMode::CurrentDir
         } else {
@@ -82,9 +93,9 @@ impl ApplicationComponentSelectMode {
     }
 }
 
+// TODO: atomic: environments
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
-    profile: Option<ProfileName>,
     components: bool,
     custom_commands: bool,
     builtin_commands: BTreeSet<String>,
@@ -93,9 +104,8 @@ pub struct DynamicHelpSections {
 }
 
 impl DynamicHelpSections {
-    pub fn show_all(profile: ProfileName, builtin_commands: BTreeSet<String>) -> Self {
+    pub fn show_all(builtin_commands: BTreeSet<String>) -> Self {
         Self {
-            profile: Some(profile),
             components: true,
             custom_commands: true,
             builtin_commands,
@@ -106,7 +116,6 @@ impl DynamicHelpSections {
 
     pub fn show_components() -> Self {
         Self {
-            profile: None,
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -117,7 +126,6 @@ impl DynamicHelpSections {
 
     pub fn show_custom_commands(builtin_commands: BTreeSet<String>) -> Self {
         Self {
-            profile: None,
             components: false,
             custom_commands: true,
             builtin_commands,
@@ -128,7 +136,6 @@ impl DynamicHelpSections {
 
     pub fn show_api_definitions() -> Self {
         Self {
-            profile: None,
             components: false,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -137,9 +144,8 @@ impl DynamicHelpSections {
         }
     }
 
-    pub fn show_api_deployments(profile: ProfileName) -> Self {
+    pub fn show_api_deployments() -> Self {
         Self {
-            profile: Some(profile),
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -164,17 +170,21 @@ impl DynamicHelpSections {
         self.api_definitions
     }
 
-    pub fn api_deployments_profile(&self) -> Option<&ProfileName> {
+    pub fn api_deployments_environment(&self) -> Option<&EnvironmentName> {
+        // TODO: atomic: should this be bool, and env always available?
+        /*
         (self.api_deployments)
             .then_some(self.profile.as_ref())
             .flatten()
+        */
+        None
     }
 }
 
 #[derive(Debug)]
 pub struct ComponentStubInterfaces {
     pub stub_interface_name: String,
-    pub component_name: AppComponentName,
+    pub component_name: ComponentName,
     pub is_ephemeral: bool,
     pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
@@ -186,57 +196,6 @@ pub enum AppBuildStep {
     Componentize,
     Link,
     AddMetadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AppComponentName(String);
-
-impl AppComponentName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl AppComponentName {
-    pub fn to_package_name(&self) -> anyhow::Result<wit_parser::PackageName> {
-        let component_name_str = self.as_str();
-        let package_name_re =
-            regex::Regex::new(r"^(?P<namespace>[^:]+):(?P<name>[^@]+)(?:@(?P<version>.+))?$")?;
-        let captures = package_name_re
-            .captures(component_name_str)
-            .ok_or_else(|| anyhow!("Invalid component name format: {}", component_name_str))?;
-        let namespace = captures.name("namespace").unwrap().as_str().to_string();
-        let name = captures.name("name").unwrap().as_str().to_string();
-        let version = captures
-            .name("version")
-            .map(|m| m.as_str().to_string())
-            .map(|v| semver::Version::parse(&v))
-            .transpose()?;
-
-        Ok(wit_parser::PackageName {
-            namespace,
-            name,
-            version,
-        })
-    }
-}
-
-impl Display for AppComponentName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for AppComponentName {
-    fn from(value: String) -> Self {
-        AppComponentName(value)
-    }
-}
-
-impl From<&str> for AppComponentName {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -285,34 +244,7 @@ impl Display for HttpApiDeploymentSite {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct BuildProfileName(String);
-
-impl BuildProfileName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Display for BuildProfileName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for BuildProfileName {
-    fn from(value: String) -> Self {
-        BuildProfileName(value)
-    }
-}
-
-impl From<&str> for BuildProfileName {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct TemplateName(String);
 
 impl TemplateName {
@@ -351,25 +283,6 @@ pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
             }
         })
         .unwrap_or_default()
-}
-
-#[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum ResolvedComponentProperties {
-    NonProfiled {
-        template_name: Option<TemplateName>,
-        properties: ComponentProperties,
-    },
-    Profiled {
-        template_name: Option<TemplateName>,
-        default_profile: BuildProfileName,
-        profiles: HashMap<BuildProfileName, ComponentProperties>,
-    },
-}
-
-pub struct ComponentEffectivePropertySource<'a> {
-    pub template_name: Option<&'a TemplateName>,
-    pub profile: Option<&'a BuildProfileName>,
 }
 
 #[derive(Clone, Debug)]
@@ -468,7 +381,7 @@ impl Display for DependencyType {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BinaryComponentSource {
-    AppComponent { name: AppComponentName },
+    AppComponent { name: ComponentName },
     LocalFile { path: PathBuf },
     Url { url: Url },
 }
@@ -515,7 +428,7 @@ impl Ord for DependentComponent {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DependentAppComponent {
-    pub name: AppComponentName,
+    pub name: ComponentName,
     pub dep_type: DependencyType,
 }
 
@@ -535,39 +448,51 @@ pub type MultiSourceHttpApiDefinitionNames = Vec<WithSource<Vec<HttpApiDefinitio
 
 #[derive(Clone, Debug)]
 pub struct Application {
+    environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
+    application_name: WithSource<ApplicationName>,
     temp_dir: Option<WithSource<String>>,
+    resolved_temp_dir: PathBuf,
     wit_deps: WithSource<Vec<String>>,
-    components: BTreeMap<AppComponentName, Component>,
-    dependencies: BTreeMap<AppComponentName, BTreeSet<DependentComponent>>,
-    dependency_sources: BTreeMap<AppComponentName, BTreeMap<AppComponentName, PathBuf>>,
+    components:
+        BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+    dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
+    dependency_sources: BTreeMap<ComponentName, BTreeMap<ComponentName, PathBuf>>,
     no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
-    http_api_deployments:
-        BTreeMap<ProfileName, BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>>,
+    http_api_deployments: BTreeMap<
+        EnvironmentName,
+        BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
+    >,
 }
 
 impl Application {
-    pub fn profiles_from_raw_apps(
+    pub fn environments_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
-        build_profiles(apps)
+    ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
+        build_environments(apps)
+    }
+
+    pub fn application_name(&self) -> &ApplicationName {
+        &self.application_name.value
     }
 
     pub fn from_raw_apps(
-        available_profiles: &BTreeSet<ProfileName>,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Self> {
-        build_application(available_profiles, apps)
+        build_application(environments, component_presets, apps)
     }
 
     pub fn all_sources(&self) -> &BTreeSet<PathBuf> {
         &self.all_sources
     }
 
-    pub fn component_names(&self) -> impl Iterator<Item = &AppComponentName> {
+    pub fn component_names(&self) -> impl Iterator<Item = &ComponentName> {
         self.components.keys()
     }
 
@@ -575,7 +500,7 @@ impl Application {
         !self.components.is_empty()
     }
 
-    pub fn contains_component(&self, component_name: &AppComponentName) -> bool {
+    pub fn contains_component(&self, component_name: &ComponentName) -> bool {
         self.components.contains_key(component_name)
     }
 
@@ -602,69 +527,21 @@ impl Application {
         self.dependencies.values().flatten().cloned().collect()
     }
 
-    pub fn all_build_profiles(&self) -> BTreeSet<BuildProfileName> {
-        self.component_names()
-            .flat_map(|component_name| self.component_build_profiles(component_name))
-            .collect()
-    }
-
-    pub fn all_option_build_profiles(&self) -> BTreeSet<Option<BuildProfileName>> {
-        let mut profiles = self
-            .component_names()
-            .flat_map(|component_name| self.component_build_profiles(component_name))
-            .map(Some)
-            .collect::<BTreeSet<_>>();
-        profiles.insert(None);
-        profiles
-    }
-
-    pub fn all_custom_commands(&self, profile: Option<&BuildProfileName>) -> BTreeSet<String> {
+    pub fn all_custom_commands(&self) -> BTreeSet<String> {
         let mut custom_commands = BTreeSet::new();
         custom_commands.extend(self.component_names().flat_map(|component_name| {
-            self.component_properties(component_name, profile)
-                .custom_commands
+            self.component(component_name)
+                .custom_commands()
                 .keys()
                 .cloned()
+                .collect::<Vec<_>>()
         }));
         custom_commands.extend(self.custom_commands.keys().cloned());
         custom_commands
     }
 
-    pub fn all_custom_commands_for_all_build_profiles(
-        &self,
-    ) -> BTreeMap<Option<BuildProfileName>, BTreeSet<String>> {
-        let mut custom_commands = BTreeMap::<Option<BuildProfileName>, BTreeSet<String>>::new();
-
-        custom_commands
-            .entry(None)
-            .or_default()
-            .extend(self.custom_commands.keys().cloned());
-
-        for profile in self.all_option_build_profiles() {
-            let profile_commands: &mut BTreeSet<String> = {
-                if custom_commands.contains_key(&profile) {
-                    custom_commands.get_mut(&profile).unwrap()
-                } else {
-                    custom_commands.entry(profile.clone()).or_default()
-                }
-            };
-
-            profile_commands.extend(self.component_names().flat_map(|component_name| {
-                self.component_properties(component_name, profile.as_ref())
-                    .custom_commands
-                    .keys()
-                    .cloned()
-            }));
-        }
-
-        custom_commands
-    }
-
-    pub fn temp_dir(&self) -> PathBuf {
-        match self.temp_dir.as_ref() {
-            Some(temp_dir) => temp_dir.source.as_path().join(&temp_dir.value),
-            None => Path::new("golem-temp").to_path_buf(),
-        }
+    pub fn temp_dir(&self) -> &Path {
+        &self.resolved_temp_dir
     }
 
     pub fn task_result_marker_dir(&self) -> PathBuf {
@@ -675,23 +552,20 @@ impl Application {
         self.temp_dir().join(".rib_repl_history")
     }
 
-    fn component(&self, component_name: &AppComponentName) -> &Component {
-        self.components
-            .get(component_name)
-            .unwrap_or_else(|| panic!("Component not found: {component_name}"))
-    }
-
-    pub fn component_source(&self, component_name: &AppComponentName) -> &Path {
-        &self.component(component_name).source
-    }
-
-    pub fn component_source_dir(&self, component_name: &AppComponentName) -> &Path {
-        self.component(component_name).source_dir()
+    pub fn component<'a>(&'a self, component_name: &'a ComponentName) -> Component<'a> {
+        Component {
+            component_name,
+            temp_dir: self.temp_dir(),
+            properties: self
+                .components
+                .get(component_name)
+                .unwrap_or_else(|| panic!("Component not found: {component_name}")),
+        }
     }
 
     pub fn component_dependencies(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
     ) -> &BTreeSet<DependentComponent> {
         self.dependencies
             .get(component_name)
@@ -700,8 +574,8 @@ impl Application {
 
     pub fn dependency_source(
         &self,
-        component_name: &AppComponentName,
-        dependent_component_name: &AppComponentName,
+        component_name: &ComponentName,
+        dependent_component_name: &ComponentName,
     ) -> Option<&Path> {
         self.dependency_sources
             .get(component_name)
@@ -710,189 +584,6 @@ impl Application {
                     .get(dependent_component_name)
                     .map(|source| source.as_path())
             })
-    }
-
-    pub fn component_build_profiles(
-        &self,
-        component_name: &AppComponentName,
-    ) -> BTreeSet<BuildProfileName> {
-        match &self.component(component_name).properties {
-            ResolvedComponentProperties::NonProfiled { .. } => BTreeSet::new(),
-            ResolvedComponentProperties::Profiled { profiles, .. } => {
-                profiles.keys().cloned().collect()
-            }
-        }
-    }
-
-    pub fn component_effective_property_source<'a>(
-        &'a self,
-        component_name: &AppComponentName,
-        profile: Option<&'a BuildProfileName>,
-    ) -> ComponentEffectivePropertySource<'a> {
-        match &self.component(component_name).properties {
-            ResolvedComponentProperties::NonProfiled { template_name, .. } => {
-                ComponentEffectivePropertySource {
-                    template_name: template_name.as_ref(),
-                    profile: None,
-                }
-            }
-            ResolvedComponentProperties::Profiled {
-                template_name,
-                default_profile,
-                profiles,
-            } => {
-                let effective_profile = profile
-                    .map(|profile| {
-                        if profiles.contains_key(profile) {
-                            profile
-                        } else {
-                            default_profile
-                        }
-                    })
-                    .unwrap_or_else(|| default_profile);
-
-                ComponentEffectivePropertySource {
-                    template_name: template_name.as_ref(),
-                    profile: Some(effective_profile),
-                }
-            }
-        }
-    }
-
-    pub fn component_properties(
-        &self,
-        component_name: &AppComponentName,
-        profile: Option<&BuildProfileName>,
-    ) -> &ComponentProperties {
-        match &self.component(component_name).properties {
-            ResolvedComponentProperties::NonProfiled { properties, .. } => properties,
-            ResolvedComponentProperties::Profiled {
-                default_profile,
-                profiles,
-                ..
-            } => profiles
-                .get(
-                    profile
-                        .map(|profile| {
-                            if profiles.contains_key(profile) {
-                                profile
-                            } else {
-                                default_profile
-                            }
-                        })
-                        .unwrap_or_else(|| default_profile),
-                )
-                .unwrap(),
-        }
-    }
-
-    pub fn component_name_as_safe_path_elem(&self, component_name: &AppComponentName) -> String {
-        component_name.as_str().replace(":", "_")
-    }
-
-    pub fn component_source_wit(
-        &self,
-        component_name: &AppComponentName,
-        profile: Option<&BuildProfileName>,
-    ) -> PathBuf {
-        let component = self.component(component_name);
-        component.source_dir().join(
-            self.component_properties(component_name, profile)
-                .source_wit
-                .clone(),
-        )
-    }
-
-    pub fn component_generated_base_wit(&self, component_name: &AppComponentName) -> PathBuf {
-        self.temp_dir()
-            .join("generated-base-wit")
-            .join(self.component_name_as_safe_path_elem(component_name))
-    }
-
-    pub fn component_generated_base_wit_exports_package_dir(
-        &self,
-        component_name: &AppComponentName,
-        exports_package_name: &wit_parser::PackageName,
-    ) -> PathBuf {
-        self.component_generated_base_wit(component_name)
-            .join(naming::wit::DEPS_DIR)
-            .join(package_dep_dir_name_from_parser(exports_package_name))
-            .join(naming::wit::EXPORTS_WIT_FILE_NAME)
-    }
-
-    pub fn component_generated_wit(
-        &self,
-        component_name: &AppComponentName,
-        profile: Option<&BuildProfileName>,
-    ) -> PathBuf {
-        let component = self.component(component_name);
-        component.source_dir().join(
-            self.component_properties(component_name, profile)
-                .generated_wit
-                .clone(),
-        )
-    }
-
-    pub fn component_wasm(
-        &self,
-        component_name: &AppComponentName,
-        profile: Option<&BuildProfileName>,
-    ) -> PathBuf {
-        let component = self.component(component_name);
-        component.source_dir().join(
-            self.component_properties(component_name, profile)
-                .component_wasm
-                .clone(),
-        )
-    }
-
-    /// The final linked component WASM
-    pub fn component_linked_wasm(
-        &self,
-        component_name: &AppComponentName,
-        profile: Option<&BuildProfileName>,
-    ) -> PathBuf {
-        self.component_source_dir(component_name).join(
-            self.component_properties(component_name, profile)
-                .linked_wasm
-                .as_ref()
-                .cloned()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    self.temp_dir()
-                        .join("final-linked-wasm")
-                        .join(format!("{}.wasm", component_name.as_str()))
-                }),
-        )
-    }
-
-    /// Temporary target of the component composition (linking) step
-    pub fn component_temp_linked_wasm(&self, component_name: &AppComponentName) -> PathBuf {
-        self.temp_dir()
-            .join("temp-linked-wasm")
-            .join(format!("{}.wasm", component_name.as_str()))
-    }
-
-    fn client_build_dir(&self) -> PathBuf {
-        self.temp_dir().join("client")
-    }
-
-    pub fn client_temp_build_dir(&self, component_name: &AppComponentName) -> PathBuf {
-        self.client_build_dir()
-            .join(self.component_name_as_safe_path_elem(component_name))
-            .join("temp-build")
-    }
-
-    pub fn client_wasm(&self, component_name: &AppComponentName) -> PathBuf {
-        self.client_build_dir()
-            .join(self.component_name_as_safe_path_elem(component_name))
-            .join("client.wasm")
-    }
-
-    pub fn client_wit(&self, component_name: &AppComponentName) -> PathBuf {
-        self.client_build_dir()
-            .join(self.component_name_as_safe_path_elem(component_name))
-            .join(naming::wit::WIT_DIR)
     }
 
     pub fn http_api_definitions(
@@ -912,7 +603,7 @@ impl Application {
     pub fn used_component_names_for_http_api_definition(
         &self,
         name: &HttpApiDefinitionName,
-    ) -> Vec<AppComponentName> {
+    ) -> Vec<ComponentName> {
         self.http_api_definitions
             .get(name)
             .unwrap_or_else(|| panic!("HTTP API definition not found: {}", name.as_str()))
@@ -924,12 +615,12 @@ impl Application {
                     .binding
                     .component_name
                     .as_ref()
-                    .map(|component_name| AppComponentName::from(component_name.as_str()))
+                    .map(|component_name| ComponentName(component_name.to_string()))
             })
             .collect()
     }
 
-    pub fn used_component_names_for_all_http_api_definition(&self) -> Vec<AppComponentName> {
+    pub fn used_component_names_for_all_http_api_definition(&self) -> Vec<ComponentName> {
         self.http_api_definitions
             .values()
             .flat_map(|def| {
@@ -938,7 +629,7 @@ impl Application {
                         .binding
                         .component_name
                         .as_ref()
-                        .map(|component_name| AppComponentName::from(component_name.as_str()))
+                        .map(|component_name| ComponentName(component_name.to_string()))
                 })
             })
             .collect()
@@ -946,24 +637,439 @@ impl Application {
 
     pub fn http_api_deployments(
         &self,
-        profile: &ProfileName,
+        environment: &EnvironmentName,
     ) -> Option<&BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>> {
-        self.http_api_deployments.get(profile)
+        self.http_api_deployments.get(environment)
+    }
+}
+
+// TODO: atomic: parse / validate
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentPresetName(pub String);
+
+impl FromStr for ComponentPresetName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err("Component preset name cannot be empty".to_string());
+        }
+        if s.contains(':') {
+            return Err("Component preset name cannot contain ':'".to_string());
+        }
+        Ok(Self(s.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentPresetSelector {
+    pub environment: EnvironmentName,
+    pub presets: Vec<ComponentPresetName>,
+}
+
+#[derive(Debug, Clone)]
+struct PartitionedComponentPresets {
+    custom_presets: IndexMap<String, ComponentLayerProperties>,
+    default_custom_preset: Option<String>,
+
+    env_presets: IndexMap<String, ComponentLayerProperties>,
+}
+
+impl PartitionedComponentPresets {
+    fn new(presets: IndexMap<String, app_raw::ComponentLayerProperties>) -> Self {
+        let mut default_custom_preset = None;
+        let mut custom_presets = IndexMap::new();
+        let mut env_presets = IndexMap::new();
+
+        for (preset_name, properties) in presets {
+            match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
+                Some(env_name) => {
+                    env_presets.insert(env_name.to_string(), properties.into());
+                }
+                None => {
+                    if default_custom_preset.is_none() {
+                        default_custom_preset = Some(preset_name.clone());
+                    }
+                    custom_presets.insert(preset_name, properties.into());
+                }
+            }
+        }
+
+        Self {
+            custom_presets,
+            default_custom_preset,
+            env_presets,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ComponentLayerId {
+    TemplateCommon(TemplateName),
+    TemplateEnvironmentPresets(TemplateName),
+    TemplateCustomPresets(TemplateName),
+    ComponentCommon(ComponentName),
+    ComponentEnvironmentPresets(ComponentName),
+    ComponentCustomPresets(ComponentName),
+}
+
+impl Display for ComponentLayerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComponentLayerId::TemplateCommon(template_name) => {
+                write!(f, "template:{template_name}:common")
+            }
+            ComponentLayerId::TemplateEnvironmentPresets(template_name) => {
+                write!(f, "template:{template_name}:environment-presets")
+            }
+            ComponentLayerId::TemplateCustomPresets(template_name) => {
+                write!(f, "template:{template_name}:custom-presets")
+            }
+            ComponentLayerId::ComponentCommon(component_name) => {
+                write!(f, "component:{component_name}:common")
+            }
+            ComponentLayerId::ComponentEnvironmentPresets(component_name) => {
+                write!(f, "component:{component_name}:environment-presets")
+            }
+            ComponentLayerId::ComponentCustomPresets(component_name) => {
+                write!(f, "component:{component_name}:custom-presets")
+            }
+        }
+    }
+}
+
+impl ComponentLayerId {
+    fn is_template(&self) -> bool {
+        match self {
+            ComponentLayerId::TemplateCommon(_)
+            | ComponentLayerId::TemplateEnvironmentPresets(_)
+            | ComponentLayerId::TemplateCustomPresets(_) => true,
+            ComponentLayerId::ComponentCommon(_)
+            | ComponentLayerId::ComponentEnvironmentPresets(_)
+            | ComponentLayerId::ComponentCustomPresets(_) => false,
+        }
+    }
+
+    fn is_environment_preset(&self) -> bool {
+        match self {
+            ComponentLayerId::TemplateEnvironmentPresets(_)
+            | ComponentLayerId::ComponentEnvironmentPresets(_) => true,
+            ComponentLayerId::TemplateCommon(_)
+            | ComponentLayerId::TemplateCustomPresets(_)
+            | ComponentLayerId::ComponentCommon(_)
+            | ComponentLayerId::ComponentCustomPresets(_) => false,
+        }
+    }
+
+    fn component_name(&self) -> Option<&ComponentName> {
+        match self {
+            ComponentLayerId::TemplateCommon(_)
+            | ComponentLayerId::TemplateEnvironmentPresets(_)
+            | ComponentLayerId::TemplateCustomPresets(_) => None,
+            ComponentLayerId::ComponentCommon(component_name)
+            | ComponentLayerId::ComponentEnvironmentPresets(component_name)
+            | ComponentLayerId::ComponentCustomPresets(component_name) => Some(component_name),
+        }
+    }
+
+    fn parent_ids_from_raw_template_references(
+        parent_ids: app_raw::TemplateReferences,
+    ) -> Vec<ComponentLayerId> {
+        parent_ids
+            .into_vec()
+            .into_iter()
+            .map(|parent_id| Self::TemplateCustomPresets(TemplateName(parent_id.to_string())))
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentLayer {
+    id: ComponentLayerId,
+    parents: Vec<ComponentLayerId>,
+    properties: ComponentLayerPropertiesKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+enum ComponentLayerPropertiesKind {
+    Empty,
+    Common(ComponentLayerProperties),
+    Presets {
+        presets: IndexMap<String, ComponentLayerProperties>,
+        default_preset: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentLayerApplyContext {
+    env: minijinja::Environment<'static>,
+    component_name: Option<ComponentName>,
+}
+
+impl ComponentLayerApplyContext {
+    pub fn new(id: &ComponentLayerId) -> Self {
+        Self {
+            env: Self::new_template_env(),
+            component_name: id.component_name().cloned(),
+        }
+    }
+
+    fn new_template_env() -> minijinja::Environment<'static> {
+        let mut env = minijinja::Environment::new();
+
+        env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
+
+        env.add_filter("to_kebab_case", |str: &str| str.to_kebab_case());
+        env.add_filter("to_lower_camel_case", |str: &str| str.to_lower_camel_case());
+        env.add_filter("to_pascal_case", |str: &str| str.to_pascal_case());
+        env.add_filter("to_shouty_kebab_case", |str: &str| {
+            str.to_shouty_kebab_case()
+        });
+        env.add_filter("to_shouty_snake_case", |str: &str| {
+            str.to_shouty_snake_case()
+        });
+        env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
+        env.add_filter("to_title_case", |str: &str| str.to_title_case());
+        env.add_filter("to_train_case", |str: &str| str.to_train_case());
+        env.add_filter("to_upper_camel_case", |str: &str| str.to_upper_camel_case());
+
+        env
+    }
+
+    fn template_env(&self) -> &minijinja::Environment<'_> {
+        &self.env
+    }
+
+    fn template_context(&self) -> Option<impl Serialize> {
+        self.component_name.as_ref().map(|component_name| {
+            minijinja::context! {
+                componentName => component_name.0.as_str(),
+                component_name => component_name.0.as_str(),
+            }
+        })
+    }
+}
+
+impl Layer for ComponentLayer {
+    type Id = ComponentLayerId;
+    type Value = ComponentLayerProperties;
+    type Selector = ComponentPresetSelector;
+    type AppliedSelection = String;
+    type ApplyContext = ComponentLayerApplyContext;
+    type ApplyError = String;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn parent_layers(&self) -> &[Self::Id] {
+        self.parents.as_slice()
+    }
+
+    fn apply_onto_parent(
+        &self,
+        ctx: &Self::ApplyContext,
+        selector: &Self::Selector,
+        value: &mut Self::Value,
+    ) -> Result<(), Self::ApplyError> {
+        let (property_layers_to_apply, selection): (
+            Vec<&ComponentLayerProperties>,
+            Option<Self::AppliedSelection>,
+        ) = match &self.properties {
+            ComponentLayerPropertiesKind::Empty => (vec![], None),
+            ComponentLayerPropertiesKind::Common(properties) => (vec![properties], None),
+            ComponentLayerPropertiesKind::Presets {
+                presets,
+                default_preset,
+            } => {
+                if self.id.is_environment_preset() {
+                    (
+                        presets.get(&selector.environment.0).into_iter().collect(),
+                        Some(format!("app-env:{}", selector.environment.0)),
+                    )
+                } else if selector.presets.is_empty() {
+                    (
+                        vec![presets.get(default_preset).ok_or_else(|| {
+                            format!(
+                                "Default preset '{}' for component layer '{}' not found!",
+                                default_preset.log_color_highlight(),
+                                self.id.to_string().log_color_highlight(),
+                            )
+                        })?],
+                        Some(default_preset.clone()),
+                    )
+                } else {
+                    (
+                        selector
+                            .presets
+                            .iter()
+                            .filter_map(|preset| presets.get(&preset.0))
+                            .collect(),
+                        Some(selector.presets.iter().map(|p| &p.0).join(", ")),
+                    )
+                }
+            }
+        };
+        let selection = selection.as_ref();
+        let id = self.id();
+
+        for properties in property_layers_to_apply {
+            let template_env = ctx.template_env();
+            let template_ctx = self
+                .id
+                .is_template()
+                .then(|| ctx.template_context())
+                .flatten();
+            let template_ctx = template_ctx.as_ref();
+
+            value.source_wit.apply_layer(
+                id,
+                selection,
+                properties
+                    .source_wit
+                    .value()
+                    .render_or_clone(template_env, template_ctx)
+                    .map_err(|err| format!("Failed to render sourceWit: {}", err))?,
+            );
+
+            value.generated_wit.apply_layer(
+                id,
+                selection,
+                properties
+                    .generated_wit
+                    .value()
+                    .render_or_clone(template_env, template_ctx)
+                    .map_err(|err| format!("Failed to render generatedWit: {}", err))?,
+            );
+
+            value.component_wasm.apply_layer(
+                id,
+                selection,
+                properties
+                    .component_wasm
+                    .value()
+                    .render_or_clone(template_env, template_ctx)
+                    .map_err(|err| format!("Failed to render componentWasm: {}", err))?,
+            );
+
+            value.linked_wasm.apply_layer(
+                id,
+                selection,
+                properties
+                    .linked_wasm
+                    .value()
+                    .render_or_clone(template_env, template_ctx)
+                    .map_err(|err| format!("Failed to render linkedWasm: {}", err))?,
+            );
+
+            value.build.apply_layer(
+                id,
+                selection,
+                (
+                    value.build_merge_mode.unwrap_or_default(),
+                    properties
+                        .build
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render build: {}", err))?,
+                ),
+            );
+
+            value.custom_commands.apply_layer(
+                id,
+                selection,
+                (
+                    MapMergeMode::Upsert,
+                    properties
+                        .custom_commands
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render customCommands: {}", err))?,
+                ),
+            );
+
+            value.clean.apply_layer(
+                id,
+                selection,
+                (
+                    VecMergeMode::Append,
+                    properties
+                        .clean
+                        .value()
+                        .render_or_clone(template_env, template_ctx)
+                        .map_err(|err| format!("Failed to render clean: {}", err))?,
+                ),
+            );
+
+            value
+                .component_type
+                .apply_layer(id, selection, *properties.component_type.value());
+
+            value.files.apply_layer(
+                id,
+                selection,
+                (
+                    properties.files_merge_mode.unwrap_or_default(),
+                    properties.files.value().clone(),
+                ),
+            );
+
+            value.plugins.apply_layer(
+                id,
+                selection,
+                (
+                    properties.plugins_merge_mode.unwrap_or_default(),
+                    properties.plugins.value().clone(),
+                ),
+            );
+
+            value.env.apply_layer(
+                id,
+                selection,
+                (
+                    properties.env_merge_mode.unwrap_or_default(),
+                    properties.env.value().clone(),
+                ),
+            );
+        }
+
+        Ok(())
+    }
+
+    fn root_id_to_context(id: &Self::Id) -> Self::ApplyContext {
+        ComponentLayerApplyContext::new(id)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Component {
-    pub source: PathBuf,
-    pub properties: ResolvedComponentProperties,
+pub struct Component<'a> {
+    component_name: &'a ComponentName,
+    temp_dir: &'a Path,
+    properties: &'a WithSource<(ComponentProperties, ComponentLayerProperties)>,
 }
 
-impl Component {
+impl<'a> Component<'a> {
+    pub fn name(&self) -> &ComponentName {
+        self.component_name
+    }
+
+    pub fn component_type(&self) -> AppComponentType {
+        self.properties().component_type
+    }
+
+    pub fn source(&self) -> &Path {
+        &self.properties.source
+    }
+
     pub fn source_dir(&self) -> &Path {
-        let parent = self.source.parent().unwrap_or_else(|| {
+        let parent = self.source().parent().unwrap_or_else(|| {
             panic!(
                 "Failed to get parent for component, source: {}",
-                self.source.display()
+                self.source().display()
             )
         });
         if parent.as_os_str().is_empty() {
@@ -971,6 +1077,202 @@ impl Component {
         } else {
             parent
         }
+    }
+
+    pub fn properties(&self) -> &ComponentProperties {
+        &self.properties.value.0
+    }
+
+    pub fn layer_properties(&self) -> &ComponentLayerProperties {
+        &self.properties.value.1
+    }
+
+    pub fn name_as_safe_path_elem(&self) -> String {
+        self.component_name.as_str().replace(":", "_")
+    }
+
+    pub fn source_wit(&self) -> PathBuf {
+        self.source_dir().join(&self.properties().source_wit)
+    }
+
+    pub fn generated_base_wit(&self) -> PathBuf {
+        self.temp_dir
+            .join("generated-base-wit")
+            .join(self.name_as_safe_path_elem())
+    }
+
+    pub fn generated_base_wit_exports_package_dir(
+        &self,
+        exports_package_name: &wit_parser::PackageName,
+    ) -> PathBuf {
+        self.generated_base_wit()
+            .join(naming::wit::DEPS_DIR)
+            .join(naming::wit::package_dep_dir_name_from_parser(
+                exports_package_name,
+            ))
+            .join(naming::wit::EXPORTS_WIT_FILE_NAME)
+    }
+
+    pub fn generated_wit(&self) -> PathBuf {
+        self.source_dir()
+            .join(self.properties().generated_wit.clone())
+    }
+
+    pub fn wasm(&self) -> PathBuf {
+        self.source_dir()
+            .join(self.properties().component_wasm.clone())
+    }
+
+    /// Temporary target of the component composition (linking) step
+    pub fn temp_linked_wasm(&self) -> PathBuf {
+        self.temp_dir
+            .join("temp-linked-wasm")
+            .join(format!("{}.wasm", self.component_name.as_str()))
+    }
+
+    /// The final linked component WASM
+    pub fn final_linked_wasm(&self) -> PathBuf {
+        self.source_dir().join(
+            self.properties()
+                .linked_wasm
+                .as_ref()
+                .cloned()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    self.temp_dir
+                        .join("final-linked-wasm")
+                        .join(format!("{}.wasm", self.component_name.as_str()))
+                }),
+        )
+    }
+
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.properties().env
+    }
+
+    pub fn files(&self) -> &Vec<InitialComponentFile> {
+        &self.properties().files
+    }
+
+    pub fn plugins(&self) -> &Vec<PluginInstallation> {
+        &self.properties().plugins
+    }
+
+    fn client_base_build_dir(&self) -> PathBuf {
+        self.temp_dir.join("client")
+    }
+
+    pub fn client_temp_build_dir(&self) -> PathBuf {
+        self.client_base_build_dir()
+            .join(self.name_as_safe_path_elem())
+            .join("temp-build")
+    }
+
+    pub fn client_wasm(&self) -> PathBuf {
+        self.client_base_build_dir()
+            .join(self.name_as_safe_path_elem())
+            .join("client.wasm")
+    }
+
+    pub fn client_wit(&self) -> PathBuf {
+        self.client_base_build_dir()
+            .join(self.name_as_safe_path_elem())
+            .join(naming::wit::WIT_DIR)
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.properties().component_type == AppComponentType::Ephemeral
+    }
+
+    pub fn is_durable(&self) -> bool {
+        self.properties().component_type == AppComponentType::Durable
+    }
+
+    pub fn is_deployable(&self) -> bool {
+        self.properties()
+            .component_type
+            .as_deployable_component_type()
+            .is_some()
+    }
+
+    pub fn custom_commands(&self) -> &BTreeMap<String, Vec<app_raw::ExternalCommand>> {
+        &self.properties().custom_commands
+    }
+
+    pub fn build_commands(&self) -> &Vec<app_raw::BuildCommand> {
+        &self.properties().build
+    }
+
+    pub fn clean(&self) -> &Vec<String> {
+        &self.properties().clean
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentLayerProperties {
+    pub source_wit: OptionalProperty<ComponentLayer, String>,
+    pub generated_wit: OptionalProperty<ComponentLayer, String>,
+    pub component_wasm: OptionalProperty<ComponentLayer, String>,
+    pub linked_wasm: OptionalProperty<ComponentLayer, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
+    pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
+    pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
+    pub clean: VecProperty<ComponentLayer, String>,
+    pub component_type: OptionalProperty<ComponentLayer, AppComponentType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    pub env: MapProperty<ComponentLayer, String, String>,
+}
+
+impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
+    fn from(value: app_raw::ComponentLayerProperties) -> Self {
+        Self {
+            source_wit: value.source_wit.into(),
+            generated_wit: value.generated_wit.into(),
+            component_wasm: value.component_wasm.into(),
+            linked_wasm: value.linked_wasm.into(),
+            build_merge_mode: value.build_merge_mode,
+            build: value.build.into(),
+            custom_commands: value.custom_commands.into(),
+            clean: value.clean.into(),
+            component_type: value.component_type.into(),
+            files_merge_mode: value.files_merge_mode,
+            files: value.files.unwrap_or_default().into(),
+            plugins_merge_mode: value.plugins_merge_mode,
+            plugins: value.plugins.unwrap_or_default().into(),
+            env_merge_mode: value.env_merge_mode,
+            env: value.env.unwrap_or_default().into(),
+        }
+    }
+}
+
+impl ComponentLayerProperties {
+    pub fn compact_traces(&mut self) {
+        self.source_wit.compact_trace();
+        self.generated_wit.compact_trace();
+        self.component_wasm.compact_trace();
+        self.linked_wasm.compact_trace();
+        self.build.compact_trace();
+        self.custom_commands.compact_trace();
+        self.clean.compact_trace();
+        self.component_type.compact_trace();
+        self.files.compact_trace();
+        self.plugins.compact_trace();
+        self.env.compact_trace();
+    }
+
+    pub fn with_compacted_traces(&self) -> Self {
+        let mut props = self.clone();
+        props.compact_traces();
+        props
     }
 }
 
@@ -981,149 +1283,71 @@ pub struct ComponentProperties {
     pub component_wasm: String,
     pub linked_wasm: Option<String>,
     pub build: Vec<app_raw::BuildCommand>,
-    pub custom_commands: HashMap<String, Vec<app_raw::ExternalCommand>>,
+    pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: Option<AppComponentType>,
+    pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
-    pub env: HashMap<String, String>,
+    pub env: BTreeMap<String, String>,
 }
 
 impl ComponentProperties {
-    fn from_raw(
+    fn from_merged(
         validation: &mut ValidationBuilder,
         source: &Path,
-        raw: app_raw::ComponentProperties,
-    ) -> Option<Self> {
+        merged: &ComponentLayerProperties,
+    ) -> Self {
         let files =
-            InitialComponentFile::from_raw_vec(validation, source, raw.files.unwrap_or_default())?;
+            InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
-            PluginInstallation::from_raw_vec(validation, source, raw.plugins.unwrap_or_default())?;
+            PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
 
-        Some(Self {
-            source_wit: raw.source_wit.unwrap_or_default(),
-            generated_wit: raw.generated_wit.unwrap_or_default(),
-            component_wasm: raw.component_wasm.unwrap_or_default(),
-            linked_wasm: raw.linked_wasm,
-            build: raw.build,
-            custom_commands: raw.custom_commands,
-            clean: raw.clean,
-            component_type: raw.component_type,
+        let properties = Self {
+            source_wit: merged.source_wit.value().clone().unwrap_or_default(),
+            generated_wit: merged.generated_wit.value().clone().unwrap_or_default(),
+            component_wasm: merged.component_wasm.value().clone().unwrap_or_default(),
+            linked_wasm: merged.linked_wasm.value().clone(),
+            build: merged.build.value().clone(),
+            custom_commands: merged
+                .custom_commands
+                .value()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            clean: merged.clean.value().clone(),
+            component_type: (*merged.component_type.value()).unwrap_or_default(),
             files,
             plugins,
-            env: Self::validate_and_normalize_env(validation, raw.env.unwrap_or_default()),
-        })
-    }
+            env: Self::validate_and_normalize_env(validation, merged.env.value()),
+        };
 
-    fn from_raw_template<C: Serialize>(
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        template_env: &minijinja::Environment,
-        template_ctx: &C,
-        template_properties: &app_raw::ComponentProperties,
-    ) -> anyhow::Result<Option<Self>> {
-        Ok(ComponentProperties::from_raw(
-            validation,
-            source,
-            template_properties.render(template_env, template_ctx)?,
-        ))
-    }
-
-    fn merge_with_overrides(
-        mut self,
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        overrides: app_raw::ComponentProperties,
-    ) -> anyhow::Result<Option<Self>> {
-        let mut any_errors = false;
-
-        if let Some(source_wit) = overrides.source_wit {
-            self.source_wit = source_wit;
-        }
-
-        if let Some(generated_wit) = overrides.generated_wit {
-            self.generated_wit = generated_wit;
-        }
-
-        if let Some(component_wasm) = overrides.component_wasm {
-            self.component_wasm = component_wasm;
-        }
-
-        if overrides.linked_wasm.is_some() {
-            self.linked_wasm = overrides.linked_wasm;
-        }
-
-        if !overrides.build.is_empty() {
-            self.build = overrides.build;
-        }
-
-        if !overrides.custom_commands.is_empty() {
-            self.custom_commands.extend(overrides.custom_commands)
-        }
-
-        if overrides.component_type.is_some() {
-            self.component_type = overrides.component_type;
-        }
-
-        let files = overrides.files.unwrap_or_default();
-        if !files.is_empty() {
-            match InitialComponentFile::from_raw_vec(validation, source, files) {
-                Some(files) => {
-                    self.files.extend(files);
-                }
-                None => {
-                    any_errors = true;
-                }
+        for (name, value) in [
+            ("sourceWit", &properties.source_wit),
+            ("generatedWit", &properties.generated_wit),
+            ("componentWasm", &properties.component_wasm),
+        ] {
+            if value.is_empty() {
+                validation.add_error(format!(
+                    "Property {} is empty or undefined",
+                    name.log_color_highlight()
+                ));
             }
         }
 
-        let plugins = overrides.plugins.unwrap_or_default();
-        if !plugins.is_empty() {
-            match PluginInstallation::from_raw_vec(validation, source, plugins) {
-                Some(plugins) => {
-                    self.plugins.extend(plugins);
-                }
-                None => {
-                    any_errors = true;
-                }
-            }
-        }
-
-        let env = overrides.env.unwrap_or_default();
-        if !env.is_empty() {
-            self.env
-                .extend(Self::validate_and_normalize_env(validation, env));
-        }
-
-        Ok((!any_errors).then_some(self))
-    }
-
-    pub fn component_type(&self) -> AppComponentType {
-        self.component_type.unwrap_or_default()
-    }
-
-    pub fn is_ephemeral(&self) -> bool {
-        self.component_type() == AppComponentType::Ephemeral
-    }
-
-    pub fn is_durable(&self) -> bool {
-        self.component_type() == AppComponentType::Durable
-    }
-
-    pub fn is_deployable(&self) -> bool {
-        self.component_type()
-            .as_deployable_component_type()
-            .is_some()
+        properties
     }
 
     fn validate_and_normalize_env(
         validation: &mut ValidationBuilder,
-        env: HashMap<String, String>,
-    ) -> HashMap<String, String> {
+        env: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>,
+    ) -> BTreeMap<String, String> {
         env.into_iter()
             .map(|(key, value)| {
+                let key = key.as_ref();
+                let value = value.as_ref();
+
                 let upper_case_key = key.to_uppercase();
-                if upper_case_key != key {
+                if upper_case_key.as_str() != key {
                     validation.add_error(format!(
                         "Only uppercase environment variable names are allowed, found: {}",
                         key.log_color_highlight()
@@ -1138,13 +1362,14 @@ impl ComponentProperties {
                         key.log_color_highlight()
                     ));
                 }
-                (upper_case_key, value)
+                (upper_case_key, value.to_string())
             })
-            .collect::<HashMap<_, _>>()
+            .collect()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentFilePathWithPermissions {
     pub path: ComponentFilePath,
     pub permissions: ComponentFilePermissions,
@@ -1156,7 +1381,8 @@ impl ComponentFilePathWithPermissions {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InitialComponentFile {
     pub source: InitialComponentFileSource,
     pub target: ComponentFilePathWithPermissions,
@@ -1191,19 +1417,16 @@ impl InitialComponentFile {
         validation: &mut ValidationBuilder,
         source: &Path,
         files: Vec<app_raw::InitialComponentFile>,
-    ) -> Option<Vec<Self>> {
-        let source_count = files.len();
-
-        let files = files
+    ) -> Vec<Self> {
+        files
             .into_iter()
             .filter_map(|file| InitialComponentFile::from_raw(validation, source, file))
-            .collect::<Vec<_>>();
-
-        (files.len() == source_count).then_some(files)
+            .collect::<Vec<_>>()
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InitialComponentFileSource(Url);
 
 impl InitialComponentFileSource {
@@ -1252,7 +1475,8 @@ impl InitialComponentFileSource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginInstallation {
     pub name: String,
     pub version: String,
@@ -1276,71 +1500,68 @@ impl PluginInstallation {
         validation: &mut ValidationBuilder,
         source: &Path,
         files: Vec<app_raw::PluginInstallation>,
-    ) -> Option<Vec<Self>> {
-        let source_count = files.len();
-
-        let files = files
+    ) -> Vec<Self> {
+        files
             .into_iter()
             .filter_map(|file| PluginInstallation::from_raw(validation, source, file))
-            .collect::<Vec<_>>();
-
-        (files.len() == source_count).then_some(files)
+            .collect::<Vec<_>>()
     }
 }
 
 mod app_builder {
-    use crate::config::ProfileName;
     use crate::fs::PathExtra;
     use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
-        ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
-        HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames, ResolvedComponentProperties,
-        TemplateName, WithSource,
+        Application, BinaryComponentSource, ComponentLayer, ComponentLayerId,
+        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetName,
+        ComponentPresetSelector, ComponentProperties, DependencyType, DependentComponent,
+        HttpApiDefinitionName, HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames,
+        PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::store::Store;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use colored::Colorize;
     use golem_common::model::api_definition::RouteMethod;
-    use heck::{
-        ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
-        ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
-    };
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::environment::EnvironmentName;
     use itertools::Itertools;
-    use serde::Serialize;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::fmt::Debug;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use url::Url;
 
-    // Load full manifest EXCEPT profiles
+    // Load full manifest EXCEPT environments
     pub fn build_application(
-        available_profiles: &BTreeSet<ProfileName>,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        component_presets: ComponentPresetSelector,
         apps: Vec<app_raw::ApplicationWithSource>,
     ) -> ValidatedResult<Application> {
-        AppBuilder::build_app(available_profiles, apps)
+        AppBuilder::build_app(environments, component_presets, apps)
     }
 
-    // Load only profiles
-    pub fn build_profiles(
+    // Load only environments
+    pub fn build_environments(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
-        AppBuilder::build_profiles(apps)
+    ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
+        AppBuilder::build_environments(apps)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
     enum UniqueSourceCheckedEntityKey {
+        App,
         Include,
         TempDir,
         WitDeps,
         CustomCommand(String),
         Template(TemplateName),
-        Dependency((AppComponentName, DependentComponent)),
-        Component(AppComponentName),
+        Dependency((ComponentName, DependentComponent)),
+        Component(ComponentName),
         HttpApiDefinition(HttpApiDefinitionName),
         HttpApiDefinitionRoute {
             api: HttpApiDefinitionName,
@@ -1348,17 +1569,18 @@ mod app_builder {
             path: String,
         },
         HttpApiDeployment {
-            profile: ProfileName,
+            environment: EnvironmentName,
             site: HttpApiDeploymentSite,
             definition: HttpApiDefinitionName,
         },
-        Profile(ProfileName),
+        Environment(EnvironmentName),
     }
 
     impl UniqueSourceCheckedEntityKey {
         fn entity_kind(&self) -> &'static str {
             let property = "Property";
             match self {
+                UniqueSourceCheckedEntityKey::App => property,
                 UniqueSourceCheckedEntityKey::Include => property,
                 UniqueSourceCheckedEntityKey::TempDir => property,
                 UniqueSourceCheckedEntityKey::WitDeps => property,
@@ -1371,12 +1593,13 @@ mod app_builder {
                     "HTTP API Definition Route"
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment { .. } => "HTTP API Deployment",
-                UniqueSourceCheckedEntityKey::Profile(_) => "Profile",
+                UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
             }
         }
 
         fn entity_name(self) -> String {
             match self {
+                UniqueSourceCheckedEntityKey::App => "app".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::Include => {
                     "include".log_color_highlight().to_string()
                 }
@@ -1418,13 +1641,13 @@ mod app_builder {
                     )
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment {
-                    profile,
+                    environment,
                     site,
                     definition,
                 } => {
                     format!(
                         "{} - {}{} - {}",
-                        profile.0.as_str().log_color_highlight(),
+                        environment.0.as_str().log_color_highlight(),
                         match site.subdomain {
                             Some(subdomain) => {
                                 format!("{}.", subdomain.as_str().log_color_highlight())
@@ -1437,8 +1660,8 @@ mod app_builder {
                         definition.as_str().log_color_highlight(),
                     )
                 }
-                UniqueSourceCheckedEntityKey::Profile(profile_name) => {
-                    profile_name.0.log_color_highlight().to_string()
+                UniqueSourceCheckedEntityKey::Environment(environment_name) => {
+                    environment_name.0.log_color_highlight().to_string()
                 }
             }
         }
@@ -1446,38 +1669,42 @@ mod app_builder {
 
     #[derive(Default)]
     struct AppBuilder {
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+
+        app: Option<WithSource<ApplicationName>>,
         include: Vec<String>,
         temp_dir: Option<WithSource<String>>,
         wit_deps: WithSource<Vec<String>>,
-        templates: HashMap<TemplateName, app_raw::ComponentTemplate>,
-        dependencies: BTreeMap<AppComponentName, BTreeSet<DependentComponent>>,
         custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
         clean: Vec<WithSource<String>>,
+
+        raw_component_names: HashSet<String>,
+        component_names_to_source: BTreeMap<ComponentName, PathBuf>,
+        component_custom_presets: BTreeSet<ComponentPresetName>,
+        component_layer_store: Store<ComponentLayer>,
+
+        components:
+            BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+        dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
+
         http_api_definitions:
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
         http_api_deployments: BTreeMap<
-            ProfileName,
+            EnvironmentName,
             BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
         >,
-
-        // NOTE: raw component names are available (for validation) even after component resolving
-        raw_component_names: HashSet<String>,
-        // NOTE: raw components are moved into resolved_components during resolving
-        raw_components: HashMap<AppComponentName, (PathBuf, app_raw::Component)>,
-        resolved_components: BTreeMap<AppComponentName, Component>,
-
-        profiles: BTreeMap<ProfileName, app_raw::Profile>,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
 
     impl AppBuilder {
-        // NOTE: build_app DOES NOT include profiles, those are preloaded with build_profiles, so
+        // NOTE: build_app DOES NOT include environments, those are preloaded with build_environments, so
         //       flows that do not use manifest otherwise won't get blocked by high-level validation errors,
         //       and we do not "steal" manifest loading logs from those which do use the manifest fully.
         fn build_app(
-            available_profiles: &BTreeSet<ProfileName>,
+            environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+            component_presets: ComponentPresetSelector,
             apps: Vec<app_raw::ApplicationWithSource>,
         ) -> ValidatedResult<Application> {
             let mut builder = Self::default();
@@ -1486,15 +1713,18 @@ mod app_builder {
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
             }
-            builder.resolve_components(&mut validation);
+
+            // TODO: atomic: validate presets used in envs and template references
+            //               before component resolve, and skip if they are not valid
+            builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
             builder.validate_http_api_definitions(&mut validation);
-            builder.validate_http_api_deployments(&mut validation, available_profiles);
+            builder.validate_http_api_deployments(&mut validation, &environments);
 
             let dependency_sources = {
                 let mut dependency_sources =
-                    BTreeMap::<AppComponentName, BTreeMap<AppComponentName, PathBuf>>::new();
+                    BTreeMap::<ComponentName, BTreeMap<ComponentName, PathBuf>>::new();
 
                 for (key, mut sources) in builder.entity_sources {
                     if let UniqueSourceCheckedEntityKey::Dependency((
@@ -1519,11 +1749,39 @@ mod app_builder {
                 dependency_sources
             };
 
+            let application_name = match builder.app {
+                Some(application_name) => application_name,
+                None => {
+                    validation.add_error(
+                        format!(
+                            "Application name not found. Please specify it in you root {} application manifest with the `{}` property!",
+                            "golem.yaml".log_color_highlight(),
+                            "app".log_color_highlight(),
+                        ),
+                    );
+                    WithSource::new(
+                        "<unknown>".into(),
+                        ApplicationName("<undefined>".to_string()),
+                    )
+                }
+            };
+
+            let resolved_temp_dir = {
+                match builder.temp_dir.as_ref() {
+                    Some(temp_dir) => temp_dir.source.join(&temp_dir.value),
+                    None => Path::new(DEFAULT_TEMP_DIR).to_path_buf(),
+                }
+            };
+
             validation.build(Application {
+                environments,
+                component_preset_selector: component_presets,
+                application_name,
                 all_sources: builder.all_sources,
                 temp_dir: builder.temp_dir,
+                resolved_temp_dir,
                 wit_deps: builder.wit_deps,
-                components: builder.resolved_components,
+                components: builder.components,
                 dependencies: builder.dependencies,
                 dependency_sources,
                 no_dependencies: BTreeSet::new(),
@@ -1536,19 +1794,17 @@ mod app_builder {
 
         // NOTE: Unlike build_app, here we do not consume the source apps, so they can be
         //       used for build_app. For more info on this separation, see build_app.
-        //
-        //       Ironically build_profiles does not build BuildProfiles, only regular ones.
-        fn build_profiles(
+        fn build_environments(
             apps: &[app_raw::ApplicationWithSource],
-        ) -> ValidatedResult<BTreeMap<ProfileName, app_raw::Profile>> {
+        ) -> ValidatedResult<BTreeMap<EnvironmentName, app_raw::Environment>> {
             let mut builder = Self::default();
             let mut validation = ValidationBuilder::default();
 
             for app in apps {
-                builder.add_raw_app_profiles_only(&mut validation, app);
+                builder.add_raw_app_environments_only(&mut validation, app);
             }
 
-            validation.build(builder.profiles)
+            validation.build(builder.environments)
         }
 
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
@@ -1569,6 +1825,25 @@ mod app_builder {
                     let app_source = PathExtra::new(&app.source);
                     let app_source_dir = app_source.parent().unwrap();
                     self.all_sources.insert(app_source.to_path_buf());
+
+                    if let Some(app_name) = app.application.app {
+                        if self.add_entity_source(UniqueSourceCheckedEntityKey::App, &app.source) {
+                            let app_name = match app_name.parse::<ApplicationName>() {
+                                Ok(app_name) => app_name,
+                                Err(err) => {
+                                    validation.add_error(format!(
+                                        "Invalid application name: {}, {}",
+                                        app_name.log_color_highlight(),
+                                        err.log_color_error_highlight()
+                                    ));
+                                    ApplicationName(app_name)
+                                }
+                            };
+
+                            self.app =
+                                Some(WithSource::new(app_source_dir.to_path_buf(), app_name));
+                        }
+                    }
 
                     if let Some(dir) = app.application.temp_dir {
                         if self
@@ -1594,23 +1869,26 @@ mod app_builder {
                             WithSource::new(app_source_dir.to_path_buf(), app.application.wit_deps);
                     }
 
-                    for (template_name, template) in app.application.templates {
-                        self.add_and_resolve_raw_template(
-                            validation,
+                    for (template_name, template) in app.application.component_templates {
+                        let template_name = TemplateName::from(template_name);
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::Template(template_name.clone()),
                             &app.source,
-                            template_name,
-                            template,
-                        );
+                        ) {
+                            self.add_component_template(validation, template_name, template);
+                        }
                     }
 
                     for (component_name, component) in app.application.components {
-                        let app_component_name = AppComponentName::from(component_name.clone());
+                        // TODO: atomic: validate component name
+                        let component_name = ComponentName(component_name);
                         let unique_key =
-                            UniqueSourceCheckedEntityKey::Component(app_component_name.clone());
+                            UniqueSourceCheckedEntityKey::Component(component_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
-                            self.raw_component_names.insert(component_name);
-                            self.raw_components
-                                .insert(app_component_name, (app.source.to_path_buf(), component));
+                            self.raw_component_names.insert(component_name.0.clone());
+                            self.component_names_to_source
+                                .insert(component_name.clone(), app.source.clone());
+                            self.add_component(validation, component_name, component);
                         }
                     }
 
@@ -1676,7 +1954,7 @@ mod app_builder {
                             }
                         }
 
-                        for (profile, deployments) in http_api.deployments {
+                        for (environment, deployments) in http_api.deployments {
                             let mut collected_deployments =
                                 BTreeMap::<HttpApiDeploymentSite, Vec<HttpApiDefinitionName>>::new(
                                 );
@@ -1693,7 +1971,7 @@ mod app_builder {
                                     let definition = HttpApiDefinitionName::from(definition);
                                     if self.add_entity_source(
                                         UniqueSourceCheckedEntityKey::HttpApiDeployment {
-                                            profile: profile.clone(),
+                                            environment: environment.clone(),
                                             site: api_deployment_site.clone(),
                                             definition: definition.clone(),
                                         },
@@ -1711,7 +1989,7 @@ mod app_builder {
 
                             if !collected_deployments.is_empty() {
                                 let deployments =
-                                    self.http_api_deployments.entry(profile).or_default();
+                                    self.http_api_deployments.entry(environment).or_default();
 
                                 for (site, definitions) in collected_deployments {
                                     deployments.entry(site).or_default().push(WithSource::new(
@@ -1726,88 +2004,43 @@ mod app_builder {
             );
         }
 
-        fn add_raw_app_profiles_only(
+        fn add_raw_app_environments_only(
             &mut self,
             validation: &mut ValidationBuilder,
             app: &app_raw::ApplicationWithSource,
         ) {
-            fn check_not_allowed_for_profile<T>(
-                message_suffix: &str,
-                validation: &mut ValidationBuilder,
-                property_name: &str,
-                value: &Option<T>,
-            ) {
-                if value.is_some() {
-                    validation.add_error(format!(
-                        "Property {} is not allowed for {}",
-                        property_name.log_color_highlight(),
-                        message_suffix
-                    ))
-                }
-            }
-
-            let mut default_profile_names = BTreeSet::<ProfileName>::new();
+            let mut default_environment_names = BTreeSet::<EnvironmentName>::new();
 
             validation.with_context(
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
-                    for (profile_name, profile) in &app.application.profiles {
+                    for (environment_name, environment) in &app.application.environments {
+                        let environment_name = match environment_name.parse::<EnvironmentName>() {
+                            Ok(environment_name) => environment_name,
+                            Err(err) => {
+                                validation.add_error(format!(
+                                    "Invalid environment name: {}, {}",
+                                    environment_name.log_color_highlight(),
+                                    err.log_color_error_highlight()
+                                ));
+                                EnvironmentName(environment_name.clone())
+                            }
+                        };
+
                         if self.add_entity_source(
-                            UniqueSourceCheckedEntityKey::Profile(profile_name.clone()),
+                            UniqueSourceCheckedEntityKey::Environment(environment_name.clone()),
                             &app.source,
                         ) {
-                            if profile.default == Some(true) {
-                                default_profile_names.insert(profile_name.clone());
+                            if environment.default == Some(app_raw::Marker) {
+                                default_environment_names.insert(environment_name.clone());
                             };
 
-                            self.profiles.insert(profile_name.clone(), profile.clone());
+                            self.environments
+                                .insert(environment_name.clone(), environment.clone());
                             validation.with_context(
-                                vec![("profile", profile_name.to_string())],
-                                |validation| {
-                                    let is_builtin_local = profile_name.is_builtin_local();
-                                    let is_cloud = profile_name.is_builtin_cloud();
-                                    if is_builtin_local || is_cloud {
-                                        check_not_allowed_for_profile(
-                                            &format!("{} profiles", "Cloud".log_color_highlight()),
-                                            validation,
-                                            "url",
-                                            &profile.url,
-                                        );
-
-                                        check_not_allowed_for_profile(
-                                            &format!(
-                                                "builtin {} profiles",
-                                                "local".log_color_highlight()
-                                            ),
-                                            validation,
-                                            "worker_url",
-                                            &profile.worker_url,
-                                        );
-                                    }
-                                    if is_builtin_local && is_cloud {
-                                        validation.add_error(format!(
-                                            "Builtin profile '{}' cannot be used as Cloud profile, using 'cloud:true' or project are not allowed!",
-                                            profile_name.0.log_color_highlight(),
-                                        ))
-                                    }
-
-                                    if profile.reset.unwrap_or_default() {
-                                        if profile.redeploy_all.unwrap_or_default() {
-                                            validation.add_error(format!(
-                                                "Property '{}' and '{}' cannot be set to true at the same time!",
-                                                "reset".log_color_highlight(),
-                                                "redeploy".log_color_highlight()
-                                            ));
-                                        }
-
-                                        if profile.redeploy_agents.unwrap_or_default() {
-                                            validation.add_error(format!(
-                                                "Property '{}' and '{}' cannot be set to true at the same time!",
-                                                "reset".log_color_highlight(),
-                                                "redeploy_agents".log_color_highlight()
-                                            ));
-                                        }
-                                    }
+                                vec![("environment", environment_name.0)],
+                                |_validation| {
+                                    // TODO: atomic: validate environment
                                 },
                             );
                         }
@@ -1815,68 +2048,182 @@ mod app_builder {
                 },
             );
 
-            if default_profile_names.len() > 1 {
+            if default_environment_names.len() > 1 {
                 validation.add_error(format!(
-                    "Only one profile can be used as default! Profiles marked as default: {}",
-                    default_profile_names
+                    "Only one environment can be marked as default! Environments marked as default: {}",
+                    default_environment_names
                         .iter()
                         .map(|pn| pn.0.log_color_highlight())
                         .join(", ")
                 ));
+            } else if default_environment_names.is_empty() {
+                match self.environments.len() {
+                    0 => {
+                        validation
+                            .add_error("At least one environment has to be defined!".to_string());
+                    }
+                    _ => {
+                        self.environments.iter_mut().next().unwrap().1.default =
+                            Some(app_raw::Marker);
+                    }
+                }
             }
         }
 
-        fn add_and_resolve_raw_template(
+        fn add_component_template(
             &mut self,
             validation: &mut ValidationBuilder,
-            source: &Path,
-            template_name: String,
+            template_name: TemplateName,
             template: app_raw::ComponentTemplate,
         ) {
-            let template = template.merge_common_properties_into_profiles();
+            validation.with_context(vec![("template", template_name.0.clone())], |validation| {
+                if let Some(err) = self
+                    .component_layer_store
+                    .add_layer(ComponentLayer {
+                        id: ComponentLayerId::TemplateCommon(template_name.clone()),
+                        parents: ComponentLayerId::parent_ids_from_raw_template_references(
+                            template.templates,
+                        ),
+                        properties: ComponentLayerPropertiesKind::Common(
+                            template.component_properties.into(),
+                        ),
+                    })
+                    .err()
+                {
+                    validation.add_error(err.to_string())
+                }
 
-            validation.with_context(vec![("template", template_name.clone())], |validation| {
-                if template.profiles.is_empty() {
-                    if template.default_profile.is_some() {
-                        validation.add_error(format!(
-                            "Property {} is not allowed if no {} are defined",
-                            "defaultProfile".log_color_highlight(),
-                            "profiles".log_color_highlight(),
-                        ));
-                    }
-                } else {
-                    match &template.default_profile {
-                        Some(default_profile) => {
-                            if !template.profiles.contains_key(default_profile) {
-                                validation.add_error(format!(
-                                    "Unknown {}: {}\n\n{}",
-                                    "defaultProfile".log_color_highlight(),
-                                    default_profile.log_color_highlight(),
-                                    self.available_profiles(
-                                        template.profiles.keys().map(|s| s.as_str()),
-                                        default_profile
-                                    ),
-                                ))
+                let presets = PartitionedComponentPresets::new(template.presets);
+
+                if let Some(err) = self
+                    .component_layer_store
+                    .add_layer(ComponentLayer {
+                        id: ComponentLayerId::TemplateEnvironmentPresets(template_name.clone()),
+                        parents: vec![ComponentLayerId::TemplateCommon(template_name.clone())],
+                        properties: {
+                            if presets.env_presets.is_empty() {
+                                ComponentLayerPropertiesKind::Empty
+                            } else {
+                                ComponentLayerPropertiesKind::Presets {
+                                    presets: presets.env_presets,
+                                    default_preset: "".to_string(),
+                                }
                             }
-                        }
-                        None => {
-                            validation.add_error(format!(
-                                "Property {} is mandatory when using {}",
-                                "defaultProfile".log_color_highlight(),
-                                "profiles".log_color_highlight(),
-                            ));
-                        }
-                    }
+                        },
+                    })
+                    .err()
+                {
+                    validation.add_error(err.to_string())
+                }
+
+                if let Some(err) = self
+                    .component_layer_store
+                    .add_layer(ComponentLayer {
+                        id: ComponentLayerId::TemplateCustomPresets(template_name.clone()),
+                        parents: vec![ComponentLayerId::TemplateEnvironmentPresets(
+                            template_name.clone(),
+                        )],
+                        properties: {
+                            match presets.default_custom_preset {
+                                Some(default_custom_preset) => {
+                                    ComponentLayerPropertiesKind::Presets {
+                                        presets: presets.custom_presets,
+                                        default_preset: default_custom_preset,
+                                    }
+                                }
+                                None => ComponentLayerPropertiesKind::Empty,
+                            }
+                        },
+                    })
+                    .err()
+                {
+                    validation.add_error(err.to_string())
                 }
             });
+        }
 
-            let template_name = TemplateName::from(template_name);
-            if self.add_entity_source(
-                UniqueSourceCheckedEntityKey::Template(template_name.clone()),
-                source,
-            ) {
-                self.templates.insert(template_name, template);
-            }
+        fn add_component(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            component_name: ComponentName,
+            component: app_raw::Component,
+        ) {
+            validation.with_context(
+                vec![("component", component_name.0.clone())],
+                |validation| {
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::ComponentCommon(component_name.clone()),
+                            parents: ComponentLayerId::parent_ids_from_raw_template_references(
+                                component.templates,
+                            ),
+                            properties: ComponentLayerPropertiesKind::Common(
+                                component.component_properties.into(),
+                            ),
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+
+                    let presets = PartitionedComponentPresets::new(component.presets);
+
+                    presets.custom_presets.keys().for_each(|preset_name| {
+                        self.component_custom_presets
+                            .insert(ComponentPresetName(preset_name.clone()));
+                    });
+
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::ComponentEnvironmentPresets(
+                                component_name.clone(),
+                            ),
+                            parents: vec![ComponentLayerId::ComponentCommon(
+                                component_name.clone(),
+                            )],
+                            properties: {
+                                if presets.env_presets.is_empty() {
+                                    ComponentLayerPropertiesKind::Empty
+                                } else {
+                                    ComponentLayerPropertiesKind::Presets {
+                                        presets: presets.env_presets,
+                                        default_preset: "".to_string(),
+                                    }
+                                }
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+
+                    if let Some(err) = self
+                        .component_layer_store
+                        .add_layer(ComponentLayer {
+                            id: ComponentLayerId::ComponentCustomPresets(component_name.clone()),
+                            parents: vec![ComponentLayerId::ComponentEnvironmentPresets(
+                                component_name.clone(),
+                            )],
+                            properties: {
+                                match presets.default_custom_preset {
+                                    Some(default_custom_preset) => {
+                                        ComponentLayerPropertiesKind::Presets {
+                                            presets: presets.custom_presets,
+                                            default_preset: default_custom_preset,
+                                        }
+                                    }
+                                    None => ComponentLayerPropertiesKind::Empty,
+                                }
+                            },
+                        })
+                        .err()
+                    {
+                        validation.add_error(err.to_string())
+                    }
+                },
+            );
         }
 
         fn add_component_dependencies(
@@ -1893,7 +2240,7 @@ mod app_builder {
                         let binary_component_source = match (dependency.target, dependency.path, dependency.url) {
                             (Some(target_name), None, None) => {
                                 Some(BinaryComponentSource::AppComponent {
-                                    name: target_name.into(),
+                                    name: ComponentName(target_name),
                                 })
                             }
                             (None, Some(path), None) => {
@@ -1940,12 +2287,12 @@ mod app_builder {
                             };
 
                             let unique_key = UniqueSourceCheckedEntityKey::Dependency((
-                                component_name.clone().into(),
+                                ComponentName(component_name.clone()),
                                 dependent_component.clone(),
                             ));
                             if self.add_entity_source(unique_key, source) {
                                 self.dependencies
-                                    .entry(component_name.clone().into())
+                                    .entry(ComponentName(component_name.clone()))
                                     .or_default()
                                     .insert(dependent_component);
                             }
@@ -1981,10 +2328,10 @@ mod app_builder {
         fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
             for (component, deps) in &self.dependencies {
                 for target in deps {
-                    let invalid_source = !self.raw_component_names.contains(&component.0);
+                    let invalid_source = !self.component_names_to_source.contains_key(component);
                     let invalid_target = match &target.source {
                         BinaryComponentSource::AppComponent { name } => {
-                            !self.raw_component_names.contains(&name.0)
+                            !self.component_names_to_source.contains_key(name)
                         }
                         BinaryComponentSource::LocalFile { path } => {
                             !std::fs::exists(path).unwrap_or(false)
@@ -2059,416 +2406,52 @@ mod app_builder {
             }
         }
 
-        fn template_env<'a>() -> minijinja::Environment<'a> {
-            let mut env = minijinja::Environment::new();
-
-            env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
-
-            env.add_filter("to_kebab_case", |str: &str| str.to_kebab_case());
-            env.add_filter("to_lower_camel_case", |str: &str| str.to_lower_camel_case());
-            env.add_filter("to_pascal_case", |str: &str| str.to_pascal_case());
-            env.add_filter("to_shouty_kebab_case", |str: &str| {
-                str.to_shouty_kebab_case()
-            });
-            env.add_filter("to_shouty_snake_case", |str: &str| {
-                str.to_shouty_snake_case()
-            });
-            env.add_filter("to_snake_case", |str: &str| str.to_snake_case());
-            env.add_filter("to_title_case", |str: &str| str.to_title_case());
-            env.add_filter("to_train_case", |str: &str| str.to_train_case());
-            env.add_filter("to_upper_camel_case", |str: &str| str.to_upper_camel_case());
-
-            env
-        }
-
-        fn template_context(component_name: &AppComponentName) -> impl Serialize {
-            minijinja::context! {
-                componentName => component_name.as_str(),
-                component_name => component_name.as_str()
-            }
-        }
-
-        fn resolve_components(&mut self, validation: &mut ValidationBuilder) {
-            let template_env = Self::template_env();
-
-            let components = std::mem::take(&mut self.raw_components);
-
-            for (component_name, (source, component)) in components {
-                self.resolve_component(
-                    validation,
-                    &template_env,
-                    source,
-                    component_name,
-                    component,
+        fn resolve_and_validate_components(
+            &mut self,
+            validation: &mut ValidationBuilder,
+            component_presets: &ComponentPresetSelector,
+        ) {
+            for (component_name, source) in self.component_names_to_source.clone() {
+                validation.with_context(
+                    vec![
+                        ("source", source.to_string_lossy().to_string()),
+                        ("component", component_name.to_string()),
+                    ],
+                    |validation| {
+                        self.resolve_and_validate_component(
+                            validation,
+                            component_presets,
+                            source,
+                            component_name,
+                        );
+                    },
                 );
             }
         }
 
-        fn resolve_component(
+        fn resolve_and_validate_component(
             &mut self,
             validation: &mut ValidationBuilder,
-            template_env: &minijinja::Environment,
+            component_presets: &ComponentPresetSelector,
             source: PathBuf,
-            component_name: AppComponentName,
-            component: app_raw::Component,
+            component_name: ComponentName,
         ) {
-            validation.with_context(
-                vec![
-                    ("source", source.to_string_lossy().to_string()),
-                    ("component", component_name.to_string()),
-                ],
-                |validation| {
-                    let properties = match &component.template {
-                        Some(template_name) => {
-                            let template_name = TemplateName::from(template_name.clone());
-                            match self.templates.get(&template_name) {
-                                Some(template) => self.resolve_templated_component_properties(
-                                    validation,
-                                    &source,
-                                    template_env,
-                                    template_name,
-                                    template,
-                                    component_name.clone(),
-                                    component,
-                                ),
-                                None => {
-                                    validation.add_error(format!(
-                                        "Component references unknown template: {}\n\n{}",
-                                        template_name.as_str().log_color_error_highlight(),
-                                        self.available_templates(template_name.as_str())
-                                    ));
-                                    None
-                                }
-                            }
-                        }
-                        None => self.resolve_directly_defined_component_properties(
-                            validation, &source, component,
-                        ),
-                    };
-                    if let Some(properties) = properties {
-                        self.resolved_components
-                            .insert(component_name, Component { source, properties });
-                    }
-                },
-            );
-        }
-
-        fn resolve_templated_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            template_env: &minijinja::Environment,
-            template_name: TemplateName,
-            template: &app_raw::ComponentTemplate,
-            component_name: AppComponentName,
-            component: app_raw::Component,
-        ) -> Option<ResolvedComponentProperties> {
-            let (properties, _) = validation.with_context_returning(
-                vec![("template", template_name.to_string())],
-                |validation| {
-                    if template.profiles.is_empty() {
-                        self.resolve_templated_non_profiled_component_properties(
-                            validation,
-                            source,
-                            template_env,
-                            template_name,
-                            template,
-                            component_name,
-                            component.component_properties,
-                        )
-                    } else {
-                        self.resolve_templated_profiled_component_properties(
-                            validation,
-                            source,
-                            template_env,
-                            template_name,
-                            template,
-                            component_name,
-                            component,
-                        )
-                    }
-                },
-            );
-
-            properties
-        }
-
-        fn resolve_templated_non_profiled_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            template_env: &minijinja::Environment,
-            template_name: TemplateName,
-            template: &app_raw::ComponentTemplate,
-            component_name: AppComponentName,
-            component_properties: app_raw::ComponentProperties,
-        ) -> Option<ResolvedComponentProperties> {
-            self.convert_and_validate_templated_component_properties(
-                validation,
-                source,
-                template_env,
-                &template_name,
-                &template.component_properties,
-                &component_name,
-                Some(component_properties),
-            )
-            .map(|properties| ResolvedComponentProperties::NonProfiled {
-                template_name: Some(template_name),
-                properties,
-            })
-        }
-
-        fn resolve_templated_profiled_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            template_env: &minijinja::Environment,
-            template_name: TemplateName,
-            template: &app_raw::ComponentTemplate,
-            component_name: AppComponentName,
-            component: app_raw::Component,
-        ) -> Option<ResolvedComponentProperties> {
-            let mut component =
-                component.merge_common_properties_into_profiles(template.profiles.keys());
-
-            let (profiles, valid) = validation.with_context_returning(vec![], |validation| {
-                let mut resolved_profiles = HashMap::<BuildProfileName, ComponentProperties>::new();
-
-                for (profile_name, template_component_properties) in &template.profiles {
-                    validation.with_context(
-                        vec![("profile", profile_name.to_string())],
-                        |validation| {
-                            let component_properties = component.profiles.remove(profile_name);
-                            self.convert_and_validate_templated_component_properties(
-                                validation,
-                                source,
-                                template_env,
-                                &template_name,
-                                template_component_properties,
-                                &component_name,
-                                component_properties,
-                            )
-                            .into_iter()
-                            .for_each(|component_properties| {
-                                resolved_profiles
-                                    .insert(profile_name.clone().into(), component_properties);
-                            });
-                        },
+            match self.component_layer_store.value(
+                &ComponentLayerId::ComponentEnvironmentPresets(component_name.clone()),
+                component_presets,
+            ) {
+                Ok(component_layer_properties) => {
+                    let component_properties = ComponentProperties::from_merged(
+                        validation,
+                        &source,
+                        &component_layer_properties,
+                    );
+                    self.components.insert(
+                        component_name,
+                        WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
-
-                if let Some(default_profile) = &component.default_profile {
-                    if !resolved_profiles
-                        .contains_key(&BuildProfileName::from(default_profile.as_str()))
-                    {
-                        validation.add_error(format!(
-                            "Unknown {}: {}\n\n{}",
-                            "defaultProfile".log_color_highlight(),
-                            default_profile.log_color_highlight(),
-                            self.available_profiles(
-                                component.profiles.keys().map(|s| s.as_str()),
-                                default_profile
-                            ),
-                        ))
-                    }
-                }
-
-                resolved_profiles
-            });
-
-            valid.then(|| ResolvedComponentProperties::Profiled {
-                template_name: Some(template_name),
-                default_profile: component
-                    .default_profile
-                    .or(template.default_profile.clone())
-                    .clone()
-                    .expect("Missing template default profile")
-                    .into(),
-                profiles,
-            })
-        }
-
-        fn resolve_directly_defined_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            component: app_raw::Component,
-        ) -> Option<ResolvedComponentProperties> {
-            if component.profiles.is_empty() {
-                self.resolve_directly_defined_non_profiled_component_properties(
-                    validation, source, component,
-                )
-            } else {
-                self.resolve_directly_defined_profiled_component_properties(
-                    validation, source, component,
-                )
-            }
-        }
-
-        fn resolve_directly_defined_profiled_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            component: app_raw::Component,
-        ) -> Option<ResolvedComponentProperties> {
-            let valid =
-                validation.with_context(vec![], |validation| match &component.default_profile {
-                    Some(default_profile) => {
-                        if !component.profiles.contains_key(default_profile) {
-                            validation.add_error(format!(
-                                "Unknown {}: {}\n\n{}",
-                                "defaultProfile".log_color_highlight(),
-                                default_profile.log_color_highlight(),
-                                self.available_profiles(
-                                    component.profiles.keys().map(|s| s.as_str()),
-                                    default_profile
-                                ),
-                            ))
-                        }
-                    }
-                    None => {
-                        validation.add_error(format!(
-                            "Property {} is not allowed if no {} are defined",
-                            "defaultProfile".log_color_highlight(),
-                            "profiles".log_color_highlight(),
-                        ));
-                    }
-                });
-
-            valid.then(|| ResolvedComponentProperties::Profiled {
-                template_name: None,
-                default_profile: component
-                    .default_profile
-                    .map(BuildProfileName::from)
-                    .unwrap(),
-                profiles: {
-                    component
-                        .profiles
-                        .into_iter()
-                        .filter_map(|(profile_name, properties)| {
-                            let (properties, _) = validation.with_context_returning(
-                                vec![("profile", profile_name.to_string())],
-                                |validation| {
-                                    self.convert_and_validate_component_properties(
-                                        validation, source, properties,
-                                    )
-                                },
-                            );
-                            properties.map(|properties| {
-                                (BuildProfileName::from(profile_name), properties)
-                            })
-                        })
-                        .collect()
-                },
-            })
-        }
-
-        fn resolve_directly_defined_non_profiled_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            component: app_raw::Component,
-        ) -> Option<ResolvedComponentProperties> {
-            let valid = validation.with_context(vec![], |validation| {
-                if component.default_profile.is_some() {
-                    validation.add_error(format!(
-                        "Property {} is not allowed if no {} are defined",
-                        "defaultProfile".log_color_highlight(),
-                        "profiles".log_color_highlight(),
-                    ));
-                }
-            });
-
-            valid
-                .then(|| {
-                    self.convert_and_validate_component_properties(
-                        validation,
-                        source,
-                        component.component_properties,
-                    )
-                })
-                .flatten()
-                .map(|properties| ResolvedComponentProperties::NonProfiled {
-                    template_name: None,
-                    properties,
-                })
-        }
-
-        fn convert_and_validate_templated_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            template_env: &minijinja::Environment,
-            template_name: &TemplateName,
-            template_properties: &app_raw::ComponentProperties,
-            component_name: &AppComponentName,
-            component_properties: Option<app_raw::ComponentProperties>,
-        ) -> Option<ComponentProperties> {
-            ComponentProperties::from_raw_template(
-                validation,
-                source,
-                template_env,
-                &Self::template_context(component_name),
-                template_properties,
-            )
-            .inspect_err(|err| {
-                validation.add_error(format!(
-                    "Failed to render template {}, error: {}",
-                    template_name.as_str().log_color_highlight(),
-                    err.to_string().log_color_error_highlight()
-                ))
-            })
-            .ok()
-            .and_then(
-                |rendered_template_properties| match rendered_template_properties {
-                    Some(rendered_template_properties) => match component_properties {
-                        Some(component_properties) => rendered_template_properties
-                            .merge_with_overrides(validation, source, component_properties)
-                            .inspect_err(|err| {
-                                validation.add_error(format!(
-                                    "Failed to override template {}, error: {}",
-                                    template_name.as_str().log_color_highlight(),
-                                    err.to_string().log_color_error_highlight()
-                                ))
-                            })
-                            .ok()
-                            .flatten(),
-                        None => Some(rendered_template_properties),
-                    },
-                    None => None,
-                },
-            )
-            .inspect(|properties| {
-                Self::validate_resolved_component_properties(validation, properties)
-            })
-        }
-
-        fn convert_and_validate_component_properties(
-            &self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            component_properties: app_raw::ComponentProperties,
-        ) -> Option<ComponentProperties> {
-            ComponentProperties::from_raw(validation, source, component_properties).inspect(
-                |properties| Self::validate_resolved_component_properties(validation, properties),
-            )
-        }
-
-        fn validate_resolved_component_properties(
-            validation: &mut ValidationBuilder,
-            properties: &ComponentProperties,
-        ) {
-            for (name, value) in [
-                ("sourceWit", &properties.source_wit),
-                ("generatedWit", &properties.generated_wit),
-                ("componentWasm", &properties.component_wasm),
-            ] {
-                if value.is_empty() {
-                    validation.add_error(format!(
-                        "Property {} is empty or undefined",
-                        name.log_color_highlight()
-                    ));
-                }
+                Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
             }
         }
 
@@ -2621,22 +2604,22 @@ mod app_builder {
         fn validate_http_api_deployments(
             &self,
             validation: &mut ValidationBuilder,
-            available_profiles: &BTreeSet<ProfileName>,
+            environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
         ) {
-            for (profile, api_deployments) in &self.http_api_deployments {
-                if !available_profiles.contains(profile) {
+            for (environment, api_deployments) in &self.http_api_deployments {
+                if !environments.contains_key(environment) {
                     validation.add_warn(format!(
-                        "Unknown profile in manifest: {}\n\n{}",
-                        profile.0.log_color_highlight(),
+                        "Unknown environment in manifest: {}\n\n{}",
+                        environment.0.log_color_highlight(),
                         self.available_profiles(
-                            available_profiles.iter().map(|p| p.0.as_str()),
-                            &profile.0
+                            environments.keys().map(|p| p.0.as_str()),
+                            &environment.0
                         )
                     ));
                 }
 
                 validation.with_context(
-                    vec![("profile", profile.0.clone())],
+                    vec![("profile", environment.0.clone())],
                     |validation| {
                         for (site, api_definitions_with_source) in api_deployments {
                             for api_definitions in api_definitions_with_source {
@@ -2707,13 +2690,15 @@ mod app_builder {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
         }
 
-        fn available_templates(&self, unknown: &str) -> String {
-            self.available_options_help(
+        fn available_templates(&self, _unknown: &str) -> String {
+            // TODO: atomic
+            /*self.available_options_help(
                 "templates",
                 "template names",
                 unknown,
                 self.templates.keys().map(|name| name.as_str()),
-            )
+            )*/
+            todo!()
         }
 
         fn available_components(&self, unknown: &str) -> String {
@@ -2793,104 +2778,5 @@ mod app_builder {
             ));
         }
         !is_empty
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::model::app::{AppComponentName, Application, BuildProfileName};
-    use crate::model::app_raw;
-    use crate::model::component::AppComponentType;
-    use assert2::{assert, check};
-    use indoc::indoc;
-    use test_r::test;
-
-    #[test]
-    fn component_property_profiles_overrides() {
-        let manifest = indoc! {"
-            templates:
-              template-profiled:
-                sourceWit: common-a-source-wit
-                generatedWit: common-a-generated-wit
-                defaultProfile: debug
-                profiles:
-                  debug:
-                    build:
-                    - command: debug-a-build
-                    sourceWit: debug-a-source-wit
-                    componentWasm: debug-a-component-wasm
-                    linkedWasm: debug-a-linked-wasm
-                    env:
-                      A: debug-a-env-var
-                  release:
-                    build:
-                    - command: release-a-build
-                    componentWasm: release-a-component-wasm
-                    generatedWit: release-a-generated-wit
-                    linkedWasm: release-a-linked-wasm
-                    env:
-                      A: release-a-env-var
-                  release-custom:
-                    build:
-                    - command: release-custom-a-build
-                    componentWasm: release-custom-a-component-wasm
-                    generatedWit: release-custom-a-generated-wit
-                    linkedWasm: release-custom-a-linked-wasm
-                    env:
-                      A: release-custom-a-env-var
-                    componentType: ephemeral
-
-            components:
-              app:comp-profiled-a:
-                template: template-profiled
-                profiles:
-                  release-custom:
-                    componentType: durable
-                    componentWasm: release-comp-a-component-wasm
-                componentType: ephemeral
-                componentWasm: comp-a-component-wasm
-        "};
-
-        let app = Application::from_raw_apps(
-            &Default::default(),
-            vec![app_raw::ApplicationWithSource::from_yaml_string(
-                "dummy-source".into(),
-                manifest.to_string(),
-            )
-            .unwrap()],
-        );
-
-        let (app, warns, errors) = app.into_product();
-        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
-        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
-        let app = app.unwrap();
-
-        let component_name_profiled_a = AppComponentName::from("app:comp-profiled-a");
-        let debug_profile = BuildProfileName::from("debug");
-        let release_profile = BuildProfileName::from("release");
-        let release_custom_profile = BuildProfileName::from("release-custom");
-
-        let debug_props =
-            app.component_properties(&component_name_profiled_a, Some(&debug_profile));
-        let release_props =
-            app.component_properties(&component_name_profiled_a, Some(&release_profile));
-        let release_custom_props =
-            app.component_properties(&component_name_profiled_a, Some(&release_custom_profile));
-
-        check!(debug_props.source_wit == "debug-a-source-wit");
-        check!(release_props.source_wit == "common-a-source-wit");
-        check!(release_custom_props.source_wit == "common-a-source-wit");
-
-        check!(debug_props.generated_wit == "common-a-generated-wit");
-        check!(release_props.generated_wit == "release-a-generated-wit");
-        check!(release_custom_props.generated_wit == "release-custom-a-generated-wit");
-
-        check!(debug_props.component_type() == AppComponentType::Ephemeral);
-        check!(release_props.component_type() == AppComponentType::Ephemeral);
-        check!(release_custom_props.component_type() == AppComponentType::Durable);
-
-        check!(debug_props.component_wasm == "comp-a-component-wasm");
-        check!(release_props.component_wasm == "comp-a-component-wasm");
-        check!(release_custom_props.component_wasm == "release-comp-a-component-wasm");
     }
 }

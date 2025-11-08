@@ -15,14 +15,14 @@
 use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash, HashFromString};
 use crate::fs;
 use crate::log::log_warn_action;
-use crate::model::app::{AppComponentName, DependentComponent};
+use crate::model::app::DependentComponent;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
 use anyhow::{anyhow, bail, Context};
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -197,7 +197,7 @@ impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_>
 }
 
 pub struct ComponentGeneratorMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub generator_kind: &'a str,
 }
 
@@ -219,7 +219,7 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
 }
 
 pub struct LinkRpcMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
     pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
@@ -265,7 +265,7 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
 }
 
 pub struct AddMetadataMarkerHash<'a> {
-    pub component_name: &'a AppComponentName,
+    pub component_name: &'a ComponentName,
     pub root_package_name: PackageName,
 }
 
@@ -286,7 +286,7 @@ impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
 pub struct GetServerComponentHash<'a> {
     pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     // NOTE: use None for querying
     pub component_hash: Option<&'a str>,
 }
@@ -299,7 +299,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}",
-            self.environment_id, self.component_name, self.component_version
+            self.environment_id, self.component_name, self.component_revision
         )))
     }
 
@@ -314,7 +314,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
 pub struct GetServerIfsFileHash<'a> {
     pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     pub target_path: &'a str,
     // NOTE: use None for querying
     pub file_hash: Option<&'a str>,
@@ -328,7 +328,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}#{}",
-            self.environment_id, self.component_name, self.component_version, self.target_path
+            self.environment_id, self.component_name, self.component_revision, self.target_path
         )))
     }
 

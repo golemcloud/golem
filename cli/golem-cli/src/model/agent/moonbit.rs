@@ -1500,7 +1500,7 @@ mod tests {
         reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
-    use crate::model::app::AppComponentName;
+    use golem_common::model::component::ComponentName;
     use tempfile::NamedTempFile;
     use test_r::test;
 
@@ -1519,7 +1519,7 @@ mod tests {
 
     #[test]
     fn multi_agent_example(_trace: &Trace) {
-        let component_name: AppComponentName = "example:multi1".into();
+        let component_name = ComponentName("example:multi1".to_string());
         let agent_types = test::multi_agent_wrapper_2_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1529,7 +1529,7 @@ mod tests {
 
     #[test]
     fn single_agent_with_wit_keywords(_trace: &Trace) {
-        let component_name: AppComponentName = "example:single1".into();
+        let component_name = ComponentName("example:single1".to_string());
         let agent_types = test::agent_type_with_wit_keywords();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[test]
     fn bug_multiple_types_called_element() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_multiple_types_called_element();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1549,7 +1549,7 @@ mod tests {
 
     #[test]
     fn single_agent_with_test_in_package_name(_trace: &Trace) {
-        let component_name: AppComponentName = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = test::agent_type_with_wit_keywords();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1559,7 +1559,7 @@ mod tests {
 
     #[test]
     fn enum_type() {
-        let component_name = "test:agent".into();
+        let component_name = ComponentName("test:agent".to_string());
         let agent_types = reproducer_for_issue_with_enums();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn bug_result_types() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = reproducer_for_issue_with_result_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1579,7 +1579,7 @@ mod tests {
 
     #[test]
     pub fn multimodal_untagged_variant_in_out() {
-        let component_name = "example:bug".into();
+        let component_name = ComponentName("example:bug".to_string());
         let agent_types = test::multimodal_untagged_variant_in_out();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 

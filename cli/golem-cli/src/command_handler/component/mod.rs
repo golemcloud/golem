@@ -22,9 +22,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{log_action, logln, LogColorize, LogIndent};
-use crate::model::app::{
-    AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
-};
+use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app::{DependencyType, InitialComponentFile};
 use crate::model::component::{
     Component, ComponentNameMatchKind, ComponentSelection, ComponentVersionSelection,
@@ -32,7 +30,7 @@ use crate::model::component::{
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::fmt::{log_error, log_warn};
+use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
@@ -126,6 +124,9 @@ impl ComponentCommandHandler {
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await
             }
+            ComponentSubcommand::ManifestTrace { component_name } => {
+                self.cmd_manifest_trace(component_name).await
+            }
         }
     }
 
@@ -174,7 +175,7 @@ impl ComponentCommandHandler {
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
 
-        let component_name = AppComponentName::from(component_package_name.to_string_with_colon());
+        let component_name = ComponentName(component_package_name.to_string_with_colon());
 
         if existing_component_names.contains(component_name.as_str()) {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -510,6 +511,32 @@ impl ComponentCommandHandler {
             .await
     }
 
+    // TODO: atomic: cleanup before release
+    async fn cmd_manifest_trace(
+        &self,
+        _component_names: ComponentOptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let component_names = app_ctx
+            .application
+            .component_names()
+            .cloned()
+            .collect::<Vec<_>>();
+        for component_name in component_names {
+            self.ctx.log_handler().log_serializable(
+                &app_ctx
+                    .application
+                    .component(&component_name)
+                    .layer_properties()
+                    .with_compacted_traces(),
+            )
+        }
+
+        Ok(())
+    }
+
     async fn cmd_add_dependency(
         &self,
         component_name: Option<ComponentName>,
@@ -524,8 +551,8 @@ impl ComponentCommandHandler {
             .ctx
             .interactive_handler()
             .create_component_dependency(
-                component_name.map(|cn| cn.0.into()),
-                target_component_name.map(|cn| cn.0.into()),
+                component_name,
+                target_component_name,
                 target_component_path,
                 target_component_url,
                 dependency_type,
@@ -561,6 +588,8 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
+    // TODO: atomic
+    /*
     async fn components_for_update_or_redeploy(
         &self,
         component_name: Option<ComponentName>,
@@ -592,6 +621,7 @@ impl ComponentCommandHandler {
         }
         Ok(components)
     }
+    */
 
     pub async fn update_workers_by_components(
         &self,
@@ -615,7 +645,7 @@ impl ComponentCommandHandler {
                     &component.component_name,
                     &component.component_id,
                     update,
-                    component.revision.0,
+                    component.revision,
                     await_updates,
                 )
                 .await?;
@@ -1124,7 +1154,7 @@ impl ComponentCommandHandler {
     // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
     async fn manifest_diffable_component(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         properties: &ComponentDeployProperties,
     ) -> anyhow::Result<DiffableComponent> {
         let component_hash = {
@@ -1233,7 +1263,7 @@ impl ComponentCommandHandler {
         environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
 
@@ -1292,7 +1322,7 @@ impl ComponentCommandHandler {
         environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
         target_path: &str,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
@@ -1362,30 +1392,23 @@ struct ComponentDeployProperties {
     linked_wasm_path: PathBuf,
     files: Vec<InitialComponentFile>,
     dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-    env: Option<HashMap<String, String>>,
+    env: HashMap<String, String>,
 }
 
 // TODO: atomic
 #[allow(unused)]
 fn component_deploy_properties(
     app_ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
-    build_profile: Option<&BuildProfileName>,
+    component_name: &ComponentName,
 ) -> anyhow::Result<ComponentDeployProperties> {
-    let linked_wasm_path = app_ctx
-        .application
-        .component_linked_wasm(component_name, build_profile);
-    let component_properties = app_ctx
-        .application
-        .component_properties(component_name, build_profile);
-    let component_type = component_properties
+    let component = app_ctx.application.component(component_name);
+    let linked_wasm_path = component.final_linked_wasm();
+    let component_type = component
         .component_type()
         .as_deployable_component_type()
         .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
-    let files = component_properties.files.clone();
-    let env = (!component_properties.env.is_empty())
-        .then(|| resolve_env_vars(component_name, &component_properties.env))
-        .transpose()?;
+    let files = component.files().clone();
+    let env = resolve_env_vars(component_name, component.env())?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1401,7 +1424,7 @@ fn component_deploy_properties(
 #[allow(unused)]
 fn app_component_dynamic_linking(
     app_ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
+    component_name: &ComponentName,
 ) -> anyhow::Result<Option<HashMap<String, DynamicLinkedInstance>>> {
     let mut mapping = Vec::new();
 
@@ -1455,8 +1478,8 @@ fn app_component_dynamic_linking(
 }
 
 fn resolve_env_vars(
-    component_name: &AppComponentName,
-    env: &HashMap<String, String>,
+    component_name: &ComponentName,
+    env: &BTreeMap<String, String>,
 ) -> anyhow::Result<HashMap<String, String>> {
     let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
 

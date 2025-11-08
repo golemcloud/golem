@@ -76,7 +76,7 @@ impl FromStr for EnvironmentReference {
                 Unknown format for environment: {}. Expected one of:
                 - <ENVIRONMENT_NAME>
                 - <APPLICATION_NAME>/<ENVIRONMENT_NAME>
-                - <ACCOUNT_EMAIL>/<PROJECT_NAME>
+                - <ACCOUNT_EMAIL>/<APPLICATION_NAME>/<ENVIRONMENT_NAME>
                 ",
                 s.log_color_highlight()
             }),
@@ -107,12 +107,37 @@ impl Display for EnvironmentReference {
 }
 
 #[derive(Clone, Debug)]
+pub enum ResolvedEnvironmentIdentitySource {
+    Reference(EnvironmentReference),
+    DefaultFromManifest,
+}
+
+#[derive(Clone, Debug)]
 pub struct ResolvedEnvironmentIdentity {
-    pub resolved_from: Option<EnvironmentReference>,
+    pub source: ResolvedEnvironmentIdentitySource,
 
     pub account_id: AccountId,
     pub application_id: ApplicationId,
     pub application_name: ApplicationName,
     pub environment_id: EnvironmentId,
     pub environment_name: EnvironmentName,
+}
+
+#[derive(Clone, Debug, Copy)]
+pub enum EnvironmentResolveMode {
+    ManifestOnly, // The environment must be one of the ones defined in the manifest
+    Any, // The environment can be one of the manifest ones, or any other "more" qualified reference
+}
+
+impl EnvironmentResolveMode {
+    pub fn allowed(&self, environment: &EnvironmentReference) -> bool {
+        match self {
+            EnvironmentResolveMode::ManifestOnly => match environment {
+                EnvironmentReference::Environment { .. } => true,
+                EnvironmentReference::ApplicationEnvironment { .. } => false,
+                EnvironmentReference::AccountApplicationEnvironment { .. } => false,
+            },
+            EnvironmentResolveMode::Any => true,
+        }
+    }
 }

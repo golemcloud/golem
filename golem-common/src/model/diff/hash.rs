@@ -64,7 +64,6 @@ impl Serialize for Hash {
     where
         S: Serializer,
     {
-        // TODO: base64 would be more common and compact
         serializer.serialize_str(self.0.to_hex().as_str())
     }
 }

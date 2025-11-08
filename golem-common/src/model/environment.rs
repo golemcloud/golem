@@ -29,6 +29,7 @@ newtype_uuid!(
 declare_revision!(EnvironmentRevision);
 
 declare_transparent_newtypes! {
+    #[derive(Eq, Hash, PartialOrd, Ord)]
     pub struct EnvironmentName(pub String);
 }
 

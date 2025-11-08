@@ -33,7 +33,7 @@ use std::time::{Duration, SystemTime};
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationResponse {
     pub worker_id: WorkerId,
-    pub component_version: ComponentRevision,
+    pub component_revision: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -114,7 +114,7 @@ pub struct GetFilesResponse {
 #[oai(rename_all = "camelCase")]
 pub struct UpdateWorkerRequest {
     pub mode: WorkerUpdateMode,
-    pub target_version: ComponentRevision,
+    pub target_revision: ComponentRevision,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]

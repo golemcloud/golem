@@ -4110,11 +4110,11 @@ components:
       title: UpdateWorkerRequest
       required:
       - mode
-      - targetVersion
+      - targetRevision
       properties:
         mode:
           $ref: '#/components/schemas/WorkerUpdateMode'
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
     UpdateWorkerResponse:

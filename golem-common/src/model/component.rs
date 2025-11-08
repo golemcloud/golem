@@ -46,7 +46,7 @@ newtype_uuid!(
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
     pub struct ComponentName(pub String);
 
     /// Key that can be used to identify a component file.
@@ -82,6 +82,12 @@ impl FromStr for ComponentName {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from(s)
+    }
+}
+
+impl ComponentName {
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

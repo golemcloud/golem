@@ -54,8 +54,9 @@ impl AddMetadata {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum AddMetadataField<T: Debug + Clone> {
+    #[default]
     Keep,
     Clear,
     Set(T),
@@ -68,11 +69,5 @@ impl<T: Debug + Clone> AddMetadataField<T> {
 
     pub fn is_keep(&self) -> bool {
         matches!(self, Self::Keep)
-    }
-}
-
-impl<T: Debug + Clone> Default for AddMetadataField<T> {
-    fn default() -> Self {
-        Self::Keep
     }
 }

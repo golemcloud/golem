@@ -22,9 +22,10 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
 use crate::command::worker::AgentSubcommand;
-use crate::config::BuildProfileName;
+use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
+use crate::model::app::ComponentPresetName;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::worker::WorkerName;
@@ -91,6 +92,7 @@ impl Verbosity {
     }
 }
 
+// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
@@ -98,15 +100,18 @@ pub struct GolemCliGlobalFlags {
     pub format: Option<Format>,
 
     /// Select Golem environment by name
-    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102
+    )]
     pub environment: Option<EnvironmentReference>,
 
-    /// Select the builtin "local" server
-    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103)]
+    /// Select "local" environment from the manifest, or target the builtin local server
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
+    )]
     pub local: bool,
 
-    /// Select the builtin "cloud" server
-    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104)]
+    /// Select "cloud" environment from the manifest, or target the cloud server
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
+    )]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
@@ -117,24 +122,34 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'X', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
-    /// Select build profile
-    #[arg(long, short = 'B', global = true, display_order = 107)]
-    pub build_profile: Option<BuildProfileName>,
+    /// Select custom component presets
+    #[arg(
+        long,
+        short = 'P',
+        global = true,
+        value_delimiter = ',',
+        display_order = 107
+    )]
+    pub preset: Vec<ComponentPresetName>,
+
+    /// Select Golem profile by name
+    #[arg(long, global = true, display_order = 108)]
+    pub profile: Option<ProfileName>,
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
-    #[arg(long, global = true, display_order = 108)]
+    #[arg(long, global = true, display_order = 109)]
     pub config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
-    #[arg(long, short = 'Y', global = true, display_order = 109)]
+    #[arg(long, short = 'Y', global = true, display_order = 110)]
     pub yes: bool,
 
     /// Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
-    #[arg(long, global = true, display_order = 110)]
+    #[arg(long, global = true, display_order = 111)]
     pub show_sensitive: bool,
 
     /// Enable experimental, development-only features
-    #[arg(long, global = true, display_order = 111)]
+    #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
 
     #[command(flatten)]
@@ -158,9 +173,6 @@ pub struct GolemCliGlobalFlags {
     pub auth_token: Option<Uuid>,
 
     #[arg(skip)]
-    pub local_server_auto_start: bool,
-
-    #[arg(skip)]
     pub server_no_limit_change: bool,
 
     #[arg(skip)]
@@ -169,6 +181,12 @@ pub struct GolemCliGlobalFlags {
 
 impl GolemCliGlobalFlags {
     pub fn with_env_overrides(mut self) -> anyhow::Result<GolemCliGlobalFlags> {
+        if self.profile.is_none() {
+            if let Ok(profile) = std::env::var("GOLEM_PROFILE") {
+                self.profile = Some(profile.into());
+            }
+        }
+
         if self.environment.is_none() {
             if let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT") {
                 self.environment = Some(
@@ -194,9 +212,13 @@ impl GolemCliGlobalFlags {
             }
         }
 
-        if self.build_profile.is_none() {
-            if let Ok(build_profile) = std::env::var("GOLEM_BUILD_PROFILE") {
-                self.build_profile = Some(build_profile.into());
+        if self.preset.is_empty() {
+            if let Ok(preset) = std::env::var("GOLEM_PRESET") {
+                self.preset = preset
+                    .split(',')
+                    .map(|preset| preset.parse())
+                    .collect::<Result<Vec<_>, String>>()
+                    .map_err(|err| anyhow!(err))?;
             }
         }
 
@@ -234,13 +256,6 @@ impl GolemCliGlobalFlags {
             );
         }
 
-        if let Ok(auto_start) = std::env::var("GOLEM_LOCAL_SERVER_AUTO_START") {
-            self.local_server_auto_start = auto_start
-                .parse::<LenientBool>()
-                .map(|b| b.into())
-                .unwrap_or_default()
-        }
-
         if let Ok(server_no_limit_change) = std::env::var("GOLEM_SERVER_NO_LIMIT_CHANGE") {
             self.server_no_limit_change = server_no_limit_change
                 .parse::<LenientBool>()
@@ -255,7 +270,7 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        self
+        Ok(self)
     }
 
     pub fn config_dir(&self) -> PathBuf {
@@ -301,7 +316,6 @@ impl GolemCliFallbackCommand {
         });
 
         if with_env_overrides {
-            // TODO: atomic
             cmd.global_flags = cmd.global_flags.with_env_overrides()?;
         }
 
@@ -362,7 +376,7 @@ impl GolemCliCommand {
                         match positional_args.as_slice() {
                             ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
-                            ["agent"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
+                            ["agent"] => Some(GolemCliCommandPartialMatch::AgentHelp),
                             _ => None,
                         }
                     }
@@ -526,7 +540,7 @@ pub enum GolemCliCommandPartialMatch {
     AppMissingSubcommandHelp,
     ComponentHelp,
     ComponentMissingSubcommandHelp,
-    WorkerHelp,
+    AgentHelp,
     WorkerInvokeMissingFunctionName { worker_name: WorkerName },
     WorkerInvokeMissingWorkerName,
     ProfileSwitchMissingProfileName,
@@ -726,7 +740,8 @@ pub mod shared_args {
     #[derive(Debug, Args, Clone)]
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"], num_args = 0..=1)]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"]
+        )]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
@@ -735,10 +750,12 @@ pub mod shared_args {
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate agents and HTTP APIs
-        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
+        )]
         pub redeploy_all: bool,
         /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"]
+        )]
         pub reset: bool,
     }
 
@@ -936,6 +953,7 @@ pub mod component {
             #[command(flatten)]
             build: BuildArgs,
         },
+        // TODO: atomic: drop this one, we only support global clean
         /// Clean component(s) based on the current directory or by selection
         Clean {
             #[command(flatten)]
@@ -994,6 +1012,11 @@ pub mod component {
         },
         /// Diagnose possible tooling problems
         Diagnose {
+            #[command(flatten)]
+            component_name: ComponentOptionalComponentNames,
+        },
+        // TODO: atomic: find better name for this, maybe add to "app" and other entities
+        ManifestTrace {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },

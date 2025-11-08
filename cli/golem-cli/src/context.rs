@@ -18,18 +18,18 @@ use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::AuthenticationConfig;
-use crate::config::{ClientConfig, Config, HttpClientConfig, NamedProfile, Profile, ProfileName};
+use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::{AppBuildStep, ApplicationSourceMode};
-use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
+use crate::log::{set_log_output, LogOutput, Output};
+use crate::model::app::{AppBuildStep, ApplicationSourceMode, ComponentPresetName};
+use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
+use crate::model::app_raw::Marker;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::{app_raw, AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
-use futures_util::future::BoxFuture;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
     ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
@@ -42,6 +42,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::environment::EnvironmentName;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -61,24 +62,23 @@ pub struct Context {
     config_dir: PathBuf,
     format: Format,
     help_mode: bool,
-    local_server_auto_start: bool,
     deploy_args: DeployArgs,
+    // TODO: atomic:
+    /*
     profile_name: ProfileName,
     profile: Profile,
-    available_profile_names: BTreeSet<ProfileName>,
-    app_context_config: ApplicationContextConfig,
+    */
+    environment_reference: Option<EnvironmentReference>,
+    manifest_environment: Option<(EnvironmentName, app_raw::Environment)>,
+    app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
-    environment: Option<EnvironmentReference>,
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
-    #[allow(unused)]
-    start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
-
     file_download_client: reqwest::Client,
 
     // Lazy initialized
@@ -86,7 +86,7 @@ pub struct Context {
     templates: std::sync::OnceLock<
         BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
     >,
-    selected_profile_logging: std::sync::OnceLock<()>,
+    selected_profile_and_environment_logging: std::sync::OnceLock<()>,
     http_api_reset: tokio::sync::OnceCell<()>,
     http_deployment_reset: tokio::sync::OnceCell<()>,
 
@@ -99,95 +99,137 @@ impl Context {
     pub async fn new(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
-        start_local_server_yes: Arc<tokio::sync::RwLock<bool>>,
-        start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
     ) -> anyhow::Result<Self> {
-        let format = global_flags.format;
-        let http_batch_size = global_flags.http_batch_size;
-        let auth_token = global_flags.auth_token;
-        let config_dir = global_flags.config_dir();
-        let local_server_auto_start = global_flags.local_server_auto_start;
-        let show_sensitive = global_flags.show_sensitive;
-        let server_no_limit_change = global_flags.server_no_limit_change;
+        let (environment_reference, env_ref_can_be_builtin_server) = {
+            if let Some(environment) = &global_flags.environment {
+                (Some(environment.clone()), false)
+            } else if global_flags.local {
+                (
+                    Some(EnvironmentReference::Environment {
+                        environment_name: EnvironmentName("local".to_string()),
+                    }),
+                    true,
+                )
+            } else if global_flags.cloud {
+                (
+                    Some(EnvironmentReference::Environment {
+                        environment_name: EnvironmentName("cloud".to_string()),
+                    }),
+                    true,
+                )
+            } else {
+                (None, false)
+            }
+        };
 
-        let mut yes = global_flags.yes;
-        let dev_mode = global_flags.dev_mode;
-        let mut deploy_args = DeployArgs::none();
-
-        let mut app_context_config = ApplicationContextConfig::new(global_flags);
-
-        let preloaded_app = ApplicationContext::preload_sources_and_get_profiles(
-            app_context_config.app_source_mode(),
+        let preloaded_app = ApplicationContext::preload_sources_and_get_environments(
+            ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags),
         )?;
 
         if preloaded_app.loaded_with_warnings
             && log_output_for_help.is_none()
-            && !InteractiveHandler::confirm_manifest_profile_warning(yes)?
+            && !InteractiveHandler::confirm_manifest_profile_warning(global_flags.yes)?
         {
             bail!(NonSuccessfulExit);
         }
 
         let app_source_mode = preloaded_app.source_mode;
-        let manifest_profiles = preloaded_app.profiles.unwrap_or_default();
+        let manifest_environments = preloaded_app.environments;
 
-        let (available_profile_names, profile, manifest_profile) = load_merged_profiles(
-            &config_dir,
-            todo!(), // TODO: atomic: app_context_config.requested_profile_name.as_ref(),
-            manifest_profiles,
-        )?;
+        let manifest_environment: Option<(EnvironmentName, app_raw::Environment)> =
+            match &environment_reference {
+                Some(environment_reference) => {
+                    match environment_reference {
+                        EnvironmentReference::Environment { environment_name } => {
+                            match &manifest_environments {
+                                Some(environments) => match environments.get(environment_name) {
+                                    Some(environment) => {
+                                        Some((environment_name.clone(), environment.clone()))
+                                    }
+                                    None => {
+                                        bail!(ContextInitHintError::EnvironmentNotFound {
+                                            requested_environment_name: environment_name.clone(),
+                                            manifest_environment_names: environments
+                                                .keys()
+                                                .cloned()
+                                                .collect(),
+                                        })
+                                    }
+                                },
+                                None => {
+                                    if env_ref_can_be_builtin_server {
+                                        None
+                                    } else {
+                                        bail!(ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
+                                        requested_environment_name: environment_name.clone()
+                                    })
+                                    }
+                                }
+                            }
+                        }
+                        EnvironmentReference::ApplicationEnvironment { .. } => {
+                            // TODO: atomic
+                            todo!()
+                        }
+                        EnvironmentReference::AccountApplicationEnvironment { .. } => {
+                            // TODO: atomic
+                            todo!()
+                        }
+                    }
+                }
+                None => match &manifest_environments {
+                    Some(environments) => environments
+                        .iter()
+                        .find(|(_, env)| env.default == Some(Marker))
+                        .map(|(name, env)| (name.clone(), env.clone())),
+                    None => None,
+                },
+            };
 
-        debug!(profile_name=%profile.name, manifest_profile=?manifest_profile, "Loaded profiles");
-
-        if let Some(manifest_profile) = &manifest_profile {
+        let mut yes = global_flags.yes;
+        let mut deploy_args = DeployArgs::none();
+        if let Some((_, environment)) = &manifest_environment {
+            // TODO: atomic: use component presets
+            /*
             if app_context_config.build_profile.is_none() {
                 app_context_config.build_profile = manifest_profile
                     .build_profile
                     .as_ref()
                     .map(|build_profile| build_profile.as_str().into())
-            }
 
-            if manifest_profile.auto_confirm == Some(true) {
-                yes = true;
-                *start_local_server_yes.write().await = true;
             }
+            */
 
-            if manifest_profile.redeploy_agents == Some(true) {
-                deploy_args.redeploy_agents = true;
-            }
+            if let Some(cli) = environment.cli.as_ref() {
+                if cli.auto_confirm == Some(Marker) {
+                    yes = true;
+                }
 
-            if manifest_profile.redeploy_http_api == Some(true) {
-                deploy_args.redeploy_http_api = true;
-            }
+                if cli.redeploy_agents == Some(Marker) {
+                    deploy_args.redeploy_agents = true;
+                }
 
-            if manifest_profile.redeploy_all == Some(true) {
-                deploy_args.redeploy_all = true;
-            }
+                if cli.redeploy_http_api == Some(Marker) {
+                    deploy_args.redeploy_http_api = true;
+                }
 
-            if manifest_profile.reset == Some(true) {
-                deploy_args.reset = true;
+                if cli.redeploy_all == Some(Marker) {
+                    deploy_args.redeploy_all = true;
+                }
+
+                if cli.reset == Some(Marker) {
+                    deploy_args.reset = true;
+                }
             }
         }
 
-        let environment: Option<EnvironmentReference> =
-            match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
-                Some(_project) => {
-                    // TODO: atomic deployment: it should also handle global flags!
-                    /*Some(
-                    ProjectReference::from_str(project.as_str())
-                        .map_err(|err| anyhow!("{}", err))
-                        .with_context(|| {
-                            anyhow!(
-                                "Failed to parse project for manifest profile {}",
-                                profile.name.0.log_color_highlight()
-                            )
-                        })?,
-                    )*/
-                    todo!()
-                }
-                None => None,
-            };
-
-        let format = format.unwrap_or(profile.profile.config.default_format);
+        let format = global_flags
+            .format
+            .or(manifest_environment
+                .as_ref()
+                .and_then(|(_, env)| env.cli.as_ref())
+                .and_then(|cli| cli.format))
+            .unwrap_or_default();
 
         let log_output = log_output_for_help.unwrap_or_else(|| {
             if enabled!(Level::ERROR) {
@@ -204,34 +246,69 @@ impl Context {
 
         set_log_output(log_output);
 
-        let client_config = ClientConfig::from(&profile.profile);
+        let client_config = match &manifest_environment {
+            Some((_, environment)) => match environment.server.as_ref() {
+                Some(server) => ClientConfig::from(server),
+                None => {
+                    ClientConfig::from(&app_raw::Server::Builtin(app_raw::BuiltinServer::Local))
+                }
+            },
+            None => {
+                // TODO: atomic: fallback to default profiles or command line args
+                todo!()
+            }
+        };
         let file_download_client =
             new_reqwest_client(&client_config.file_download_http_client_config)?;
 
+        let app_context_config = {
+            manifest_environment
+                .as_ref()
+                .zip(manifest_environments)
+                .map(
+                    |((selected_environment_name, selected_environment), environments)| {
+                        ApplicationContextConfig::new(
+                            &global_flags,
+                            environments,
+                            ComponentPresetSelector {
+                                environment: selected_environment_name.clone(),
+                                presets: {
+                                    let mut presets = selected_environment
+                                        .component_presets
+                                        .clone()
+                                        .into_vec()
+                                        .into_iter()
+                                        .map(ComponentPresetName)
+                                        .collect::<Vec<_>>();
+                                    presets.extend(global_flags.preset.iter().cloned());
+                                    presets
+                                },
+                            },
+                        )
+                    },
+                )
+        };
+
         Ok(Self {
-            config_dir,
+            config_dir: global_flags.config_dir(),
             format,
             help_mode: log_output_for_help.is_some(),
-            local_server_auto_start,
             deploy_args,
-            profile_name: profile.name,
-            profile: profile.profile,
-            available_profile_names,
             app_context_config,
-            http_batch_size: http_batch_size.unwrap_or(50),
-            auth_token_override: auth_token,
-            environment,
+            http_batch_size: global_flags.http_batch_size.unwrap_or(50),
+            auth_token_override: global_flags.auth_token,
+            environment_reference,
+            manifest_environment,
             yes,
-            dev_mode,
-            show_sensitive,
-            server_no_limit_change,
+            dev_mode: global_flags.dev_mode,
+            show_sensitive: global_flags.show_sensitive,
+            server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
-            start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             templates: std::sync::OnceLock::new(),
-            selected_profile_logging: std::sync::OnceLock::new(),
+            selected_profile_and_environment_logging: std::sync::OnceLock::new(),
             http_api_reset: tokio::sync::OnceCell::new(),
             http_deployment_reset: tokio::sync::OnceCell::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
@@ -293,33 +370,34 @@ impl Context {
     }
 
     pub fn profile_name(&self) -> &ProfileName {
-        self.log_selected_profile_once();
-        &self.profile_name
+        self.log_selected_profile_and_environment_once();
+        // TODO: atomic: &self.profile_name
+        todo!()
     }
 
     pub fn available_profile_names(&self) -> &BTreeSet<ProfileName> {
-        &self.available_profile_names
+        // TODO: atomic: &self.available_profile_names
+        todo!()
     }
-
-    pub fn build_profile(&self) -> Option<&AppBuildProfileName> {
-        self.app_context_config.build_profile.as_ref()
-    }
-
-    // TODO: atomic: env
-    /*
-    pub fn profile_project(&self) -> Option<&ProjectReference> {
-        self.log_selected_profile_once();
-        self.project.as_ref()
-    }
-    */
 
     pub fn application_name(&self) -> Option<ApplicationName> {
         // TODO: atomic
         todo!()
     }
 
-    pub fn default_environment(&self) -> Option<&EnvironmentReference> {
-        self.environment.as_ref()
+    pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
+        self.log_selected_profile_and_environment_once();
+        self.environment_reference.as_ref()
+    }
+
+    pub fn manifest_environment_name(&self) -> Option<&EnvironmentName> {
+        self.log_selected_profile_and_environment_once();
+        self.manifest_environment.as_ref().map(|(name, _)| name)
+    }
+
+    pub fn manifest_environment(&self) -> Option<&app_raw::Environment> {
+        self.log_selected_profile_and_environment_once();
+        self.manifest_environment.as_ref().map(|(_, env)| env)
     }
 
     pub fn http_batch_size(&self) -> u64 {
@@ -329,49 +407,25 @@ impl Context {
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
-                self.log_selected_profile_once();
+                self.log_selected_profile_and_environment_once();
 
                 let clients = GolemClients::new(
                     self.client_config.clone(),
                     self.auth_token_override,
+                    // TODO: atomic
+                    /*
                     &self.profile_name,
                     &self.profile.auth,
+                    */
+                    todo!(),
+                    todo!(),
                     self.config_dir(),
                 )
                 .await?;
 
-                if self.local_server_auto_start {
-                    self.start_local_server_if_needed(&clients).await?;
-                }
-
                 Ok(clients)
             })
             .await
-    }
-
-    #[cfg(feature = "server-commands")]
-    async fn start_local_server_if_needed(&self, clients: &GolemClients) -> anyhow::Result<()> {
-        if !self.profile_name.is_builtin_local() {
-            return Ok(());
-        };
-
-        // NOTE: explicitly calling the trait method to avoid unused imports when compiling with
-        //       default features
-        if golem_client::api::HealthCheckClient::healthcheck(&clients.component_healthcheck)
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-
-        (self.start_local_server)().await?;
-
-        Ok(())
-    }
-
-    #[cfg(not(feature = "server-commands"))]
-    async fn start_local_server_if_needed(&self, _clients: &GolemClients) -> anyhow::Result<()> {
-        Ok(())
     }
 
     pub fn file_download_client(&self) -> &reqwest::Client {
@@ -416,18 +470,15 @@ impl Context {
     ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
         state
-            .init(
-                &self.available_profile_names,
-                &self.app_context_config,
-                self.file_download_client.clone(),
-            )
+            .init(&self.app_context_config, &self.file_download_client)
             .await?;
         Ok(state)
     }
 
     pub async fn unload_app_context(&self) {
-        let mut state = self.app_context_state.write().await;
-        *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
+        // TODO: atomic: this should also redo env preload
+        // let mut state = self.app_context_state.write().await;
+        // *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
     }
 
     async fn set_app_ctx_init_config<T>(
@@ -548,29 +599,29 @@ impl Context {
         }
     }
 
-    // TODO: atomic: naming
-    fn log_selected_profile_once(&self) {
-        self.selected_profile_logging.get_or_init(|| {
-            // TODO: atomic
-            /*
-            if !self.help_mode {
-                log_action(
-                    "Selected",
-                    format!(
-                        "profile: {}{}",
-                        profile.name.0.log_color_highlight(),
-                        environment
-                            .as_ref()
-                            .map(|environment| format!(
-                                ", environment: {}",
-                                environment.to_string().log_color_highlight()
-                            ))
-                            .unwrap_or_default()
-                    ),
-                );
-            }
-            */
-        });
+    fn log_selected_profile_and_environment_once(&self) {
+        self.selected_profile_and_environment_logging
+            .get_or_init(|| {
+                // TODO: atomic
+                /*
+                if !self.help_mode {
+                    log_action(
+                        "Selected",
+                        format!(
+                            "profile: {}{}",
+                            profile.name.0.log_color_highlight(),
+                            environment
+                                .as_ref()
+                                .map(|environment| format!(
+                                    ", environment: {}",
+                                    environment.to_string().log_color_highlight()
+                                ))
+                                .unwrap_or_default()
+                        ),
+                    );
+                }
+                */
+            });
     }
 
     pub async fn reset_http_api_definitions_once<F, Fut>(&self, f: F) -> anyhow::Result<()>
@@ -745,10 +796,10 @@ impl GolemClients {
 }
 
 struct ApplicationContextConfig {
-    requested_environment: Option<EnvironmentReference>,
-    build_profile: Option<AppBuildProfileName>,
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
+    environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    component_presets: ComponentPresetSelector,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
@@ -756,15 +807,19 @@ struct ApplicationContextConfig {
 }
 
 impl ApplicationContextConfig {
-    pub fn new(global_flags: GolemCliGlobalFlags) -> Self {
+    pub fn new(
+        global_flags: &GolemCliGlobalFlags,
+        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        component_presets: ComponentPresetSelector,
+    ) -> Self {
         Self {
-            requested_environment: global_flags.environment,
-            build_profile: global_flags.build_profile.map(|bp| bp.0.into()),
-            app_manifest_path: global_flags.app_manifest_path,
+            app_manifest_path: global_flags.app_manifest_path.clone(),
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
+            environments,
+            component_presets,
             golem_rust_override: RustDependencyOverride {
-                path_override: global_flags.golem_rust_path,
-                version_override: global_flags.golem_rust_version,
+                path_override: global_flags.golem_rust_path.clone(),
+                version_override: global_flags.golem_rust_version.clone(),
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
@@ -779,6 +834,31 @@ impl ApplicationContextConfig {
             match &self.app_manifest_path {
                 Some(root_manifest) if !self.disable_app_manifest_discovery => {
                     ApplicationSourceMode::ByRootManifest(root_manifest.clone())
+                }
+                _ => ApplicationSourceMode::Automatic,
+            }
+        }
+    }
+
+    pub fn app_source_mode_from_global_flags(
+        global_flags: &GolemCliGlobalFlags,
+    ) -> ApplicationSourceMode {
+        Self::app_source_mode_from_flags(
+            global_flags.disable_app_manifest_discovery,
+            global_flags.app_manifest_path.as_deref(),
+        )
+    }
+
+    fn app_source_mode_from_flags(
+        disable_app_manifest_discovery: bool,
+        app_manifest_path: Option<&Path>,
+    ) -> ApplicationSourceMode {
+        if disable_app_manifest_discovery {
+            ApplicationSourceMode::None
+        } else {
+            match app_manifest_path {
+                Some(root_manifest) if !disable_app_manifest_discovery => {
+                    ApplicationSourceMode::ByRootManifest(root_manifest.to_path_buf())
                 }
                 _ => ApplicationSourceMode::Automatic,
             }
@@ -815,13 +895,17 @@ impl ApplicationContextState {
 
     async fn init(
         &mut self,
-        available_profile_names: &BTreeSet<ProfileName>,
-        config: &ApplicationContextConfig,
-        file_download_client: reqwest::Client,
+        config: &Option<ApplicationContextConfig>,
+        file_download_client: &reqwest::Client,
     ) -> anyhow::Result<()> {
         if self.app_context.is_some() {
             return Ok(());
         }
+
+        let Some(config) = config else {
+            self.app_context = Some(Ok(None));
+            return Ok(());
+        };
 
         let _log_output = self
             .silent_init
@@ -829,7 +913,6 @@ impl ApplicationContextState {
 
         let app_config = ApplicationConfig {
             skip_up_to_date_checks: self.skip_up_to_date_checks,
-            build_profile: config.build_profile.as_ref().map(|p| p.to_string().into()),
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
@@ -841,12 +924,13 @@ impl ApplicationContextState {
 
         self.app_context = Some(
             ApplicationContext::new(
-                available_profile_names,
                 self.app_source_mode
                     .take()
                     .expect("ApplicationContextState.app_source_mode is not set"),
                 app_config,
-                file_download_client,
+                config.environments.clone(),
+                config.component_presets.clone(),
+                file_download_client.clone(),
             )
             .await
             .map_err(Arc::new),
@@ -919,6 +1003,7 @@ impl Default for RibReplState {
     }
 }
 
+// TODO: atomic: move to a http / client module?
 fn new_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder();
 
@@ -939,131 +1024,7 @@ fn new_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Clie
     Ok(builder.connection_verbose(true).build()?)
 }
 
-/// Finds the requested or the default profile in the global CLI config
-/// and in the application manifest. The global config gets overrides applied from
-/// the manifest profile.
-///
-/// NOTE: Both of the profiles are returned, because currently the set of properties
-///       are different. Eventually they should converge, but that will need breaking
-///       config changes and migration.
-fn load_merged_profiles(
-    config_dir: &Path,
-    profile_name: Option<&ProfileName>,
-    manifest_profiles: BTreeMap<ProfileName, app_raw::Profile>,
-) -> anyhow::Result<(
-    BTreeSet<ProfileName>,
-    NamedProfile,
-    Option<app_raw::Profile>,
-)> {
-    let mut available_profile_names = BTreeSet::new();
-
-    let mut config = Config::from_dir(config_dir)?;
-    available_profile_names.extend(config.profiles.keys().cloned());
-    available_profile_names.extend(manifest_profiles.keys().cloned());
-
-    // Use the requested profile name or the manifest default profile if none was requested
-    // and there is a manifest default one
-    let profile_name = match profile_name {
-        Some(profile_name) => Some(profile_name),
-        None => manifest_profiles
-            .iter()
-            .find_map(|(profile_name, profile)| {
-                (profile.default == Some(true)).then_some(profile_name)
-            }),
-    };
-
-    let global_profile = match profile_name {
-        Some(profile_name) => config
-            .profiles
-            .remove(profile_name)
-            .map(|profile| NamedProfile {
-                name: profile_name.clone(),
-                profile,
-            }),
-        None => Some(Config::get_default_profile(config_dir)?),
-    };
-
-    // If we did not find a global (maybe default) profile then switch back to the previously
-    // calculated requested or manifest default profile.
-    let profile_name = global_profile
-        .as_ref()
-        .map(|profile| Some(profile.name.clone()))
-        .unwrap_or(profile_name.cloned());
-
-    let manifest_profile = profile_name
-        .as_ref()
-        .and_then(|profile_name| manifest_profiles.get(profile_name));
-
-    let (profile, manifest_profile) = match (global_profile, manifest_profile) {
-        (Some(mut profile), Some(manifest_profile)) => {
-            let profile_name = &profile.name;
-            {
-                let profile = &mut profile.profile;
-
-                if let Some(format) = &manifest_profile.format {
-                    profile.config.default_format = *format;
-                }
-
-                // TODO: should we allow these? or show only warn logs?
-                if manifest_profile.url.is_some() {
-                    bail!(
-                        "Cannot override {} for global profile {} in application manifest!",
-                        "url".log_color_highlight(),
-                        profile_name.0.log_color_highlight()
-                    );
-                }
-                if manifest_profile.worker_url.is_some() {
-                    bail!(
-                        "Cannot override {} for global profile {} in application manifest!",
-                        "worker url".log_color_highlight(),
-                        profile_name.0.log_color_highlight()
-                    );
-                }
-            }
-            (profile, Some(manifest_profile.clone()))
-        }
-        (Some(profile), None) => (profile, None),
-        (None, Some(manifest_profile)) => {
-            // If we only found manifest profile, then it must be found by name
-            let profile_name = profile_name.unwrap();
-
-            let profile = {
-                let mut profile = Profile::default_local_profile();
-
-                if let Some(format) = &manifest_profile.format {
-                    profile.config.default_format = *format
-                }
-
-                if let Some(url) = &manifest_profile.url {
-                    profile.custom_url = Some(url.clone());
-                }
-                if let Some(worker_url) = &manifest_profile.worker_url {
-                    profile.custom_worker_url = Some(worker_url.clone());
-                }
-                profile
-            };
-            (
-                NamedProfile {
-                    name: profile_name,
-                    profile,
-                },
-                Some(manifest_profile.clone()),
-            )
-        }
-        (None, None) => {
-            // If no profile is found, then its name must be defined, as otherwise the global
-            // default should have returned
-            let profile_name = profile_name.as_ref().unwrap().clone();
-            bail!(ContextInitHintError::ProfileNotFound {
-                profile_name,
-                manifest_profile_names: manifest_profiles.keys().cloned().collect(),
-            });
-        }
-    };
-
-    Ok((available_profile_names, profile, manifest_profile))
-}
-
+// TODO: atomic: move to a http / client module?
 pub async fn check_http_response_success(
     response: reqwest::Response,
 ) -> anyhow::Result<reqwest::Response> {

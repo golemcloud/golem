@@ -554,7 +554,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
     async fn auto_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -567,7 +567,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Automatic,
-                    target_version: target_version.0,
+                    target_revision: target_revision.0,
                 },
             )
             .await?;
@@ -577,7 +577,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
     async fn manual_update_worker(
         &self,
         worker_id: &WorkerId,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<()> {
         let client = self
             .deps
@@ -590,7 +590,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
-                    target_version: target_version.0,
+                    target_revision: target_revision.0, // TODO: atomic: why is this not ComponentRevision?
                 },
             )
             .await?;
