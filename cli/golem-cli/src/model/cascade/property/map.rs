@@ -75,7 +75,10 @@ impl<L: Layer, K: Serialize, V: Serialize> Default for MapProperty<L, K, V> {
 
 impl<L: Layer, K: Serialize, V: Serialize> MapProperty<L, K, V> {
     pub fn new(map: IndexMap<K, V>) -> Self {
-        Self { value: map, trace: vec![] }
+        Self {
+            value: map,
+            trace: vec![],
+        }
     }
 }
 

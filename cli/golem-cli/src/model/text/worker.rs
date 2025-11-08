@@ -21,7 +21,7 @@ use crate::model::worker::{
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use cli_table::{format::Justify, Table};
 use colored::Colorize;
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};

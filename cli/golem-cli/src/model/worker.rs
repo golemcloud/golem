@@ -18,7 +18,6 @@ use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use chrono::{DateTime, Utc};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
@@ -167,8 +166,8 @@ impl WorkerMetadata {
         WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
-            created_by: value.created_by.into(),
-            environment_id: value.environment_id.into(),
+            created_by: value.created_by,
+            environment_id: value.environment_id,
             args: value.args,
             env: value.env,
             status: value.status,
