@@ -1,5 +1,5 @@
 use crate::agentic::helpers::{
-    get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
+    InputParamType, OutputParamType, ParamType, get_input_param_type, get_output_param_type
 };
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
@@ -7,7 +7,7 @@ use syn::ItemTrait;
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
-    constructor_param_type: &InputParamType,
+    constructor_param_type: &ParamType,
     constructor_param_defs: Vec<proc_macro2::TokenStream>,
     constructor_param_idents: Vec<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
@@ -17,7 +17,7 @@ pub fn get_remote_client(
     let method_impls = get_remote_method_impls(item_trait, type_name.to_string());
 
     match constructor_param_type {
-        InputParamType::Tuple => {
+        ParamType::Tuple => {
             let remote_client = quote! {
                 pub struct #remote_trait_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
@@ -54,7 +54,7 @@ pub fn get_remote_client(
 
             remote_client
         }
-        InputParamType::Multimodal => {
+        ParamType::Multimodal => {
             // TODO; Once multimodal representation is decided,
             // We can almost copy paste the above tokens expect for picking only 1 constructor parameter, and enumerate and get DataValue::Multimodal
             quote! {}
@@ -121,22 +121,24 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
             let output_parameter_type = get_output_param_type(&method.sig);
 
-            match (input_parameter_type, output_parameter_type) {
-                (InputParamType::Tuple, OutputParamType::Tuple) =>
+            match (input_parameter_type.param_type, output_parameter_type.param_type) {
+                (ParamType::Tuple, ParamType::Tuple) =>
                     Some(quote!{
-                        pub fn #method_name(#(#inputs),*) -> #return_type {
+                        pub async fn #method_name(#(#inputs),*) -> #return_type {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
                           let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
 
-                          // Change to async later
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke_and_await(
-                              #remote_method_name_token,
-                              &wit_values
+                          let rpc_result = wasm_rpc.async_invoke_and_await(
+                            #remote_method_name_token,
+                            &wit_values
                           );
 
-                            let result = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
+                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = 
+                            golem_rust::agentic::await_async_invoke_result(rpc_result).await;
+
+                          let result = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
                           let value = golem_rust::wasm_rpc::Value::from(result);
 
@@ -154,20 +156,22 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                         }
                      }),
-                  (InputParamType::Tuple, OutputParamType::Multimodal) => {
+                  (ParamType::Tuple, ParamType::Multimodal) => {
                     Some(quote!{
-                        pub fn #method_name(#(#inputs),*) -> #return_type {
+                        pub async fn #method_name(#(#inputs),*) -> #return_type {
 
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed to serialize")),*];
 
                           let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
 
-                          // Change to async later
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke_and_await(
+                          let rpc_result = wasm_rpc.async_invoke_and_await(
                               #remote_method_name_token,
                               &wit_values
                           );
+
+                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = 
+                            golem_rust::agentic::await_async_invoke_result(rpc_result).await;
 
                           let result = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 

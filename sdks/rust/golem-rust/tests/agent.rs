@@ -16,86 +16,27 @@
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
 
-    use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
+    use golem_rust::{agent_definition, agent_implementation};
 
     #[agent_definition]
     trait Echo {
-        fn new(init: UserId) -> Self;
-        fn echo_mut(&mut self, message: String) -> String;
+        fn new(xyz: String) -> Self;
         fn echo(&self, message: String) -> String;
-        fn get_agent_id(&self) -> String;
-        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()>;
-        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
-        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
-        fn echo_option(&self, option: Option<String>) -> Option<String>;
     }
 
     struct EchoImpl {
-        _id: String,
+        xyz: String,
     }
 
     #[agent_implementation]
     impl Echo for EchoImpl {
-        fn new(id: UserId) -> Self {
-            // Retrieve remote foo client and then it's agent id
-            let foo_client = FooClient::get(id);
-            let result = foo_client.get_name();
-
-            EchoImpl { _id: result }
-        }
-        fn echo_mut(&mut self, message: String) -> String {
-            format!("Echo: {}", message)
+        fn new(xyz: String) -> Self {
+            EchoImpl { xyz }
         }
 
         fn echo(&self, message: String) -> String {
             message.to_string()
         }
-
-        fn get_agent_id(&self) -> String {
-            self.get_id()
-        }
-
-        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
-            result
-        }
-
-        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String> {
-            result
-        }
-
-        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()> {
-            result
-        }
-
-        fn echo_option(&self, option: Option<String>) -> Option<String> {
-            option
-        }
-    }
-
-    #[agent_definition]
-    trait Foo {
-        fn new(user_id: UserId) -> Self;
-        fn get_name(&self) -> String;
-    }
-
-    struct FooImpl {
-        user_id: UserId,
-    }
-
-    #[agent_implementation]
-    impl Foo for FooImpl {
-        fn new(user_id: UserId) -> Self {
-            FooImpl { user_id }
-        }
-
-        fn get_name(&self) -> String {
-            self.user_id.id.clone()
-        }
-    }
-
-    #[derive(Schema)]
-    struct UserId {
-        id: String,
     }
 
     #[test] // only to verify that the agent compiles correctly

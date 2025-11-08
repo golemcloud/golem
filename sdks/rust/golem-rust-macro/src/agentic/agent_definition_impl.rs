@@ -18,7 +18,9 @@ use syn::ItemTrait;
 
 use crate::agentic::{
     get_remote_client,
-    helpers::{get_input_param_type, get_output_param_type, InputParamType, OutputParamType},
+    helpers::{
+        get_input_param_type, get_output_param_type, InputParamType, OutputParamType, ParamType,
+    },
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -125,8 +127,8 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
             let input_param_type = get_input_param_type(&trait_fn.sig);
             let output_param_type = get_output_param_type(&trait_fn.sig);
 
-            match input_param_type {
-                InputParamType::Tuple =>  {
+            match input_param_type.param_type {
+                ParamType::Tuple =>  {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
                             let param_name = match &*pat_type.pat {
@@ -141,7 +143,7 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
                     }
 
                 },
-                InputParamType::Multimodal => {
+                ParamType::Multimodal => {
                     let input = &trait_fn.sig.inputs[0];
                     if let syn::FnArg::Typed(_) = input {
                         // TODO; Once multimodal representation is decided,
@@ -151,8 +153,8 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
                 }
             }
 
-            match output_param_type {
-                OutputParamType::Tuple => {
+            match output_param_type.param_type {
+                ParamType::Tuple => {
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
@@ -162,26 +164,26 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
                         }
                     };
                 },
-                OutputParamType::Multimodal => {
+                ParamType::Multimodal => {
                     // TODO; Once multimodal representation is decided,
                     // we can expand this to retireve each name and type from multimodal;
                 }
             }
 
-            let input_schema = match input_param_type {
-                InputParamType::Tuple => quote! {
+            let input_schema = match input_param_type.param_type {
+                ParamType::Tuple => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#input_parameters),*])
                 },
-                InputParamType::Multimodal => quote! {
+                ParamType::Multimodal => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#input_parameters),*])
                 },
             };
 
-            let output_schema = match output_param_type {
-                OutputParamType::Tuple => quote! {
+            let output_schema = match output_param_type.param_type {
+                ParamType::Tuple => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
                 },
-                OutputParamType::Multimodal => quote! {
+                ParamType::Multimodal => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#output_parameters),*])
                 },
             };
@@ -203,7 +205,7 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
     // It holds the name and type of the constructor parmeters with schema
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    let mut constructor_param_type = InputParamType::Tuple;
+    let mut constructor_param_type = ParamType::Tuple;
 
     // name and type of the constructor params
     let mut constructor_param_defs = vec![];
@@ -212,10 +214,10 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
     let mut constructor_param_idents = vec![];
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
-        constructor_param_type = get_input_param_type(&ctor_fn.sig);
+        constructor_param_type = get_input_param_type(&ctor_fn.sig).param_type;
 
         match constructor_param_type {
-            InputParamType::Tuple => {
+            ParamType::Tuple => {
                 for input in &ctor_fn.sig.inputs {
                     if let syn::FnArg::Typed(pat_type) = input {
                         let param_name = match &*pat_type.pat {
@@ -242,7 +244,7 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
                     }
                 }
             }
-            InputParamType::Multimodal => {
+            ParamType::Multimodal => {
                 let input = &ctor_fn.sig.inputs[0];
                 if let syn::FnArg::Typed(_) = input {
                     // TODO; Once multimodal representation is decided,
@@ -260,10 +262,10 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
     );
 
     let agent_constructor_input_schema = match constructor_param_type {
-        InputParamType::Tuple => quote! {
+        ParamType::Tuple => quote! {
             golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameters_with_schema),*])
         },
-        InputParamType::Multimodal => quote! {
+        ParamType::Multimodal => quote! {
             golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameters_with_schema),*])
         },
     };

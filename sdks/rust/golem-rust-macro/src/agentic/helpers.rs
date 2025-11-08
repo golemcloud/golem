@@ -12,15 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub enum InputParamType {
-    Tuple,
-    Multimodal,
+use syn::{Type, PathArguments, GenericArgument};
+
+pub struct InputParamType {
+    pub param_type: ParamType,
 }
 
-pub enum OutputParamType {
-    Tuple,
-    Multimodal,
+
+pub struct OutputParamType {
+    pub param_type: ParamType,
+    pub function_kind: FunctionKind
 }
+
+pub enum FunctionKind {
+    Async,
+    Sync
+}
+
+pub enum ParamType {
+    Tuple,
+    Multimodal
+}
+
 
 pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
     if sig.inputs.len() == 1 {
@@ -29,25 +42,75 @@ pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
                 if let Some(seg) = type_path.path.segments.last() {
                     if seg.ident == "Multimodal" {
                         // Depends on how exactly multimodal is represented
-                        return InputParamType::Multimodal;
+                        return InputParamType {
+                            param_type: ParamType::Multimodal,
+                        }
                     }
                 }
             }
         }
     }
-    InputParamType::Tuple
+    InputParamType {
+        param_type: ParamType::Tuple,
+    }
 }
 
 pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
+   let function_kind = get_function_kind(&sig);
+
     if let syn::ReturnType::Type(_, ty) = &sig.output {
-        if let syn::Type::Path(type_path) = &**ty {
-            if let Some(seg) = type_path.path.segments.last() {
-                if seg.ident == "Multimodal" {
-                    // Depends on how exactly multimodal is represented
-                    return OutputParamType::Multimodal;
+        if let Some(inner_type) = extract_inner_type_if_future(&ty) {
+            if is_multimodal_type(inner_type) {
+                return OutputParamType {
+                    param_type: ParamType::Multimodal,
+                    function_kind,
+                };
+            }
+        } else if is_multimodal_type(&ty) {
+            return OutputParamType {
+                param_type: ParamType::Multimodal,
+                function_kind,
+            };
+        }
+    }
+
+    OutputParamType {
+        param_type: ParamType::Tuple,
+        function_kind
+    }
+}
+
+pub fn get_function_kind(sig: &syn::Signature) -> FunctionKind {
+    if sig.asyncness.is_some() {
+        FunctionKind::Async
+    } else {
+        FunctionKind::Sync
+    }
+}
+
+
+fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            if seg.ident == "impl" || seg.ident == "Future" {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    for arg in &args.args {
+                        if let GenericArgument::Type(inner_ty) = arg {
+                            return Some(inner_ty);
+                        }
+                    }
                 }
             }
         }
     }
-    OutputParamType::Tuple
+    None
+}
+
+fn is_multimodal_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "Multimodal";
+        }
+    }
+    false
 }
