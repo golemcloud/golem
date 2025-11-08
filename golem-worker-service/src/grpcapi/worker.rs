@@ -35,10 +35,10 @@ use golem_common::grpc::{
 };
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
-use golem_service_base::model::WorkerUpdateMode;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tap::TapFallible;

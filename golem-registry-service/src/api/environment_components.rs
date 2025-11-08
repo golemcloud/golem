@@ -189,7 +189,7 @@ impl EnvironmentComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_staged_component(environment_id, component_name, &auth)
+            .get_staged_component_by_name(environment_id, component_name, &auth)
             .await?
             .into();
 
@@ -233,7 +233,7 @@ impl EnvironmentComponentsApi {
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let components: Vec<ComponentDto> = self
             .component_service
-            .list_deployed_components(&environment_id, deployment_revision_id, &auth)
+            .list_deployment_components(&environment_id, deployment_revision_id, &auth)
             .await?
             .into_iter()
             .map(ComponentDto::from)
@@ -287,7 +287,7 @@ impl EnvironmentComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_deployed_component(
+            .get_deployment_component_by_name(
                 environment_id,
                 deployment_revision_id,
                 component_name,

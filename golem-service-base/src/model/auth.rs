@@ -177,6 +177,7 @@ pub enum AccountAction {
     ViewApplications,
     ViewPlugin,
     ViewToken,
+    ViewUsage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
@@ -248,6 +249,10 @@ impl AuthCtx {
         AuthCtx::System
     }
 
+    pub fn is_system(&self) -> bool {
+        matches!(self, AuthCtx::System)
+    }
+
     pub fn account_id(&self) -> &AccountId {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ID,
@@ -269,7 +274,7 @@ impl AuthCtx {
         }
     }
 
-    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment)
+    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment / does this user own the environment)
     /// should be disabled for this user.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
         has_any_role(self.account_roles(), &[AccountRole::Admin])
@@ -348,9 +353,11 @@ impl AuthCtx {
         roles_from_shares: &HashSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
-        // Environment owners are allowed to do everything with their environments
-        if self.account_id() == account_owning_enviroment {
-            return Ok(());
+        // Environment owners and system users are allowed to do everything with their environments
+        match self {
+            Self::User(user) if user.account_id == *account_owning_enviroment => return Ok(()),
+            Self::System => return Ok(()),
+            _ => {}
         };
 
         let is_allowed = match action {

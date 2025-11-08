@@ -18,7 +18,7 @@ use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
-use crate::services::account_usage::{AccountUsage, AccountUsageService};
+use crate::services::account_usage::AccountUsageService;
 use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::environment::EnvironmentError;
@@ -108,7 +108,12 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::CreateComponent, auth)
+            .get_and_authorize(
+                environment_id,
+                EnvironmentAction::CreateComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -128,9 +133,8 @@ impl ComponentWriteService {
                 )))
             })?;
 
-        let mut account_usage = self
-            .account_usage_service
-            .add_component(&environment.owner_account_id, wasm.len() as i64)
+        self.account_usage_service
+            .ensure_new_component_within_limits(&environment.owner_account_id, wasm.len() as i64)
             .await?;
 
         let initial_component_files: Vec<InitialComponentFile> = self
@@ -192,10 +196,8 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
-                environment.roles_from_shares,
+                environment.roles_from_active_shares,
             )?;
-
-        account_usage.ack();
 
         self.component_compilation
             .enqueue_compilation(environment_id, &component_id, stored_component.revision)
@@ -224,7 +226,12 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, auth)
+            .get_and_authorize(
+                &environment_id,
+                EnvironmentAction::UpdateComponent,
+                false,
+                auth,
+            )
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
@@ -235,7 +242,7 @@ impl ComponentWriteService {
         let component = component_record.try_into_model(
             environment.application_id.clone(),
             environment.owner_account_id.clone(),
-            environment.roles_from_shares.clone(),
+            environment.roles_from_active_shares.clone(),
         )?;
 
         // Fast path. If the current revision does not match we will reject it later anyway
@@ -248,15 +255,13 @@ impl ComponentWriteService {
 
         info!(environment_id = %environment_id, "Update component");
 
-        let mut account_usage: Option<AccountUsage> = None;
-
         let (wasm, wasm_object_store_key, wasm_hash) = if let Some(new_data) = new_wasm {
-            let actual_account_usage = self
-                .account_usage_service
-                .add_component(&environment.owner_account_id, new_data.len() as i64)
+            self.account_usage_service
+                .ensure_updated_component_within_limits(
+                    &environment.owner_account_id,
+                    new_data.len() as i64,
+                )
                 .await?;
-
-            let _ = account_usage.insert(actual_account_usage);
 
             let (wasm_hash, wasm_object_store_key) = self
                 .upload_and_hash_component_wasm(&environment_id, new_data.clone())
@@ -328,12 +333,8 @@ impl ComponentWriteService {
             .try_into_model(
                 environment.application_id,
                 environment.owner_account_id,
-                environment.roles_from_shares,
+                environment.roles_from_active_shares,
             )?;
-
-        if let Some(mut account_usage) = account_usage {
-            account_usage.ack();
-        };
 
         self.component_compilation
             .enqueue_compilation(&environment_id, &component_id, stored_component.revision)

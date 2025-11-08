@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::component::ComponentRepoError;
-use crate::services::account_usage::error::AccountUsageError;
+use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::application::ApplicationError;
 use crate::services::component_transformer_plugin_caller::TransformationFailedReason;
 use crate::services::environment::EnvironmentError;
@@ -48,12 +48,8 @@ pub enum ComponentError {
         "The component name {actual} did not match the component's root package name: {expected}"
     )]
     InvalidComponentName { expected: String, actual: String },
-    #[error("Limit {limit_name} exceeded, limit: {limit_value}, current: {current_value}")]
-    LimitExceeded {
-        limit_name: String,
-        limit_value: i64,
-        current_value: i64,
-    },
+    #[error(transparent)]
+    LimitExceeded(LimitExceededError),
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
@@ -101,7 +97,7 @@ impl SafeDisplay for ComponentError {
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
             Self::InvalidComponentName { .. } => self.to_string(),
-            Self::LimitExceeded { .. } => self.to_string(),
+            Self::LimitExceeded(inner) => inner.to_safe_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
@@ -132,16 +128,8 @@ error_forwarding!(
 impl From<AccountUsageError> for ComponentError {
     fn from(value: AccountUsageError) -> Self {
         match value {
-            AccountUsageError::LimitExceeded {
-                limit_name,
-                limit_value,
-                current_value,
-            } => Self::LimitExceeded {
-                limit_name,
-                limit_value,
-                current_value,
-            },
-            other => Self::InternalError(other.into_anyhow().context("AccountUsageError")),
+            AccountUsageError::LimitExceeded(inner) => Self::LimitExceeded(inner),
+            other => Self::InternalError(other.into_anyhow()),
         }
     }
 }

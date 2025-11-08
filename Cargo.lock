@@ -4501,7 +4501,6 @@ dependencies = [
  "golem-api-grpc",
  "golem-client",
  "golem-common",
- "golem-registry-service",
  "golem-service-base",
  "golem-wasm",
  "itertools 0.14.0",

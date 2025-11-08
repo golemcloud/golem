@@ -14,19 +14,19 @@
 
 use super::TestWorkerExecutor;
 use anyhow::anyhow;
+use applying::Apply;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     cancel_invocation_response, complete_promise_response, create_worker_response,
-    delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest,
-    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
-    GetFileContentsRequest, GetFileSystemNodeRequest, GetRunningWorkersMetadataRequest,
-    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest,
+    delete_worker_response, get_oplog_response, get_workers_metadata_response,
+    interrupt_worker_response, resume_worker_response, revert_worker_response,
+    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
+    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
+    GetFileContentsRequest, GetFileSystemNodeRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -35,27 +35,29 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::worker::WorkerMetadataDto;
-use golem_common::model::{ComponentFileSystemNode, PromiseId};
+use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{FlatComponentFileSystemNode, WorkerMetadataDto};
+use golem_common::model::PromiseId;
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{rename_component_if_needed, TestDsl};
+use golem_test_framework::dsl::{rename_component_if_needed, TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::oneshot::Sender;
-use tracing::{debug, Instrument};
+use tonic::Streaming;
 use uuid::Uuid;
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
+    type WorkerInvocationResult<T> = anyhow::Result<Result<T, WorkerExecutorError>>;
+
     fn redis(&self) -> Arc<dyn Redis> {
         self.deps.redis.clone()
     }
@@ -290,6 +292,20 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
+    async fn start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
+    ) -> anyhow::Result<WorkerId> {
+        let result = self
+            .try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+            .await??;
+        Ok(result)
+    }
+
     async fn invoke_with_key(
         &self,
         worker_id: &WorkerId,
@@ -414,6 +430,64 @@ impl TestDsl for TestWorkerExecutor {
                     .clone()
                     .into_iter()
                     .map(|param| param.value.into())
+                    .collect(),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                context: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await;
+
+        let result = result?.into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor invoke call"
+            )),
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                result,
+            )) => match result.output {
+                None => Ok(Ok(None)),
+                Some(response) => {
+                    let response: ValueAndType = response
+                        .try_into()
+                        .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?;
+                    Ok(Ok(Some(response)))
+                }
+            },
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
+                error,
+            )) => Ok(Err(error
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
+        }
+    }
+
+    async fn invoke_and_await_json_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let result = self
+            .client
+            .clone()
+            .invoke_and_await_worker_json(workerexecutor::v1::InvokeAndAwaitWorkerJsonRequest {
+                worker_id: Some(worker_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                name: function_name.to_string(),
+                input: params
+                    .clone()
+                    .into_iter()
+                    .map(|param| {
+                        serde_json::to_string(&param).expect("Failed serializing param to json")
+                    })
                     .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 account_limits: None,
@@ -681,15 +755,15 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn capture_output(
+    async fn make_worker_log_event_stream(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
+    ) -> anyhow::Result<impl WorkerLogEventStream> {
         let latest_version = self
             .get_latest_component_version(&worker_id.component_id)
             .await?;
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut response = self
+
+        let stream = self
             .client
             .clone()
             .connect_worker(ConnectWorkerRequest {
@@ -702,77 +776,7 @@ impl TestDsl for TestWorkerExecutor {
             .await?
             .into_inner();
 
-        tokio::spawn(
-            async move {
-                while let Some(event) = response.message().await.expect("Failed to get message") {
-                    debug!("Received event: {:?}", event);
-                    let _ = tx.send(event);
-                }
-
-                debug!("Finished receiving events");
-            }
-            .in_current_span(),
-        );
-
-        Ok(rx)
-    }
-
-    async fn capture_output_with_termination(
-        &self,
-        worker_id: &WorkerId,
-    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
-        let latest_version = self
-            .get_latest_component_version(&worker_id.component_id)
-            .await?;
-
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
-
-        let mut response = self
-            .client
-            .clone()
-            .connect_worker(ConnectWorkerRequest {
-                worker_id: Some(worker_id.clone().into()),
-                environment_id: Some(latest_version.environment_id.into()),
-                account_limits: None,
-                component_owner_account_id: Some(latest_version.account_id.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await?
-            .into_inner();
-
-        tokio::spawn(
-            async move {
-                loop {
-                    tokio::select! {
-                        msg = response.message() => {
-                            match msg {
-                                Ok(Some(event)) =>  {
-                                    debug!("Received event: {:?}", event);
-                                    tx.send(Some(event)).expect("Failed to send event");
-                                }
-                                Ok(None) => {
-                                    break;
-                                }
-                                Err(e) => {
-                                    panic!("Failed to get message: {e:?}");
-                                }
-                            }
-                        }
-                        _ = (&mut abort_rx) => {
-                            break;
-                        }
-                    }
-                }
-
-                debug!("Finished receiving events");
-
-                let _ = tx.send(None);
-            }
-            .in_current_span(),
-        );
-
-        Ok((rx, abort_tx))
+        Ok(GrpcWorkerLogEventStream(stream))
     }
 
     async fn auto_update_worker(
@@ -936,37 +940,6 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn get_running_workers_metadata(
-        &self,
-        component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
-        let response = self
-            .client
-            .clone()
-            .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                component_id: Some(component_id.clone().into()),
-                filter: filter.map(|f| f.into()),
-                auth_ctx: Some(self.auth_ctx().into()),
-            })
-            .await
-            .expect("Failed to get running workers metadata")
-            .into_inner();
-
-        match response.result {
-            None => panic!("No response from get_running_workers_metadata"),
-            Some(get_running_workers_metadata_response::Result::Success(success)) => Ok(success
-                .workers
-                .into_iter()
-                .map(|w| w.try_into())
-                .collect::<Result<_, _>>()
-                .map_err(|e| anyhow!("Failed converting worker metadata: {e}"))?),
-            Some(get_running_workers_metadata_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to get worker metadata: {error:?}"))
-            }
-        }
-    }
-
     async fn cancel_invocation(
         &self,
         worker_id: &WorkerId,
@@ -1001,7 +974,7 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         worker_id: &WorkerId,
         path: &str,
-    ) -> anyhow::Result<Vec<ComponentFileSystemNode>> {
+    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
         let latest_version = self
             .get_latest_component_version(&worker_id.component_id)
             .await?;
@@ -1024,15 +997,21 @@ impl TestDsl for TestWorkerExecutor {
             Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
                 data.nodes
                     .into_iter()
-                    .map(|v| v.try_into().map_err(|_| anyhow!("Failed to convert node")))
+                    .map(|v| {
+                        let converted: ComponentFileSystemNode = v
+                            .try_into()
+                            .map_err(|_| anyhow!("Failed to convert node"))?;
+                        Ok::<_, anyhow::Error>(converted.into())
+                    })
                     .collect::<Result<Vec<_>, _>>()
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
                 let file_node = data
                     .file
                     .ok_or(anyhow!("Missing file data in response"))?
-                    .try_into()
-                    .map_err(|_| anyhow!("Failed to convert file node"))?;
+                    .apply(ComponentFileSystemNode::try_from)
+                    .map_err(|_| anyhow!("Failed to convert file node"))?
+                    .into();
                 Ok(vec![file_node])
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)) => {
@@ -1093,5 +1072,57 @@ impl TestDsl for TestWorkerExecutor {
             }
         }
         Ok(Bytes::from(bytes))
+    }
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_version(&source_worker_id.component_id)
+            .await?;
+
+        let target_worker_id = WorkerId {
+            component_id: source_worker_id.component_id.clone(),
+            worker_name: target_worker_name.to_string(),
+        };
+
+        let response = self
+            .client
+            .clone()
+            .fork_worker(ForkWorkerRequest {
+                source_worker_id: Some(source_worker_id.clone().into()),
+                target_worker_id: Some(target_worker_id.into()),
+                oplog_index_cutoff: oplog_index.into(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(workerexecutor::v1::fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(workerexecutor::v1::fork_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Error forking worker: {error:?}"))
+            }
+            None => Err(anyhow!(
+                "No response from golem-worker-executor fork-worker call"
+            )),
+        }
+    }
+}
+
+struct GrpcWorkerLogEventStream(Streaming<LogEvent>);
+
+#[async_trait::async_trait]
+impl WorkerLogEventStream for GrpcWorkerLogEventStream {
+    async fn message(&mut self) -> anyhow::Result<Option<LogEvent>> {
+        self.0
+            .message()
+            .await
+            .map_err(|e| anyhow!("Failed to receive log event: {e}"))
     }
 }

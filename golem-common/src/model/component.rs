@@ -488,55 +488,46 @@ mod protobuf {
             })
         }
     }
+
+    impl From<ComponentDto> for golem_api_grpc::proto::golem::component::Component {
+        fn from(value: ComponentDto) -> Self {
+            Self {
+                component_id: Some(value.id.into()),
+                revision: value.revision.0,
+                component_name: value.component_name.0,
+                component_size: value.component_size,
+                metadata: Some(value.metadata.into()),
+                account_id: Some(value.account_id.into()),
+                application_id: Some(value.application_id.into()),
+                environment_id: Some(value.environment_id.into()),
+                environment_roles_from_shares: value
+                    .environment_roles_from_shares
+                    .into_iter()
+                    .map(|er| golem_api_grpc::proto::golem::auth::EnvironmentRole::from(er) as i32)
+                    .collect(),
+                created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                    value.created_at,
+                ))),
+                component_type: Some(
+                    golem_api_grpc::proto::golem::component::ComponentType::from(
+                        value.component_type,
+                    ) as i32,
+                ),
+                files: value.files.into_iter().map(|file| file.into()).collect(),
+                installed_plugins: value
+                    .installed_plugins
+                    .into_iter()
+                    .map(|plugin| plugin.into())
+                    .collect(),
+                env: value.env.into_iter().collect(),
+                wasm_hash_bytes: value
+                    .wasm_hash
+                    .into_blake3()
+                    .as_bytes()
+                    .iter()
+                    .map(|b| *b as u32)
+                    .collect(),
+            }
+        }
+    }
 }
-
-// #[derive(
-//     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
-// )]
-// #[serde(rename_all = "camelCase")]
-// #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-// #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-
-// pub struct VersionedComponentId {
-//     pub component_id: ComponentId,
-//     pub version: ComponentRevision,
-// }
-
-// impl Display for VersionedComponentId {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}#{}", self.component_id, self.version)
-//     }
-// }
-
-// #[cfg(feature = "protobuf")]
-// mod protobuf {
-//     use super::ComponentRevision;
-//     use crate::model::component::VersionedComponentId;
-
-//     impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
-//         for VersionedComponentId
-//     {
-//         type Error = String;
-
-//         fn try_from(
-//             value: golem_api_grpc::proto::golem::component::VersionedComponentId,
-//         ) -> Result<Self, Self::Error> {
-//             Ok(Self {
-//                 component_id: value
-//                     .component_id
-//                     .ok_or("Missing component_id")?
-//                     .try_into()?,
-//                 version: ComponentRevision(value.version),
-//             })
-//         }
-//     }
-
-//     impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
-//         fn from(value: VersionedComponentId) -> Self {
-//             Self {
-//                 component_id: Some(value.component_id.into()),
-//                 version: value.version.0,
-//             }
-//         }
-//     }
-// }

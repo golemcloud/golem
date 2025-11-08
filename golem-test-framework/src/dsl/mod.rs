@@ -38,18 +38,19 @@ use golem_common::model::component::{
     ComponentType, PluginInstallation,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
+use golem_common::model::deployment::DeploymentCreation;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
+use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::worker::{FlatComponentFileSystemNode, UpdateRecord, WorkerMetadataDto};
 use golem_common::model::{
-    ComponentFileSystemNode, IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter,
-    WorkerId, WorkerStatus,
+    IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm::Value;
 use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, HashMap};
@@ -60,13 +61,15 @@ use tempfile::{Builder, TempDir};
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
-use tracing::info;
+use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
+    type WorkerInvocationResult<T>;
+
     fn redis(&self) -> Arc<dyn Redis>;
 
     fn component(
@@ -167,21 +170,30 @@ pub trait TestDsl {
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
 
+    async fn try_start_worker(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+    ) -> Self::WorkerInvocationResult<WorkerId> {
+        self.try_start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
+            .await
+    }
+
+    async fn try_start_worker_with(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        wasi_config_vars: Vec<(String, String)>,
+    ) -> Self::WorkerInvocationResult<WorkerId>;
+
     async fn start_worker(
         &self,
         component_id: &ComponentId,
         name: &str,
     ) -> anyhow::Result<WorkerId> {
         self.start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
-            .await
-    }
-
-    async fn try_start_worker(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
-        self.try_start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
             .await
     }
 
@@ -192,28 +204,14 @@ pub trait TestDsl {
         args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<WorkerId> {
-        let result = self
-            .try_start_worker_with(component_id, name, args, env, wasi_config_vars)
-            .await?;
-        Ok(result.map_err(|err| anyhow!("Failed to start worker: {err:?}"))?)
-    }
-
-    async fn try_start_worker_with(
-        &self,
-        component_id: &ComponentId,
-        name: &str,
-        args: Vec<String>,
-        env: HashMap<String, String>,
-        wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>>;
+    ) -> anyhow::Result<WorkerId>;
 
     async fn invoke(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
+    ) -> Self::WorkerInvocationResult<()> {
         self.invoke_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
             .await
     }
@@ -224,14 +222,14 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<(), WorkerExecutorError>>;
+    ) -> Self::WorkerInvocationResult<()>;
 
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
+    ) -> Self::WorkerInvocationResult<Vec<Value>> {
         self.invoke_and_await_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
             .await
     }
@@ -242,14 +240,14 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>>;
+    ) -> Self::WorkerInvocationResult<Vec<Value>>;
 
     async fn invoke_and_await_typed(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
         self.invoke_and_await_typed_with_key(
             worker_id,
             &IdempotencyKey::fresh(),
@@ -265,7 +263,30 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>>;
+    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
+
+    async fn invoke_and_await_json(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Self::WorkerInvocationResult<Option<ValueAndType>> {
+        self.invoke_and_await_json_with_key(
+            worker_id,
+            &IdempotencyKey::fresh(),
+            function_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_and_await_json_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Self::WorkerInvocationResult<Option<ValueAndType>>;
 
     async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
@@ -310,25 +331,84 @@ pub trait TestDsl {
 
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
 
+    async fn make_worker_log_event_stream(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<impl WorkerLogEventStream>;
+
     async fn capture_output(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<LogEvent>>;
+    ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
+        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(
+            async move {
+                while let Some(event) = stream.message().await.expect("Failed to get message") {
+                    debug!("Received event: {:?}", event);
+                    let _ = tx.send(event);
+                }
+
+                debug!("Finished receiving events");
+            }
+            .in_current_span(),
+        );
+        Ok(rx)
+    }
 
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)>;
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
+        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(
+            async move {
+                loop {
+                    tokio::select! {
+                        msg = stream.message() => {
+                            match msg {
+                                Ok(Some(event)) =>  {
+                                    debug!("Received event: {:?}", event);
+                                    tx.send(Some(event)).expect("Failed to send event");
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    panic!("Failed to get message: {e:?}");
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            break;
+                        }
+                    }
+                }
+
+                debug!("Finished receiving events");
+
+                let _ = tx.send(None);
+            }
+            .in_current_span(),
+        );
+
+        Ok((rx, abort_tx))
+    }
 
     async fn log_output(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
-        let mut rx = self.capture_output(worker_id).await?;
-
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                info!("Received event: {:?}", event);
+        let mut stream = self.make_worker_log_event_stream(worker_id).await?;
+        tokio::spawn(
+            async move {
+                while let Some(event) = stream.message().await.expect("Failed to get message") {
+                    info!("Received event: {:?}", event);
+                }
+                debug!("Finished receiving events");
             }
-        });
-
+            .in_current_span(),
+        );
         Ok(())
     }
 
@@ -356,12 +436,6 @@ pub trait TestDsl {
         count: u64,
         precise: bool,
     ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)>;
-
-    async fn get_running_workers_metadata(
-        &self,
-        component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-    ) -> anyhow::Result<Vec<WorkerMetadataDto>>;
 
     async fn wait_for_status(
         &self,
@@ -411,9 +485,16 @@ pub trait TestDsl {
         &self,
         worker_id: &WorkerId,
         path: &str,
-    ) -> anyhow::Result<Vec<ComponentFileSystemNode>>;
+    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>>;
 
     async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes>;
+
+    async fn fork_worker(
+        &self,
+        source_worker_id: &WorkerId,
+        target_worker_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -502,6 +583,33 @@ pub trait TestDslExtended: TestDsl {
             .await?;
 
         Ok(environment_share)
+    }
+
+    async fn get_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<Environment> {
+        let client = self.registry_service_client().await;
+        let environment = client.get_environment(&environment_id.0).await?;
+        Ok(environment)
+    }
+
+    async fn deploy_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<()> {
+        let client = self.registry_service_client().await;
+
+        let plan = client
+            .get_environment_deployment_plan(&environment_id.0)
+            .await?;
+        tracing::info!("plan: {plan:?}");
+        client
+            .deploy_environment(
+                &environment_id.0,
+                &DeploymentCreation {
+                    current_deployment_revision: plan.current_deployment_revision,
+                    expected_deployment_hash: plan.deployment_hash,
+                    version: Uuid::new_v4().to_string(),
+                },
+            )
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -962,4 +1070,9 @@ pub async fn build_ifs_archive(
     zip_writer.close().await?;
     let file_path = temp_dir.path().join(ARCHIVE_NAME);
     Ok((temp_dir, file_path))
+}
+
+#[async_trait]
+pub trait WorkerLogEventStream: 'static + Send {
+    async fn message(&mut self) -> anyhow::Result<Option<LogEvent>>;
 }

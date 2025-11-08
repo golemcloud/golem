@@ -216,7 +216,7 @@ impl Rpc for RemoteInvocationRpc {
     async fn create_demand(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         _self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -233,6 +233,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
+                self_created_by,
             )
             .await?;
 
@@ -245,7 +246,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -264,6 +265,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
+                self_created_by,
             )
             .await?)
     }
@@ -274,7 +276,7 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
-        _self_created_by: &AccountId,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
@@ -293,6 +295,7 @@ impl Rpc for RemoteInvocationRpc {
                 HashMap::from_iter(self_env.to_vec()),
                 self_config,
                 self_stack,
+                self_created_by,
             )
             .await?)
     }

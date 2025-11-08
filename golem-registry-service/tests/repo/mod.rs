@@ -23,7 +23,6 @@ use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
 };
-use golem_registry_service::repo::model::account_usage::UsageType;
 use golem_registry_service::repo::model::application::{
     ApplicationExtRevisionRecord, ApplicationRevisionRecord,
 };
@@ -64,20 +63,19 @@ pub struct Deps {
 impl Deps {
     pub async fn setup(&self) {
         self.plan_repo
-            .create_or_update(
-                PlanRecord {
-                    plan_id: self.test_plan_id(),
-                    name: "MAIN_TEST_PLAN".to_string(),
-                    limits: Default::default(),
-                }
-                .with_limit(UsageType::TotalAppCount, 3)
-                .with_limit(UsageType::TotalEnvCount, 10)
-                .with_limit(UsageType::TotalComponentCount, 15)
-                .with_limit(UsageType::TotalWorkerCount, 20)
-                .with_limit(UsageType::TotalComponentStorageBytes, 1000)
-                .with_limit(UsageType::MonthlyGasLimit, 2000)
-                .with_limit(UsageType::MonthlyComponentUploadLimitBytes, 3000),
-            )
+            .create_or_update(PlanRecord {
+                plan_id: self.test_plan_id(),
+                name: "MAIN_TEST_PLAN".to_string(),
+                total_app_count: 3,
+                total_env_count: 10,
+                total_component_count: 15,
+                total_worker_count: 20,
+                total_worker_connection_count: 25,
+                total_component_storage_bytes: 1000,
+                monthly_gas_limit: 2000,
+                monthly_component_upload_limit_bytes: 3000,
+                max_memory_per_worker: 4000,
+            })
             .await
             .unwrap();
     }

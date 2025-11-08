@@ -16,7 +16,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision};
+use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{
@@ -108,7 +108,7 @@ impl DeploymentService {
     ) -> Result<Deployment, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -119,9 +119,11 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::DeployEnvironment,
         )?;
+
+        tracing::info!("Creating deployment for environment: {environment_id}");
 
         // Validation of the deployment is done as part of the repo.
         let deployment: Deployment = self
@@ -155,6 +157,8 @@ impl DeploymentService {
             })?
             .into();
 
+        tracing::debug!("New deployment for environment {environment_id}: {deployment:?}");
+
         Ok(deployment)
     }
 
@@ -165,7 +169,7 @@ impl DeploymentService {
     ) -> Result<Vec<Deployment>, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -176,7 +180,7 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeployment,
         )?;
 
@@ -198,7 +202,7 @@ impl DeploymentService {
     ) -> Result<DeploymentPlan, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -209,15 +213,21 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeploymentPlan,
         )?;
+
+        let staged_revision = self
+            .deployment_repo
+            .get_next_revision_number(&environment_id.0)
+            .await?
+            .map(|r| DeploymentRevision(r as u64));
 
         let summary: DeploymentPlan = self
             .deployment_repo
             .get_staged_identity(&environment_id.0)
             .await?
-            .into();
+            .into_plan(staged_revision);
 
         Ok(summary)
     }
@@ -227,10 +237,10 @@ impl DeploymentService {
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
-    ) -> Result<DeploymentPlan, DeploymentError> {
+    ) -> Result<DeploymentSummary, DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, auth)
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
@@ -241,11 +251,11 @@ impl DeploymentService {
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewDeploymentPlan,
         )?;
 
-        let summary: DeploymentPlan = self
+        let summary: DeploymentSummary = self
             .deployment_repo
             .get_deployment_identity(&environment_id.0, Some(deployment_revision.into()))
             .await?

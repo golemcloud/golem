@@ -29,7 +29,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
-use golem_common::model::worker::{WorkerCreationRequest, WorkerMetadataDto};
+use golem_common::model::worker::{RevertWorkerTarget, WorkerCreationRequest, WorkerMetadataDto};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
@@ -900,7 +900,7 @@ impl WorkerApi {
         self.worker_service
             .update(
                 &worker_id,
-                params.mode.clone(),
+                params.mode,
                 params.target_version,
                 component.environment_id,
                 auth,
@@ -1317,6 +1317,69 @@ impl WorkerApi {
             .await?;
 
         Ok(Json(RevertWorkerResponse {}))
+    }
+
+    /// Fork a worker
+    ///
+    /// Fork a worker by creating a new worker with the oplog up to the provided index
+    #[oai(
+        path = "/:component_id/workers/:worker_name/fork",
+        method = "post",
+        operation_id = "fork_worker"
+    )]
+    async fn fork_worker(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        request: Json<ForkWorkerRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<ForkWorkerResponse>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let worker_id = self
+            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .await?;
+
+        let record =
+            recorded_http_api_request!("revert_worker", worker_id = worker_id.to_string(),);
+
+        let response = self
+            .fork_worker_internal(worker_id, request.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn fork_worker_internal(
+        &self,
+        worker_id: WorkerId,
+        request: ForkWorkerRequest,
+        auth: AuthCtx,
+    ) -> Result<Json<ForkWorkerResponse>> {
+        let component = self
+            .component_service
+            .get_latest_by_id(&worker_id.component_id, &auth)
+            .await?;
+
+        auth.authorize_environment_action(
+            &component.account_id,
+            &component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
+
+        self.worker_service
+            .fork_worker(
+                &worker_id,
+                &request.target_worker_id,
+                request.oplog_index_cutoff,
+                component.environment_id,
+                component.account_id,
+                auth,
+            )
+            .await?;
+
+        Ok(Json(ForkWorkerResponse {}))
     }
 
     /// Cancels a pending invocation if it has not started yet

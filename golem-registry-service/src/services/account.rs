@@ -32,6 +32,8 @@ use tracing::{error, info};
 pub enum AccountError {
     #[error("Account Not Found: {0}")]
     AccountNotFound(AccountId),
+    #[error("Account by email not found: {0}")]
+    AccountByEmailNotFound(String),
     #[error("Email already in use")]
     EmailAlreadyInUse,
     #[error("Concurrent update")]
@@ -46,6 +48,7 @@ impl SafeDisplay for AccountError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::AccountNotFound(_) => self.to_string(),
+            Self::AccountByEmailNotFound(_) => self.to_string(),
             Self::EmailAlreadyInUse => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
@@ -202,6 +205,27 @@ impl AccountService {
             .await?
             .ok_or(AccountError::AccountNotFound(account_id.clone()))?
             .try_into()?;
+
+        Ok(account)
+    }
+
+    pub async fn get_by_email(
+        &self,
+        account_email: &str,
+        auth: &AuthCtx,
+    ) -> Result<Account, AccountError> {
+        let account: Account = self
+            .account_repo
+            .get_by_email(account_email)
+            .await?
+            .ok_or(AccountError::AccountByEmailNotFound(
+                account_email.to_string(),
+            ))?
+            .try_into()?;
+
+        auth.authorize_account_action(&account.id, AccountAction::ViewAccount)
+            // Visibility is not enforced in the repo, so we need to map permissions to visibility
+            .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
     }

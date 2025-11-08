@@ -124,6 +124,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeploymentPlanComponentEntry",
                 "golem_common::model::deployment::DeploymentPlanComponentEntry",
             ),
+            (
+                "DeploymentSummary",
+                "golem_common::model::deployment::DeploymentSummary",
+            ),
             // Environment
             (
                 "Environment",
@@ -175,6 +179,29 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "OplogProcessorPluginSpec",
                 "golem_common::model::plugin_registration::OplogProcessorPluginSpec",
+            ),
+            // Worker
+            (
+                "FlatComponentFileSystemNode",
+                "golem_common::model::worker::FlatComponentFileSystemNode",
+            ),
+            (
+                "RevertWorkerTarget",
+                "golem_common::model::worker::RevertWorkerTarget",
+            ),
+            ("ScanCursor", "golem_common::model::ScanCursor"),
+            (
+                "WorkerMetadataDto",
+                "golem_common::model::worker::WorkerMetadataDto",
+            ),
+            (
+                "WorkerUpdateMode",
+                "golem_common::model::worker::WorkerUpdateMode",
+            ),
+            // Public Oplog
+            (
+                "PublicOplogEntryWithIndex",
+                "golem_common::model::public_oplog::PublicOplogEntryWithIndex",
             ),
             // TODO: Leftovers
             ("PluginScope", "golem_common::model::plugin::PluginScope"),

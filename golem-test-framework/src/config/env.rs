@@ -12,12 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::blob_storage::BlobStorageInfo;
-use crate::components::rdb::DbInfo;
-use crate::components::registry_service::spawned::SpawnedRegistyService;
-use crate::components::registry_service::RegistryService;
-// use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
-// use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::sqlite::SqliteRdb;
 use crate::components::rdb::Rdb;
@@ -26,12 +22,14 @@ use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
-// use crate::components::shard_manager::spawned::SpawnedShardManager;
-// use crate::components::shard_manager::ShardManager;
-// use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
-// use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-// use crate::components::worker_service::spawned::SpawnedWorkerService;
-// use crate::components::worker_service::WorkerService;
+use crate::components::registry_service::spawned::SpawnedRegistryService;
+use crate::components::registry_service::RegistryService;
+use crate::components::shard_manager::spawned::SpawnedShardManager;
+use crate::components::shard_manager::ShardManager;
+use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use crate::components::worker_executor_cluster::WorkerExecutorCluster;
+use crate::components::worker_service::spawned::SpawnedWorkerService;
+use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, GolemClientProtocol, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -45,6 +43,7 @@ use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
     pub number_of_shards_override: Option<usize>,
@@ -151,21 +150,21 @@ impl Default for EnvBasedTestDependenciesConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct EnvBasedTestDependencies {
     config: EnvBasedTestDependenciesConfig,
     rdb: Arc<dyn Rdb>,
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
-    // shard_manager: Arc<dyn ShardManager>,
-    // component_service: Arc<dyn ComponentService>,
-    // component_compilation_service: Arc<dyn ComponentCompilationService>,
-    // worker_service: Arc<dyn WorkerService>,
-    // worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
+    shard_manager: Arc<dyn ShardManager>,
+    component_compilation_service: Arc<dyn ComponentCompilationService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
     blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
-    registry_service: Arc<dyn RegistryService>, // cloud_service: Arc<dyn CloudService>,
+    registry_service: Arc<dyn RegistryService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -214,156 +213,112 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_registry_service(
-        db_info: &DbInfo,
-        blob_storage_info: &BlobStorageInfo,
-    ) -> anyhow::Result<Arc<dyn RegistryService>> {
-        Ok(Arc::new(
-            SpawnedRegistyService::new(db_info, blob_storage_info).await?,
-        ))
+        config: &EnvBasedTestDependenciesConfig,
+        rdb: &Arc<dyn Rdb>,
+        component_compilation_service: &Arc<dyn ComponentCompilationService>,
+    ) -> Arc<dyn RegistryService> {
+        Arc::new(
+            SpawnedRegistryService::new(
+                Path::new("../target/debug/golem-registry-service"),
+                Path::new("../golem-registry-service"),
+                8081,
+                9091,
+                rdb,
+                component_compilation_service,
+                config.default_verbosity(),
+                config.default_stdout_level(),
+                config.default_stderr_level(),
+            )
+            .await,
+        )
     }
 
-    // async fn make_shard_manager(
-    //     config: Arc<EnvBasedTestDependenciesConfig>,
-    //     redis: Arc<dyn Redis>,
-    // ) -> Arc<dyn ShardManager> {
-    //     Arc::new(
-    //         SpawnedShardManager::new(
-    //             Path::new("../target/debug/golem-shard-manager"),
-    //             Path::new("../golem-shard-manager"),
-    //             config.number_of_shards_override,
-    //             9021,
-    //             9020,
-    //             redis,
-    //             config.default_verbosity(),
-    //             config.default_stdout_level(),
-    //             config.default_stderr_level(),
-    //         )
-    //         .await,
-    //     )
-    // }
+    async fn make_shard_manager(
+        config: &EnvBasedTestDependenciesConfig,
+        redis: Arc<dyn Redis>,
+    ) -> Arc<dyn ShardManager> {
+        Arc::new(
+            SpawnedShardManager::new(
+                Path::new("../target/debug/golem-shard-manager"),
+                Path::new("../golem-shard-manager"),
+                config.number_of_shards_override,
+                9021,
+                9020,
+                redis,
+                config.default_verbosity(),
+                config.default_stdout_level(),
+                config.default_stderr_level(),
+            )
+            .await,
+        )
+    }
 
-    // async fn make_component_compilation_service(
-    //     config: Arc<EnvBasedTestDependenciesConfig>,
-    //     component_service: Arc<dyn ComponentService>,
-    //     cloud_service: Arc<dyn CloudService>,
-    // ) -> Arc<dyn ComponentCompilationService> {
-    //     Arc::new(
-    //         SpawnedComponentCompilationService::new(
-    //             Path::new("../target/debug/golem-component-compilation-service"),
-    //             Path::new("../golem-component-compilation-service"),
-    //             8083,
-    //             9094,
-    //             component_service,
-    //             config.default_verbosity(),
-    //             config.default_stdout_level(),
-    //             config.default_stderr_level(),
-    //             cloud_service.clone(),
-    //         )
-    //         .await,
-    //     )
-    // }
+    async fn make_component_compilation_service(
+        config: &EnvBasedTestDependenciesConfig,
+    ) -> Arc<dyn ComponentCompilationService> {
+        Arc::new(
+            SpawnedComponentCompilationService::new(
+                Path::new("../target/debug/golem-component-compilation-service"),
+                Path::new("../golem-component-compilation-service"),
+                8083,
+                9094,
+                config.default_verbosity(),
+                config.default_stdout_level(),
+                config.default_stderr_level(),
+            )
+            .await,
+        )
+    }
 
-    // async fn make_worker_service(
-    //     config: Arc<EnvBasedTestDependenciesConfig>,
-    //     component_service: Arc<dyn ComponentService>,
-    //     shard_manager: Arc<dyn ShardManager>,
-    //     rdb: Arc<dyn Rdb>,
-    //     cloud_service: Arc<dyn CloudService>,
-    // ) -> Arc<dyn WorkerService> {
-    //     Arc::new(
-    //         SpawnedWorkerService::new(
-    //             Path::new("../target/debug/golem-worker-service"),
-    //             Path::new("../golem-worker-service"),
-    //             8082,
-    //             9092,
-    //             9093,
-    //             component_service,
-    //             shard_manager,
-    //             rdb,
-    //             config.default_verbosity(),
-    //             config.default_stdout_level(),
-    //             config.default_stderr_level(),
-    //             config.golem_client_protocol,
-    //             cloud_service,
-    //         )
-    //         .await,
-    //     )
-    // }
+    async fn make_worker_service(
+        config: &EnvBasedTestDependenciesConfig,
+        shard_manager: &Arc<dyn ShardManager>,
+        rdb: &Arc<dyn Rdb>,
+        registry_service: &Arc<dyn RegistryService>,
+    ) -> Arc<dyn WorkerService> {
+        Arc::new(
+            SpawnedWorkerService::new(
+                Path::new("../target/debug/golem-worker-service"),
+                Path::new("../golem-worker-service"),
+                8082,
+                9092,
+                9093,
+                shard_manager,
+                rdb,
+                config.default_verbosity(),
+                config.default_stdout_level(),
+                config.default_stderr_level(),
+                registry_service,
+            )
+            .await,
+        )
+    }
 
-    // async fn make_worker_executor_cluster(
-    //     config: Arc<EnvBasedTestDependenciesConfig>,
-    //     component_service: Arc<dyn ComponentService>,
-    //     shard_manager: Arc<dyn ShardManager>,
-    //     worker_service: Arc<dyn WorkerService>,
-    //     redis: Arc<dyn Redis>,
-    //     cloud_service: Arc<dyn CloudService>,
-    // ) -> Arc<dyn WorkerExecutorCluster> {
-    //     Arc::new(
-    //         SpawnedWorkerExecutorCluster::new(
-    //             config.worker_executor_cluster_size,
-    //             9000,
-    //             9100,
-    //             Path::new("../target/debug/worker-executor"),
-    //             Path::new("../golem-worker-executor"),
-    //             redis,
-    //             component_service,
-    //             shard_manager,
-    //             worker_service,
-    //             config.default_verbosity(),
-    //             config.default_stdout_level(),
-    //             config.default_stderr_level(),
-    //             config.shared_client,
-    //             cloud_service,
-    //         )
-    //         .await,
-    //     )
-    // }
-
-    // async fn make_worker_executor_cluster(
-    //     config: Arc<EnvBasedTestDependenciesConfig>,
-    //     component_service: Arc<dyn ComponentService>,
-    //     shard_manager: Arc<dyn ShardManager>,
-    //     worker_service: Arc<dyn WorkerService>,
-    //     redis: Arc<dyn Redis>,
-    //     cloud_service: Arc<dyn CloudService>,
-    // ) -> Arc<dyn WorkerExecutorCluster> {
-    //     if config.golem_docker_services {
-    //         Arc::new(
-    //             DockerWorkerExecutorCluster::new(
-    //                 config.worker_executor_cluster_size,
-    //                 &config.unique_network_id,
-    //                 redis,
-    //                 component_service,
-    //                 shard_manager,
-    //                 worker_service,
-    //                 config.default_verbosity(),
-    //                 config.shared_client,
-    //                 cloud_service,
-    //             )
-    //             .await,
-    //         )
-    //     } else {
-    //         Arc::new(
-    //             SpawnedWorkerExecutorCluster::new(
-    //                 config.worker_executor_cluster_size,
-    //                 9000,
-    //                 9100,
-    //                 Path::new("../target/debug/worker-executor"),
-    //                 Path::new("../golem-worker-executor"),
-    //                 redis,
-    //                 component_service,
-    //                 shard_manager,
-    //                 worker_service,
-    //                 config.default_verbosity(),
-    //                 config.default_stdout_level(),
-    //                 config.default_stderr_level(),
-    //                 config.shared_client,
-    //                 cloud_service,
-    //             )
-    //             .await,
-    //         )
-    //     }
-    // }
+    async fn make_worker_executor_cluster(
+        config: &EnvBasedTestDependenciesConfig,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
+        redis: Arc<dyn Redis>,
+        registry_service: Arc<dyn RegistryService>,
+    ) -> Arc<dyn WorkerExecutorCluster> {
+        Arc::new(
+            SpawnedWorkerExecutorCluster::new(
+                config.worker_executor_cluster_size,
+                9000,
+                9100,
+                Path::new("../target/debug/worker-executor"),
+                Path::new("../golem-worker-executor"),
+                redis,
+                shard_manager,
+                worker_service,
+                config.default_verbosity(),
+                config.default_stdout_level(),
+                config.default_stderr_level(),
+                registry_service,
+            )
+            .await,
+        )
+    }
 
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
         let blob_storage_root = "../target/golem_test_blob_storage";
@@ -373,10 +328,6 @@ impl EnvBasedTestDependencies {
                 .await
                 .unwrap(),
         );
-
-        let blob_storage_info = BlobStorageInfo::LocalFileSytem {
-            root: PathBuf::from(blob_storage_root),
-        };
 
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
@@ -393,45 +344,24 @@ impl EnvBasedTestDependencies {
 
         let rdb = Self::make_rdb(&config).await;
 
-        // let cloud_service = Self::make_cloud_service(config.clone(), rdb.clone()).await;
+        let shard_manager = Self::make_shard_manager(&config, redis.clone()).await;
 
-        // let component_service = Self::make_component_service(
-        //     config.clone(),
-        //     rdb.clone(),
-        //     plugin_wasm_files_service.clone(),
-        //     cloud_service.clone(),
-        // )
-        // .await;
+        let component_compilation_service = Self::make_component_compilation_service(&config).await;
 
-        // let component_compilation_service = Self::make_component_compilation_service(
-        //     config.clone(),
-        //     component_service.clone(),
-        //     cloud_service.clone(),
-        // )
-        // .await;
+        let registry_service: Arc<dyn RegistryService> =
+            Self::make_registry_service(&config, &rdb, &component_compilation_service).await;
 
-        // let shard_manager = Self::make_shard_manager(config.clone(), redis.clone()).await;
+        let worker_service =
+            Self::make_worker_service(&config, &shard_manager, &rdb, &registry_service).await;
 
-        // let worker_service = Self::make_worker_service(
-        //     config.clone(),
-        //     component_service.clone(),
-        //     shard_manager.clone(),
-        //     rdb.clone(),
-        //     cloud_service.clone(),
-        // )
-        // .await;
-
-        // let worker_executor_cluster = Self::make_worker_executor_cluster(
-        //     config.clone(),
-        //     component_service.clone(),
-        //     shard_manager.clone(),
-        //     worker_service.clone(),
-        //     redis.clone(),
-        //     cloud_service.clone(),
-        // )
-        // .await;
-
-        let registry_service = Self::make_registry_service(&rdb.info(), &blob_storage_info).await?;
+        let worker_executor_cluster = Self::make_worker_executor_cluster(
+            &config,
+            shard_manager.clone(),
+            worker_service.clone(),
+            redis.clone(),
+            registry_service.clone(),
+        )
+        .await;
 
         Ok(Self {
             config,
@@ -443,6 +373,10 @@ impl EnvBasedTestDependencies {
             plugin_wasm_files_service,
             registry_service,
             temp_directory: Arc::new(TempDir::new().expect("Failed to create temporary directory")),
+            shard_manager,
+            component_compilation_service,
+            worker_executor_cluster,
+            worker_service,
         })
     }
 }
@@ -465,9 +399,9 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.redis_monitor.clone()
     }
 
-    // fn shard_manager(&self) -> Arc<dyn ShardManager> {
-    //     self.shard_manager.clone()
-    // }
+    fn shard_manager(&self) -> Arc<dyn ShardManager> {
+        self.shard_manager.clone()
+    }
 
     fn component_directory(&self) -> &Path {
         &self.config.golem_test_components
@@ -477,21 +411,17 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.temp_directory.path()
     }
 
-    // fn component_service(&self) -> Arc<dyn ComponentService> {
-    //     self.component_service.clone()
-    // }
+    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
+        self.component_compilation_service.clone()
+    }
 
-    // fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
-    //     self.component_compilation_service.clone()
-    // }
+    fn worker_service(&self) -> Arc<dyn WorkerService> {
+        self.worker_service.clone()
+    }
 
-    // fn worker_service(&self) -> Arc<dyn WorkerService> {
-    //     self.worker_service.clone()
-    // }
-
-    // fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
-    //     self.worker_executor_cluster.clone()
-    // }
+    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
+        self.worker_executor_cluster.clone()
+    }
 
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
         self.initial_component_files_service.clone()
@@ -500,10 +430,6 @@ impl TestDependencies for EnvBasedTestDependencies {
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
         self.plugin_wasm_files_service.clone()
     }
-
-    // fn cloud_service(&self) -> Arc<dyn CloudService> {
-    //     self.cloud_service.clone()
-    // }
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {
         self.registry_service.clone()

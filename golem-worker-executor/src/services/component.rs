@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::golem_config::{ComponentCacheConfig, ComponentServiceConfig};
+use super::golem_config::ComponentCacheConfig;
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
 use golem_common::cache::SimpleCache;
@@ -21,9 +21,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::RetryConfig;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
@@ -33,7 +31,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
-use tracing::info;
 use tracing::{debug, warn};
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -48,6 +45,8 @@ pub trait ComponentService: Send + Sync {
         component_version: ComponentRevision,
     ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
 
+    // If a version is provided, deleted components will also be returned.
+    // If no version is provided, only the latest non-deleted version is returned.
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
@@ -70,22 +69,19 @@ pub trait ComponentService: Send + Sync {
 }
 
 pub fn configured(
-    config: &ComponentServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
+    registry_service: Arc<dyn RegistryService>,
     blob_storage: Arc<dyn BlobStorage>,
 ) -> Arc<dyn ComponentService> {
     let compiled_component_service =
         golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
 
-    info!("Using component API at {}", config.url());
     Arc::new(ComponentServiceDefault::new(
-        config.host.clone(),
-        config.port,
+        registry_service,
         cache_config.max_capacity,
         cache_config.max_metadata_capacity,
         cache_config.time_to_idle,
-        config.retries.clone(),
         compiled_component_service,
     ))
 }
@@ -94,31 +90,25 @@ pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
-    component_client: GrpcRegistryService,
+    registry_client: Arc<dyn RegistryService>,
 }
 
 impl ComponentServiceDefault {
     pub fn new(
-        component_host: String,
-        component_port: u16,
+        registry_client: Arc<dyn RegistryService>,
         max_component_capacity: usize,
         max_metadata_capacity: usize,
         time_to_idle: Duration,
-        retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
         Self {
+            registry_client,
             component_cache: create_component_cache(max_component_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
                 time_to_idle,
             ),
             compiled_component_service,
-            component_client: GrpcRegistryService::new(&RemoteServiceConfig {
-                host: component_host,
-                port: component_port,
-                retries: retry_config,
-            }),
         }
     }
 }
@@ -168,7 +158,7 @@ impl ComponentService for ComponentServiceDefault {
                         Some(component) => Ok(component),
                         None => {
                             let bytes = self
-                                .component_client
+                                .registry_client
                                 .download_component(
                                     &component_id_clone,
                                     component_version,
@@ -238,7 +228,7 @@ impl ComponentService for ComponentServiceDefault {
     ) -> Result<ComponentDto, WorkerExecutorError> {
         match forced_version {
             Some(version) => {
-                let client = self.component_client.clone();
+                let client = self.registry_client.clone();
                 let component_id = component_id.clone();
                 self.component_metadata_cache
                     .get_or_insert_simple(
@@ -268,7 +258,7 @@ impl ComponentService for ComponentServiceDefault {
             }
             None => {
                 let metadata = self
-                    .component_client
+                    .registry_client
                     .get_latest_component_metadata(component_id, &AuthCtx::System)
                     .await
                     .map_err(|e| {
@@ -301,7 +291,7 @@ impl ComponentService for ComponentServiceDefault {
         resolving_account: AccountId,
     ) -> Result<Option<ComponentId>, WorkerExecutorError> {
         let component = self
-            .component_client
+            .registry_client
             .resolve_component(
                 &resolving_account,
                 &resolving_application,

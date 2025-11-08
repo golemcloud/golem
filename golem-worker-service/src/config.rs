@@ -19,7 +19,7 @@ use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::RegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ pub struct WorkerServiceConfig {
     // pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
-    pub registry_service: RemoteServiceConfig,
+    pub registry_service: RegistryServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -144,7 +144,7 @@ impl Default for WorkerServiceConfig {
             // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
-            registry_service: RemoteServiceConfig::default(),
+            registry_service: RegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }

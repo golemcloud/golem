@@ -19,6 +19,7 @@ mod tests;
 
 use super::environment::EnvironmentId;
 use super::worker::WasiConfigVars;
+use crate::declare_structs;
 use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
@@ -39,6 +40,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
+
+declare_structs! {
+    pub struct PublicOplogEntryWithIndex {
+        pub oplog_index: OplogIndex,
+        pub entry: PublicOplogEntry,
+    }
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]

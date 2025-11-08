@@ -53,6 +53,7 @@ use tokio::runtime::Handle;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
+    // TODO: this should be restricted to targets within the same component
     async fn fork(
         &self,
         fork_account_id: &AccountId,
@@ -61,6 +62,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(), WorkerExecutorError>;
 
+    // TODO: this should be restricted to targets within the same component
     async fn fork_and_write_fork_result(
         &self,
         fork_account_id: &AccountId,
@@ -522,7 +524,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())
@@ -580,7 +582,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // depending on sharding.
         // This will replay until the fork point in the forked worker
         self.worker_proxy
-            .resume(target_worker_id, true)
+            .resume(target_worker_id, true, fork_account_id)
             .await
             .map_err(|err| {
                 WorkerExecutorError::failed_to_resume_worker(target_worker_id.clone(), err.into())

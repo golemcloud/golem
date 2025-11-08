@@ -13,13 +13,17 @@
 // limitations under the License.
 
 use super::account::AccountId;
+use super::component::ComponentFilePermissions;
 use super::component::{ComponentRevision, PluginPriority};
 use super::environment::EnvironmentId;
 use super::oplog::WorkerResourceId;
 use super::regions::OplogRegion;
 use super::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
-use crate::{declare_structs, declare_unions};
+use crate::model::OplogIndex;
+use crate::{declare_enums, declare_structs, declare_unions};
+use bincode::{Decode, Encode};
 use golem_wasm::IntoValue;
+use golem_wasm_derive::IntoValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -87,11 +91,24 @@ impl IntoValue for WasiConfigVars {
     }
 }
 
+declare_enums! {
+    pub enum FlatComponentFileSystemNodeKind {
+        Directory,
+        File,
+    }
+}
+
 declare_unions! {
     pub enum UpdateRecord {
         PendingUpdate(PendingUpdate),
         SuccessfulUpdate(SuccessfulUpdate),
         FailedUpdate(FailedUpdate),
+    }
+
+    #[derive(Encode, Decode, IntoValue)]
+    pub enum RevertWorkerTarget {
+        RevertToOplogIndex(RevertToOplogIndex),
+        RevertLastInvocations(RevertLastInvocations),
     }
 }
 
@@ -143,19 +160,46 @@ declare_structs! {
         pub deleted_regions: Vec<OplogRegion>
     }
 
+    #[derive(Encode, Decode, IntoValue)]
+    pub struct RevertToOplogIndex {
+        pub last_oplog_index: OplogIndex,
+    }
+
+    #[derive(Encode, Decode, IntoValue)]
+    pub struct RevertLastInvocations {
+        pub number_of_invocations: u64,
+    }
+
+    pub struct FlatComponentFileSystemNode {
+        pub name: String,
+        pub last_modified: u64,
+        pub kind: FlatComponentFileSystemNodeKind,
+        pub permissions: Option<ComponentFilePermissions>, // only for files
+        pub size: Option<u64>,                             // only for files
+    }
+}
+
+declare_enums! {
+    pub enum WorkerUpdateMode {
+        Automatic,
+        Manual,
+    }
 }
 
 mod protobuf {
-    use super::WasiConfigVarsEntry;
     use super::WorkerMetadataDto;
     use super::{
         ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
         WasiConfigVars,
     };
+    use super::{
+        RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget, WasiConfigVarsEntry,
+        WorkerUpdateMode,
+    };
     use crate::model::component::{ComponentRevision, PluginPriority};
     use crate::model::oplog::WorkerResourceId;
     use crate::model::regions::OplogRegion;
-    use crate::model::WorkerResourceDescription;
+    use crate::model::{OplogIndex, WorkerResourceDescription};
     use std::collections::HashSet;
 
     impl From<golem_api_grpc::proto::golem::worker::WasiConfigVars> for WasiConfigVars {
@@ -368,6 +412,95 @@ mod protobuf {
                         ),
                     ),
                 },
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
+        fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
+            Self {
+                last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
+            }
+        }
+    }
+
+    impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
+        fn from(value: RevertToOplogIndex) -> Self {
+            Self {
+                last_oplog_index: u64::from(value.last_oplog_index) as i64,
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
+        fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
+            Self {
+                number_of_invocations: value.number_of_invocations as u64,
+            }
+        }
+    }
+
+    impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
+        fn from(value: RevertLastInvocations) -> Self {
+            Self {
+                number_of_invocations: value.number_of_invocations as i64,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
+        type Error = String;
+
+        fn try_from(
+            value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
+        ) -> Result<Self, Self::Error> {
+            match value.target {
+                Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
+                    Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
+                }
+                Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
+                    Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
+                }
+                None => Err("Missing field: target".to_string()),
+            }
+        }
+    }
+
+    impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
+        fn from(value: RevertWorkerTarget) -> Self {
+            match value {
+                RevertWorkerTarget::RevertToOplogIndex(target) => Self {
+                    target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
+                },
+                RevertWorkerTarget::RevertLastInvocations(target) => Self {
+                    target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
+                },
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::worker::UpdateMode> for WorkerUpdateMode {
+        fn from(value: golem_api_grpc::proto::golem::worker::UpdateMode) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::worker::UpdateMode::Automatic => {
+                    WorkerUpdateMode::Automatic
+                }
+                golem_api_grpc::proto::golem::worker::UpdateMode::Manual => {
+                    WorkerUpdateMode::Manual
+                }
+            }
+        }
+    }
+
+    impl From<WorkerUpdateMode> for golem_api_grpc::proto::golem::worker::UpdateMode {
+        fn from(value: WorkerUpdateMode) -> Self {
+            match value {
+                WorkerUpdateMode::Automatic => {
+                    golem_api_grpc::proto::golem::worker::UpdateMode::Automatic
+                }
+                WorkerUpdateMode::Manual => {
+                    golem_api_grpc::proto::golem::worker::UpdateMode::Manual
+                }
             }
         }
     }

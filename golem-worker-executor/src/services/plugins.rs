@@ -19,9 +19,7 @@ use golem_common::model::component::{
     ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_common::model::RetryConfig;
-use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::plugin_registration::PluginRegistration;
@@ -59,9 +57,12 @@ pub trait PluginsService: Send + Sync {
     ) -> Result<PluginRegistration, WorkerExecutorError>;
 }
 
-pub fn configured(config: &PluginServiceConfig) -> Arc<dyn PluginsService> {
+pub fn configured(
+    registry_service: Arc<dyn RegistryService>,
+    config: &PluginServiceConfig,
+) -> Arc<dyn PluginsService> {
     let client = CachedPlugins::new(
-        PluginsGrpc::new(config.host.clone(), config.port, config.retries.clone()),
+        PluginsRegistryService::new(registry_service),
         config.plugin_cache_size,
     );
     Arc::new(client)
@@ -146,24 +147,18 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
 }
 
 #[derive(Clone)]
-struct PluginsGrpc {
-    client: GrpcRegistryService,
+struct PluginsRegistryService {
+    client: Arc<dyn RegistryService>,
 }
 
-impl PluginsGrpc {
-    pub fn new(host: String, port: u16, retry_config: RetryConfig) -> Self {
-        Self {
-            client: GrpcRegistryService::new(&RemoteServiceConfig {
-                host,
-                port,
-                retries: retry_config,
-            }),
-        }
+impl PluginsRegistryService {
+    pub fn new(client: Arc<dyn RegistryService>) -> Self {
+        Self { client }
     }
 }
 
 #[async_trait]
-impl PluginsService for PluginsGrpc {
+impl PluginsService for PluginsRegistryService {
     async fn get_plugin_installation(
         &self,
         component_id: &ComponentId,

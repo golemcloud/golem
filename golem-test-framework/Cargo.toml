@@ -18,7 +18,6 @@ golem-client = { workspace = true }
 golem-common = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm = { workspace = true }
-golem-registry-service = { path = "../golem-registry-service", version = "=0.0.0" }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::config::PlansConfig;
-use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
 use anyhow::anyhow;
@@ -23,7 +22,6 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::auth::{GlobalAction, PlanAction};
 use golem_service_base::repo::RepoError;
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -78,7 +76,8 @@ impl PlanService {
                         || existing_plan.storage_limit != plan.storage_limit
                         || existing_plan.worker_limit != plan.worker_limit
                         || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
-                        || existing_plan.monthly_upload_limit != plan.app_limit;
+                        || existing_plan.monthly_upload_limit != plan.app_limit
+                        || existing_plan.max_memory_per_worker != plan.max_memory_per_worker;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -102,9 +101,11 @@ impl PlanService {
                         env_limit: plan.env_limit,
                         component_limit: plan.component_limit,
                         worker_limit: plan.worker_limit,
+                        worker_connection_limit: plan.worker_connection_limit,
                         storage_limit: plan.storage_limit,
                         monthly_gas_limit: plan.monthly_gas_limit,
                         monthly_upload_limit: plan.monthly_upload_limit,
+                        max_memory_per_worker: plan.max_memory_per_worker,
                     },
                     auth,
                 )
@@ -144,27 +145,21 @@ impl PlanService {
         Ok(result.try_into()?)
     }
 
-    pub async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
+    async fn create_or_update_plan(&self, plan: Plan, auth: &AuthCtx) -> Result<(), PlanError> {
         auth.authorize_plan_action(&plan.plan_id, PlanAction::CreateOrUpdatePlan)?;
 
         let record: PlanRecord = PlanRecord {
             name: plan.name.0,
             plan_id: plan.plan_id.0,
-            limits: BTreeMap::from_iter([
-                (UsageType::TotalAppCount, Some(plan.app_limit)),
-                (UsageType::TotalEnvCount, Some(plan.env_limit)),
-                (UsageType::TotalComponentCount, Some(plan.component_limit)),
-                (
-                    UsageType::TotalComponentStorageBytes,
-                    Some(plan.storage_limit),
-                ),
-                (UsageType::TotalWorkerCount, Some(plan.worker_limit)),
-                (UsageType::MonthlyGasLimit, Some(plan.monthly_gas_limit)),
-                (
-                    UsageType::MonthlyComponentUploadLimitBytes,
-                    Some(plan.monthly_upload_limit),
-                ),
-            ]),
+            max_memory_per_worker: plan.max_memory_per_worker as i64,
+            total_app_count: plan.app_limit,
+            total_env_count: plan.env_limit,
+            total_component_count: plan.component_limit,
+            total_component_storage_bytes: plan.storage_limit,
+            total_worker_count: plan.worker_limit,
+            total_worker_connection_count: plan.worker_connection_limit,
+            monthly_component_upload_limit_bytes: plan.monthly_upload_limit,
+            monthly_gas_limit: plan.monthly_gas_limit,
         };
 
         self.plan_repo.create_or_update(record).await?;

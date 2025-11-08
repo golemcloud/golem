@@ -67,7 +67,8 @@ declare_structs! {
 
         pub owner_account_id: AccountId,
         /// Roles in the environment that were given to the current user by shares. The owner always has full access.
-        pub roles_from_shares: HashSet<EnvironmentRole>,
+        /// Note that even if getting a deleted environment only non-deleted shares are considered.
+        pub roles_from_active_shares: HashSet<EnvironmentRole>,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }

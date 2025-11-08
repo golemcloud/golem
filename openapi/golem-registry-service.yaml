@@ -4776,7 +4776,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/DeploymentPlan'
+                $ref: '#/components/schemas/DeploymentSummary'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5670,7 +5670,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment_share
-  /v1/login/v1/oauth2:
+  /v1/login/oauth2:
     post:
       tags:
       - RegistryService
@@ -7807,11 +7807,14 @@ components:
     DeploymentPlan:
       type: object
       title: DeploymentPlan
-      description: Summary of all entities tracked by the deployment
+      description: Planned deployment including the current revision
       required:
       - deploymentHash
       - components
       properties:
+        currentDeploymentRevision:
+          type: integer
+          format: uint64
         deploymentHash:
           type: string
           format: hash
@@ -7839,6 +7842,21 @@ components:
         hash:
           type: string
           format: hash
+    DeploymentSummary:
+      type: object
+      title: DeploymentSummary
+      description: Summary of all entities tracked by the deployment
+      required:
+      - deploymentHash
+      - components
+      properties:
+        deploymentHash:
+          type: string
+          format: hash
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanComponentEntry'
     DynamicLinkedInstance:
       type: object
       oneOf:
@@ -7933,7 +7951,7 @@ components:
       - versionCheck
       - securityOverrides
       - ownerAccountId
-      - rolesFromShares
+      - rolesFromActiveShares
       properties:
         id:
           type: string
@@ -7955,9 +7973,11 @@ components:
         ownerAccountId:
           type: string
           format: uuid
-        rolesFromShares:
+        rolesFromActiveShares:
           type: array
-          description: Roles in the environment that were given to the current user by shares. The owner always has full access.
+          description: |-
+            Roles in the environment that were given to the current user by shares. The owner always has full access.
+            Note that even if getting a deleted environment only non-deleted shares are considered.
           items:
             $ref: '#/components/schemas/EnvironmentRole'
         currentDeployment:
@@ -8472,9 +8492,11 @@ components:
       - envLimit
       - componentLimit
       - workerLimit
+      - workerConnectionLimit
       - storageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
+      - maxMemoryPerWorker
       properties:
         planId:
           type: string
@@ -8493,6 +8515,9 @@ components:
         workerLimit:
           type: integer
           format: int64
+        workerConnectionLimit:
+          type: integer
+          format: int64
         storageLimit:
           type: integer
           format: int64
@@ -8502,6 +8527,9 @@ components:
         monthlyUploadLimit:
           type: integer
           format: int64
+        maxMemoryPerWorker:
+          type: integer
+          format: uint64
     PluginInstallation:
       type: object
       title: PluginInstallation

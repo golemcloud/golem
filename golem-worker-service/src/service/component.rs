@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -44,13 +42,6 @@ error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError>;
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
@@ -66,14 +57,14 @@ pub trait ComponentService: Send + Sync {
 
 pub struct CachedComponentService {
     inner: Arc<dyn ComponentService>,
-    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<ComponentServiceError>>,
+    _cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<ComponentServiceError>>,
 }
 
 impl CachedComponentService {
     pub fn new(inner: Arc<dyn ComponentService>, cache_capacity: usize) -> Self {
         Self {
             inner,
-            cache: Cache::new(
+            _cache: Cache::new(
                 Some(cache_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
@@ -85,31 +76,6 @@ impl CachedComponentService {
 
 #[async_trait]
 impl ComponentService for CachedComponentService {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError> {
-        let inner_clone = self.inner.clone();
-        self.cache
-            .get_or_insert_simple(&(component_id.clone(), version), || async {
-                inner_clone
-                    .get_by_version(component_id, version, auth_ctx)
-                    .await
-                    .map_err(Arc::new)
-            })
-            .await
-            .map_err(|e| match &*e {
-                ComponentServiceError::InternalError(inner) => {
-                    ComponentServiceError::InternalError(anyhow!("Cached error: {inner}"))
-                }
-                ComponentServiceError::ComponentNotFound => {
-                    ComponentServiceError::ComponentNotFound
-                }
-            })
-    }
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
@@ -139,21 +105,6 @@ impl RemoteComponentService {
 
 #[async_trait]
 impl ComponentService for RemoteComponentService {
-    async fn get_by_version(
-        &self,
-        component_id: &ComponentId,
-        version: ComponentRevision,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client
-            .get_component_metadata(component_id, version, auth_ctx)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-                other => other.into(),
-            })
-    }
-
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ComponentCompilationConfig;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationRequest,
@@ -24,6 +25,8 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use http::Uri;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -36,20 +39,30 @@ pub trait ComponentCompilationService: Debug + Send + Sync {
         component_id: &ComponentId,
         component_version: ComponentRevision,
     );
+
+    fn set_own_grpc_port(&self, grpc_port: u16);
+}
+
+pub fn configured(config: &ComponentCompilationConfig) -> Arc<dyn ComponentCompilationService> {
+    match config {
+        ComponentCompilationConfig::Disabled(_) => Arc::new(DisabledComponentCompilationService),
+        ComponentCompilationConfig::Enabled(inner) => {
+            Arc::new(GrpcComponentCompilationService::new(
+                inner.uri(),
+                inner.retries.clone(),
+                inner.connect_timeout,
+            ))
+        }
+    }
 }
 
 pub struct GrpcComponentCompilationService {
     client: GrpcClient<ComponentCompilationServiceClient<Channel>>,
-    component_service_port: u16,
+    own_grpc_port: AtomicU16,
 }
 
 impl GrpcComponentCompilationService {
-    pub fn new(
-        uri: Uri,
-        retries: RetryConfig,
-        connect_timeout: Duration,
-        component_service_port: u16,
-    ) -> Self {
+    pub fn new(uri: Uri, retries: RetryConfig, connect_timeout: Duration) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
             |channel| {
@@ -65,7 +78,7 @@ impl GrpcComponentCompilationService {
         );
         Self {
             client,
-            component_service_port,
+            own_grpc_port: AtomicU16::new(0),
         }
     }
 }
@@ -87,7 +100,10 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
     ) {
         let component_id_clone = component_id.clone();
         let environment_id_clone = environment_id.clone();
-        let component_service_port = self.component_service_port;
+        let component_service_port = match self.own_grpc_port.load(Ordering::Acquire) {
+            0 => None,
+            port => Some(port as u32),
+        };
 
         let result = self
             .client
@@ -98,7 +114,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
                         component_version: component_version.0,
-                        component_service_port: Some(component_service_port.into()),
+                        component_service_port,
                         environment_id: Some(environment_id_clone.into()),
                     };
 
@@ -119,11 +135,15 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
             ),
         }
     }
+
+    fn set_own_grpc_port(&self, grpc_port: u16) {
+        self.own_grpc_port.store(grpc_port, Ordering::Release);
+    }
 }
 
-pub struct ComponentCompilationServiceDisabled;
+pub struct DisabledComponentCompilationService;
 
-impl Debug for ComponentCompilationServiceDisabled {
+impl Debug for DisabledComponentCompilationService {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ComponentCompilationServiceDisabled")
             .finish()
@@ -131,6 +151,13 @@ impl Debug for ComponentCompilationServiceDisabled {
 }
 
 #[async_trait]
-impl ComponentCompilationService for ComponentCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, _: &EnvironmentId, _: &ComponentId, _: ComponentRevision) {}
+impl ComponentCompilationService for DisabledComponentCompilationService {
+    async fn enqueue_compilation(
+        &self,
+        _environment_id: &EnvironmentId,
+        _component_id: &ComponentId,
+        _component_version: ComponentRevision,
+    ) {
+    }
+    fn set_own_grpc_port(&self, _grpc_port: u16) {}
 }

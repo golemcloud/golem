@@ -37,17 +37,18 @@ use golem_common::model::component::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    ComponentFileSystemNode, FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter,
-    WorkerId, WorkerStatus,
+    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex};
-use golem_service_base::model::{RevertWorkerTarget, WorkerUpdateMode};
+use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::protobuf::Val as ProtoVal;
@@ -568,7 +569,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(&account_id, worker_id, 1)
+            .update_worker_limit(&account_id, worker_id, true)
             .await?;
 
         Ok(worker_id.clone())
@@ -611,7 +612,7 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
 
         self.limit_service
-            .update_worker_connection_limit(&account_id, worker_id, 1)
+            .update_worker_connection_limit(&account_id, worker_id, true)
             .await?;
 
         Ok(ConnectWorkerStream::new(
@@ -658,7 +659,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(account_id, worker_id, -1)
+            .update_worker_limit(account_id, worker_id, false)
             .await?;
 
         Ok(())
@@ -1189,9 +1190,8 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(
-                        update_mode.clone(),
-                    ) as i32,
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode)
+                        as i32,
                     target_version: target_version.0,
                     environment_id: Some(environment_id.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),

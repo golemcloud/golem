@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account_usage::AccountUsageService;
+use super::account_usage::error::{AccountUsageError, LimitExceededError};
 use super::application::ApplicationService;
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -21,7 +23,7 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
@@ -42,6 +44,8 @@ pub enum EnvironmentError {
     #[error("Concurrent update attempt")]
     ConcurrentModification,
     #[error(transparent)]
+    LimitExceeded(LimitExceededError),
+    #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
@@ -55,6 +59,7 @@ impl SafeDisplay for EnvironmentError {
             Self::EnvironmentByNameNotFound(_) => self.to_string(),
             Self::ParentApplicationNotFound(_) => self.to_string(),
             Self::ConcurrentModification => self.to_string(),
+            Self::LimitExceeded(inner) => inner.to_safe_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -68,19 +73,31 @@ error_forwarding!(
     EnvironmentRepoError
 );
 
+impl From<AccountUsageError> for EnvironmentError {
+    fn from(value: AccountUsageError) -> Self {
+        match value {
+            AccountUsageError::LimitExceeded(inner) => EnvironmentError::LimitExceeded(inner),
+            other => Self::InternalError(other.into_anyhow()),
+        }
+    }
+}
+
 pub struct EnvironmentService {
     environment_repo: Arc<dyn EnvironmentRepo>,
     application_service: Arc<ApplicationService>,
+    account_usage_service: Arc<AccountUsageService>,
 }
 
 impl EnvironmentService {
     pub fn new(
         environment_repo: Arc<dyn EnvironmentRepo>,
         application_service: Arc<ApplicationService>,
+        account_usage_service: Arc<AccountUsageService>,
     ) -> Self {
         Self {
             environment_repo,
             application_service,
+            account_usage_service,
         }
     }
 
@@ -102,6 +119,10 @@ impl EnvironmentService {
             })?;
 
         auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
+
+        self.account_usage_service
+            .ensure_environment_within_limits(&application.account_id)
+            .await?;
 
         let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id().clone());
 
@@ -126,11 +147,11 @@ impl EnvironmentService {
         update: EnvironmentUpdate,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let mut environment = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::UpdateEnvironment,
         )?;
 
@@ -167,11 +188,11 @@ impl EnvironmentService {
         environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentError> {
-        let mut environment = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, false, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::DeleteEnvironment,
         )?;
 
@@ -197,6 +218,7 @@ impl EnvironmentService {
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let environment: Environment = self
@@ -204,6 +226,7 @@ impl EnvironmentService {
             .get_by_id(
                 &environment_id.0,
                 &auth.account_id().0,
+                include_deleted,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -212,11 +235,9 @@ impl EnvironmentService {
             ))?
             .into();
 
-        // If the current caller is also the owner or global admin, add those roles.
-
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
         .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
@@ -244,7 +265,7 @@ impl EnvironmentService {
 
         auth.authorize_environment_action(
             &result.owner_account_id,
-            &result.roles_from_shares,
+            &result.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
         .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
@@ -260,13 +281,14 @@ impl EnvironmentService {
         &self,
         environment_id: &EnvironmentId,
         action: EnvironmentAction,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let environment: Environment = self.get(environment_id, auth).await?;
+        let environment: Environment = self.get(environment_id, include_deleted, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
-            &environment.roles_from_shares,
+            &environment.roles_from_active_shares,
             action,
         )?;
 
@@ -313,6 +335,7 @@ impl EnvironmentService {
         match (application_owner_id, authorized_environments.is_empty()) {
             (Some(_), false) => {
                 // checked above using the authorized environment actions -> only return authorized environments
+                Ok(authorized_environments)
             }
             (Some(application_owner_id), true) => {
                 // application exists but has no environments -> only leak existence if account-level permissions are present
@@ -320,15 +343,15 @@ impl EnvironmentService {
                     &application_owner_id,
                     AccountAction::ListAllApplicationEnvironments,
                 )?;
+
+                Ok(authorized_environments)
             }
             (None, _) => {
                 // parent application does not exist -> return notfound to prevent leakage
-                return Err(EnvironmentError::ParentApplicationNotFound(
+                Err(EnvironmentError::ParentApplicationNotFound(
                     application_id.clone(),
-                ));
+                ))
             }
         }
-
-        Ok(authorized_environments)
     }
 }

@@ -186,7 +186,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 // talk to the executor that actually owns the promise
                 self.state
                     .worker_proxy
-                    .complete_promise(promise_id.clone(), data)
+                    .complete_promise(promise_id.clone(), data, self.created_by())
                     .await?
             };
 
@@ -508,7 +508,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .update(&owned_worker_id, ComponentRevision(target_version), mode)
+                .update(
+                    &owned_worker_id,
+                    ComponentRevision(target_version),
+                    mode,
+                    self.created_by(),
+                )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
             durability
@@ -581,7 +586,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .fork_worker(&source_worker_id, &target_worker_id, &oplog_index_cut_off)
+                .fork_worker(
+                    &source_worker_id,
+                    &target_worker_id,
+                    &oplog_index_cut_off,
+                    self.created_by(),
+                )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
             durability
@@ -613,11 +623,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             let worker_id: WorkerId = worker_id.into();
-            let revert_target: golem_service_base::model::RevertWorkerTarget = revert_target.into();
+            let revert_target: golem_common::model::worker::RevertWorkerTarget =
+                revert_target.into();
 
             let result = self
                 .worker_proxy()
-                .revert(&worker_id, revert_target.clone())
+                .revert(&worker_id, revert_target.clone(), self.created_by())
                 .await;
             durability.try_trigger_retry(self, &result).await?;
             durability
@@ -1084,20 +1095,20 @@ impl SearchOplogEntry {
 impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {}
 
 impl From<golem_api_1_x::host::RevertAgentTarget>
-    for golem_service_base::model::RevertWorkerTarget
+    for golem_common::model::worker::RevertWorkerTarget
 {
     fn from(value: golem_api_1_x::host::RevertAgentTarget) -> Self {
         match value {
             golem_api_1_x::host::RevertAgentTarget::RevertToOplogIndex(index) => {
-                golem_service_base::model::RevertWorkerTarget::RevertToOplogIndex(
-                    golem_service_base::model::RevertToOplogIndex {
+                golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_common::model::worker::RevertToOplogIndex {
                         last_oplog_index: OplogIndex::from_u64(index),
                     },
                 )
             }
             golem_api_1_x::host::RevertAgentTarget::RevertLastInvocations(n) => {
-                golem_service_base::model::RevertWorkerTarget::RevertLastInvocations(
-                    golem_service_base::model::RevertLastInvocations {
+                golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(
+                    golem_common::model::worker::RevertLastInvocations {
                         number_of_invocations: n,
                     },
                 )

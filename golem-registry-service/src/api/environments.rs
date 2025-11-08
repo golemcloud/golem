@@ -21,7 +21,7 @@ use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
 use golem_common::model::deployment::{
-    Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
+    Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentSummary,
 };
 use golem_common::model::environment::*;
 use golem_common::model::environment_plugin_grant::{
@@ -101,7 +101,10 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
-        let environment = self.environment_service.get(&environment_id, &auth).await?;
+        let environment = self
+            .environment_service
+            .get(&environment_id, false, &auth)
+            .await?;
         Ok(Json(environment))
     }
 
@@ -313,7 +316,7 @@ impl EnvironmentsApi {
         environment_id: Path<EnvironmentId>,
         deployment_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<DeploymentPlan>> {
+    ) -> ApiResult<Json<DeploymentSummary>> {
         let record = recorded_http_api_request!(
             "get_environment_deployed_deployment_plan",
             environment_id = environment_id.0.to_string(),
@@ -339,7 +342,7 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         deployment_id: DeploymentRevision,
         auth: AuthCtx,
-    ) -> ApiResult<Json<DeploymentPlan>> {
+    ) -> ApiResult<Json<DeploymentSummary>> {
         let deployment_plan = self
             .deployment_service
             .get_deployed_deployment_summary(&environment_id, deployment_id, &auth)

@@ -315,6 +315,7 @@ pub async fn test_environment_create(deps: &Deps) {
             &env.revision.environment_id,
             &user.revision.account_id,
             false,
+            false,
         )
         .await
         .unwrap();
@@ -416,7 +417,12 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_1_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_1.environment_id, &user.revision.account_id, false)
+        .get_by_id(
+            &env_rev_1.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
@@ -475,7 +481,12 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let rev_2_by_id = deps
         .environment_repo
-        .get_by_id(&env_rev_2.environment_id, &user.revision.account_id, false)
+        .get_by_id(
+            &env_rev_2.environment_id,
+            &user.revision.account_id,
+            false,
+            false,
+        )
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
@@ -1237,16 +1248,17 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalEnvCount => 10,
             UsageType::TotalComponentCount => 15,
             UsageType::TotalWorkerCount => 20,
+            UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
         };
-        let_assert!(Ok(Some(plan_limit)) = usage.plan.limit(usage_type));
+        let plan_limit = usage.plan.limit(usage_type);
         assert!(plan_limit == limit);
 
         check!(usage.usage(usage_type) == 0, "{usage_type:?}");
-        assert!(usage.add_checked(usage_type, 1).unwrap());
-        check!(usage.increase(usage_type) == 1, "{usage_type:?}");
+        assert!(usage.add_change(usage_type, 1).unwrap());
+        check!(usage.change(usage_type) == 1, "{usage_type:?}");
     }
 
     let increased_usage = usage;
@@ -1265,24 +1277,7 @@ pub async fn test_account_usage(deps: &Deps) {
             } else {
                 check!(usage.usage(usage_type) == 0, "{usage_type:?}");
             }
-            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
-        }
-    }
-
-    {
-        deps.account_usage_repo
-            .rollback(&increased_usage)
-            .await
-            .unwrap();
-        let usage = deps
-            .account_usage_repo
-            .get(&user.revision.account_id, &now)
-            .await
-            .unwrap()
-            .unwrap();
-        for usage_type in UsageType::iter() {
-            check!(usage.usage(usage_type) == 0, "{usage_type:?}");
-            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
+            check!(usage.change(usage_type) == 0, "{usage_type:?}");
         }
     }
 
@@ -1298,11 +1293,11 @@ pub async fn test_account_usage(deps: &Deps) {
 
         for usage_type in UsageType::iter() {
             if usage_type.tracking() == UsageTracking::Stats {
-                check!(usage.usage(usage_type) == 2, "{usage_type:?}");
+                check!(usage.usage(usage_type) == 3, "{usage_type:?}");
             } else {
                 check!(usage.usage(usage_type) == 0, "{usage_type:?}");
             }
-            check!(usage.increase(usage_type) == 0, "{usage_type:?}");
+            check!(usage.change(usage_type) == 0, "{usage_type:?}");
         }
     }
 
@@ -1315,7 +1310,7 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
 
         for usage_type in UsageType::iter() {
-            check!(!usage.add_checked(usage_type, 1000000).unwrap());
+            check!(!usage.add_change(usage_type, 1000000).unwrap());
         }
     }
 

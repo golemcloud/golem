@@ -22,9 +22,8 @@ use bytes::Bytes;
 use futures::stream;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, IdempotencyKey, WorkerStatus,
-};
+use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
+use golem_common::model::{IdempotencyKey, WorkerStatus};
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
@@ -353,8 +352,8 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| ComponentFileSystemNode {
-            last_modified: SystemTime::UNIX_EPOCH,
+        .map(|e| FlatComponentFileSystemNode {
+            last_modified: 0,
             ..e
         })
         .collect::<Vec<_>>();
@@ -364,26 +363,26 @@ async fn initial_file_listing_through_api(
     check!(
         result
             == vec![
-                ComponentFileSystemNode {
+                FlatComponentFileSystemNode {
                     name: "bar".to_string(),
-                    last_modified: SystemTime::UNIX_EPOCH,
-                    details: ComponentFileSystemNodeDetails::Directory
+                    last_modified: 0,
+                    kind: FlatComponentFileSystemNodeKind::Directory,
+                    permissions: None,
+                    size: None
                 },
-                ComponentFileSystemNode {
+                FlatComponentFileSystemNode {
                     name: "baz.txt".to_string(),
-                    last_modified: SystemTime::UNIX_EPOCH,
-                    details: ComponentFileSystemNodeDetails::File {
-                        permissions: ComponentFilePermissions::ReadWrite,
-                        size: 4,
-                    }
+                    last_modified: 0,
+                    kind: FlatComponentFileSystemNodeKind::File,
+                    permissions: Some(ComponentFilePermissions::ReadWrite),
+                    size: Some(4),
                 },
-                ComponentFileSystemNode {
+                FlatComponentFileSystemNode {
                     name: "foo.txt".to_string(),
-                    last_modified: SystemTime::UNIX_EPOCH,
-                    details: ComponentFileSystemNodeDetails::File {
-                        permissions: ComponentFilePermissions::ReadOnly,
-                        size: 4,
-                    }
+                    last_modified: 0,
+                    kind: FlatComponentFileSystemNodeKind::File,
+                    permissions: Some(ComponentFilePermissions::ReadOnly),
+                    size: Some(4)
                 },
             ]
     );
@@ -392,8 +391,8 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| ComponentFileSystemNode {
-            last_modified: SystemTime::UNIX_EPOCH,
+        .map(|e| FlatComponentFileSystemNode {
+            last_modified: 0,
             ..e
         })
         .collect::<Vec<_>>();
@@ -402,13 +401,12 @@ async fn initial_file_listing_through_api(
 
     check!(
         result
-            == vec![ComponentFileSystemNode {
+            == vec![FlatComponentFileSystemNode {
                 name: "baz.txt".to_string(),
-                last_modified: SystemTime::UNIX_EPOCH,
-                details: ComponentFileSystemNodeDetails::File {
-                    permissions: ComponentFilePermissions::ReadWrite,
-                    size: 4,
-                }
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadWrite),
+                size: Some(4),
             },]
     );
 
@@ -418,8 +416,8 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| ComponentFileSystemNode {
-            last_modified: SystemTime::UNIX_EPOCH,
+        .map(|e| FlatComponentFileSystemNode {
+            last_modified: 0,
             ..e
         })
         .collect::<Vec<_>>();
@@ -428,13 +426,12 @@ async fn initial_file_listing_through_api(
 
     check!(
         result
-            == vec![ComponentFileSystemNode {
+            == vec![FlatComponentFileSystemNode {
                 name: "baz.txt".to_string(),
-                last_modified: SystemTime::UNIX_EPOCH,
-                details: ComponentFileSystemNodeDetails::File {
-                    permissions: ComponentFilePermissions::ReadWrite,
-                    size: 4,
-                }
+                last_modified: 0,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(ComponentFilePermissions::ReadWrite),
+                size: Some(4),
             },]
     );
 
