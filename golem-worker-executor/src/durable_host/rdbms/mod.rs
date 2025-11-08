@@ -396,12 +396,11 @@ where
 
         let result = result
             .map(|chunk| {
-                chunk
-                    .map(|rows| {
-                        rows.into_iter()
-                            .map(|row| row.values.into_iter().map(|v| v.into()).collect())
-                    })
-                    .collect()
+                chunk.map(|rows| {
+                    rows.into_iter()
+                        .map(|row| row.values.into_iter().map(|v| v.into()).collect())
+                        .collect()
+                })
             })
             .map_err(|err| err.into());
         durability

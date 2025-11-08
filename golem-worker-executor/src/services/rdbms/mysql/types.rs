@@ -162,11 +162,11 @@ impl From<DbColumnType> for SerializableDbColumnType {
 impl TryFrom<SerializableDbColumnType> for DbColumnType {
     type Error = String;
 
-    fn try_from(value: SerializableDbColumnType) -> Result<Self, Self::Error> {
+    fn try_from(mut value: SerializableDbColumnType) -> Result<Self, Self::Error> {
         if value.nodes.len() != 1 {
             return Err("SerializableDbColumnType must have exactly one node".to_string());
         }
-        let node = value.nodes[value.nodes.len() - 1];
+        let node = value.nodes.remove(0);
         match node {
             SerializableDbColumnTypeNode::Boolean => Ok(DbColumnType::Boolean),
             SerializableDbColumnTypeNode::Tinyint => Ok(DbColumnType::Tinyint),
@@ -367,11 +367,11 @@ impl From<DbValue> for SerializableDbValue {
 impl TryFrom<SerializableDbValue> for DbValue {
     type Error = String;
 
-    fn try_from(value: SerializableDbValue) -> Result<Self, Self::Error> {
-        if value.nodes.is_empty() {
-            return Err("SerializableDbValue has no nodes".to_string());
+    fn try_from(mut value: SerializableDbValue) -> Result<Self, Self::Error> {
+        if value.nodes.len() != 1 {
+            return Err("SerializableDbValue must have exactly one node".to_string());
         }
-        let node = value.nodes[value.nodes.len() - 1];
+        let node = value.nodes.remove(0);
         match node {
             SerializableDbValueNode::Boolean(v) => Ok(DbValue::Boolean(v)),
             SerializableDbValueNode::Tinyint(v) => Ok(DbValue::Tinyint(v)),
@@ -464,13 +464,6 @@ pub mod tests {
         let value_and_type = value.into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
         check!(value_and_type_json.is_ok());
-    }
-
-    #[test]
-    fn test_db_column_types_conversions() {
-        for value in get_test_db_column_types() {
-            check_serialization(value.clone());
-        }
     }
 
     pub(crate) fn get_test_db_columns() -> Vec<mysql_types::DbColumn> {

@@ -161,7 +161,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         executor: E,
     ) -> Result<u64, RdbmsError>
     where
-        E: sqlx::Executor<'c, Database = sqlx::Postgres>,
+        E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
             sqlx::query(statement).bind_params(params)?;
@@ -179,7 +179,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         executor: E,
     ) -> Result<DbResult<PostgresType>, RdbmsError>
     where
-        E: sqlx::Executor<'c, Database = sqlx::Postgres>,
+        E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
             sqlx::query(statement).bind_params(params)?;
@@ -197,7 +197,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         executor: E,
     ) -> Result<Arc<dyn DbResultStream<PostgresType> + Send + Sync + 'c>, RdbmsError>
     where
-        E: sqlx::Executor<'c, Database = sqlx::Postgres>,
+        E: Executor<'c, Database = sqlx::Postgres>,
     {
         let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
             sqlx::query(statement.to_string().leak()).bind_params(params)?;
@@ -247,7 +247,8 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
                 }
                 DbColumnType::Domain(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        *try_match!(v, DbValue::Domain(r))
+                        try_match!(v, DbValue::Domain(r))
+                            .map(|domain| *domain)
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgDomains(values))
@@ -459,7 +460,9 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Domain(_) => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Domain(r)).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Domain(r))
+                .map(|r| *r)
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         _ => Err(format!(
             "{value_category} do not support '{column_type}' value"
@@ -504,8 +507,7 @@ fn get_pg_range<T: Clone>(
     f: impl Fn(DbValue) -> Result<T, String> + Clone,
 ) -> Result<PgCustomRange<T>, String> {
     let name = value.name;
-    let value = *value.value;
-    let value = value.try_map(f)?;
+    let value = value.value.try_map(f)?;
     Ok(PgCustomRange::new(
         name,
         PgRange {
@@ -520,7 +522,7 @@ fn get_range<T>(value: PgCustomRange<T>, f: impl Fn(T) -> DbValue + Clone) -> Db
     let start = value.value.start.map(f.clone());
     let end = value.value.end.map(f.clone());
     let value = ValuesRange { start, end };
-    DbValue::Range(Range::new(name, value))
+    DbValue::Range(Box::new(Range::new(name, value)))
 }
 
 fn get_unexpected_value_error(column_type: &DbColumnType) -> String {
@@ -676,7 +678,7 @@ fn get_db_value_helper<G: PgValueGetter>(
             getter.try_get_db_value::<Composite>(value_category, DbValue::Composite)?
         }
         DbColumnType::Domain(_) => {
-            getter.try_get_db_value::<Domain>(value_category, DbValue::Domain)?
+            getter.try_get_db_value::<Domain>(value_category, |d| DbValue::Domain(Box::new(d)))?
         }
         _ => Err(format!(
             "{value_category} of '{column_type}' is not supported"
@@ -797,7 +799,9 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
             }
             PgTypeKind::Domain(base_type) => {
                 let base_type = get_db_column_type(base_type)?;
-                Ok(DbColumnType::Domain(DomainType::new(type_name, base_type)))
+                Ok(DbColumnType::Domain(Box::new(DomainType::new(
+                    type_name, base_type,
+                ))))
             }
             PgTypeKind::Range(base_type) => {
                 let base_type = get_db_column_type(base_type)?;
@@ -914,7 +918,7 @@ trait PgValueSetter<'a> {
             }
             DbValueCategory::Range => match value {
                 DbValue::Range(v) => {
-                    let v: PgCustomRange<T> = get_pg_range(v, f)?;
+                    let v: PgCustomRange<T> = get_pg_range(*v, f)?;
                     self.try_set_value(v)
                 }
                 _ => Err(format!("{value_category} do not support '{value}' value")),
@@ -922,7 +926,7 @@ trait PgValueSetter<'a> {
             DbValueCategory::RangeArray => {
                 let vs: Vec<PgCustomRange<T>> = get_array_plain_values(value, |v| {
                     if let DbValue::Range(r) = v {
-                        get_pg_range(r, f.clone())
+                        get_pg_range(*r, f.clone())
                     } else {
                         Err("value do not have 'range' type".to_string())
                     }
@@ -1240,7 +1244,7 @@ impl sqlx::Encode<'_, sqlx::Postgres> for Domain {
         &self,
         buf: &mut sqlx::postgres::PgArgumentBuffer,
     ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        let v: DbValue = *self.value.clone();
+        let v: DbValue = self.value.clone();
         set_value(buf, v)?;
 
         Ok(sqlx::encode::IsNull::No)

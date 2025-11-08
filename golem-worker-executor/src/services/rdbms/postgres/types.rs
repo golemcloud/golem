@@ -16,8 +16,10 @@ use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::oplog::payload::types::SerializableDbValue;
 use golem_common::model::oplog::types::{
-    Enumeration, EnumerationType, Interval, SerializableComposite, SerializableDbColumn,
-    SerializableDbValueNode, SerializableDomain, SerializableRange, TimeTz, ValuesRange,
+    Enumeration, EnumerationType, Interval, SerializableComposite, SerializableCompositeType,
+    SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
+    SerializableDbValueNode, SerializableDomain, SerializableDomainType, SerializableRange,
+    SerializableRangeType, TimeTz, ValuesRange,
 };
 use golem_wasm::NodeIndex;
 use itertools::Itertools;
@@ -576,8 +578,9 @@ impl TryFrom<SerializableDbValue> for DbValue {
             return Err("Empty SerializableDbValue".to_string());
         }
 
+        let len = value.nodes.len() - 1;
         let mut nodes = value.nodes.into_iter().map(Some).collect::<Vec<_>>();
-        let last = nodes[nodes.len() - 1].take().unwrap();
+        let last = nodes[len].take().unwrap();
         convert_node(last, &mut nodes)
     }
 }
@@ -661,7 +664,7 @@ impl DbValue {
         )
     }
 
-    pub(crate) fn get_column_type(&self) -> DbColumnType {
+    pub fn get_column_type(&self) -> DbColumnType {
         match self {
             DbValue::Character(_) => DbColumnType::Character,
             DbValue::Int2(_) => DbColumnType::Int2,
@@ -710,7 +713,7 @@ impl DbValue {
                 DbColumnType::Domain(Box::new(DomainType::new(v.name.clone(), t)))
             }
             DbValue::Range(r) => {
-                let v = (*r.value).start_value().or((*r.value).end_value());
+                let v = r.value.start_value().or(r.value.end_value());
                 let t = v.map(|v| v.get_column_type()).unwrap_or(DbColumnType::Null);
                 DbColumnType::Range(RangeType::new(r.name.clone(), t))
             }
@@ -723,7 +726,7 @@ impl DbValue {
                                 .iter()
                                 .map(|v| {
                                     if let DbValue::Range(v) = v {
-                                        (*v.value).start_value().or((*v.value).end_value())
+                                        v.value.start_value().or(v.value.end_value())
                                     } else {
                                         None
                                     }
@@ -742,6 +745,276 @@ impl DbValue {
             }
             DbValue::Null => DbColumnType::Null,
         }
+    }
+}
+
+impl From<DbColumnType> for SerializableDbColumnType {
+    fn from(value: DbColumnType) -> Self {
+        fn build_serializable_db_column_type(
+            db_type: DbColumnType,
+            nodes: &mut Vec<SerializableDbColumnTypeNode>,
+        ) -> NodeIndex {
+            match db_type {
+                DbColumnType::Character => {
+                    nodes.push(SerializableDbColumnTypeNode::Character);
+                }
+                DbColumnType::Int2 => {
+                    nodes.push(SerializableDbColumnTypeNode::Smallint);
+                }
+                DbColumnType::Int4 => {
+                    nodes.push(SerializableDbColumnTypeNode::Int);
+                }
+                DbColumnType::Int8 => {
+                    nodes.push(SerializableDbColumnTypeNode::Bigint);
+                }
+                DbColumnType::Float4 => {
+                    nodes.push(SerializableDbColumnTypeNode::Float);
+                }
+                DbColumnType::Float8 => {
+                    nodes.push(SerializableDbColumnTypeNode::Double);
+                }
+                DbColumnType::Numeric => {
+                    nodes.push(SerializableDbColumnTypeNode::Decimal);
+                }
+                DbColumnType::Boolean => {
+                    nodes.push(SerializableDbColumnTypeNode::Boolean);
+                }
+                DbColumnType::Text => {
+                    nodes.push(SerializableDbColumnTypeNode::Text);
+                }
+                DbColumnType::Varchar => {
+                    nodes.push(SerializableDbColumnTypeNode::Varchar);
+                }
+                DbColumnType::Bpchar => {
+                    nodes.push(SerializableDbColumnTypeNode::Bpchar);
+                }
+                DbColumnType::Timestamp => {
+                    nodes.push(SerializableDbColumnTypeNode::Timestamp);
+                }
+                DbColumnType::Timestamptz => {
+                    nodes.push(SerializableDbColumnTypeNode::Timestamptz);
+                }
+                DbColumnType::Date => {
+                    nodes.push(SerializableDbColumnTypeNode::Date);
+                }
+                DbColumnType::Time => {
+                    nodes.push(SerializableDbColumnTypeNode::Time);
+                }
+                DbColumnType::Timetz => {
+                    nodes.push(SerializableDbColumnTypeNode::Timetz);
+                }
+                DbColumnType::Interval => {
+                    nodes.push(SerializableDbColumnTypeNode::Interval);
+                }
+                DbColumnType::Bytea => {
+                    nodes.push(SerializableDbColumnTypeNode::Bytea);
+                }
+                DbColumnType::Uuid => {
+                    nodes.push(SerializableDbColumnTypeNode::Uuid);
+                }
+                DbColumnType::Xml => {
+                    nodes.push(SerializableDbColumnTypeNode::Xml);
+                }
+                DbColumnType::Json => {
+                    nodes.push(SerializableDbColumnTypeNode::Json);
+                }
+                DbColumnType::Jsonb => {
+                    nodes.push(SerializableDbColumnTypeNode::Jsonb);
+                }
+                DbColumnType::Jsonpath => {
+                    nodes.push(SerializableDbColumnTypeNode::Jsonpath);
+                }
+                DbColumnType::Inet => {
+                    nodes.push(SerializableDbColumnTypeNode::Inet);
+                }
+                DbColumnType::Cidr => {
+                    nodes.push(SerializableDbColumnTypeNode::Cidr);
+                }
+                DbColumnType::Macaddr => {
+                    nodes.push(SerializableDbColumnTypeNode::Macaddr);
+                }
+                DbColumnType::Bit => {
+                    nodes.push(SerializableDbColumnTypeNode::Bit);
+                }
+                DbColumnType::Varbit => {
+                    nodes.push(SerializableDbColumnTypeNode::Varbit);
+                }
+                DbColumnType::Int4range => {
+                    nodes.push(SerializableDbColumnTypeNode::Int4range);
+                }
+                DbColumnType::Int8range => {
+                    nodes.push(SerializableDbColumnTypeNode::Int8range);
+                }
+                DbColumnType::Numrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Numrange);
+                }
+                DbColumnType::Tsrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Tsrange);
+                }
+                DbColumnType::Tstzrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Tstzrange);
+                }
+                DbColumnType::Daterange => {
+                    nodes.push(SerializableDbColumnTypeNode::Daterange);
+                }
+                DbColumnType::Money => {
+                    nodes.push(SerializableDbColumnTypeNode::Money);
+                }
+                DbColumnType::Oid => {
+                    nodes.push(SerializableDbColumnTypeNode::Oid);
+                }
+                DbColumnType::Enumeration(enum_type) => {
+                    nodes.push(SerializableDbColumnTypeNode::Enumeration(enum_type));
+                }
+                DbColumnType::Composite(composite_type) => {
+                    let attributes: Vec<(String, NodeIndex)> = composite_type
+                        .attributes
+                        .into_iter()
+                        .map(|(name, attr_type)| {
+                            (
+                                name.clone(),
+                                build_serializable_db_column_type(attr_type, nodes),
+                            )
+                        })
+                        .collect();
+                    nodes.push(SerializableDbColumnTypeNode::Composite(
+                        SerializableCompositeType {
+                            name: composite_type.name.clone(),
+                            attributes,
+                        },
+                    ));
+                }
+                DbColumnType::Domain(domain_type) => {
+                    let node = SerializableDbColumnTypeNode::Domain(SerializableDomainType {
+                        name: domain_type.name,
+                        base_type: build_serializable_db_column_type(domain_type.base_type, nodes),
+                    });
+                    nodes.push(node);
+                }
+                DbColumnType::Array(element_type) => {
+                    let node = SerializableDbColumnTypeNode::Array(
+                        build_serializable_db_column_type(*element_type, nodes),
+                    );
+                    nodes.push(node);
+                }
+                DbColumnType::Range(range_type) => {
+                    let node = SerializableDbColumnTypeNode::Range(SerializableRangeType {
+                        name: range_type.name,
+                        base_type: build_serializable_db_column_type(*range_type.base_type, nodes),
+                    });
+                    nodes.push(node);
+                }
+                DbColumnType::Null => {
+                    nodes.push(SerializableDbColumnTypeNode::Null);
+                }
+            }
+
+            (nodes.len() - 1) as NodeIndex
+        }
+
+        let mut nodes = Vec::new();
+        build_serializable_db_column_type(value, &mut nodes);
+        SerializableDbColumnType { nodes }
+    }
+}
+
+impl TryFrom<SerializableDbColumnType> for DbColumnType {
+    type Error = String;
+
+    fn try_from(value: SerializableDbColumnType) -> Result<Self, Self::Error> {
+        fn resolve_db_column_type(
+            nodes: &mut Vec<Option<SerializableDbColumnTypeNode>>,
+            index: NodeIndex,
+        ) -> Result<DbColumnType, String> {
+            let node = nodes[index as usize].take().unwrap();
+            match node {
+                SerializableDbColumnTypeNode::Character => Ok(DbColumnType::Character),
+                SerializableDbColumnTypeNode::Smallint => Ok(DbColumnType::Int2),
+                SerializableDbColumnTypeNode::Int => Ok(DbColumnType::Int4),
+                SerializableDbColumnTypeNode::Bigint => Ok(DbColumnType::Int8),
+                SerializableDbColumnTypeNode::Float => Ok(DbColumnType::Float4),
+                SerializableDbColumnTypeNode::Double => Ok(DbColumnType::Float8),
+                SerializableDbColumnTypeNode::Decimal => Ok(DbColumnType::Numeric),
+                SerializableDbColumnTypeNode::Boolean => Ok(DbColumnType::Boolean),
+                SerializableDbColumnTypeNode::Text => Ok(DbColumnType::Text),
+                SerializableDbColumnTypeNode::Varchar => Ok(DbColumnType::Varchar),
+                SerializableDbColumnTypeNode::Bpchar => Ok(DbColumnType::Bpchar),
+                SerializableDbColumnTypeNode::Timestamp => Ok(DbColumnType::Timestamp),
+                SerializableDbColumnTypeNode::Timestamptz => Ok(DbColumnType::Timestamptz),
+                SerializableDbColumnTypeNode::Date => Ok(DbColumnType::Date),
+                SerializableDbColumnTypeNode::Time => Ok(DbColumnType::Time),
+                SerializableDbColumnTypeNode::Timetz => Ok(DbColumnType::Timetz),
+                SerializableDbColumnTypeNode::Interval => Ok(DbColumnType::Interval),
+                SerializableDbColumnTypeNode::Bytea => Ok(DbColumnType::Bytea),
+                SerializableDbColumnTypeNode::Uuid => Ok(DbColumnType::Uuid),
+                SerializableDbColumnTypeNode::Xml => Ok(DbColumnType::Xml),
+                SerializableDbColumnTypeNode::Json => Ok(DbColumnType::Json),
+                SerializableDbColumnTypeNode::Jsonb => Ok(DbColumnType::Jsonb),
+                SerializableDbColumnTypeNode::Jsonpath => Ok(DbColumnType::Jsonpath),
+                SerializableDbColumnTypeNode::Inet => Ok(DbColumnType::Inet),
+                SerializableDbColumnTypeNode::Cidr => Ok(DbColumnType::Cidr),
+                SerializableDbColumnTypeNode::Macaddr => Ok(DbColumnType::Macaddr),
+                SerializableDbColumnTypeNode::Bit => Ok(DbColumnType::Bit),
+                SerializableDbColumnTypeNode::Varbit => Ok(DbColumnType::Varbit),
+                SerializableDbColumnTypeNode::Int4range => Ok(DbColumnType::Int4range),
+                SerializableDbColumnTypeNode::Int8range => Ok(DbColumnType::Int8range),
+                SerializableDbColumnTypeNode::Numrange => Ok(DbColumnType::Numrange),
+                SerializableDbColumnTypeNode::Tsrange => Ok(DbColumnType::Tsrange),
+                SerializableDbColumnTypeNode::Tstzrange => Ok(DbColumnType::Tstzrange),
+                SerializableDbColumnTypeNode::Daterange => Ok(DbColumnType::Daterange),
+                SerializableDbColumnTypeNode::Money => Ok(DbColumnType::Money),
+                SerializableDbColumnTypeNode::Oid => Ok(DbColumnType::Oid),
+                SerializableDbColumnTypeNode::Enumeration(enum_type) => {
+                    Ok(DbColumnType::Enumeration(enum_type.clone()))
+                }
+                SerializableDbColumnTypeNode::Composite(composite_type) => {
+                    let attributes: Result<Vec<(String, DbColumnType)>, String> = composite_type
+                        .attributes
+                        .into_iter()
+                        .map(|(name, attr_index)| {
+                            let attr_type = resolve_db_column_type(nodes, attr_index)?;
+                            Ok((name, attr_type))
+                        })
+                        .collect();
+                    let attributes = attributes?;
+                    Ok(DbColumnType::Composite(CompositeType::new(
+                        composite_type.name,
+                        attributes,
+                    )))
+                }
+                SerializableDbColumnTypeNode::Domain(domain_type) => {
+                    let base_type = resolve_db_column_type(nodes, domain_type.base_type)?;
+                    Ok(DbColumnType::Domain(Box::new(DomainType::new(
+                        domain_type.name,
+                        base_type,
+                    ))))
+                }
+                SerializableDbColumnTypeNode::Array(element_index) => {
+                    let element_type = resolve_db_column_type(nodes, element_index)?;
+                    Ok(DbColumnType::Array(Box::new(element_type)))
+                }
+                SerializableDbColumnTypeNode::Range(range_type) => {
+                    let base_type = resolve_db_column_type(nodes, range_type.base_type)?;
+                    Ok(DbColumnType::Range(RangeType::new(
+                        range_type.name.clone(),
+                        base_type,
+                    )))
+                }
+                SerializableDbColumnTypeNode::Null => Ok(DbColumnType::Null),
+                _ => Err(format!(
+                    "Unsupported SerializableDbColumnTypeNode variant: {:?}",
+                    node
+                )),
+            }
+        }
+
+        if value.nodes.is_empty() {
+            return Err("SerializableDbColumnType must have at least one node".to_string());
+        }
+
+        let last_idx = (value.nodes.len() - 1) as NodeIndex;
+        let mut nodes = value.nodes.into_iter().map(Some).collect::<Vec<_>>();
+        resolve_db_column_type(&mut nodes, last_idx)
     }
 }
 

@@ -42,7 +42,7 @@ use sqlx::postgres::PgTypeKind;
 use sqlx::ValueRef;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Add;
 use std::ops::Bound;
 use std::str::FromStr;
@@ -1220,6 +1220,28 @@ impl FromValue for SerializableIpAddress {
     }
 }
 
+impl From<IpAddr> for SerializableIpAddress {
+    fn from(value: IpAddr) -> Self {
+        match value {
+            IpAddr::V4(addr) => SerializableIpAddress::IPv4 {
+                address: addr.octets(),
+            },
+            IpAddr::V6(addr) => SerializableIpAddress::IPv6 {
+                address: addr.segments(),
+            },
+        }
+    }
+}
+
+impl From<SerializableIpAddress> for IpAddr {
+    fn from(value: SerializableIpAddress) -> Self {
+        match value {
+            SerializableIpAddress::IPv4 { address } => IpAddr::V4(Ipv4Addr::from(address)),
+            SerializableIpAddress::IPv6 { address } => IpAddr::V6(Ipv6Addr::from(address)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(transparent)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
@@ -1480,6 +1502,18 @@ impl FromValue for SerializableMacAddress {
         let str = String::from_value(value)?;
         let macaddr = MacAddress::from_str(&str).map_err(|err| err.to_string())?;
         Ok(SerializableMacAddress(macaddr))
+    }
+}
+
+impl From<MacAddress> for SerializableMacAddress {
+    fn from(value: MacAddress) -> Self {
+        SerializableMacAddress(value)
+    }
+}
+
+impl From<SerializableMacAddress> for MacAddress {
+    fn from(value: SerializableMacAddress) -> Self {
+        value.0
     }
 }
 

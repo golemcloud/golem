@@ -958,7 +958,7 @@ fn to_db_value(
                 .value
                 .clone();
             DbValueWithResourceRep::new(
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(v.name, value.value)),
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(v.name, value.value))),
                 DbValueResourceRep::Domain(v.value.rep()),
             )
         }
@@ -967,10 +967,10 @@ fn to_db_value(
             let (end_value, end_rep) = to_bound(v.value.end, resource_table)?;
 
             DbValueWithResourceRep::new(
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     v.name,
                     golem_common::model::oplog::payload::types::ValuesRange::new(start_value, end_value),
-                )),
+                ))),
                 DbValueResourceRep::Range((start_rep, end_rep)),
             )
         }
@@ -1142,7 +1142,7 @@ fn from_db_value(
         }
         postgres_types::DbValue::Domain(v) => {
             let value = get_db_value_resource(
-                *v.value,
+                v.value,
                 value.resource_rep.get_domain_rep(),
                 resource_table,
             )?;
@@ -1395,7 +1395,7 @@ fn from_db_column_type(
         }
         postgres_types::DbColumnType::Domain(v) => {
             let value = get_db_column_type_resource(
-                *v.base_type,
+                v.base_type,
                 value.resource_rep.get_domain_rep(),
                 resource_table,
             )?;
@@ -1598,10 +1598,10 @@ fn to_db_column_type(
                 .value
                 .clone();
             DbColumnTypeWithResourceRep::new(
-                postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
+                postgres_types::DbColumnType::Domain(Box::new(postgres_types::DomainType::new(
                     v.name,
                     value.value,
-                )),
+                ))),
                 DbColumnTypeResourceRep::Domain(v.base_type.rep()),
             )
         }
