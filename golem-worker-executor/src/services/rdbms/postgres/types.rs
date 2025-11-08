@@ -104,11 +104,11 @@ impl NamedType for CompositeType {
 }
 
 impl RdbmsIntoValueAndType for CompositeType {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         let mut vs = Vec::with_capacity(self.attributes.len());
         let mut t: Option<AnalysedType> = None;
         for (n, v) in self.attributes {
-            let v = v.into_value_and_type();
+            let v = v.into_value_and_type_rdbms();
             t = match t {
                 None => Some(v.typ),
                 Some(t) => Some(DbColumnType::merge_types(t, v.typ)),
@@ -219,8 +219,8 @@ impl NamedType for DomainType {
 }
 
 impl RdbmsIntoValueAndType for DomainType {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let v = RdbmsIntoValueAndType::into_value_and_type_rdbms(*self.base_type);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -300,8 +300,8 @@ impl NamedType for RangeType {
 }
 
 impl RdbmsIntoValueAndType for RangeType {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let v = RdbmsIntoValueAndType::into_value_and_type_rdbms(*self.base_type);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -532,8 +532,8 @@ impl NamedType for Composite {
 }
 
 impl RdbmsIntoValueAndType for Composite {
-    fn into_value_and_type(self) -> ValueAndType {
-        let values = RdbmsIntoValueAndType::into_value_and_type(self.values);
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let values = RdbmsIntoValueAndType::into_value_and_type_rdbms(self.values);
         let typ = Self::get_analysed_type(values.typ);
         let value = Value::Record(vec![self.name.into_value(), values.value]);
         ValueAndType::new(value, typ)
@@ -612,8 +612,8 @@ impl Display for Domain {
 }
 
 impl RdbmsIntoValueAndType for Domain {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.value);
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let v = RdbmsIntoValueAndType::into_value_and_type_rdbms(*self.value);
         let typ = Self::get_analysed_type(v.typ);
         let value = Value::Record(vec![self.name.into_value(), v.value]);
         ValueAndType::new(value, typ)
@@ -700,7 +700,7 @@ impl Display for Range {
 }
 
 impl RdbmsIntoValueAndType for Range {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         let (value_start, typ_start) = get_bound_value(self.value.start);
         let (value_end, typ_end) = get_bound_value(self.value.end);
 
@@ -971,7 +971,7 @@ impl Display for DbColumnType {
 }
 
 impl RdbmsIntoValueAndType for DbColumnType {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
             let case_value = case_value.map(Box::new);
             let v = Value::Variant {
@@ -1020,7 +1020,7 @@ impl RdbmsIntoValueAndType for DbColumnType {
             DbColumnType::Oid => get_variant(35, None),
             DbColumnType::Enumeration(v) => get_variant(36, Some(v.into_value())),
             DbColumnType::Composite(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 37,
                     case_value: Some(Box::new(v.value)),
@@ -1031,7 +1031,7 @@ impl RdbmsIntoValueAndType for DbColumnType {
                 )
             }
             DbColumnType::Domain(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 38,
                     case_value: Some(Box::new(v.value)),
@@ -1042,7 +1042,7 @@ impl RdbmsIntoValueAndType for DbColumnType {
                 )
             }
             DbColumnType::Array(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 39,
                     case_value: Some(Box::new(v.value)),
@@ -1053,7 +1053,7 @@ impl RdbmsIntoValueAndType for DbColumnType {
                 )
             }
             DbColumnType::Range(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 40,
                     case_value: Some(Box::new(v.value)),
@@ -1381,7 +1381,7 @@ impl DbValue {
 }
 
 impl RdbmsIntoValueAndType for DbValue {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
             let case_value = case_value.map(Box::new);
             let v = Value::Variant {
@@ -1419,9 +1419,9 @@ impl RdbmsIntoValueAndType for DbValue {
                 let v = Value::Record(vec![Value::U64(h), Value::U64(l)]);
                 get_variant(22, Some(v))
             }
-            DbValue::Inet(v) => get_variant(23, Some(v.into_value_and_type().value)),
-            DbValue::Cidr(v) => get_variant(24, Some(v.into_value_and_type().value)),
-            DbValue::Macaddr(v) => get_variant(25, Some(v.into_value_and_type().value)),
+            DbValue::Inet(v) => get_variant(23, Some(v.into_value_and_type_rdbms().value)),
+            DbValue::Cidr(v) => get_variant(24, Some(v.into_value_and_type_rdbms().value)),
+            DbValue::Macaddr(v) => get_variant(25, Some(v.into_value_and_type_rdbms().value)),
             DbValue::Bit(v) => get_variant(26, Some(v.iter().collect::<Vec<bool>>().into_value())),
             DbValue::Varbit(v) => {
                 get_variant(27, Some(v.iter().collect::<Vec<bool>>().into_value()))
@@ -1436,7 +1436,7 @@ impl RdbmsIntoValueAndType for DbValue {
             DbValue::Oid(v) => get_variant(35, Some(v.into_value())),
             DbValue::Enumeration(v) => get_variant(36, Some(v.into_value())),
             DbValue::Composite(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 37,
                     case_value: Some(Box::new(v.value)),
@@ -1447,7 +1447,7 @@ impl RdbmsIntoValueAndType for DbValue {
                 )
             }
             DbValue::Domain(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 38,
                     case_value: Some(Box::new(v.value)),
@@ -1458,7 +1458,7 @@ impl RdbmsIntoValueAndType for DbValue {
                 )
             }
             DbValue::Array(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 39,
                     case_value: Some(Box::new(v.value)),
@@ -1469,7 +1469,7 @@ impl RdbmsIntoValueAndType for DbValue {
                 )
             }
             DbValue::Range(v) => {
-                let v = v.into_value_and_type();
+                let v = v.into_value_and_type_rdbms();
                 let value = Value::Variant {
                     case_idx: 40,
                     case_value: Some(Box::new(v.value)),
@@ -1552,8 +1552,8 @@ impl DbColumn {
 }
 
 impl RdbmsIntoValueAndType for DbColumn {
-    fn into_value_and_type(self) -> ValueAndType {
-        let db_type = RdbmsIntoValueAndType::into_value_and_type(self.db_type);
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let db_type = RdbmsIntoValueAndType::into_value_and_type_rdbms(self.db_type);
         let t = DbColumn::get_analysed_type(db_type.typ);
         let v = Value::Record(vec![
             self.ordinal.into_value(),
@@ -1625,7 +1625,7 @@ pub mod tests {
     }
 
     fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
-        let value_and_type = value.into_value_and_type();
+        let value_and_type = value.into_value_and_type_rdbms();
         let value_and_type_json = serde_json::to_string(&value_and_type);
         check!(value_and_type_json.is_ok());
     }
@@ -1635,13 +1635,13 @@ pub mod tests {
         value2: T,
         expected: T,
     ) {
-        let vt1 = value1.into_value_and_type();
-        let vt2 = value2.into_value_and_type();
+        let vt1 = value1.into_value_and_type_rdbms();
+        let vt2 = value2.into_value_and_type_rdbms();
 
         let vt_merged = T::merge_types(vt1.typ, vt2.typ);
         let vt_merged_json = serde_json::to_string(&vt_merged);
 
-        let vt_expected = expected.into_value_and_type();
+        let vt_expected = expected.into_value_and_type_rdbms();
         let vt_expected_json = serde_json::to_string(&vt_expected);
 
         check!(vt_merged == vt_expected.typ);

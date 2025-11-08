@@ -130,6 +130,17 @@ macro_rules! oplog_payload {
             }
         }
 
+        impl TryFrom<$typename> for ValueAndType {
+            type Error = String;
+
+            fn try_from(value: $typename) -> Result<Self, Self::Error> {
+                match value {
+                    $typename::Custom(value) => Ok(value),
+                    other => Err(format!("Expected Custom, got {other:?}")),
+                }
+            }
+        }
+
         $(ident_mash::mash! {
             inner_name = $typename + $case =>
 

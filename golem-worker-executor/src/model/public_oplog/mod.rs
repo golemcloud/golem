@@ -40,12 +40,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
     SuccessfulUpdateParams, SuspendParams,
 };
-use golem_common::model::oplog::types::SerializableInvokeRequest;
+use golem_common::model::oplog::types::{encode_span_data, SerializableInvokeRequest};
 use golem_common::model::oplog::{
     ExportedFunctionParameters, HostRequest, HostResponse, ManualUpdateParameters, OplogEntry,
-    OplogIndex, PluginInstallationDescription, PublicAttribute, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicSpanData, PublicUpdateDescription,
-    PublicWorkerInvocation, SnapshotBasedUpdateParameters, SpanData, UpdateDescription,
+    OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
+    PublicUpdateDescription, PublicWorkerInvocation, SnapshotBasedUpdateParameters,
+    UpdateDescription,
 };
 use golem_common::model::{ComponentVersion, Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
 use golem_common::serialization::try_deserialize as core_try_deserialize;

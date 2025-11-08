@@ -16,7 +16,7 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextStack, T
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData,
-    SpanAttributeValue, SpanData,
+    SpanData,
 };
 use crate::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScheduleId,
@@ -1237,7 +1237,7 @@ pub struct SerializableInvokeRequest {
     pub function_params: Vec<ValueAndType>,
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub enum SerializableInvokeResult {
     Failed(String),

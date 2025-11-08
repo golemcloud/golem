@@ -104,7 +104,7 @@ impl Display for DbColumnType {
 }
 
 impl RdbmsIntoValueAndType for DbColumnType {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         IntoValueAndType::into_value_and_type(self)
     }
 
@@ -198,7 +198,7 @@ impl Display for DbValue {
 }
 
 impl RdbmsIntoValueAndType for DbValue {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         IntoValueAndType::into_value_and_type(self)
     }
 
@@ -217,7 +217,7 @@ pub struct DbColumn {
 }
 
 impl RdbmsIntoValueAndType for DbColumn {
-    fn into_value_and_type(self) -> ValueAndType {
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
         IntoValueAndType::into_value_and_type(self)
     }
 
@@ -268,7 +268,7 @@ pub mod tests {
     }
 
     fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
-        let value_and_type = value.into_value_and_type();
+        let value_and_type = value.into_value_and_type_rdbms();
         let value_and_type_json = serde_json::to_string(&value_and_type);
         check!(value_and_type_json.is_ok());
     }

@@ -23,11 +23,7 @@ use crate::model::oplog::payload::types::{
     SerializableSocketError,
 };
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
-use crate::model::oplog::types::{
-    AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest,
-    SerializableHttpResponse, SerializableInvokeRequest, SerializableIpAddresses,
-    SerializableRpcError, SerializableScheduledInvocation, SerializableStreamError,
-};
+use crate::model::oplog::types::{AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses, SerializableRpcError, SerializableScheduledInvocation, SerializableStreamError};
 use crate::model::oplog::PayloadId;
 use crate::model::{
     ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
@@ -226,6 +222,9 @@ oplog_payload! {
         },
         GolemRpcInvokeAndAwait {
             result: Result<Option<ValueAndType>, SerializableRpcError>
+        },
+        GolemRpcInvokeGet {
+            result: SerializableInvokeResult
         },
         GolemRpcScheduledInvocation {
             invocation: SerializableScheduledInvocation

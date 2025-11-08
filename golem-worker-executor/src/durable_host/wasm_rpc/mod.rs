@@ -35,7 +35,8 @@ use golem_common::model::oplog::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
-    HostRequestNoInput, HostResponseGolemApiIdempotencyKey, HostResponseGolemRpcInvokeAndAwait,
+    HostRequestNoInput, HostResponse, HostResponseGolemApiIdempotencyKey,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit, OplogEntry,
     PersistenceLevel,
 };
@@ -917,89 +918,64 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 )
                     })?;
 
-            let serialized_invoke_result: Result<SerializableInvokeResult, String> = self
-                .state
-                .oplog
-                .get_payload_of_entry::<SerializableInvokeResult>(&oplog_entry)
-                .await
-                .map(|v| v.unwrap());
+            let serialized_invoke_result = match oplog_entry {
+                OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                    let response = self
+                        .state
+                        .oplog
+                        .download_payload(response)
+                        .await
+                        .map_err(|err| anyhow!("Failed to download oplog payload: {err}"))?;
 
-            if let Ok(serialized_invoke_result) = serialized_invoke_result {
-                let entry = self.table().get_mut(&this)?;
-                let entry = entry
-                    .payload
-                    .as_any_mut()
-                    .downcast_mut::<FutureInvokeResultState>()
-                    .unwrap();
-                let begin_index = entry.begin_index();
-
-                if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
-                        .await?;
-
-                    self.finish_span(&span_id).await?;
+                    match response {
+                        HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
+                            result,
+                        }) => result,
+                        _ => panic!("unexpected oplog payload type"),
+                    }
                 }
+                _ => panic!("unexpected oplog entry type"),
+            };
 
-                match serialized_invoke_result {
-                    SerializableInvokeResult::Pending => Ok(None),
-                    SerializableInvokeResult::Completed(result) => match result {
-                        Ok(tav) => {
-                            // The wasm-rpc interface encodes unit result types as empty records and other result types as 1-tuples.
-                            let wit_value = match tav {
-                                Some(value_and_type) => {
-                                    let wrapped = ValueAndType::new(
-                                        Value::Tuple(vec![value_and_type.value]),
-                                        analysed_type::tuple(vec![value_and_type.typ]),
-                                    );
-                                    wrapped.into()
-                                }
-                                None => ValueAndType::new(
-                                    Value::Record(vec![]),
-                                    analysed_type::record(vec![]),
-                                )
-                                .into(),
-                            };
-                            Ok(Some(Ok(wit_value)))
-                        }
-                        Err(error) => Ok(Some(Err(error.into()))),
-                    },
-                    SerializableInvokeResult::Failed(error) => Err(error.into()),
-                }
-            } else {
-                let entry = self.table().get_mut(&this)?;
-                let entry = entry
-                    .payload
-                    .as_any_mut()
-                    .downcast_mut::<FutureInvokeResultState>()
-                    .unwrap();
-                let begin_index = entry.begin_index();
+            let entry = self.table().get_mut(&this)?;
+            let entry = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            let begin_index = entry.begin_index();
 
-                let serialized_invoke_result = self
-                    .state
-                    .oplog
-                    .get_payload_of_entry::<SerializableInvokeResultV1>(&oplog_entry)
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to deserialize function response: {oplog_entry:?}: {err}")
-                    })
-                    .unwrap();
+            if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
+                self.end_function(&DurableFunctionType::WriteRemote, begin_index)
+                    .await?;
 
-                if !matches!(
-                    serialized_invoke_result,
-                    SerializableInvokeResultV1::Pending
-                ) {
-                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
-                        .await?;
-                }
+                self.finish_span(&span_id).await?;
+            }
 
-                match serialized_invoke_result {
-                    SerializableInvokeResultV1::Pending => Ok(None),
-                    SerializableInvokeResultV1::Completed(result) => match result {
-                        Ok(wit_value) => Ok(Some(Ok(wit_value))),
-                        Err(error) => Ok(Some(Err(error.into()))),
-                    },
-                    SerializableInvokeResultV1::Failed(error) => Err(error.into()),
-                }
+            match serialized_invoke_result {
+                SerializableInvokeResult::Pending => Ok(None),
+                SerializableInvokeResult::Completed(result) => match result {
+                    Ok(tav) => {
+                        // The wasm-rpc interface encodes unit result types as empty records and other result types as 1-tuples.
+                        let wit_value = match tav {
+                            Some(value_and_type) => {
+                                let wrapped = ValueAndType::new(
+                                    Value::Tuple(vec![value_and_type.value]),
+                                    analysed_type::tuple(vec![value_and_type.typ]),
+                                );
+                                wrapped.into()
+                            }
+                            None => ValueAndType::new(
+                                Value::Record(vec![]),
+                                analysed_type::record(vec![]),
+                            )
+                            .into(),
+                        };
+                        Ok(Some(Ok(wit_value)))
+                    }
+                    Err(error) => Ok(Some(Err(error.into()))),
+                },
+                SerializableInvokeResult::Failed(error) => Err(error.into()),
             }
         }
     }
@@ -1017,7 +993,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         let serialized_scheduled_invocation: SerializableScheduledInvocation =
             deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
 
-        let durability = Durability::<(), WorkerExecutorError>::new(
+        let durability = Durability::new(
             self,
             "golem::rpc::cancellation-token",
             "cancel",
@@ -1027,11 +1003,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             self.scheduler_service()
-                .cancel(
-                    serialized_scheduled_invocation
-                        .as_domain()
-                        .map_err(|e| anyhow!(e))?,
-                )
+                .cancel(serialized_scheduled_invocation.clone().into_domain())
                 .await;
 
             durability

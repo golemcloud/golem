@@ -59,8 +59,8 @@ where
     T: RdbmsType + 'static,
     Vec<T::DbValue>: RdbmsIntoValueAndType,
 {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = self.params.into_value_and_type();
+    fn into_value_and_type_rdbms(self) -> ValueAndType {
+        let v = self.params.into_value_and_type_rdbms();
         let t = RdbmsRequest::<T>::get_analysed_type(v.typ);
         let v = Value::Record(vec![
             self.pool_key.into_value(),

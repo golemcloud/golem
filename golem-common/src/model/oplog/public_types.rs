@@ -18,6 +18,7 @@ use crate::model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::model::oplog::DurableFunctionType;
 use crate::model::plugin::{PluginDefinition, PluginInstallation};
 use crate::model::{Empty, IdempotencyKey, RetryConfig, Timestamp};
+use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, Value, ValueAndType, WitValue};
@@ -197,20 +198,22 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+    Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
+#[desert(transparent)]
 pub struct StringAttributeValue {
     pub value: String,
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
 }
@@ -226,10 +229,11 @@ impl From<AttributeValue> for PublicAttributeValue {
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct PublicLocalSpanData {
     pub span_id: SpanId,
     pub start: Timestamp,
@@ -240,29 +244,32 @@ pub struct PublicLocalSpanData {
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue, FromValue, poem_openapi::Union,
+    Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum PublicSpanData {
     LocalSpan(PublicLocalSpanData),
     ExternalSpan(PublicExternalSpanData),

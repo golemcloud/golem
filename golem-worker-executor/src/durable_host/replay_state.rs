@@ -483,21 +483,19 @@ impl ReplayState {
         }
     }
 
-    // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
     ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
-                match &oplog_entry {
-                    OplogEntry::ExportedFunctionCompleted { .. } => {
+                match oplog_entry {
+                    OplogEntry::ExportedFunctionCompleted { response, .. } => {
                         let response: Option<ValueAndType> = self
                             .oplog
-                            .get_payload_of_entry(&oplog_entry)
+                            .download_payload(response)
                             .await
-                            .expect("failed to deserialize function response payload")
-                            .unwrap();
+                            .expect("failed to deserialize function response payload");
 
                         break Ok(Some(response));
                     }

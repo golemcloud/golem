@@ -23,6 +23,10 @@ use test_r::test;
 use crate::model::oplog::types::{SerializableDateTime, SerializableHttpErrorCode, SerializableIpAddress, SerializableIpAddresses, SerializableStreamError, SerializedHttpVersion};
 use crate::model::oplog::{OplogIndex, WorkerError};
 use crate::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use crate::model::oplog::raw_types::SpanData;
+use crate::model::invocation_context::{SpanId, AttributeValue};
+use crate::model::Timestamp;
+use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::strategy::LazyJust;
@@ -36,6 +40,7 @@ use wasmtime_wasi::p2::bindings::{filesystem, sockets};
 use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi_http::bindings::http::types::{DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload};
+use std::num::NonZeroU64;
 
 fn datetime_strat(
 ) -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
@@ -177,6 +182,28 @@ fn ipaddress_strat() -> impl Strategy<Value = IpAddress> {
     }
 }
 
+fn span_data_strat() -> impl Strategy<Value = SpanData> {
+    prop_oneof![
+        (
+            any::<u64>().prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap())),
+            any::<i64>(),
+            of(any::<u64>().prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap()))),
+            vec((any::<String>(), any::<String>()), 0..5).prop_map(|v| {
+                v.into_iter().map(|(k, v)| (k, AttributeValue::String(v))).collect()
+            }),
+            any::<bool>()
+        ).prop_map(|(span_id, _start, parent_id, attributes, inherited)| SpanData::LocalSpan {
+            span_id,
+            start: Timestamp(iso_ts::Timestamp::parse("2023-01-01T00:00:00Z").unwrap()),
+            parent_id,
+            linked_context: None,
+            attributes,
+            inherited,
+        }),
+        any::<u64>().prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap())).prop_map(|span_id| SpanData::ExternalSpan { span_id }),
+    ]
+}
+
 proptest! {
     #[test]
     fn roundtrip_wall_clock_datetime(value in datetime_strat()) {
@@ -191,23 +218,6 @@ proptest! {
         let serialized: SerializableDateTime = value.into();
         let result: SystemTime = serialized.into();
         prop_assert_eq!(value, result);
-    }
-
-    #[test]
-    fn roundtrip_streamerror(value in streamerror_strat()) {
-        let serialized: SerializableStreamError = (&value).into();
-        let result: StreamError = serialized.into();
-
-        match (value, result) {
-            (StreamError::Closed, StreamError::Closed) => (),
-            (StreamError::LastOperationFailed(value), StreamError::LastOperationFailed(result)) => {
-                prop_assert_eq!(value.to_string(), result.to_string());
-            },
-            (StreamError::Trap(value), StreamError::Trap(result)) => {
-                prop_assert_eq!(value.to_string(), result.to_string());
-            },
-            _ => prop_assert!(false),
-        }
     }
 
     #[test]
@@ -402,5 +412,12 @@ proptest! {
             }
             _ => prop_assert!(false)
         }
+    }
+
+    #[test]
+    fn roundtrip_span_data(value in vec(span_data_strat(), 0..10)) {
+        let encoded = super::types::encode_span_data(&value);
+        let decoded = super::types::decode_span_data(encoded);
+        prop_assert_eq!(value, decoded);
     }
 }

@@ -15,7 +15,7 @@
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
 use crate::services::rdbms::{
-    Error as RdbmsError, RdbmsIntoValueAndType, RdbmsService, RdbmsTransactionStatus,
+    Error as RdbmsError, Error, RdbmsIntoValueAndType, RdbmsService, RdbmsTransactionStatus,
     RdbmsTypeService,
 };
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
@@ -24,7 +24,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput};
 use golem_common::model::{OplogIndex, TransactionId, WorkerId};
-use golem_wasm::IntoValueAndType;
+use golem_wasm::{FromValue, FromValueAndType, IntoValueAndType, ValueAndType};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -128,11 +128,14 @@ where
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let input = input.into_value_and_type();
-        let result = result.into_value_and_type();
-        durability.persist(ctx, input, result).await
+        let input = input.into_value_and_type_rdbms();
+        let serializable_result = result.clone().into_value_and_type();
+        let _ = durability.persist(ctx, input, serializable_result).await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<u64, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("unexpected payload: {err}"))?
     };
 
     Ok(result.map_err(|e| e.into()))
@@ -164,10 +167,14 @@ where
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let input = input.into_value_and_type();
-        durability.persist(ctx, input, result).await
+        let input = input.into_value_and_type_rdbms();
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability.persist(ctx, input, serializable_result).await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<R, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
     };
 
     match result {
@@ -208,11 +215,14 @@ where
         durability.try_trigger_retry(ctx, &result).await?;
         let input = result.clone().ok();
 
-        let input = input.into_value_and_type();
-        let result = result.into_value_and_type();
-        durability.persist(ctx, input, result).await
+        let input = input.into_value_and_type_rdbms();
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability.persist(ctx, input, serializable_result).await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<RdbmsRequest<T>, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
     };
     match result {
         Ok(request) => {
@@ -303,7 +313,7 @@ where
         };
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let result = result.into_value_and_type();
+        let result = result.into_value_and_type_rdbms();
         durability.persist(ctx, HostRequestNoInput {}, result).await
     } else {
         durability.replay(ctx).await
@@ -355,9 +365,18 @@ where
             Err(error) => Err(error),
         };
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, (), result).await
+
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability
+            .persist(ctx, HostRequestNoInput {}, serializable_result)
+            .await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<Option<Vec<crate::services::rdbms::DbRow<T::DbValue>>>, Error>::from_value_and_type(
+            serializable_result,
+        )
+        .map_err(|err| anyhow!("Unexpected payload: {err}"))
     };
 
     match result {
@@ -375,7 +394,7 @@ where
             };
             Ok(rows)
         }
-        Err(error) => Err(anyhow!(error)),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -432,9 +451,15 @@ where
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, input, result).await
+
+        let input = input.into_value_and_type_rdbms();
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability.persist(ctx, input, serializable_result).await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<R, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
     };
 
     match result {
@@ -475,11 +500,14 @@ where
         durability.try_trigger_retry(ctx, &result).await?;
         tracing::warn!("after try trigger retry");
 
-        let input = input.into_value_and_type();
-        let result = result.into_value_and_type();
-        durability.persist(ctx, input, result).await
+        let input = input.into_value_and_type_rdbms();
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability.persist(ctx, input, serializable_result).await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<u64, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
     };
 
     Ok(result.map_err(|e| e.into()))
@@ -511,10 +539,15 @@ where
         let result = db_transaction_query_stream(statement, params, ctx, entry);
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let result = result.into_value_and_type();
-        durability.persist(ctx, HostRequestNoInput {}, result).await
+        let serializable_result = result.clone().into_value_and_type_rdbms();
+        let _ = durability
+            .persist(ctx, HostRequestNoInput {}, serializable_result)
+            .await?;
+        result
     } else {
-        durability.replay(ctx).await
+        let serializable_result: ValueAndType = durability.replay(ctx).await?;
+        Result::<RdbmsRequest<T>, Error>::from_value_and_type(serializable_result)
+            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
     };
     match result {
         Ok(request) => {
