@@ -645,7 +645,7 @@ impl ComponentCommandHandler {
                     &component.component_name,
                     &component.component_id,
                     update,
-                    component.revision.0,
+                    component.revision,
                     await_updates,
                 )
                 .await?;
@@ -1263,7 +1263,7 @@ impl ComponentCommandHandler {
         environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
 
@@ -1322,7 +1322,7 @@ impl ComponentCommandHandler {
         environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
         target_path: &str,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;

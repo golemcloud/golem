@@ -22,7 +22,7 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use anyhow::{anyhow, bail, Context};
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -286,7 +286,7 @@ impl TaskResultMarkerHashSource for AddMetadataMarkerHash<'_> {
 pub struct GetServerComponentHash<'a> {
     pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     // NOTE: use None for querying
     pub component_hash: Option<&'a str>,
 }
@@ -299,7 +299,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}",
-            self.environment_id, self.component_name, self.component_version
+            self.environment_id, self.component_name, self.component_revision
         )))
     }
 
@@ -314,7 +314,7 @@ impl TaskResultMarkerHashSource for GetServerComponentHash<'_> {
 pub struct GetServerIfsFileHash<'a> {
     pub environment_id: Option<&'a EnvironmentId>,
     pub component_name: &'a ComponentName,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     pub target_path: &'a str,
     // NOTE: use None for querying
     pub file_hash: Option<&'a str>,
@@ -328,7 +328,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(Some(format!(
             "{:?}#{}#{}#{}",
-            self.environment_id, self.component_name, self.component_version, self.target_path
+            self.environment_id, self.component_name, self.component_revision, self.target_path
         )))
     }
 

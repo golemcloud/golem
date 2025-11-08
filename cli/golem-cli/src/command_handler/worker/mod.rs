@@ -52,18 +52,17 @@ use crate::model::worker::{
 };
 use golem_client::api::WorkerClient;
 use golem_client::model::{
-    InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
-    RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
-    UpdateWorkerRequest as UpdateWorkerRequestCloud,
-    WorkerCreationRequest as WorkerCreationRequestCloud,
+    InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
 };
-use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
+use golem_client::model::{InvokeResult, ScanCursor};
 use golem_common::model::agent::AgentId;
-use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentName;
-use golem_common::model::public_oplog::OplogCursor;
-use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::worker::{
+    RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WasiConfigVars,
+};
+use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
@@ -527,7 +526,7 @@ impl WorkerCommandHandler {
                     result
                         .entries
                         .into_iter()
-                        .map(|entry| (entry.oplog_index, entry.entry)),
+                        .map(|entry| (entry.oplog_index.as_u64(), entry.entry)),
                 );
                 result.next
             };
@@ -580,11 +579,11 @@ impl WorkerCommandHandler {
         {
             let target = {
                 if let Some(last_oplog_index) = last_oplog_index {
-                    RevertWorkerTargetCloud::RevertToOplogIndex(RevertToOplogIndexCloud {
-                        last_oplog_index,
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: OplogIndex::from_u64(last_oplog_index),
                     })
                 } else if let Some(number_of_invocations) = number_of_invocations {
-                    RevertWorkerTargetCloud::RevertLastInvocations(RevertLastInvocationsCloud {
+                    RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
                         number_of_invocations,
                     })
                 } else {
@@ -817,7 +816,7 @@ impl WorkerCommandHandler {
         &self,
         _worker_name: AgentIdArgs,
         _mode: AgentUpdateMode,
-        _target_version: Option<u64>,
+        _target_version: Option<u64>, // TODO: atomic ComponentRevision
         _await_update: bool,
     ) -> anyhow::Result<()> {
         // TODO: atomic
@@ -967,8 +966,9 @@ impl WorkerCommandHandler {
                     kind: n.kind.to_string(),
                     permissions: n
                         .permissions
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "-".to_string()),
+                        .map(|p| p.as_compact_str())
+                        .unwrap_or_else(|| "-")
+                        .to_string(),
                     size: n.size.unwrap_or(0),
                 })
                 .collect(),
@@ -1082,7 +1082,7 @@ impl WorkerCommandHandler {
             .worker
             .launch_new_worker(
                 &component_id,
-                &WorkerCreationRequestCloud {
+                &WorkerCreationRequest {
                     name: worker_name,
                     args,
                     env,
@@ -1138,7 +1138,7 @@ impl WorkerCommandHandler {
                     &worker_name.0,
                     Some(&idempotency_key.value),
                     function_name,
-                    &InvokeParametersCloud { params: arguments },
+                    &InvokeParameters { params: arguments },
                 )
                 .await
                 .map_service_error()?;
@@ -1152,7 +1152,7 @@ impl WorkerCommandHandler {
                         &worker_name.0,
                         Some(&idempotency_key.value),
                         function_name,
-                        &InvokeParametersCloud { params: arguments },
+                        &InvokeParameters { params: arguments },
                     )
                     .await
                     .map_service_error()?,
@@ -1209,7 +1209,7 @@ impl WorkerCommandHandler {
         component_name: &ComponentName,
         component_id: &ComponentId,
         update_mode: AgentUpdateMode,
-        target_version: u64,
+        target_revision: ComponentRevision,
         await_update: bool,
     ) -> anyhow::Result<TryUpdateAllWorkersResult> {
         let (workers, _) = self
@@ -1227,10 +1227,10 @@ impl WorkerCommandHandler {
         log_action(
             "Updating",
             format!(
-                "all agents ({}) for component {} to version {}",
+                "all agents ({}) for component {} to revision {}",
                 workers.len().to_string().log_color_highlight(),
                 component_name.0.blue().bold(),
-                target_version.to_string().log_color_highlight()
+                target_revision.to_string().log_color_highlight()
             ),
         );
         let _indent = LogIndent::new();
@@ -1243,7 +1243,7 @@ impl WorkerCommandHandler {
                     worker.worker_id.component_id.0,
                     &worker.worker_id.worker_name,
                     update_mode,
-                    target_version,
+                    target_revision,
                     false,
                 )
                 .await;
@@ -1252,7 +1252,7 @@ impl WorkerCommandHandler {
                 Ok(_) => {
                     update_results.triggered.push(WorkerUpdateAttempt {
                         component_name: component_name.clone(),
-                        target_version,
+                        target_revision,
                         worker_name: worker.worker_id.worker_name.as_str().into(),
                         error: None,
                     });
@@ -1260,7 +1260,7 @@ impl WorkerCommandHandler {
                 Err(error) => {
                     update_results.triggered.push(WorkerUpdateAttempt {
                         component_name: component_name.clone(),
-                        target_version,
+                        target_revision,
                         worker_name: worker.worker_id.worker_name.as_str().into(),
                         error: Some(error.to_string()),
                     });
@@ -1274,7 +1274,7 @@ impl WorkerCommandHandler {
                     .await_update_result(
                         &worker.worker_id.component_id.0,
                         &worker.worker_id.worker_name,
-                        target_version,
+                        target_revision,
                     )
                     .await;
             }
@@ -1289,16 +1289,16 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         worker_name: &str,
         update_mode: AgentUpdateMode,
-        target_version: u64,
+        target_revision: ComponentRevision,
         await_update: bool,
     ) -> anyhow::Result<()> {
         log_warn_action(
             "Triggering update",
             format!(
-                "for agent {}/{} to version {} using {} update mode",
+                "for agent {}/{} to revision {} using {} update mode",
                 component_name.0.bold().blue(),
                 worker_name.bold().green(),
-                target_version.to_string().log_color_highlight(),
+                target_revision.to_string().log_color_highlight(),
                 update_mode.to_string().log_color_highlight()
             ),
         );
@@ -1310,14 +1310,14 @@ impl WorkerCommandHandler {
             .update_worker(
                 &component_id,
                 worker_name,
-                &UpdateWorkerRequestCloud {
+                &UpdateWorkerRequest {
                     mode: match update_mode {
                         AgentUpdateMode::Automatic => {
                             golem_client::model::WorkerUpdateMode::Automatic
                         }
                         AgentUpdateMode::Manual => golem_client::model::WorkerUpdateMode::Manual,
                     },
-                    target_version,
+                    target_revision: target_revision.0,
                 },
             )
             .await
@@ -1329,7 +1329,7 @@ impl WorkerCommandHandler {
                 log_action("Triggered update", "");
 
                 if await_update {
-                    self.await_update_result(&component_id, worker_name, target_version)
+                    self.await_update_result(&component_id, worker_name, target_revision)
                         .await?;
                 }
 
@@ -1348,7 +1348,7 @@ impl WorkerCommandHandler {
         &self,
         component_id: &Uuid,
         worker_name: &str,
-        target_version: u64,
+        target_version: ComponentRevision,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
         loop {

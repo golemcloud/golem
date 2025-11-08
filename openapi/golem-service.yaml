@@ -10742,12 +10742,12 @@ components:
       properties:
         mode:
           $ref: '#/components/schemas/WorkerUpdateMode'
-        targetVersion:
+        targetRevision:
           type: integer
           format: uint64
       required:
       - mode
-      - targetVersion
+      - targetRevision
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object

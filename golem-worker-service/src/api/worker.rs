@@ -147,7 +147,7 @@ impl WorkerApi {
 
         Ok(Json(WorkerCreationResponse {
             worker_id,
-            component_version: component.revision,
+            component_revision: component.revision,
         }))
     }
 
@@ -901,7 +901,7 @@ impl WorkerApi {
             .update(
                 &worker_id,
                 params.mode,
-                params.target_version,
+                params.target_revision,
                 component.environment_id,
                 auth,
             )

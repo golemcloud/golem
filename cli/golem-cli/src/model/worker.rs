@@ -21,12 +21,12 @@ use crate::model::environment::{
 use chrono::{DateTime, Utc};
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
-use golem_client::model::{UpdateRecord, WorkerResourceDescription};
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{WorkerId, WorkerStatus};
+use golem_common::model::worker::UpdateRecord;
+use golem_common::model::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use golem_wasm::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use serde_derive::{Deserialize, Serialize};
@@ -98,12 +98,12 @@ pub struct WorkerMetadataView {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: u64,
+    pub component_revision: ComponentRevision,
     pub retry_count: u32,
 
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -112,10 +112,7 @@ pub struct WorkerMetadataView {
 
 impl TrimDateTime for WorkerMetadataView {
     fn trim_date_time_ms(self) -> Self {
-        Self {
-            created_at: self.created_at.trim_date_time_ms(),
-            ..self
-        }
+        self
     }
 }
 
@@ -129,7 +126,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             args: value.args,
             env: value.env,
             status: value.status,
-            component_version: value.component_version,
+            component_revision: value.component_version,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value.updates,
@@ -151,11 +148,11 @@ pub struct WorkerMetadata {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: u64,
+    pub component_version: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
