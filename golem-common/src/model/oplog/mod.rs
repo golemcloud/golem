@@ -38,7 +38,7 @@ use crate::model::{ProjectId, RetryConfig};
 use crate::oplog_entry;
 use desert_rust::BinaryCodec;
 use golem_wasm::wasmtime::ResourceTypeId;
-use golem_wasm::{Value, ValueAndType, WitValue};
+use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 

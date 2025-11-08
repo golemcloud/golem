@@ -12,9 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
+use crate::model::oplog::{
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData,
+    SpanAttributeValue, SpanData,
+};
 use crate::model::{
-    ComponentVersion, IdempotencyKey, ScheduleId, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScheduleId,
+    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
 use desert_rust::{
@@ -23,7 +29,7 @@ use desert_rust::{
 };
 use golem_wasm::analysis::analysed_type::{r#enum, str};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, Value, ValueAndType, WitValue};
+use golem_wasm::{FromValue, IntoValue, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
 use std::collections::{BTreeMap, HashMap};
@@ -1251,19 +1257,188 @@ pub enum SerializableRpcError {
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 #[wit_transparent]
-pub struct SerializableScheduleId {
-    pub data: Vec<u8>,
+pub struct SerializableScheduledInvocation {
+    pub timestamp: i64,
+    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub full_function_name: String,
+    pub function_input: Vec<Value>,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub spans: Vec<Vec<PublicSpanData>>,
 }
 
-impl SerializableScheduleId {
-    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
-        let data = crate::serialization::serialize(schedule_id)
-            .unwrap()
-            .to_vec();
-        Self { data }
+impl SerializableScheduledInvocation {
+    pub fn from_domain(schedule_id: ScheduleId) -> Result<Self, String> {
+        match schedule_id.action {
+            ScheduledAction::Invoke {
+                account_id,
+                owned_worker_id,
+                idempotency_key,
+                full_function_name,
+                function_input,
+                invocation_context,
+            } => Ok(Self {
+                timestamp: schedule_id.timestamp,
+                account_id,
+                project_id: owned_worker_id.project_id,
+                worker_id: owned_worker_id.worker_id,
+                idempotency_key,
+                full_function_name,
+                function_input,
+                spans: encode_span_data(&invocation_context.to_oplog_data()),
+                trace_id: invocation_context.trace_id,
+                trace_states: invocation_context.trace_states,
+            }),
+            _ => Err("ScheduleId does not describe an invocation".to_string()),
+        }
     }
 
-    pub fn as_domain(&self) -> Result<ScheduleId, String> {
-        crate::serialization::deserialize(&self.data)
+    pub fn into_domain(self) -> ScheduleId {
+        ScheduleId {
+            timestamp: self.timestamp,
+            action: ScheduledAction::Invoke {
+                account_id: self.account_id,
+                owned_worker_id: OwnedWorkerId {
+                    project_id: self.project_id,
+                    worker_id: self.worker_id,
+                },
+                idempotency_key: self.idempotency_key,
+                full_function_name: self.full_function_name,
+                function_input: self.function_input,
+                invocation_context: InvocationContextStack::from_oplog_data(
+                    self.trace_id,
+                    self.trace_states,
+                    decode_span_data(self.spans),
+                ),
+            },
+        }
     }
+}
+
+pub fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+
+    for span in spans.iter().rev() {
+        match span {
+            SpanData::LocalSpan {
+                span_id,
+                start,
+                parent_id,
+                linked_context,
+                attributes,
+                inherited,
+            } => {
+                let linked_context = if let Some(linked_context) = linked_context {
+                    let mut encoded_linked_context = encode_span_data(linked_context);
+
+                    // Before merging encoded_linked_context into result, we need to adjust the indices in it
+                    for spans in encoded_linked_context.iter_mut() {
+                        for span in spans.iter_mut() {
+                            match span {
+                                PublicSpanData::LocalSpan(local_span) => {
+                                    if let Some(idx) = local_span.linked_context.as_mut() {
+                                        *idx += (result.len() as u64) + 1;
+                                    }
+                                }
+                                PublicSpanData::ExternalSpan(_) => {}
+                            }
+                        }
+                    }
+
+                    result.extend(encoded_linked_context);
+
+                    let id = result.len() as u64 + 1;
+                    Some(id)
+                } else {
+                    None
+                };
+                let span_data = PublicSpanData::LocalSpan(PublicLocalSpanData {
+                    span_id: span_id.clone(),
+                    start: *start,
+                    parent_id: parent_id.clone(),
+                    linked_context,
+                    attributes: attributes
+                        .iter()
+                        .map(|(k, v)| PublicAttribute {
+                            key: k.clone(),
+                            value: v.clone().into(),
+                        })
+                        .collect(),
+                    inherited: *inherited,
+                });
+                current.insert(0, span_data);
+            }
+            SpanData::ExternalSpan { span_id } => {
+                let span_data = PublicSpanData::ExternalSpan(PublicExternalSpanData {
+                    span_id: span_id.clone(),
+                });
+                current.insert(0, span_data);
+            }
+        }
+    }
+
+    for stack in &mut result {
+        for span in stack {
+            if let PublicSpanData::LocalSpan(ref mut local_span) = span {
+                if let Some(linked_id) = &mut local_span.linked_context {
+                    *linked_id += 1;
+                }
+            }
+        }
+    }
+    result.insert(0, current);
+    result
+}
+
+pub fn decode_span_data(spans: Vec<Vec<PublicSpanData>>) -> Vec<SpanData> {
+    let mut result = Vec::new();
+    let mut linked_contexts = Vec::new();
+
+    for stack in spans {
+        linked_contexts.push(stack);
+    }
+
+    if !linked_contexts.is_empty() {
+        let current = linked_contexts.remove(0);
+        for span in current {
+            match span {
+                PublicSpanData::LocalSpan(local_span) => {
+                    let linked_context = if let Some(idx) = local_span.linked_context {
+                        let linked_idx = (idx - 1) as usize;
+                        if linked_idx < linked_contexts.len() {
+                            Some(decode_span_data(vec![linked_contexts[linked_idx].clone()]))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    result.push(SpanData::LocalSpan {
+                        span_id: local_span.span_id,
+                        start: local_span.start,
+                        parent_id: local_span.parent_id,
+                        linked_context,
+                        attributes: local_span
+                            .attributes
+                            .into_iter()
+                            .map(|attr| (attr.key, AttributeValue::from(attr.value)))
+                            .collect(),
+                        inherited: local_span.inherited,
+                    });
+                }
+                PublicSpanData::ExternalSpan(external_span) => {
+                    result.push(SpanData::ExternalSpan {
+                        span_id: external_span.span_id,
+                    });
+                }
+            }
+        }
+    }
+
+    result
 }

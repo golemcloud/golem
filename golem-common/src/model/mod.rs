@@ -39,16 +39,15 @@ use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::SafeDisplay;
-use anyhow::anyhow;
 use desert_rust::{
-    BinaryCodec, BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer,
-    DeserializationContext, SerializationContext,
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{field, r#enum, record, u32, u64};
+use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
-use http::{HeaderName, HeaderValue, Uri, Version};
+use http::Uri;
 use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -60,14 +59,6 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
-use wasmtime_wasi::p2::bindings::filesystem;
-use wasmtime_wasi::p2::FsError;
-use wasmtime_wasi::StreamError;
-use wasmtime_wasi_http::bindings::http::types::{
-    DnsErrorPayload, FieldSizePayload, Method, TlsAlertReceivedPayload,
-};
-use wasmtime_wasi_http::body::HostIncomingBody;
-use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
 
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON

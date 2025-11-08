@@ -27,19 +27,22 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use desert_rust::serialize_to_bytes;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::types::{
     SerializableDateTime, SerializableInvokeRequest, SerializableInvokeResult,
+    SerializableScheduledInvocation,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestNoInput,
-    HostResponseGolemApiIdempotencyKey, HostResponseGolemRpcInvokeAndAwait, OplogEntry,
+    DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
+    HostRequestNoInput, HostResponseGolemApiIdempotencyKey, HostResponseGolemRpcInvokeAndAwait,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit, OplogEntry,
     PersistenceLevel,
 };
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
-use golem_common::serialization::try_deserialize;
+use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::golem_rpc_0_2_x::types::{
@@ -102,28 +105,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
 
-        let durability = Durability::new(
-            self,
-            "golem::rpc::wasm-rpc",
-            "invoke-and-await idempotency key",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
-        let uuid = if durability.is_live() {
-            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiIdempotencyKey { uuid },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?
-        .uuid;
-        let idempotency_key = IdempotencyKey::from_uuid(uuid);
+        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
@@ -241,29 +223,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
 
-        let durability = Durability::new(
-            self,
-            "golem::rpc::wasm-rpc",
-            "invoke idempotency key",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
-        let uuid = if durability.is_live() {
-            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiIdempotencyKey { uuid },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?
-        .uuid;
-
-        let idempotency_key = IdempotencyKey::from_uuid(uuid);
+        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
@@ -353,38 +313,17 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
 
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
         let oplog_index = self.state.oplog.current_oplog_index().await;
 
-        if remote_worker_id == own_worker_id {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
-
-        let durability = Durability::new(
-            self,
-            "golem::rpc::wasm-rpc",
-            "async-invoke-and-await idempotency key",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
-        let uuid = if durability.is_live() {
-            let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
-            let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGolemApiIdempotencyKey { uuid },
-                )
-                .await
-        } else {
-            durability.replay(self).await
-        }?
-        .uuid;
-        let idempotency_key = IdempotencyKey::from_uuid(uuid);
+        let idempotency_key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
 
         let span =
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
@@ -487,7 +426,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<golem_wasm::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        let durability = Durability::<SerializableScheduleId, WorkerExecutorError>::new(
+        let durability = Durability::new(
             self,
             "golem::rpc::wasm-rpc",
             "schedule_invocation",
@@ -495,7 +434,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let schedule_id = if durability.is_live() {
+        let result = if durability.is_live() {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             let remote_worker_id = payload.remote_worker_id().clone();
@@ -512,7 +451,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let idempotency_key =
                 IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
 
-            let serializable_input = SerializableScheduleInvocationRequest {
+            let request = SerializableScheduleInvocationRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -545,25 +484,23 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .schedule(datetime.into(), action)
                 .await;
 
-            let serializable_schedule_id = SerializableScheduleId::from_domain(&result);
+            let invocation = SerializableScheduledInvocation::from_domain(&result)
+                .map_err(|err| anyhow!(err))?;
 
             durability
-                .persist_serializable(
+                .persist(
                     self,
-                    serializable_input,
-                    Ok(serializable_schedule_id.clone()),
+                    HostRequestGolemRpcInvoke { request },
+                    HostResponseGolemRpcScheduledInvocation { invocation },
                 )
-                .await?;
-
-            serializable_schedule_id
+                .await
         } else {
-            durability
-                .replay::<SerializableScheduleId, WorkerExecutorError>(self)
-                .await?
-        };
+            durability.replay(self).await
+        }?;
 
+        let serialized_result = serialize(&result.invocation).expect("Failed to serialize result");
         let cancellation_token = CancellationTokenEntry {
-            schedule_id: schedule_id.data,
+            schedule_id: serialized_result,
         };
 
         let resource = self.table().push(cancellation_token)?;
@@ -757,9 +694,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     (
                         Err(anyhow!(message)),
                         request.clone(),
-                        SerializableInvokeResult::Failed(SerializableError::Generic {
-                            message: message.to_string(),
-                        }),
+                        SerializableInvokeResult::Failed(message),
                         begin_index,
                     )
                 }
@@ -1079,9 +1014,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
         let entry = self.table().get(&this)?;
-        let schedule_id = SerializableScheduleId {
-            data: entry.schedule_id.clone(),
-        };
+        let serialized_scheduled_invocation: SerializableScheduledInvocation =
+            deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
 
         let durability = Durability::<(), WorkerExecutorError>::new(
             self,
@@ -1093,15 +1027,25 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             self.scheduler_service()
-                .cancel(schedule_id.as_domain().map_err(|e| anyhow!(e))?)
+                .cancel(
+                    serialized_scheduled_invocation
+                        .as_domain()
+                        .map_err(|e| anyhow!(e))?,
+                )
                 .await;
 
             durability
-                .persist_serializable(self, schedule_id, Ok(()))
-                .await?;
+                .persist(
+                    self,
+                    HostRequestGolemRpcScheduledInvocation {
+                        invocation: serialized_scheduled_invocation,
+                    },
+                    HostResponseGolemRpcUnit {},
+                )
+                .await
         } else {
-            durability.replay::<(), WorkerExecutorError>(self).await?;
-        };
+            durability.replay(self).await
+        }?;
 
         Ok(())
     }
