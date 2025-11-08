@@ -397,18 +397,18 @@ impl From<mysql_types::DbColumn> for DbColumn {
     }
 }
 
-impl From<crate::services::rdbms::Error> for Error {
-    fn from(value: crate::services::rdbms::Error) -> Self {
+impl From<crate::services::rdbms::RdbmsError> for Error {
+    fn from(value: crate::services::rdbms::RdbmsError) -> Self {
         match value {
-            crate::services::rdbms::Error::ConnectionFailure(v) => Self::ConnectionFailure(v),
-            crate::services::rdbms::Error::QueryParameterFailure(v) => {
+            crate::services::rdbms::RdbmsError::ConnectionFailure(v) => Self::ConnectionFailure(v),
+            crate::services::rdbms::RdbmsError::QueryParameterFailure(v) => {
                 Self::QueryParameterFailure(v)
             }
-            crate::services::rdbms::Error::QueryExecutionFailure(v) => {
+            crate::services::rdbms::RdbmsError::QueryExecutionFailure(v) => {
                 Self::QueryExecutionFailure(v)
             }
-            crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
-            crate::services::rdbms::Error::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
+            crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
         }
     }
 }

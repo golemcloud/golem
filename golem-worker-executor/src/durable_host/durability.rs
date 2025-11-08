@@ -22,17 +22,13 @@ use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
-use bytes::Bytes;
-use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, PersistenceLevel,
 };
 use golem_common::model::Timestamp;
-use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::IntoValueAndType;
 use std::fmt::{Debug, Display};
-use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};

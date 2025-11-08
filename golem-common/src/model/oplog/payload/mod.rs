@@ -23,7 +23,13 @@ use crate::model::oplog::payload::types::{
     SerializableSocketError,
 };
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
-use crate::model::oplog::types::{AgentMetadataForGuests, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses, SerializableRpcError, SerializableScheduledInvocation, SerializableStreamError};
+use crate::model::oplog::types::{
+    AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
+    SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses,
+    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError,
+    SerializableScheduledInvocation, SerializableStreamError,
+};
 use crate::model::oplog::PayloadId;
 use crate::model::{
     ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
@@ -110,6 +116,9 @@ oplog_payload! {
         },
         GolemAgentGetAgentType {
             agent_type_name: String
+        },
+        GolemRdbmsRequest {
+            request: Option<SerializableRdbmsRequest>
         },
         GolemRpcInvoke {
             request: SerializableInvokeRequest
@@ -219,6 +228,21 @@ oplog_payload! {
         },
         GolemAgentAgentType {
             result: Result<Option<RegisteredAgentType>, String>
+        },
+        GolemRdbmsColumns {
+            result: Result<Vec<SerializableDbColumn>, SerializableRdbmsError>
+        },
+        GolemRdbmsRowCount {
+            result: Result<u64, SerializableRdbmsError>
+        },
+        GolemRdbmsResult {
+            result: Result<SerializableDbResult, SerializableRdbmsError>
+        },
+        GolemRdbmsResultChunk {
+            result: Result<Option<Vec<Vec<SerializableDbValue>>>, SerializableRdbmsError>
+        },
+        GolemRdbmsRequest {
+            request: Result<SerializableRdbmsRequest, SerializableRdbmsError>
         },
         GolemRpcInvokeAndAwait {
             result: Result<Option<ValueAndType>, SerializableRpcError>

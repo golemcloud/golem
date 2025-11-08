@@ -1286,7 +1286,7 @@ impl<T: RdbmsType> TestRdms<T> {
         &self,
         worker_id: &WorkerId,
         entry_name: &str,
-    ) -> Result<(), rdbms::Error> {
+    ) -> Result<(), rdbms::RdbmsError> {
         // FailRdbmsTx{times}On{entry}
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
@@ -1306,7 +1306,7 @@ impl<T: RdbmsType> TestRdms<T> {
                     self.additional_test_deps
                         .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string())
                         .await;
-                    Err(rdbms::Error::Other(format!(
+                    Err(rdbms::RdbmsError::Other(format!(
                         "worker {} failed on {} {} times",
                         worker_name,
                         entry_name,
@@ -1328,7 +1328,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         &self,
         address: &str,
         worker_id: &WorkerId,
-    ) -> Result<RdbmsPoolKey, rdbms::Error> {
+    ) -> Result<RdbmsPoolKey, rdbms::RdbmsError> {
         self.rdbms.create(address, worker_id).await
     }
 
@@ -1346,7 +1346,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<u64, rdbms::Error>
+    ) -> Result<u64, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1359,7 +1359,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1374,7 +1374,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<DbResult<T>, rdbms::Error>
+    ) -> Result<DbResult<T>, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1385,7 +1385,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::Error> {
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::RdbmsError> {
         self.check_rdbms_tx(worker_id, "BeginTransaction").await?;
         self.rdbms.begin_transaction(key, worker_id).await
     }
@@ -1395,7 +1395,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, rdbms::Error> {
+    ) -> Result<RdbmsTransactionStatus, rdbms::RdbmsError> {
         let r = self
             .check_rdbms_tx(worker_id, "GetTransactionStatusNotFound")
             .await;
@@ -1413,7 +1413,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<(), rdbms::Error> {
+    ) -> Result<(), rdbms::RdbmsError> {
         self.check_rdbms_tx(worker_id, "CleanupTransaction").await?;
         self.rdbms
             .cleanup_transaction(key, worker_id, transaction_id)

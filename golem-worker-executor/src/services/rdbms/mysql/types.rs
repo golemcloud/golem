@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use desert_rust::BinaryCodec;
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
-use golem_wasm_derive::{FromValue, IntoValue};
+use golem_common::model::oplog::payload::types::SerializableDbValue;
+use golem_common::model::oplog::types::{
+    EnumerationType, SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
+    SerializableDbValueNode,
+};
+use golem_wasm::NodeIndex;
 use std::fmt::Display;
 
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnType {
     Boolean,
     Tinyint,
@@ -103,18 +103,113 @@ impl Display for DbColumnType {
     }
 }
 
-impl RdbmsIntoValueAndType for DbColumnType {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        IntoValueAndType::into_value_and_type(self)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        DbColumnType::get_type()
+impl From<DbColumnType> for SerializableDbColumnType {
+    fn from(value: DbColumnType) -> Self {
+        let mut result = SerializableDbColumnType { nodes: vec![] };
+        match value {
+            DbColumnType::Boolean => result.nodes.push(SerializableDbColumnTypeNode::Boolean),
+            DbColumnType::Tinyint => result.nodes.push(SerializableDbColumnTypeNode::Tinyint),
+            DbColumnType::Smallint => result.nodes.push(SerializableDbColumnTypeNode::Smallint),
+            DbColumnType::Mediumint => result.nodes.push(SerializableDbColumnTypeNode::Int),
+            DbColumnType::Int => result.nodes.push(SerializableDbColumnTypeNode::Int),
+            DbColumnType::Bigint => result.nodes.push(SerializableDbColumnTypeNode::Bigint),
+            DbColumnType::TinyintUnsigned => result
+                .nodes
+                .push(SerializableDbColumnTypeNode::TinyintUnsigned),
+            DbColumnType::SmallintUnsigned => result
+                .nodes
+                .push(SerializableDbColumnTypeNode::SmallintUnsigned),
+            DbColumnType::MediumintUnsigned => result
+                .nodes
+                .push(SerializableDbColumnTypeNode::MediumintUnsigned),
+            DbColumnType::IntUnsigned => {
+                result.nodes.push(SerializableDbColumnTypeNode::IntUnsigned)
+            }
+            DbColumnType::BigintUnsigned => result
+                .nodes
+                .push(SerializableDbColumnTypeNode::BigintUnsigned),
+            DbColumnType::Float => result.nodes.push(SerializableDbColumnTypeNode::Float),
+            DbColumnType::Double => result.nodes.push(SerializableDbColumnTypeNode::Double),
+            DbColumnType::Decimal => result.nodes.push(SerializableDbColumnTypeNode::Decimal),
+            DbColumnType::Date => result.nodes.push(SerializableDbColumnTypeNode::Date),
+            DbColumnType::Datetime => result.nodes.push(SerializableDbColumnTypeNode::Timestamptz),
+            DbColumnType::Timestamp => result.nodes.push(SerializableDbColumnTypeNode::Timestamptz),
+            DbColumnType::Time => result.nodes.push(SerializableDbColumnTypeNode::Time),
+            DbColumnType::Year => result.nodes.push(SerializableDbColumnTypeNode::Year),
+            DbColumnType::Fixchar => result.nodes.push(SerializableDbColumnTypeNode::Fixchar),
+            DbColumnType::Varchar => result.nodes.push(SerializableDbColumnTypeNode::Varchar),
+            DbColumnType::Tinytext => result.nodes.push(SerializableDbColumnTypeNode::Tinytext),
+            DbColumnType::Text => result.nodes.push(SerializableDbColumnTypeNode::Text),
+            DbColumnType::Mediumtext => result.nodes.push(SerializableDbColumnTypeNode::Mediumtext),
+            DbColumnType::Longtext => result.nodes.push(SerializableDbColumnTypeNode::Longtext),
+            DbColumnType::Binary => result.nodes.push(SerializableDbColumnTypeNode::Binary),
+            DbColumnType::Varbinary => result.nodes.push(SerializableDbColumnTypeNode::Varbinary),
+            DbColumnType::Tinyblob => result.nodes.push(SerializableDbColumnTypeNode::Tinyblob),
+            DbColumnType::Blob => result.nodes.push(SerializableDbColumnTypeNode::Blob),
+            DbColumnType::Mediumblob => result.nodes.push(SerializableDbColumnTypeNode::Mediumblob),
+            DbColumnType::Longblob => result.nodes.push(SerializableDbColumnTypeNode::Longblob),
+            DbColumnType::Enumeration => result.nodes.push(
+                SerializableDbColumnTypeNode::Enumeration(EnumerationType::new("".to_string())),
+            ),
+            DbColumnType::Set => result.nodes.push(SerializableDbColumnTypeNode::Set),
+            DbColumnType::Bit => result.nodes.push(SerializableDbColumnTypeNode::Bit),
+            DbColumnType::Json => result.nodes.push(SerializableDbColumnTypeNode::Json),
+        }
+        result
     }
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
+impl TryFrom<SerializableDbColumnType> for DbColumnType {
+    type Error = String;
+
+    fn try_from(value: SerializableDbColumnType) -> Result<Self, Self::Error> {
+        if value.nodes.len() != 1 {
+            return Err("SerializableDbColumnType must have exactly one node".to_string());
+        }
+        let node = value.nodes[value.nodes.len() - 1];
+        match node {
+            SerializableDbColumnTypeNode::Boolean => Ok(DbColumnType::Boolean),
+            SerializableDbColumnTypeNode::Tinyint => Ok(DbColumnType::Tinyint),
+            SerializableDbColumnTypeNode::Smallint => Ok(DbColumnType::Smallint),
+            SerializableDbColumnTypeNode::Int => Ok(DbColumnType::Int),
+            SerializableDbColumnTypeNode::Bigint => Ok(DbColumnType::Bigint),
+            SerializableDbColumnTypeNode::TinyintUnsigned => Ok(DbColumnType::TinyintUnsigned),
+            SerializableDbColumnTypeNode::SmallintUnsigned => Ok(DbColumnType::SmallintUnsigned),
+            SerializableDbColumnTypeNode::MediumintUnsigned => Ok(DbColumnType::MediumintUnsigned),
+            SerializableDbColumnTypeNode::IntUnsigned => Ok(DbColumnType::IntUnsigned),
+            SerializableDbColumnTypeNode::BigintUnsigned => Ok(DbColumnType::BigintUnsigned),
+            SerializableDbColumnTypeNode::Float => Ok(DbColumnType::Float),
+            SerializableDbColumnTypeNode::Double => Ok(DbColumnType::Double),
+            SerializableDbColumnTypeNode::Decimal => Ok(DbColumnType::Decimal),
+            SerializableDbColumnTypeNode::Date => Ok(DbColumnType::Date),
+            SerializableDbColumnTypeNode::Timestamptz => Ok(DbColumnType::Timestamp),
+            SerializableDbColumnTypeNode::Time => Ok(DbColumnType::Time),
+            SerializableDbColumnTypeNode::Year => Ok(DbColumnType::Year),
+            SerializableDbColumnTypeNode::Fixchar => Ok(DbColumnType::Fixchar),
+            SerializableDbColumnTypeNode::Varchar => Ok(DbColumnType::Varchar),
+            SerializableDbColumnTypeNode::Tinytext => Ok(DbColumnType::Tinytext),
+            SerializableDbColumnTypeNode::Text => Ok(DbColumnType::Text),
+            SerializableDbColumnTypeNode::Mediumtext => Ok(DbColumnType::Mediumtext),
+            SerializableDbColumnTypeNode::Longtext => Ok(DbColumnType::Longtext),
+            SerializableDbColumnTypeNode::Binary => Ok(DbColumnType::Binary),
+            SerializableDbColumnTypeNode::Varbinary => Ok(DbColumnType::Varbinary),
+            SerializableDbColumnTypeNode::Tinyblob => Ok(DbColumnType::Tinyblob),
+            SerializableDbColumnTypeNode::Blob => Ok(DbColumnType::Blob),
+            SerializableDbColumnTypeNode::Mediumblob => Ok(DbColumnType::Mediumblob),
+            SerializableDbColumnTypeNode::Longblob => Ok(DbColumnType::Longblob),
+            SerializableDbColumnTypeNode::Enumeration(_) => Ok(DbColumnType::Enumeration),
+            SerializableDbColumnTypeNode::Set => Ok(DbColumnType::Set),
+            SerializableDbColumnTypeNode::Bit => Ok(DbColumnType::Bit),
+            SerializableDbColumnTypeNode::Json => Ok(DbColumnType::Json),
+            _ => Err(format!(
+                "Unsupported SerializableDbColumnTypeNode variant for MySQL: {:?}",
+                node
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum DbValue {
     Boolean(bool),
     Tinyint(i8),
@@ -197,18 +292,122 @@ impl Display for DbValue {
     }
 }
 
-impl RdbmsIntoValueAndType for DbValue {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        IntoValueAndType::into_value_and_type(self)
-    }
+impl From<DbValue> for SerializableDbValue {
+    fn from(value: DbValue) -> Self {
+        fn add_node(target: &mut SerializableDbValue, value: SerializableDbValueNode) -> NodeIndex {
+            target.nodes.push(value);
+            (target.nodes.len() - 1) as NodeIndex
+        }
 
-    fn get_base_type() -> AnalysedType {
-        DbValue::get_type()
+        fn add_db_value(target: &mut SerializableDbValue, value: DbValue) -> NodeIndex {
+            match value {
+                DbValue::Boolean(v) => add_node(target, SerializableDbValueNode::Boolean(v)),
+                DbValue::Tinyint(v) => add_node(target, SerializableDbValueNode::Tinyint(v)),
+                DbValue::Smallint(v) => add_node(target, SerializableDbValueNode::Smallint(v)),
+                DbValue::Mediumint(v) => add_node(target, SerializableDbValueNode::Int(v as i32)),
+                DbValue::Int(v) => add_node(target, SerializableDbValueNode::Int(v)),
+                DbValue::Bigint(v) => add_node(target, SerializableDbValueNode::Bigint(v)),
+                DbValue::TinyintUnsigned(v) => {
+                    add_node(target, SerializableDbValueNode::TinyintUnsigned(v))
+                }
+                DbValue::SmallintUnsigned(v) => {
+                    add_node(target, SerializableDbValueNode::SmallintUnsigned(v))
+                }
+                DbValue::MediumintUnsigned(v) => {
+                    add_node(target, SerializableDbValueNode::MediumintUnsigned(v))
+                }
+                DbValue::IntUnsigned(v) => {
+                    add_node(target, SerializableDbValueNode::IntUnsigned(v))
+                }
+                DbValue::BigintUnsigned(v) => {
+                    add_node(target, SerializableDbValueNode::BigintUnsigned(v))
+                }
+                DbValue::Float(v) => add_node(target, SerializableDbValueNode::Float(v)),
+                DbValue::Double(v) => add_node(target, SerializableDbValueNode::Double(v)),
+                DbValue::Decimal(v) => add_node(target, SerializableDbValueNode::Decimal(v)),
+                DbValue::Date(v) => add_node(target, SerializableDbValueNode::Date(v)),
+                DbValue::Datetime(v) => add_node(target, SerializableDbValueNode::Timestamptz(v)),
+                DbValue::Timestamp(v) => add_node(target, SerializableDbValueNode::Timestamptz(v)),
+                DbValue::Time(v) => add_node(target, SerializableDbValueNode::Time(v)),
+                DbValue::Year(v) => add_node(target, SerializableDbValueNode::Year(v)),
+                DbValue::Fixchar(v) => add_node(target, SerializableDbValueNode::Bpchar(v)),
+                DbValue::Varchar(v) => add_node(target, SerializableDbValueNode::Varchar(v)),
+                DbValue::Tinytext(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Text(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Mediumtext(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Longtext(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Binary(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Varbinary(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Tinyblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Blob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Mediumblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Longblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Enumeration(v) => add_node(
+                    target,
+                    SerializableDbValueNode::Enumeration(
+                        golem_common::model::oplog::payload::types::Enumeration {
+                            name: "".to_string(),
+                            value: v,
+                        },
+                    ),
+                ),
+                DbValue::Set(v) => add_node(target, SerializableDbValueNode::Set(v)),
+                DbValue::Bit(v) => add_node(target, SerializableDbValueNode::Bit(v)),
+                DbValue::Json(v) => add_node(target, SerializableDbValueNode::Json(v)),
+                DbValue::Null => add_node(target, SerializableDbValueNode::Null),
+            }
+        }
+
+        let mut result = SerializableDbValue { nodes: vec![] };
+        add_db_value(&mut result, value);
+        result
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
+impl TryFrom<SerializableDbValue> for DbValue {
+    type Error = String;
+
+    fn try_from(value: SerializableDbValue) -> Result<Self, Self::Error> {
+        if value.nodes.is_empty() {
+            return Err("SerializableDbValue has no nodes".to_string());
+        }
+        let node = value.nodes[value.nodes.len() - 1];
+        match node {
+            SerializableDbValueNode::Boolean(v) => Ok(DbValue::Boolean(v)),
+            SerializableDbValueNode::Tinyint(v) => Ok(DbValue::Tinyint(v)),
+            SerializableDbValueNode::Smallint(v) => Ok(DbValue::Smallint(v)),
+            SerializableDbValueNode::Int(v) => Ok(DbValue::Int(v)),
+            SerializableDbValueNode::Bigint(v) => Ok(DbValue::Bigint(v)),
+            SerializableDbValueNode::TinyintUnsigned(v) => Ok(DbValue::TinyintUnsigned(v)),
+            SerializableDbValueNode::SmallintUnsigned(v) => Ok(DbValue::SmallintUnsigned(v)),
+            SerializableDbValueNode::MediumintUnsigned(v) => Ok(DbValue::MediumintUnsigned(v)),
+            SerializableDbValueNode::IntUnsigned(v) => Ok(DbValue::IntUnsigned(v)),
+            SerializableDbValueNode::BigintUnsigned(v) => Ok(DbValue::BigintUnsigned(v)),
+            SerializableDbValueNode::Float(v) => Ok(DbValue::Float(v)),
+            SerializableDbValueNode::Double(v) => Ok(DbValue::Double(v)),
+            SerializableDbValueNode::Decimal(v) => Ok(DbValue::Decimal(v)),
+            SerializableDbValueNode::Date(v) => Ok(DbValue::Date(v)),
+            SerializableDbValueNode::Timestamptz(v) => Ok(DbValue::Datetime(v)),
+            SerializableDbValueNode::Time(v) => Ok(DbValue::Time(v)),
+            SerializableDbValueNode::Year(v) => Ok(DbValue::Year(v)),
+            SerializableDbValueNode::Bpchar(v) => Ok(DbValue::Fixchar(v)),
+            SerializableDbValueNode::Varchar(v) => Ok(DbValue::Varchar(v)),
+            SerializableDbValueNode::Text(v) => Ok(DbValue::Text(v)),
+            SerializableDbValueNode::Bytea(v) => Ok(DbValue::Blob(v)),
+            SerializableDbValueNode::Enumeration(e) => Ok(DbValue::Enumeration(e.value)),
+            SerializableDbValueNode::Set(v) => Ok(DbValue::Set(v)),
+            SerializableDbValueNode::Bit(v) => Ok(DbValue::Bit(v)),
+            SerializableDbValueNode::Json(v) => Ok(DbValue::Json(v)),
+            SerializableDbValueNode::Null => Ok(DbValue::Null),
+            _ => Err(format!(
+                "Unsupported SerializableDbValueNode variant for MySQL: {:?}",
+                value
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
@@ -216,46 +415,40 @@ pub struct DbColumn {
     pub db_type_name: String,
 }
 
-impl RdbmsIntoValueAndType for DbColumn {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        IntoValueAndType::into_value_and_type(self)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        DbColumn::get_type()
-    }
-}
-
-impl AnalysedTypeMerger for DbColumnType {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        // same types are expected
-        first
+impl From<DbColumn> for SerializableDbColumn {
+    fn from(value: DbColumn) -> Self {
+        Self {
+            ordinal: value.ordinal,
+            name: value.name,
+            db_type: value.db_type.into(),
+            db_type_name: value.db_type_name,
+        }
     }
 }
 
-impl AnalysedTypeMerger for DbValue {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        // same types are expected
-        first
-    }
-}
+impl TryFrom<SerializableDbColumn> for DbColumn {
+    type Error = String;
 
-impl AnalysedTypeMerger for DbColumn {
-    fn merge_types(first: AnalysedType, _second: AnalysedType) -> AnalysedType {
-        // same types are expected
-        first
+    fn try_from(value: SerializableDbColumn) -> Result<Self, Self::Error> {
+        Ok(DbColumn {
+            ordinal: value.ordinal,
+            name: value.name,
+            db_type: value.db_type.try_into()?,
+            db_type_name: value.db_type_name,
+        })
     }
 }
 
 #[cfg(test)]
 pub mod tests {
     use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
-    use crate::services::rdbms::{DbResult, DbRow, RdbmsIntoValueAndType};
+    use crate::services::rdbms::{DbResult, DbRow};
     use assert2::check;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
     use desert_rust::BinaryCodec;
     use golem_common::serialization::{serialize, try_deserialize};
+    use golem_wasm::IntoValueAndType;
     use serde_json::json;
     use std::str::FromStr;
     use test_r::test;
@@ -267,39 +460,17 @@ pub mod tests {
         check!(value2.unwrap() == value);
     }
 
-    fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
-        let value_and_type = value.into_value_and_type_rdbms();
+    fn check_type_and_value<T: IntoValueAndType>(value: T) {
+        let value_and_type = value.into_value_and_type();
         let value_and_type_json = serde_json::to_string(&value_and_type);
         check!(value_and_type_json.is_ok());
-    }
-
-    #[test]
-    fn test_db_values_conversions() {
-        for value in get_test_db_values() {
-            check_serialization(value.clone());
-            check_type_and_value(value);
-        }
     }
 
     #[test]
     fn test_db_column_types_conversions() {
         for value in get_test_db_column_types() {
             check_serialization(value.clone());
-            check_type_and_value(value);
         }
-    }
-
-    #[test]
-    fn test_db_result_conversions() {
-        let value = DbResult::<MysqlType>::new(
-            get_test_db_columns(),
-            vec![DbRow {
-                values: get_test_db_values(),
-            }],
-        );
-
-        check_serialization(value.clone());
-        check_type_and_value(value);
     }
 
     pub(crate) fn get_test_db_columns() -> Vec<mysql_types::DbColumn> {

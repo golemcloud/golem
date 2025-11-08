@@ -14,17 +14,18 @@
 
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
-use crate::services::rdbms::{
-    Error as RdbmsError, Error, RdbmsIntoValueAndType, RdbmsService, RdbmsTransactionStatus,
-    RdbmsTypeService,
-};
-use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
+use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput};
-use golem_common::model::{OplogIndex, TransactionId, WorkerId};
-use golem_wasm::{FromValue, FromValueAndType, IntoValueAndType, ValueAndType};
+use futures::StreamExt;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
+    HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,
+    HostResponseGolemRdbmsResultChunk, HostResponseGolemRdbmsRowCount,
+};
+use golem_common::model::{OplogIndex, RdbmsPoolKey, TransactionId, WorkerId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -128,17 +129,21 @@ where
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let input = input.into_value_and_type_rdbms();
-        let serializable_result = result.clone().into_value_and_type();
-        let _ = durability.persist(ctx, input, serializable_result).await?;
-        result
+        let result = result.map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsRowCount { result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<u64, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("unexpected payload: {err}"))?
-    };
+        durability.replay(ctx).await
+    }?;
 
-    Ok(result.map_err(|e| e.into()))
+    Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
 
 async fn db_connection_durable_query<Ctx, T, P, R, E>(
@@ -167,23 +172,30 @@ where
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let input = input.into_value_and_type_rdbms();
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability.persist(ctx, input, serializable_result).await?;
-        result
+        let result = result.map(|result| result.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsResult { result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<R, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
-    };
+        durability.replay(ctx).await
+    }?;
 
-    match result {
+    match result.result {
         Ok(result) => {
+            let result: DbResult<T> = result
+                .try_into()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = FromRdbmsValue::from(result, ctx.as_wasi_view().table())
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -213,21 +225,24 @@ where
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
         durability.try_trigger_retry(ctx, &result).await?;
-        let input = result.clone().ok();
 
-        let input = input.into_value_and_type_rdbms();
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability.persist(ctx, input, serializable_result).await?;
-        result
+        let result = result.map(|request| request.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsRequest { request: result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<RdbmsRequest<T>, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
-    };
-    match result {
+        durability.replay(ctx).await
+    }?;
+    match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
-                request,
+                request
+                    .try_into()
+                    .map_err(|err| anyhow!("Invalid payload: {err}"))?,
                 RdbmsResultStreamState::New,
                 None,
                 begin_index,
@@ -243,7 +258,7 @@ where
             )
             .await?;
 
-            Ok(Err(error.into()))
+            Ok(Err(RdbmsError::from(error).into()))
         }
     }
 }
@@ -313,14 +328,27 @@ where
         };
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let result = result.into_value_and_type_rdbms();
-        durability.persist(ctx, HostRequestNoInput {}, result).await
+        let result = result
+            .map(|columns| columns.into_iter().map(|c| c.into()).collect())
+            .map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsColumns { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    match result {
+    match result.result {
         Ok(columns) => {
+            let columns = columns
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = columns
                 .into_iter()
                 .map(|r| FromRdbmsValue::from(r, ctx.as_wasi_view().table()))
@@ -328,7 +356,7 @@ where
                 .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
             Ok(result)
         }
-        Err(error) => Err(anyhow!(error)),
+        Err(error) => Err(anyhow!(RdbmsError::from(error))),
     }
 }
 
@@ -362,30 +390,46 @@ where
         let query_stream = get_db_query_stream(ctx, entry).await;
         let result = match query_stream {
             Ok(query_stream) => query_stream.deref().get_next().await,
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         };
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability
-            .persist(ctx, HostRequestNoInput {}, serializable_result)
-            .await?;
-        result
+        let result = result
+            .map(|chunk| {
+                chunk
+                    .map(|rows| {
+                        rows.into_iter()
+                            .map(|row| row.values.into_iter().map(|v| v.into()).collect())
+                    })
+                    .collect()
+            })
+            .map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsResultChunk { result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<Option<Vec<crate::services::rdbms::DbRow<T::DbValue>>>, Error>::from_value_and_type(
-            serializable_result,
-        )
-        .map_err(|err| anyhow!("Unexpected payload: {err}"))
-    };
+        durability.replay(ctx).await
+    }?;
 
-    match result {
+    match result.result {
         Ok(rows) => {
             let rows = match rows {
                 Some(rows) => {
                     let result = rows
                         .into_iter()
-                        .map(|r| FromRdbmsValue::from(r, ctx.as_wasi_view().table()))
+                        .map(|serialized_values| {
+                            let row = DbRow {
+                                values: serialized_values
+                                    .into_iter()
+                                    .map(|v| v.try_into())
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            };
+                            FromRdbmsValue::from(row, ctx.as_wasi_view().table())
+                        })
                         .collect::<Result<Vec<R>, String>>()
                         .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
                     Some(result)
@@ -394,7 +438,7 @@ where
             };
             Ok(rows)
         }
-        Err(error) => Err(error.into()),
+        Err(error) => Err(anyhow!(RdbmsError::from(error))),
     }
 }
 
@@ -452,23 +496,30 @@ where
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let input = input.into_value_and_type_rdbms();
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability.persist(ctx, input, serializable_result).await?;
-        result
+        let result = result.map(|result| result.into()).map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsResult { result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<R, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
-    };
+        durability.replay(ctx).await
+    }?;
 
-    match result {
+    match result.result {
         Ok(result) => {
+            let result = result
+                .try_into()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = FromRdbmsValue::from(result, ctx.as_wasi_view().table())
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -496,21 +547,23 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
-        tracing::warn!("result: {result:?}");
         durability.try_trigger_retry(ctx, &result).await?;
-        tracing::warn!("after try trigger retry");
 
-        let input = input.into_value_and_type_rdbms();
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability.persist(ctx, input, serializable_result).await?;
-        result
+        let result = result.map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsRowCount { result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<u64, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
-    };
+        durability.replay(ctx).await
+    }?;
 
-    Ok(result.map_err(|e| e.into()))
+    Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
 
 async fn db_transaction_durable_query_stream<Ctx, T, P, E>(
@@ -539,20 +592,23 @@ where
         let result = db_transaction_query_stream(statement, params, ctx, entry);
         durability.try_trigger_retry(ctx, &result).await?;
 
-        let serializable_result = result.clone().into_value_and_type_rdbms();
-        let _ = durability
-            .persist(ctx, HostRequestNoInput {}, serializable_result)
-            .await?;
-        result
+        let result = result.map(|request| request.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsRequest { request: result },
+            )
+            .await
     } else {
-        let serializable_result: ValueAndType = durability.replay(ctx).await?;
-        Result::<RdbmsRequest<T>, Error>::from_value_and_type(serializable_result)
-            .map_err(|err| anyhow!("Unexpected payload: {err}"))?
-    };
-    match result {
+        durability.replay(ctx).await
+    }?;
+    match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
-                request,
+                request
+                    .try_into()
+                    .map_err(|e| anyhow!("Invalid payload: {e}"))?,
                 RdbmsResultStreamState::New,
                 Some(handle),
                 begin_oplog_idx,
@@ -560,7 +616,7 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 

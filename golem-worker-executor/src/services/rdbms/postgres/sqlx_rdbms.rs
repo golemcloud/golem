@@ -14,8 +14,8 @@
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
 use crate::services::rdbms::postgres::types::{
-    Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enumeration,
-    EnumerationType, Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
+    Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, NamedType,
+    Range, RangeType,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
@@ -23,13 +23,14 @@ use crate::services::rdbms::sqlx_common::{
     SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+    DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
-use golem_common::model::TransactionId;
+use golem_common::model::oplog::types::{Enumeration, EnumerationType, ValuesRange};
+use golem_common::model::{RdbmsPoolKey, TransactionId};
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
@@ -50,21 +51,24 @@ pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + S
 
 #[async_trait]
 impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
-    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::Postgres>, Error> {
+    async fn create_pool(
+        &self,
+        config: &RdbmsPoolConfig,
+    ) -> Result<Pool<sqlx::Postgres>, RdbmsError> {
         if self.address.scheme() != POSTGRES && self.address.scheme() != "postgresql" {
-            Err(Error::ConnectionFailure(format!(
+            Err(RdbmsError::ConnectionFailure(format!(
                 "scheme '{}' in url is invalid",
                 self.address.scheme()
             )))?
         }
         let options =
-            PgConnectOptions::from_url(&self.address).map_err(Error::connection_failure)?;
+            PgConnectOptions::from_url(&self.address).map_err(RdbmsError::connection_failure)?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
-            .map_err(Error::connection_failure)
+            .map_err(RdbmsError::connection_failure)
     }
 }
 
@@ -74,24 +78,24 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
         key: &RdbmsPoolKey,
         pool: Arc<Pool<sqlx::Postgres>>,
         query_config: RdbmsQueryConfig,
-    ) -> Result<Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>, Error> {
+    ) -> Result<Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>, RdbmsError> {
         let mut connection = pool
             .deref()
             .acquire()
             .await
-            .map_err(Error::connection_failure)?;
+            .map_err(RdbmsError::connection_failure)?;
 
         <sqlx::Postgres as sqlx::Database>::TransactionManager::begin(&mut connection, None)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
 
         let query = sqlx::query("SELECT pg_current_xact_id()");
         let row = connection
             .fetch_one(query)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         let transaction_id: TransactionId =
-            row.try_get(0).map_err(Error::query_response_failure)?;
+            row.try_get(0).map_err(RdbmsError::query_response_failure)?;
 
         let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
             SqlxDbTransaction::new(transaction_id, key.clone(), connection, pool, query_config),
@@ -106,33 +110,33 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn pre_commit_transaction(
         _pool: &Pool<sqlx::Postgres>,
         _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         Ok(())
     }
 
     async fn pre_rollback_transaction(
         _pool: &Pool<sqlx::Postgres>,
         _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         Ok(())
     }
 
     async fn get_transaction_status(
         pool: &Pool<sqlx::Postgres>,
         id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, Error> {
+    ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         let query = sqlx::query("SELECT pg_xact_status($1)").bind(id);
         let row = pool
             .fetch_optional(query)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         if let Some(row) = row {
-            let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
+            let status: &str = row.try_get(0).map_err(RdbmsError::query_response_failure)?;
             match status {
                 "in progress" => Ok(RdbmsTransactionStatus::InProgress),
                 "committed" => Ok(RdbmsTransactionStatus::Committed),
                 "aborted" => Ok(RdbmsTransactionStatus::RolledBack),
-                _ => Err(Error::query_response_failure(format!(
+                _ => Err(RdbmsError::query_response_failure(format!(
                     "Unknown transaction status: {status}"
                 ))),
             }
@@ -144,7 +148,7 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn cleanup_transaction(
         _pool: &Pool<sqlx::Postgres>,
         _id: &TransactionId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         Ok(())
     }
 }
@@ -155,7 +159,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         statement: &str,
         params: Vec<DbValue>,
         executor: E,
-    ) -> Result<u64, Error>
+    ) -> Result<u64, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::Postgres>,
     {
@@ -165,7 +169,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         let result = query
             .execute(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         Ok(result.rows_affected())
     }
 
@@ -173,7 +177,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         statement: &str,
         params: Vec<DbValue>,
         executor: E,
-    ) -> Result<DbResult<PostgresType>, Error>
+    ) -> Result<DbResult<PostgresType>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::Postgres>,
     {
@@ -182,7 +186,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         let result = query
             .fetch_all(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         create_db_result::<PostgresType, sqlx::Postgres>(result)
     }
 
@@ -191,7 +195,7 @@ impl QueryExecutor<PostgresType, sqlx::Postgres> for PostgresType {
         params: Vec<DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultStream<PostgresType> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<PostgresType> + Send + Sync + 'c>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::Postgres>,
     {
@@ -212,9 +216,10 @@ impl<'q> QueryParamsBinder<'q, PostgresType, sqlx::Postgres>
     fn bind_params(
         mut self,
         params: Vec<DbValue>,
-    ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, Error> {
+    ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, RdbmsError>
+    {
         for param in params {
-            set_value(&mut self, param).map_err(Error::QueryParameterFailure)?;
+            set_value(&mut self, param).map_err(RdbmsError::QueryParameterFailure)?;
         }
         Ok(self)
     }
@@ -242,7 +247,7 @@ fn set_value<'a, S: PgValueSetter<'a>>(setter: &mut S, value: DbValue) -> Result
                 }
                 DbColumnType::Domain(_) => {
                     let values: Vec<_> = get_array_plain_values(value, |v| {
-                        try_match!(v, DbValue::Domain(r))
+                        *try_match!(v, DbValue::Domain(r))
                             .map_err(|_| get_unexpected_value_error(&base_type))
                     })?;
                     setter.try_set_value(PgDomains(values))
@@ -815,65 +820,6 @@ fn get_db_column_type(type_info: &sqlx::postgres::PgTypeInfo) -> Result<DbColumn
     }
 }
 
-impl<T> From<ValuesRange<T>> for PgRange<T> {
-    fn from(range: ValuesRange<T>) -> Self {
-        PgRange {
-            start: range.start,
-            end: range.end,
-        }
-    }
-}
-
-impl<T> From<PgRange<T>> for ValuesRange<T> {
-    fn from(range: PgRange<T>) -> Self {
-        ValuesRange {
-            start: range.start,
-            end: range.end,
-        }
-    }
-}
-
-impl From<PgInterval> for Interval {
-    fn from(interval: PgInterval) -> Self {
-        Self {
-            months: interval.months,
-            days: interval.days,
-            microseconds: interval.microseconds,
-        }
-    }
-}
-
-impl From<Interval> for PgInterval {
-    fn from(interval: Interval) -> Self {
-        Self {
-            months: interval.months,
-            days: interval.days,
-            microseconds: interval.microseconds,
-        }
-    }
-}
-
-impl From<PgTimeTz> for TimeTz {
-    fn from(value: PgTimeTz) -> Self {
-        Self {
-            time: value.time,
-            offset: value.offset.utc_minus_local(),
-        }
-    }
-}
-
-impl TryFrom<TimeTz> for PgTimeTz {
-    type Error = String;
-    fn try_from(value: TimeTz) -> Result<Self, Self::Error> {
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
-        Ok(Self {
-            time: value.time,
-            offset,
-        })
-    }
-}
-
 enum DbValueCategory {
     Primitive,
     Array,
@@ -1058,56 +1004,6 @@ impl PgValueGetter for PgValueRefValueGetter<'_> {
         T: for<'a> sqlx::Decode<'a, sqlx::Postgres> + Type<sqlx::Postgres>,
     {
         T::decode(self.0.clone()).map_err(|e| e.to_string())
-    }
-}
-
-impl sqlx::types::Type<sqlx::Postgres> for Enumeration {
-    fn type_info() -> sqlx::postgres::PgTypeInfo {
-        <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
-    }
-
-    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        matches!(ty.kind(), PgTypeKind::Enum(_))
-    }
-}
-
-impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enumeration {
-    fn decode(
-        value: sqlx::postgres::PgValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let type_info = &value.type_info();
-        let name = type_info.name().to_string();
-        if matches!(type_info.kind(), PgTypeKind::Enum(_)) {
-            let v = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-            Ok(Enumeration::new(name, v))
-        } else {
-            Err(format!("Type '{name}' is not supported").into())
-        }
-    }
-}
-
-impl sqlx::Encode<'_, sqlx::Postgres> for Enumeration {
-    fn encode_by_ref(
-        &self,
-        buf: &mut sqlx::postgres::PgArgumentBuffer,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.value, buf)
-    }
-
-    fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
-        Some(sqlx::postgres::PgTypeInfo::with_name(
-            self.name.clone().leak(),
-        ))
-    }
-}
-
-impl sqlx::postgres::PgHasArrayType for Enumeration {
-    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
-        sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type array
-    }
-
-    fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enumeration as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
     }
 }
 

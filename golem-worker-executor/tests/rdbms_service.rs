@@ -21,7 +21,7 @@ use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
-use golem_worker_executor::services::rdbms::{DbResult, DbRow, Error, RdbmsTransactionStatus};
+use golem_worker_executor::services::rdbms::{DbResult, DbRow, RdbmsError, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use golem_worker_executor::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
@@ -2443,9 +2443,9 @@ async fn execute_rdbms_test<T: RdbmsType + 'static>(
     test: RdbmsTest<T>,
 ) -> (
     Option<TransactionId>,
-    Vec<Result<StatementResult<T>, Error>>,
+    Vec<Result<StatementResult<T>, RdbmsError>>,
 ) {
-    let mut results: Vec<Result<StatementResult<T>, Error>> =
+    let mut results: Vec<Result<StatementResult<T>, RdbmsError>> =
         Vec::with_capacity(test.statements.len());
     let mut transaction_id: Option<TransactionId> = None;
     if let Some(te) = test.transaction_end {
@@ -2623,7 +2623,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
 fn check_test_results<T: RdbmsType>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
-    results: Vec<Result<StatementResult<T>, Error>>,
+    results: Vec<Result<StatementResult<T>, RdbmsError>>,
 ) {
     for (i, st) in test.statements.into_iter().enumerate() {
         match st.action {
@@ -2689,14 +2689,14 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "pg://user:password@localhost:3506",
-        Error::ConnectionFailure("scheme 'pg' in url is invalid".to_string()),
+        RdbmsError::ConnectionFailure("scheme 'pg' in url is invalid".to_string()),
     )
     .await;
 
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "postgres://user:password@localhost:5999",
-        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
+        RdbmsError::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
     )
     .await
 }
@@ -2714,7 +2714,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: relation \"xxx\" does not exist".to_string(),
         ),
     )
@@ -2724,7 +2724,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT 'a fat cat sat on a mat and ate a fat rat'::tsvector;",
         vec![],
-        Error::QueryResponseFailure("Column type 'TSVECTOR' is not supported".to_string()),
+        RdbmsError::QueryResponseFailure("Column type 'TSVECTOR' is not supported".to_string()),
     )
     .await;
 
@@ -2736,7 +2736,7 @@ async fn postgres_query_err_test(
             postgres_types::DbValue::Text("tag1".to_string()),
             postgres_types::DbValue::Int8(0),
         ])],
-        Error::QueryParameterFailure(
+        RdbmsError::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
@@ -2756,7 +2756,7 @@ async fn postgres_execute_err_test(
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: relation \"xxx\" does not exist".to_string(),
         ),
     )
@@ -2770,7 +2770,7 @@ async fn postgres_execute_err_test(
             postgres_types::DbValue::Text("tag1".to_string()),
             postgres_types::DbValue::Int8(0),
         ])],
-        Error::QueryParameterFailure(
+        RdbmsError::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
@@ -2787,7 +2787,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServi
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
@@ -2799,7 +2799,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServi
         &db_address,
         "SELECT Point(56.7, 53.34);",
         vec![],
-        Error::QueryResponseFailure("Column type 'GEOMETRY' is not supported".to_string()),
+        RdbmsError::QueryResponseFailure("Column type 'GEOMETRY' is not supported".to_string()),
     )
     .await;
 }
@@ -2814,7 +2814,7 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsSer
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
@@ -2827,14 +2827,14 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "msql://user:password@localhost:3506",
-        Error::ConnectionFailure("scheme 'msql' in url is invalid".to_string()),
+        RdbmsError::ConnectionFailure("scheme 'msql' in url is invalid".to_string()),
     )
     .await;
 
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "mysql://user:password@localhost:3506",
-        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
+        RdbmsError::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
     )
     .await;
 }
@@ -2842,7 +2842,7 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
 async fn rdbms_connection_err_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let result = rdbms.create(db_address, &worker_id).await;
@@ -2861,7 +2861,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     db_address: &str,
     query: &str,
     params: Vec<T::DbValue>,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
@@ -2895,7 +2895,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     db_address: &str,
     query: &str,
     params: Vec<T::DbValue>,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
@@ -3050,7 +3050,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         }
     }
 
-    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
+    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, RdbmsError>>> =
         HashMap::new();
     let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
     let mut workers_transactions: HashMap<WorkerId, Option<TransactionId>> = HashMap::new();

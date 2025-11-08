@@ -22,7 +22,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::{OplogOps, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::projects::ProjectService;
-use crate::services::rdbms::RdbmsIntoValueAndType;
+
 use async_trait::async_trait;
 use desert_rust::BinaryDeserializer;
 use golem_common::model::agent::AgentId;
@@ -50,9 +50,9 @@ use golem_common::model::oplog::{
 use golem_common::model::{ComponentVersion, Empty, OwnedWorkerId, WorkerId, WorkerInvocation};
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::analysis::analysed_type::{option, str, u64};
+use golem_wasm::analysis::analysed_type::{option, str};
 use golem_wasm::analysis::AnalysedFunctionParameter;
-use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

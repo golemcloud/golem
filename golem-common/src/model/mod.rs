@@ -58,6 +58,7 @@ use std::ops::Add;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
+use url::Url;
 use uuid::{uuid, Uuid};
 
 pub trait PoemTypeRequirements:
@@ -2065,5 +2066,78 @@ impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::Rever
         Self {
             number_of_invocations: value.number_of_invocations as i64,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct RdbmsPoolKey {
+    pub address: Url,
+}
+
+impl RdbmsPoolKey {
+    pub fn new(address: Url) -> Self {
+        Self { address }
+    }
+
+    pub fn from(address: &str) -> Result<Self, String> {
+        let url = Url::parse(address).map_err(|e| e.to_string())?;
+        Ok(Self::new(url))
+    }
+
+    pub fn masked_address(&self) -> String {
+        let mut output: String = self.address.scheme().to_string();
+        output.push_str("://");
+
+        let username = self.address.username();
+        output.push_str(username);
+
+        let password = self.address.password();
+        if password.is_some() {
+            output.push_str(":*****");
+        }
+
+        if let Some(h) = self.address.host_str() {
+            if !username.is_empty() || password.is_some() {
+                output.push('@');
+            }
+
+            output.push_str(h);
+
+            if let Some(p) = self.address.port() {
+                output.push(':');
+                output.push_str(p.to_string().as_str());
+            }
+        }
+
+        output.push_str(self.address.path());
+
+        let query_pairs = self.address.query_pairs();
+
+        if query_pairs.count() > 0 {
+            output.push('?');
+        }
+        for (index, (key, value)) in query_pairs.enumerate() {
+            let key = &*key;
+            output.push_str(key);
+            output.push('=');
+
+            if key == "password" || key == "secret" {
+                output.push_str("*****");
+            } else {
+                output.push_str(&value);
+            }
+            if index < query_pairs.count() - 1 {
+                output.push('&');
+            }
+        }
+
+        output
+    }
+}
+
+impl Display for RdbmsPoolKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.masked_address())
     }
 }

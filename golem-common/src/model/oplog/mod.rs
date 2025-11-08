@@ -15,12 +15,12 @@
 pub mod matcher;
 mod oplog_macro;
 mod protobuf;
+pub mod payload;
 mod public_types;
 mod raw_types;
 
 #[cfg(test)]
 mod tests;
-mod payload;
 
 pub use crate::base_model::OplogIndex;
 pub use payload::*;

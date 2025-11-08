@@ -18,7 +18,7 @@ use crate::model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::model::oplog::DurableFunctionType;
 use crate::model::plugin::{PluginDefinition, PluginInstallation};
 use crate::model::{Empty, IdempotencyKey, RetryConfig, Timestamp};
-use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, Value, ValueAndType, WitValue};
@@ -198,7 +198,15 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -209,7 +217,15 @@ pub struct StringAttributeValue {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Union,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
@@ -229,7 +245,15 @@ impl From<AttributeValue> for PublicAttributeValue {
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
+    Clone,
+    Debug,
+    Serialize,
+    PartialEq,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -244,7 +268,15 @@ pub struct PublicLocalSpanData {
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
+    Clone,
+    Debug,
+    Serialize,
+    PartialEq,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -255,7 +287,15 @@ pub struct PublicAttribute {
 }
 
 #[derive(
-    Clone, Debug, Serialize, PartialEq, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Object,
+    Clone,
+    Debug,
+    Serialize,
+    PartialEq,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -265,7 +305,15 @@ pub struct PublicExternalSpanData {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue, poem_openapi::Union,
+    Clone,
+    Debug,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]

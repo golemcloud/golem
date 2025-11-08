@@ -12,32 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::TransactionId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::{
-    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData,
-    SpanData,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScheduleId,
-    ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, RdbmsPoolKey,
+    ScheduleId, ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
+use bigdecimal::BigDecimal;
+use bit_vec::BitVec;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use desert_rust::{
     BinaryDeserializer, BinaryInput, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_wasm::analysis::analysed_type::{r#enum, str};
+use golem_wasm::analysis::analysed_type::{r#enum, str, tuple};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{FromValue, IntoValue, Value, ValueAndType};
+use golem_wasm::{FromValue, IntoValue, NodeIndex, Value, ValueAndType};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue, Version};
+use mac_address::MacAddress;
+use serde::{Deserialize, Serialize};
+use sqlx::postgres::types::{Oid, PgInterval, PgRange, PgTimeTz};
+use sqlx::postgres::PgTypeKind;
+use sqlx::ValueRef;
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
 use std::ops::Add;
+use std::ops::Bound;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
+use uuid::Uuid;
 use wasmtime_wasi::p2::bindings::filesystem;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
@@ -443,21 +453,19 @@ impl SerializableSocketError {
     }
 }
 
-impl From<wasmtime_wasi::p2::SocketError> for SerializableSocketError {
+impl From<SocketError> for SerializableSocketError {
     fn from(value: SocketError) -> Self {
         Self::from_result(value.downcast().map_err(|err| err.to_string()))
     }
 }
 
-impl From<SerializableSocketError> for wasmtime_wasi::p2::SocketError {
+impl From<SerializableSocketError> for SocketError {
     fn from(value: SerializableSocketError) -> Self {
         match value {
             SerializableSocketError::ErrorCode(SerializableSocketErrorCode(error_code)) => {
                 error_code.into()
             }
-            SerializableSocketError::Generic(error) => {
-                wasmtime_wasi::p2::SocketError::trap(anyhow!(error))
-            }
+            SerializableSocketError::Generic(error) => SocketError::trap(anyhow!(error)),
         }
     }
 }
@@ -1441,4 +1449,519 @@ pub fn decode_span_data(spans: Vec<Vec<PublicSpanData>>) -> Vec<SpanData> {
     }
 
     result
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableRdbmsError {
+    ConnectionFailure(String),
+    QueryParameterFailure(String),
+    QueryExecutionFailure(String),
+    QueryResponseFailure(String),
+    Other(String),
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(transparent)]
+pub struct SerializableMacAddress(pub MacAddress);
+
+impl IntoValue for SerializableMacAddress {
+    fn into_value(self) -> Value {
+        Value::String(self.0.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
+
+impl FromValue for SerializableMacAddress {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let str = String::from_value(value)?;
+        let macaddr = MacAddress::from_str(&str).map_err(|err| err.to_string())?;
+        Ok(SerializableMacAddress(macaddr))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableRdbmsRequest {
+    pub pool_key: RdbmsPoolKey,
+    pub statement: String,
+    pub params: Vec<SerializableDbValue>,
+    pub transaction_id: Option<TransactionId>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableDbValue {
+    pub nodes: Vec<SerializableDbValueNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableDbValueNode {
+    Boolean(bool),
+    Tinyint(i8),
+    Smallint(i16),
+    Int(i32),
+    Bigint(i64),
+    TinyintUnsigned(u8),
+    SmallintUnsigned(u16),
+    MediumintUnsigned(u32),
+    IntUnsigned(u32),
+    BigintUnsigned(u64),
+    Float(f32),
+    Double(f64),
+    Decimal(BigDecimal),
+    Date(NaiveDate),
+    Timestamp(NaiveDateTime),
+    Timestamptz(DateTime<Utc>),
+    Time(chrono::NaiveTime),
+    Timetz(TimeTz),
+    Interval(Interval),
+    Year(u16),
+    Bpchar(String),
+    Varchar(String),
+    Text(String),
+    Bytea(Vec<u8>),
+    Json(String),
+    Jsonb(String),
+    Jsonpath(String),
+    Xml(String),
+    Uuid(Uuid),
+    Inet(SerializableIpAddress),
+    Cidr(SerializableIpAddress),
+    Macaddr(SerializableMacAddress),
+    Bit(BitVec),
+    Varbit(BitVec),
+    Int4range(ValuesRange<i32>),
+    Int8range(ValuesRange<i64>),
+    Numrange(ValuesRange<BigDecimal>),
+    Tsrange(ValuesRange<NaiveDateTime>),
+    Tstzrange(ValuesRange<DateTime<Utc>>),
+    Daterange(ValuesRange<NaiveDate>),
+    Money(i64),
+    Oid(u32),
+    Enumeration(Enumeration),
+    Composite(SerializableComposite),
+    Domain(SerializableDomain),
+    Array(Vec<NodeIndex>),
+    Range(SerializableRange),
+    Set(String),
+    Null,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
+pub struct ValuesRange<T> {
+    pub start: Bound<T>,
+    pub end: Bound<T>,
+}
+
+impl<T> ValuesRange<T> {
+    pub fn new(start: Bound<T>, end: Bound<T>) -> Self {
+        ValuesRange { start, end }
+    }
+
+    pub fn start_value(&self) -> Option<&T> {
+        match &self.start {
+            Bound::Included(v) => Some(v),
+            Bound::Excluded(v) => Some(v),
+            Bound::Unbounded => None,
+        }
+    }
+
+    pub fn end_value(&self) -> Option<&T> {
+        match &self.end {
+            Bound::Included(v) => Some(v),
+            Bound::Excluded(v) => Some(v),
+            Bound::Unbounded => None,
+        }
+    }
+
+    pub fn map<U>(self, f: impl Fn(T) -> U + Clone) -> ValuesRange<U> {
+        let start: Bound<U> = self.start.map(f.clone());
+        let end: Bound<U> = self.end.map(f.clone());
+        ValuesRange::new(start, end)
+    }
+
+    pub fn try_map<U>(
+        self,
+        f: impl Fn(T) -> Result<U, String> + Clone,
+    ) -> Result<ValuesRange<U>, String> {
+        fn to_bound<T, U>(
+            v: Bound<T>,
+            f: impl Fn(T) -> Result<U, String>,
+        ) -> Result<Bound<U>, String> {
+            match v {
+                Bound::Included(v) => Ok(Bound::Included(f(v)?)),
+                Bound::Excluded(v) => Ok(Bound::Excluded(f(v)?)),
+                Bound::Unbounded => Ok(Bound::Unbounded),
+            }
+        }
+        let start: Bound<U> = to_bound(self.start, f.clone())?;
+        let end: Bound<U> = to_bound(self.end, f.clone())?;
+
+        Ok(ValuesRange::new(start, end))
+    }
+}
+
+impl<T: Debug> Display for ValuesRange<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} {:?}", self.start, self.end)
+    }
+}
+
+impl<T: IntoValue> IntoValue for ValuesRange<T> {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![self.start.into_value(), self.end.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        tuple(vec![T::get_type(), T::get_type()])
+    }
+}
+
+impl<T: FromValue> FromValue for ValuesRange<T> {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let mut tuple = match value {
+            Value::Tuple(elements) => elements,
+            _ => return Err("Expected Tuple value".to_string()),
+        };
+
+        if tuple.len() != 2 {
+            return Err("Expected Tuple of length 2".to_string());
+        }
+
+        let start = Bound::from_value(tuple.remove(0))?;
+        let end = Bound::from_value(tuple.remove(0))?;
+
+        Ok(ValuesRange::new(start, end))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct Interval {
+    pub months: i32,
+    pub days: i32,
+    pub microseconds: i64,
+}
+
+impl Interval {
+    pub fn new(months: i32, days: i32, microseconds: i64) -> Self {
+        Interval {
+            months,
+            days,
+            microseconds,
+        }
+    }
+}
+
+impl Display for Interval {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}m {}d {}us", self.months, self.days, self.microseconds)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct TimeTz {
+    pub time: chrono::NaiveTime,
+    pub offset: i32,
+}
+
+impl TimeTz {
+    pub fn new(time: chrono::NaiveTime, offset: chrono::FixedOffset) -> Self {
+        TimeTz {
+            time,
+            offset: offset.utc_minus_local(),
+        }
+    }
+}
+
+impl Display for TimeTz {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.time, self.offset)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct Enumeration {
+    pub name: String,
+    pub value: String,
+}
+
+impl Enumeration {
+    pub fn new(name: String, value: String) -> Self {
+        Enumeration { name, value }
+    }
+}
+
+impl Display for Enumeration {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.name, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableComposite {
+    pub name: String,
+    pub values: Vec<NodeIndex>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableDomain {
+    pub name: String,
+    pub value: NodeIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableRange {
+    pub name: String,
+    pub value: ValuesRange<NodeIndex>,
+}
+
+impl<T> From<ValuesRange<T>> for PgRange<T> {
+    fn from(range: ValuesRange<T>) -> Self {
+        PgRange {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+impl<T> From<PgRange<T>> for ValuesRange<T> {
+    fn from(range: PgRange<T>) -> Self {
+        ValuesRange {
+            start: range.start,
+            end: range.end,
+        }
+    }
+}
+
+impl From<PgInterval> for Interval {
+    fn from(interval: PgInterval) -> Self {
+        Self {
+            months: interval.months,
+            days: interval.days,
+            microseconds: interval.microseconds,
+        }
+    }
+}
+
+impl From<Interval> for PgInterval {
+    fn from(interval: Interval) -> Self {
+        Self {
+            months: interval.months,
+            days: interval.days,
+            microseconds: interval.microseconds,
+        }
+    }
+}
+
+impl From<PgTimeTz> for TimeTz {
+    fn from(value: PgTimeTz) -> Self {
+        Self {
+            time: value.time,
+            offset: value.offset.utc_minus_local(),
+        }
+    }
+}
+
+impl TryFrom<TimeTz> for PgTimeTz {
+    type Error = String;
+    fn try_from(value: TimeTz) -> Result<Self, Self::Error> {
+        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+            .ok_or("Offset value is not valid")?;
+        Ok(Self {
+            time: value.time,
+            offset,
+        })
+    }
+}
+
+impl sqlx::types::Type<sqlx::Postgres> for Enumeration {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <&str as sqlx::types::Type<sqlx::Postgres>>::type_info()
+    }
+
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(ty.kind(), PgTypeKind::Enum(_))
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Enumeration {
+    fn decode(
+        value: sqlx::postgres::PgValueRef<'r>,
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        use sqlx::TypeInfo;
+
+        let type_info = &value.type_info();
+        let name = type_info.name().to_string();
+        if matches!(type_info.kind(), PgTypeKind::Enum(_)) {
+            let v = <String as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+            Ok(Enumeration::new(name, v))
+        } else {
+            Err(format!("Type '{name}' is not supported").into())
+        }
+    }
+}
+
+impl sqlx::Encode<'_, sqlx::Postgres> for Enumeration {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <String as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.value, buf)
+    }
+
+    fn produces(&self) -> Option<sqlx::postgres::PgTypeInfo> {
+        Some(sqlx::postgres::PgTypeInfo::with_name(
+            self.name.clone().leak(),
+        ))
+    }
+}
+
+impl sqlx::postgres::PgHasArrayType for Enumeration {
+    fn array_type_info() -> sqlx::postgres::PgTypeInfo {
+        sqlx::postgres::PgTypeInfo::with_oid(Oid(2277)) // pseudo type array
+    }
+
+    fn array_compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        matches!(ty.kind(), PgTypeKind::Array(ty) if <Enumeration as sqlx::types::Type<sqlx::Postgres>>::compatible(ty))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub struct EnumerationType {
+    pub name: String,
+}
+
+impl EnumerationType {
+    pub fn new(name: String) -> Self {
+        EnumerationType { name }
+    }
+}
+
+impl Display for EnumerationType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub struct SerializableCompositeType {
+    pub name: String,
+    pub attributes: Vec<(String, NodeIndex)>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub struct SerializableDomainType {
+    pub name: String,
+    pub base_type: NodeIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub struct SerializableRangeType {
+    pub name: String,
+    pub base_type: NodeIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub struct SerializableDbColumnType {
+    pub nodes: Vec<SerializableDbColumnTypeNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+pub enum SerializableDbColumnTypeNode {
+    Boolean,
+    Tinyint,
+    Smallint,
+    Mediumint,
+    Int,
+    Bigint,
+    TinyintUnsigned,
+    SmallintUnsigned,
+    MediumintUnsigned,
+    IntUnsigned,
+    BigintUnsigned,
+    Float,
+    Double,
+    Decimal,
+    Date,
+    Datetime,
+    Timestamp,
+    Time,
+    Year,
+    Fixchar,
+    Varchar,
+    Tinytext,
+    Text,
+    Mediumtext,
+    Longtext,
+    Binary,
+    Varbinary,
+    Tinyblob,
+    Blob,
+    Mediumblob,
+    Longblob,
+    Set,
+    Bit,
+    Json,
+    Character,
+    Int2,
+    Int4,
+    Int8,
+    Float4,
+    Float8,
+    Numeric,
+    Bpchar,
+    Timestamptz,
+    Timetz,
+    Interval,
+    Bytea,
+    Uuid,
+    Xml,
+    Jsonb,
+    Jsonpath,
+    Inet,
+    Cidr,
+    Macaddr,
+    Varbit,
+    Int4range,
+    Int8range,
+    Numrange,
+    Tsrange,
+    Tstzrange,
+    Daterange,
+    Money,
+    Oid,
+    Enumeration(EnumerationType),
+    Composite(SerializableCompositeType),
+    Domain(SerializableDomainType),
+    Array(NodeIndex),
+    Range(SerializableRangeType),
+    Null,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableDbColumn {
+    pub ordinal: u64,
+    pub name: String,
+    pub db_type: SerializableDbColumnType,
+    pub db_type_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableDbResult {
+    pub columns: Vec<SerializableDbColumn>,
+    pub rows: Vec<Vec<SerializableDbValue>>,
 }

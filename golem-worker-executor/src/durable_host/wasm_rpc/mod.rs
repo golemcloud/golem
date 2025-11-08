@@ -27,7 +27,6 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use desert_rust::serialize_to_bytes;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::types::{
     SerializableDateTime, SerializableInvokeRequest, SerializableInvokeResult,

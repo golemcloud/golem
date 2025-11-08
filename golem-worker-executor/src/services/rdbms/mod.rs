@@ -21,38 +21,34 @@ use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
-use desert_rust::BinaryCodec;
-use golem_common::model::TransactionId;
+use golem_common::model::oplog::types::{
+    SerializableDbColumn, SerializableDbResult, SerializableDbValue, SerializableRdbmsError,
+};
 use golem_common::model::WorkerId;
+use golem_common::model::{RdbmsPoolKey, TransactionId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm::{IntoValue, Value, ValueAndType};
-use golem_wasm_derive::{FromValue, IntoValue};
 use itertools::Itertools;
-use mac_address::MacAddress;
-use std::collections::{Bound, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use url::Url;
 
-pub trait RdbmsType: Debug + Display + Default + PartialEq + BinaryCodec + Clone + Send {
+pub trait RdbmsType: Debug + Display + Default + PartialEq + Clone + Send {
     type DbColumn: Clone
         + Send
         + Sync
         + PartialEq
         + Debug
-        + BinaryCodec
-        + RdbmsIntoValueAndType
+        + Into<SerializableDbColumn>
+        + TryFrom<SerializableDbColumn, Error = String>
         + 'static;
     type DbValue: Clone
         + Send
         + Sync
         + PartialEq
         + Debug
-        + BinaryCodec
-        + RdbmsIntoValueAndType
+        + Into<SerializableDbValue>
+        + TryFrom<SerializableDbValue, Error = String>
         + 'static;
 
     fn durability_connection_interface() -> &'static str;
@@ -66,7 +62,7 @@ pub struct RdbmsStatus {
 }
 
 impl Display for RdbmsStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for (key, workers) in self.pools.iter() {
             writeln!(f, "{}: {}", key, workers.iter().join(", "))?;
         }
@@ -79,11 +75,15 @@ impl Display for RdbmsStatus {
 pub trait DbTransaction<T: RdbmsType> {
     fn transaction_id(&self) -> TransactionId;
 
-    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
-    async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
+    async fn query(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<DbResult<T>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -91,24 +91,25 @@ pub trait DbTransaction<T: RdbmsType> {
         &self,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
-    async fn pre_commit(&self) -> Result<(), Error>;
+    async fn pre_commit(&self) -> Result<(), RdbmsError>;
 
-    async fn pre_rollback(&self) -> Result<(), Error>;
+    async fn pre_rollback(&self) -> Result<(), RdbmsError>;
 
-    async fn commit(&self) -> Result<(), Error>;
+    async fn commit(&self) -> Result<(), RdbmsError>;
 
-    async fn rollback(&self) -> Result<(), Error>;
+    async fn rollback(&self) -> Result<(), RdbmsError>;
 
-    async fn rollback_if_open(&self) -> Result<(), Error>;
+    async fn rollback_if_open(&self) -> Result<(), RdbmsError>;
 }
 
 #[async_trait]
 pub trait Rdbms<T: RdbmsType> {
-    async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error>;
+    async fn create(&self, address: &str, worker_id: &WorkerId)
+        -> Result<RdbmsPoolKey, RdbmsError>;
 
     async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
@@ -120,7 +121,7 @@ pub trait Rdbms<T: RdbmsType> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<u64, Error>
+    ) -> Result<u64, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -130,7 +131,7 @@ pub trait Rdbms<T: RdbmsType> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -140,7 +141,7 @@ pub trait Rdbms<T: RdbmsType> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<DbResult<T>, Error>
+    ) -> Result<DbResult<T>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
 
@@ -148,21 +149,21 @@ pub trait Rdbms<T: RdbmsType> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error>;
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, RdbmsError>;
 
     async fn get_transaction_status(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, Error>;
+    ) -> Result<RdbmsTransactionStatus, RdbmsError>;
 
     async fn cleanup_transaction(
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<(), Error>;
+    ) -> Result<(), RdbmsError>;
 
     async fn status(&self) -> RdbmsStatus;
 }
@@ -219,148 +220,19 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct RdbmsPoolKey {
-    pub address: Url,
-}
-
-impl RdbmsPoolKey {
-    pub fn new(address: Url) -> Self {
-        Self { address }
-    }
-
-    pub fn from(address: &str) -> Result<Self, String> {
-        let url = Url::parse(address).map_err(|e| e.to_string())?;
-        Ok(Self::new(url))
-    }
-
-    pub fn masked_address(&self) -> String {
-        let mut output: String = self.address.scheme().to_string();
-        output.push_str("://");
-
-        let username = self.address.username();
-        output.push_str(username);
-
-        let password = self.address.password();
-        if password.is_some() {
-            output.push_str(":*****");
-        }
-
-        if let Some(h) = self.address.host_str() {
-            if !username.is_empty() || password.is_some() {
-                output.push('@');
-            }
-
-            output.push_str(h);
-
-            if let Some(p) = self.address.port() {
-                output.push(':');
-                output.push_str(p.to_string().as_str());
-            }
-        }
-
-        output.push_str(self.address.path());
-
-        let query_pairs = self.address.query_pairs();
-
-        if query_pairs.count() > 0 {
-            output.push('?');
-        }
-        for (index, (key, value)) in query_pairs.enumerate() {
-            let key = &*key;
-            output.push_str(key);
-            output.push('=');
-
-            if key == "password" || key == "secret" {
-                output.push_str("*****");
-            } else {
-                output.push_str(&value);
-            }
-            if index < query_pairs.count() - 1 {
-                output.push('&');
-            }
-        }
-
-        output
-    }
-}
-
-impl Display for RdbmsPoolKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.masked_address())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
-#[desert(evolution())]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DbRow<T: 'static> {
     pub values: Vec<T>,
 }
 
-impl<T> RdbmsIntoValueAndType for DbRow<T>
-where
-    Vec<T>: RdbmsIntoValueAndType,
-{
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type_rdbms(self.values);
-        let t = analysed_type::record(vec![analysed_type::field("values", v.typ)]);
-        ValueAndType::new(Value::Record(vec![v.value]), t)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![analysed_type::field(
-            "values",
-            <Vec<T>>::get_base_type(),
-        )])
-    }
-}
-
-impl<T> AnalysedTypeMerger for DbRow<T>
-where
-    T: AnalysedTypeMerger,
-    Vec<T>: RdbmsIntoValueAndType,
-{
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "values" {
-                        let t = <Vec<T>>::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
 #[async_trait]
 pub trait DbResultStream<T: RdbmsType> {
-    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error>;
+    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, RdbmsError>;
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error>;
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, RdbmsError>;
 }
 
-#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DbResult<T: RdbmsType + 'static> {
     pub columns: Vec<T::DbColumn>,
     pub rows: Vec<DbRow<T::DbValue>>,
@@ -378,7 +250,7 @@ impl<T: RdbmsType> DbResult<T> {
     #[allow(dead_code)]
     pub async fn from(
         result_set: Arc<dyn DbResultStream<T> + Send + Sync>,
-    ) -> Result<DbResult<T>, Error> {
+    ) -> Result<DbResult<T>, RdbmsError> {
         let columns = result_set.get_columns().await?;
         let mut rows: Vec<DbRow<T::DbValue>> = vec![];
 
@@ -389,33 +261,44 @@ impl<T: RdbmsType> DbResult<T> {
     }
 }
 
-impl<T> RdbmsIntoValueAndType for DbResult<T>
-where
-    T: RdbmsType,
-    Vec<T::DbColumn>: RdbmsIntoValueAndType,
-    Vec<DbRow<T::DbValue>>: RdbmsIntoValueAndType,
-{
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let cs = RdbmsIntoValueAndType::into_value_and_type_rdbms(self.columns);
-        let rs = RdbmsIntoValueAndType::into_value_and_type_rdbms(self.rows);
-        let t = analysed_type::record(vec![
-            analysed_type::field("columns", cs.typ),
-            analysed_type::field("rows", rs.typ),
-        ]);
-        ValueAndType::new(Value::Record(vec![cs.value, rs.value]), t)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("columns", <Vec<T::DbColumn>>::get_base_type()),
-            analysed_type::field("rows", <Vec<DbRow<T::DbValue>>>::get_base_type()),
-        ])
+impl<T: RdbmsType> From<DbResult<T>> for SerializableDbResult {
+    fn from(value: DbResult<T>) -> Self {
+        let columns = value.columns.into_iter().map(|c| c.into()).collect();
+        let rows = value
+            .rows
+            .into_iter()
+            .map(|r| r.values.into_iter().map(|v| v.into()).collect())
+            .collect();
+        SerializableDbResult { columns, rows }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub enum Error {
+impl<T: RdbmsType> TryFrom<SerializableDbResult> for DbResult<T> {
+    type Error = String;
+
+    fn try_from(value: SerializableDbResult) -> Result<Self, Self::Error> {
+        let columns = value
+            .columns
+            .into_iter()
+            .map(|c| c.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+        let rows = value
+            .rows
+            .into_iter()
+            .map(|r| {
+                r.into_iter()
+                    .map(|v| v.try_into())
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|values| DbRow { values })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(DbResult { columns, rows })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RdbmsError {
     ConnectionFailure(String),
     QueryParameterFailure(String),
     QueryExecutionFailure(String),
@@ -423,228 +306,76 @@ pub enum Error {
     Other(String),
 }
 
-impl Error {
-    pub(crate) fn connection_failure<E: Display>(error: E) -> Error {
+impl RdbmsError {
+    pub fn connection_failure<E: Display>(error: E) -> RdbmsError {
         Self::ConnectionFailure(error.to_string())
     }
 
-    pub(crate) fn query_execution_failure<E: Display>(error: E) -> Error {
+    pub fn query_execution_failure<E: Display>(error: E) -> RdbmsError {
         Self::QueryExecutionFailure(error.to_string())
     }
 
-    pub(crate) fn query_response_failure<E: Display>(error: E) -> Error {
+    pub fn query_response_failure<E: Display>(error: E) -> RdbmsError {
         Self::QueryResponseFailure(error.to_string())
     }
 
-    pub(crate) fn other_response_failure<E: Display>(error: E) -> Error {
+    pub fn other_response_failure<E: Display>(error: E) -> RdbmsError {
         Self::Other(error.to_string())
     }
 }
 
-impl Display for Error {
+impl Display for RdbmsError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {msg}"),
-            Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),
-            Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
-            Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
-            Error::Other(msg) => write!(f, "Other: {msg}"),
+            RdbmsError::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {msg}"),
+            RdbmsError::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),
+            RdbmsError::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
+            RdbmsError::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
+            RdbmsError::Other(msg) => write!(f, "Other: {msg}"),
         }
     }
 }
 
-impl From<WorkerExecutorError> for Error {
+impl From<RdbmsError> for SerializableRdbmsError {
+    fn from(value: RdbmsError) -> SerializableRdbmsError {
+        match value {
+            RdbmsError::ConnectionFailure(msg) => SerializableRdbmsError::ConnectionFailure(msg),
+            RdbmsError::QueryParameterFailure(msg) => {
+                SerializableRdbmsError::QueryParameterFailure(msg)
+            }
+            RdbmsError::QueryExecutionFailure(msg) => {
+                SerializableRdbmsError::QueryExecutionFailure(msg)
+            }
+            RdbmsError::QueryResponseFailure(msg) => {
+                SerializableRdbmsError::QueryResponseFailure(msg)
+            }
+            RdbmsError::Other(msg) => SerializableRdbmsError::Other(msg),
+        }
+    }
+}
+
+impl From<SerializableRdbmsError> for RdbmsError {
+    fn from(value: SerializableRdbmsError) -> RdbmsError {
+        match value {
+            SerializableRdbmsError::ConnectionFailure(msg) => RdbmsError::ConnectionFailure(msg),
+            SerializableRdbmsError::QueryParameterFailure(msg) => {
+                RdbmsError::QueryParameterFailure(msg)
+            }
+            SerializableRdbmsError::QueryExecutionFailure(msg) => {
+                RdbmsError::QueryExecutionFailure(msg)
+            }
+            SerializableRdbmsError::QueryResponseFailure(msg) => {
+                RdbmsError::QueryResponseFailure(msg)
+            }
+            SerializableRdbmsError::Other(msg) => RdbmsError::Other(msg),
+        }
+    }
+}
+
+impl From<WorkerExecutorError> for RdbmsError {
     fn from(value: WorkerExecutorError) -> Self {
         Self::other_response_failure(value)
     }
-}
-
-pub trait AnalysedTypeMerger {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType;
-
-    fn merge_types_opt(
-        first: Option<AnalysedType>,
-        second: Option<AnalysedType>,
-    ) -> Option<AnalysedType> {
-        match (first, second) {
-            (Some(f), Some(s)) => Some(Self::merge_types(f, s)),
-            (None, Some(s)) => Some(s),
-            (Some(f), None) => Some(f),
-            _ => None,
-        }
-    }
-}
-
-impl<T: AnalysedTypeMerger> AnalysedTypeMerger for Vec<T> {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::List(f), AnalysedType::List(s)) = (first.clone(), second) {
-            let t = T::merge_types(*f.inner, *s.inner);
-            analysed_type::list(t)
-        } else {
-            first
-        }
-    }
-}
-
-pub trait RdbmsIntoValueAndType {
-    fn into_value_and_type_rdbms(self) -> ValueAndType;
-
-    fn get_base_type() -> AnalysedType;
-}
-
-impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Option<T> {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        match self {
-            Some(v) => {
-                let v = v.into_value_and_type_rdbms();
-                ValueAndType::new(
-                    Value::Option(Some(Box::new(v.value))),
-                    analysed_type::option(v.typ),
-                )
-            }
-            None => ValueAndType::new(Value::Option(None), Self::get_base_type()),
-        }
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::option(T::get_base_type())
-    }
-}
-
-impl<S: RdbmsIntoValueAndType, E: IntoValue> RdbmsIntoValueAndType for Result<S, E> {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        match self {
-            Ok(v) => {
-                let v = v.into_value_and_type_rdbms();
-                ValueAndType::new(
-                    Value::Result(Ok(Some(Box::new(v.value)))),
-                    analysed_type::result(v.typ, E::get_type()),
-                )
-            }
-            Err(e) => ValueAndType::new(
-                Value::Result(Err(Some(Box::new(e.into_value())))),
-                Self::get_base_type(),
-            ),
-        }
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::result(S::get_base_type(), E::get_type())
-    }
-}
-
-impl<T: RdbmsIntoValueAndType + AnalysedTypeMerger> RdbmsIntoValueAndType for Vec<T> {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let mut vs = Vec::with_capacity(self.len());
-        let mut t: Option<AnalysedType> = None;
-        for v in self {
-            let v = v.into_value_and_type_rdbms();
-            t = match t {
-                None => Some(v.typ),
-                Some(t) => Some(T::merge_types(t, v.typ)),
-            };
-            vs.push(v.value);
-        }
-
-        let t = t.unwrap_or(T::get_base_type());
-        ValueAndType::new(Value::List(vs), analysed_type::list(t))
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::list(T::get_base_type())
-    }
-}
-
-impl RdbmsIntoValueAndType for MacAddress {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let vs = self.bytes().into_iter().map(Value::U8).collect();
-        ValueAndType::new(Value::Record(vec![Value::Tuple(vs)]), Self::get_base_type())
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::record(vec![analysed_type::field(
-            "octets",
-            analysed_type::tuple(vec![analysed_type::u8(); 6]),
-        )])
-    }
-}
-
-impl RdbmsIntoValueAndType for IpAddr {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let v = match self {
-            IpAddr::V4(v) => {
-                let vs = v.octets().into_iter().map(Value::U8).collect();
-                Value::Variant {
-                    case_idx: 0,
-                    case_value: Some(Box::new(Value::Tuple(vs))),
-                }
-            }
-            IpAddr::V6(v) => {
-                let vs = v.segments().into_iter().map(Value::U16).collect();
-                Value::Variant {
-                    case_idx: 1,
-                    case_value: Some(Box::new(Value::Tuple(vs))),
-                }
-            }
-        };
-
-        ValueAndType::new(v, Self::get_base_type())
-    }
-
-    fn get_base_type() -> AnalysedType {
-        analysed_type::variant(vec![
-            analysed_type::case("ipv4", analysed_type::tuple(vec![analysed_type::u8(); 4])),
-            analysed_type::case("ipv6", analysed_type::tuple(vec![analysed_type::u16(); 8])),
-        ])
-    }
-}
-
-impl<T: RdbmsIntoValueAndType> RdbmsIntoValueAndType for Bound<T> {
-    fn into_value_and_type_rdbms(self) -> ValueAndType {
-        let (v, t) = get_bound_value(self);
-        let t = t.unwrap_or(Self::get_base_type());
-        ValueAndType::new(v, t)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        get_bound_analysed_type(T::get_base_type())
-    }
-}
-
-fn get_bound_value<T: RdbmsIntoValueAndType>(value: Bound<T>) -> (Value, Option<AnalysedType>) {
-    match value {
-        Bound::Included(t) => {
-            let v = t.into_value_and_type_rdbms();
-            let value = Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(v.value)),
-            };
-            (value, Some(v.typ))
-        }
-        Bound::Excluded(t) => {
-            let v = t.into_value_and_type_rdbms();
-            let value = Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(v.value)),
-            };
-            (value, Some(v.typ))
-        }
-        Bound::Unbounded => {
-            let value = Value::Variant {
-                case_idx: 2,
-                case_value: None,
-            };
-            (value, None)
-        }
-    }
-}
-
-fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
-    analysed_type::variant(vec![
-        analysed_type::case("included", base_type.clone()),
-        analysed_type::case("excluded", base_type.clone()),
-        analysed_type::unit_case("unbounded"),
-    ])
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -20,13 +20,13 @@ use crate::services::rdbms::sqlx_common::{
     SqlxDbResultStream, SqlxRdbms,
 };
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+    DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,
 };
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
-use golem_common::model::TransactionId;
+use golem_common::model::{RdbmsPoolKey, TransactionId};
 use sqlx::mysql::MySqlDatabaseError;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::str::FromStr;
@@ -39,22 +39,22 @@ pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync
 
 #[async_trait]
 impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
-    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, Error> {
+    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, RdbmsError> {
         if self.address.scheme() != MYSQL {
-            Err(Error::ConnectionFailure(format!(
+            Err(RdbmsError::ConnectionFailure(format!(
                 "scheme '{}' in url is invalid",
                 self.address.scheme()
             )))?
         }
         let options = sqlx::mysql::MySqlConnectOptions::from_url(&self.address)
-            .map_err(Error::connection_failure)?;
+            .map_err(RdbmsError::connection_failure)?;
 
         let pool = sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
             .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
-            .map_err(Error::connection_failure)?;
+            .map_err(RdbmsError::connection_failure)?;
 
         MysqlType::create_transaction_table(&pool).await?;
 
@@ -64,7 +64,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 
 #[async_trait]
 impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
-    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
+    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -82,17 +82,17 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         let _ = query.execute(executor).await.map_err(|e| {
             match e {
                 sqlx::Error::Database(e) if e.downcast_ref::<MySqlDatabaseError>().number() == 1142 => {
-                    Error::other_response_failure(format!(
+                    RdbmsError::other_response_failure(format!(
                         "There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: {e})"
                     ))
                 }
-                _ => Error::other_response_failure(e)
+                _ => RdbmsError::other_response_failure(e)
             }
         })?;
         Ok(())
     }
 
-    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), Error>
+    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -102,11 +102,11 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         let _res = query
             .execute(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         Ok(())
     }
 
-    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, Error>
+    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -114,7 +114,7 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         let res = query
             .execute(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         Ok(res.rows_affected() > 0)
     }
 
@@ -122,7 +122,7 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         id: &TransactionId,
         status: RdbmsTransactionStatus,
         executor: E,
-    ) -> Result<bool, Error>
+    ) -> Result<bool, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -132,14 +132,14 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         let res = query
             .execute(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         Ok(res.rows_affected() > 0)
     }
 
     async fn get_transaction_status<'c, E>(
         id: &TransactionId,
         executor: E,
-    ) -> Result<RdbmsTransactionStatus, Error>
+    ) -> Result<RdbmsTransactionStatus, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -148,10 +148,10 @@ impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
         let row = query
             .fetch_optional(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         if let Some(row) = row {
-            let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
-            RdbmsTransactionStatus::from_str(status).map_err(Error::query_response_failure)
+            let status: &str = row.try_get(0).map_err(RdbmsError::query_response_failure)?;
+            RdbmsTransactionStatus::from_str(status).map_err(RdbmsError::query_response_failure)
         } else {
             Ok(RdbmsTransactionStatus::NotFound)
         }
@@ -164,7 +164,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         statement: &str,
         params: Vec<DbValue>,
         executor: E,
-    ) -> Result<u64, Error>
+    ) -> Result<u64, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -174,7 +174,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         let result = query
             .execute(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         Ok(result.rows_affected())
     }
 
@@ -182,7 +182,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         statement: &str,
         params: Vec<DbValue>,
         executor: E,
-    ) -> Result<DbResult<MysqlType>, Error>
+    ) -> Result<DbResult<MysqlType>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -192,7 +192,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         let result = query
             .fetch_all(executor)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
         create_db_result::<MysqlType, sqlx::MySql>(result)
     }
 
@@ -201,7 +201,7 @@ impl QueryExecutor<MysqlType, sqlx::MySql> for MysqlType {
         params: Vec<DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultStream<MysqlType> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<MysqlType> + Send + Sync + 'c>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = sqlx::MySql>,
     {
@@ -222,9 +222,9 @@ impl<'q> QueryParamsBinder<'q, MysqlType, sqlx::MySql>
     fn bind_params(
         mut self,
         params: Vec<DbValue>,
-    ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, Error> {
+    ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, RdbmsError> {
         for param in params {
-            self = bind_value(self, param).map_err(Error::QueryParameterFailure)?;
+            self = bind_value(self, param).map_err(RdbmsError::QueryParameterFailure)?;
         }
         Ok(self)
     }
