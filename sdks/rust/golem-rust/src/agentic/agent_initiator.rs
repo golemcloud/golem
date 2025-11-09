@@ -22,7 +22,7 @@ use async_trait::async_trait;
  * This is used to create an instance of the agent with the given parameters.
  */
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait AgentInitiator {
     async fn initiate(&self, params: DataValue) -> Result<(), AgentError>;
 }

@@ -47,7 +47,7 @@ pub struct AgentInitiators {
 
 #[derive(Default)]
 pub struct AsyncRuntime {
-    pub reactor: Option<Reactor>,
+    pub reactor: Option<Arc<Reactor>>,
 }
 
 pub fn get_all_agent_types() -> Vec<AgentType> {
@@ -133,14 +133,14 @@ where
     f(agent_instance.as_ref())
 }
 
-pub fn get_reactor() -> Reactor {
+pub fn get_reactor() -> Arc<Reactor> {
     get_state().async_runtime.borrow().reactor.clone().unwrap()
 }
 
 pub fn register_reactor(reactor: Reactor) {
     let state = get_state();
 
-    state.async_runtime.borrow_mut().reactor = Some(reactor);
+    state.async_runtime.borrow_mut().reactor = Some(Arc::new(reactor));
 }
 
 pub fn get_agent_id() -> AgentId {

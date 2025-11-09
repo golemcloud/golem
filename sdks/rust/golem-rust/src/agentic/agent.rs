@@ -14,7 +14,7 @@
 
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 pub trait Agent {
     fn get_agent_id(&self) -> String;
     async fn invoke(

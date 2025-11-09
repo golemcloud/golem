@@ -19,7 +19,7 @@ use syn::ItemTrait;
 use crate::agentic::{
     get_remote_client,
     helpers::{
-        get_input_param_type, get_output_param_type, InputParamType, OutputParamType, ParamType,
+        get_input_param_type, get_output_param_type, ParamType,
     },
 };
 
