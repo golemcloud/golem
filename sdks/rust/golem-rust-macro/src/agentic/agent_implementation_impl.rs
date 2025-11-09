@@ -14,10 +14,11 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemImpl, ReturnType, Type};
+use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, get_input_param_type, get_output_param_type, FunctionKind, ParamType,
+    get_function_kind, get_input_param_type, get_output_param_type, is_constructor_method,
+    FunctionKind, ParamType,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -157,20 +158,14 @@ fn build_match_arms(
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
-            let returns_self = match &method.sig.output {
-                ReturnType::Type(_, ty) => match &**ty {
-                    Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
-                    _ => false,
-                },
-                _ => false,
-            };
+            let is_constructor_method = is_constructor_method(&method.sig);
 
-            let method_name_str = method.sig.ident.to_string();
-
-            if returns_self {
+            if is_constructor_method {
                 constructor_method = Some(method);
                 continue;
             }
+
+            let method_name_str = method.sig.ident.to_string();
 
             let param_idents = extract_param_idents(method);
 

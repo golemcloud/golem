@@ -16,41 +16,46 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
 
+use crate::agentic::helpers::is_constructor_method;
 use crate::agentic::{
     get_remote_client,
-    helpers::{
-        get_input_param_type, get_output_param_type, ParamType,
-    },
+    helpers::{get_input_param_type, get_output_param_type, ParamType},
+    multiple_constructor_methods_error, no_constructor_method_error,
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
+    let item_trait = syn::parse_macro_input!(item as ItemTrait);
 
-    let AgentTypeWithRemoteClient {
-        agent_type,
-        remote_client,
-    } = get_agent_type_with_remote_client(&item_trait);
+    match get_agent_type_with_remote_client(&item_trait) {
+        Ok(agent_type_with_remote_client) => {
+            let AgentTypeWithRemoteClient {
+                agent_type,
+                remote_client,
+            } = agent_type_with_remote_client;
 
-    let register_fn_name = get_register_function_ident(&item_trait);
+            let register_fn_name = get_register_function_ident(&item_trait);
 
-    let register_fn = quote! {
-        #[::ctor::ctor]
-        fn #register_fn_name() {
-            golem_rust::agentic::register_agent_type(
-               golem_rust::agentic::AgentTypeName(#agent_type.type_name.to_string()),
-               #agent_type
-            );
+            let register_fn = quote! {
+                #[::ctor::ctor]
+                fn #register_fn_name() {
+                    golem_rust::agentic::register_agent_type(
+                        golem_rust::agentic::AgentTypeName(#agent_type.type_name.to_string()),
+                        #agent_type
+                    );
+                }
+            };
+
+            let result = quote! {
+                #item_trait
+                #register_fn
+                #remote_client
+            };
+
+            result.into()
         }
-    };
 
-    let result = quote! {
-        #item_trait
-        #register_fn
-        #remote_client
-
-    };
-
-    result.into()
+        Err(invalid_trait_error) => invalid_trait_error,
+    }
 }
 
 fn get_register_function_ident(item_trait: &ItemTrait) -> proc_macro2::Ident {
@@ -68,35 +73,27 @@ struct AgentTypeWithRemoteClient {
     remote_client: proc_macro2::TokenStream,
 }
 
-fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWithRemoteClient {
+fn get_agent_type_with_remote_client(
+    item_trait: &syn::ItemTrait,
+) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let trait_ident = &item_trait.ident;
     let type_name = trait_ident.to_string();
 
     let mut constructor_methods = vec![];
 
-    // Capture constructor methods (returning Self)
     for item in &item_trait.items {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            if let syn::ReturnType::Type(_, ty) = &trait_fn.sig.output {
-                if let syn::Type::Path(type_path) = &**ty {
-                    if type_path.path.segments.last().unwrap().ident == "Self" {
-                        constructor_methods.push(trait_fn.clone());
-                    }
-                }
+            if is_constructor_method(&trait_fn.sig) {
+                constructor_methods.push(trait_fn.clone());
             }
         }
     }
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            if let syn::ReturnType::Type(_, ty) = &trait_fn.sig.output {
-                if let syn::Type::Path(type_path) = &**ty {
-                    if type_path.path.segments.last().unwrap().ident == "Self" {
-                        return None;
-                    }
-                }
+            if is_constructor_method(&trait_fn.sig) {
+                return None;
             }
-
 
             let name = &trait_fn.sig.ident;
             let method_name = &name.to_string();
@@ -213,6 +210,14 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
     // just the parmaeter identities
     let mut constructor_param_idents = vec![];
 
+    if constructor_methods.is_empty() {
+        return Err(no_constructor_method_error(item_trait).into());
+    }
+
+    if constructor_methods.len() > 1 {
+        return Err(multiple_constructor_methods_error(item_trait).into());
+    }
+
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
         constructor_param_type = get_input_param_type(&ctor_fn.sig).param_type;
 
@@ -278,7 +283,7 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
         }
     };
 
-    AgentTypeWithRemoteClient {
+    Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #type_name.to_string(),
@@ -289,5 +294,5 @@ fn get_agent_type_with_remote_client(item_trait: &syn::ItemTrait) -> AgentTypeWi
             }
         },
         remote_client,
-    }
+    })
 }

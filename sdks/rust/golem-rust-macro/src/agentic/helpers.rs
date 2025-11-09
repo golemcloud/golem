@@ -12,28 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use syn::{Type, PathArguments, GenericArgument};
+use syn::{GenericArgument, PathArguments, ReturnType, Type};
 
 pub struct InputParamType {
     pub param_type: ParamType,
 }
 
-
 pub struct OutputParamType {
     pub param_type: ParamType,
-    pub function_kind: FunctionKind
+    pub function_kind: FunctionKind,
 }
 
 pub enum FunctionKind {
     Async,
-    Sync
+    Sync,
 }
 
 pub enum ParamType {
     Tuple,
-    Multimodal
+    Multimodal,
 }
-
 
 pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
     if sig.inputs.len() == 1 {
@@ -44,7 +42,7 @@ pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
                         // Depends on how exactly multimodal is represented
                         return InputParamType {
                             param_type: ParamType::Multimodal,
-                        }
+                        };
                     }
                 }
             }
@@ -56,17 +54,17 @@ pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
 }
 
 pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
-   let function_kind = get_function_kind(&sig);
+    let function_kind = get_function_kind(sig);
 
     if let syn::ReturnType::Type(_, ty) = &sig.output {
-        if let Some(inner_type) = extract_inner_type_if_future(&ty) {
+        if let Some(inner_type) = extract_inner_type_if_future(ty) {
             if is_multimodal_type(inner_type) {
                 return OutputParamType {
                     param_type: ParamType::Multimodal,
                     function_kind,
                 };
             }
-        } else if is_multimodal_type(&ty) {
+        } else if is_multimodal_type(ty) {
             return OutputParamType {
                 param_type: ParamType::Multimodal,
                 function_kind,
@@ -76,7 +74,17 @@ pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
 
     OutputParamType {
         param_type: ParamType::Tuple,
-        function_kind
+        function_kind,
+    }
+}
+
+pub fn is_constructor_method(sig: &syn::Signature) -> bool {
+    match &sig.output {
+        ReturnType::Type(_, ty) => match &**ty {
+            Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -87,7 +95,6 @@ pub fn get_function_kind(sig: &syn::Signature) -> FunctionKind {
         FunctionKind::Sync
     }
 }
-
 
 fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {

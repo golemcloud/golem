@@ -1,6 +1,4 @@
-use crate::agentic::helpers::{
-    ParamType, get_input_param_type, get_output_param_type
-};
+use crate::agentic::helpers::{get_input_param_type, get_output_param_type, ParamType};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
@@ -121,17 +119,16 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
 
-                          let rpc_result = wasm_rpc.async_invoke_and_await(
+                          let rpc_result_future = wasm_rpc.async_invoke_and_await(
                             #remote_method_name_token,
                             &wit_values
                           );
 
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = 
-                            golem_rust::agentic::await_async_invoke_result(rpc_result).await;
+                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = golem_rust::agentic::await_async_invoke_result(rpc_result_future).await;
 
-                          let result = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
+                          let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
-                          let value = golem_rust::wasm_rpc::Value::from(result);
+                          let value = golem_rust::wasm_rpc::Value::from(rpc_result_ok);
 
                           let value_unwrapped = match value {
                             golem_rust::wasm_rpc::Value::Tuple(values) => values[0].clone(), // Not sure how to go about this unwrapping and clone
@@ -156,17 +153,16 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
 
-                          let rpc_result = wasm_rpc.async_invoke_and_await(
+                          let rpc_result_future = wasm_rpc.async_invoke_and_await(
                               #remote_method_name_token,
                               &wit_values
                           );
 
-                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = 
-                            golem_rust::agentic::await_async_invoke_result(rpc_result).await;
+                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = golem_rust::agentic::await_async_invoke_result(rpc_result_future).await;
 
-                          let result = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
+                          let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
-                          let value = golem_rust::wasm_rpc::Value::from(result);
+                          let value = golem_rust::wasm_rpc::Value::from(rpc_result_ok);
 
                           let value_unwrapped = match value {
                             golem_rust::wasm_rpc::Value::Tuple(values) => values[0].clone(), // Not sure how to go about this unwrapping and clone
@@ -199,11 +195,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
     }
 }
 
-
-fn rpc_invoke_method_name(
-    agent_type_name: &str,
-    method_name: &str,
-) -> String {
+fn rpc_invoke_method_name(agent_type_name: &str, method_name: &str) -> String {
     let agent_type_name_kebab = agent_type_name.to_kebab_case();
     let method_name_kebab = method_name.to_kebab_case();
 
