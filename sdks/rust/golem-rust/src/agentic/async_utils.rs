@@ -1,6 +1,5 @@
-use crate::agentic::{get_reactor, get_state};
+use crate::agentic::{get_reactor};
 use golem_wasm::{FutureInvokeResult, RpcError, WitValue};
-use wasi::clocks::monotonic_clock::subscribe_duration;
 
 pub async fn await_async_invoke_result(
     invoke_result: FutureInvokeResult,
@@ -11,7 +10,7 @@ pub async fn await_async_invoke_result(
         std::mem::transmute(golem_wasm_pollable)
     };
 
-    let reactor =  get_state().async_runtime.borrow().reactor.clone().unwrap();
+    let reactor = get_reactor();
 
     let _ = reactor.wait_for(pollable_wasi).await;
 
