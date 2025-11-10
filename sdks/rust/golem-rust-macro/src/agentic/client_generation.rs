@@ -128,16 +128,10 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
-                          let value = golem_rust::wasm_rpc::Value::from(rpc_result_ok);
-
-                          let value_unwrapped = match value {
-                            golem_rust::wasm_rpc::Value::Tuple(values) => values[0].clone(), // Not sure how to go about this unwrapping and clone
-                            v => v,
-                          };
-
-                          let wit_value = golem_rust::wasm_rpc::WitValue::from(value_unwrapped);
+                          let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
 
                           let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
+
                           let element_schema = <#return_type as golem_rust::agentic::Schema>::get_type();
 
                           <#return_type as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
@@ -162,14 +156,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
 
-                          let value = golem_rust::wasm_rpc::Value::from(rpc_result_ok);
-
-                          let value_unwrapped = match value {
-                            golem_rust::wasm_rpc::Value::Tuple(values) => values[0].clone(), // Not sure how to go about this unwrapping and clone
-                            v => v,
-                          };
-
-                          let wit_value = golem_rust::wasm_rpc::WitValue::from(value_unwrapped);
+                          let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
 
                           // TODO;
                           // If its multimodal, we cannot use Schema instance directly, we need to enumerate the values from multimodal

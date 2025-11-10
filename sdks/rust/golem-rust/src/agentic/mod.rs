@@ -19,6 +19,7 @@ pub use async_utils::*;
 pub use errors::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use wit_utils::*;
 
 mod agent;
 mod agent_impl;
@@ -28,3 +29,4 @@ mod async_utils;
 mod errors;
 mod resolved_agent;
 mod schema;
+mod wit_utils;

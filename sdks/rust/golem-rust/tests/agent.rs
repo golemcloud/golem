@@ -15,7 +15,6 @@
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
 
     #[agent_definition]
