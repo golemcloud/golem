@@ -9,7 +9,7 @@ use model::*;
 trait FooAgent {
     fn new(opt_string: Option<String>) -> Self;
 
-    fn get_agent_id(&self) -> String;
+    fn get_id(&self) -> String;
 
     fn fun_string(&self, string: String) -> String;
 
@@ -93,8 +93,8 @@ impl FooAgent for FooAgentImpl {
         }
     }
 
-    fn get_agent_id(&self) -> String {
-        self.get_id()
+    fn get_id(&self) -> String {
+        self.get_agent_id()
     }
 
     fn fun_string(&self, string: String) -> String {
@@ -217,7 +217,7 @@ impl FooAgent for FooAgentImpl {
 trait BarAgent {
     fn new(opt_string: Option<String>) -> Self;
 
-    fn get_agent_id(&self) -> String;
+    fn get_id(&self) -> String;
 
     fn fun_string(&self, string: String) -> String;
 
@@ -301,8 +301,8 @@ impl BarAgent for BarAgentImpl {
         }
     }
 
-    fn get_agent_id(&self) -> String {
-        self.get_id()
+    fn get_id(&self) -> String {
+        self.get_agent_id()
     }
 
     fn fun_string(&self, string: String) -> String {
