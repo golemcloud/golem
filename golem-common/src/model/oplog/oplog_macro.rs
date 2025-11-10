@@ -168,3 +168,38 @@ macro_rules! oplog_payload {
         })*
     }
 }
+
+#[macro_export]
+macro_rules! host_payload_pairs {
+    ( $( ($typename:ident => $iface:literal, $func:literal, $reqtype:ident, $resptype:ident) ),* $(,)? ) => {
+        $(
+            ident_mash::mash! {
+                inner_req = "HostRequest" + $reqtype &
+                inner_resp = "HostResponse" + $resptype =>
+                pub struct $typename;
+
+                impl crate::model::oplog::payload::HostPayloadPair for $typename {
+                    type Req = crate::model::oplog::payload::$inner_req;
+                    type Resp = crate::model::oplog::payload::$inner_resp;
+
+                    const INTERFACE: &'static str = $iface;
+                    const FUNCTION: &'static str = $func;
+                    const FQFN: &'static str = concat!($iface, "::", $func);
+                }
+            }
+        )*
+
+        pub fn host_response_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<crate::model::oplog::payload::HostResponse, String> {
+            match fqfn {
+                $(
+                    concat!($iface, "::", $func) =>
+                        ident_mash::mash! {
+                            inner_resp = "HostResponse" + $resptype =>
+                            Ok(crate::model::oplog::payload::HostResponse::$resptype(<crate::model::oplog::payload::$inner_resp as golem_wasm::FromValue>::from_value(value_and_type.value)?))
+                        }
+                ),*,
+                _ => Ok(crate::model::oplog::payload::HostResponse::Custom(value_and_type))
+            }
+        }
+    }
+}

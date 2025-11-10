@@ -301,6 +301,97 @@ oplog_payload! {
     }
 }
 
+pub trait HostPayloadPair {
+    type Req: Into<HostRequest>;
+    type Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>;
+
+    const INTERFACE: &'static str;
+    const FUNCTION: &'static str;
+    const FQFN: &'static str;
+}
+
+pub mod payload_pairs {
+    use crate::host_payload_pairs;
+
+    host_payload_pairs! {
+        (RdbmsMysqlDbConnectionExecute => "rdbms::mysql::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsMysqlDbConnectionQuery => "rdbms::mysql::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsMysqlDbConnectionQueryStream => "rdbms::mysql::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsMysqlDbResultStreamGetColumns => "rdbms::mysql::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
+        (RdbmsMysqlDbResultStreamGetNext => "rdbms::mysql::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
+        (RdbmsMysqlDbTransactionQuery => "rdbms::mysql::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsMysqlDbTransactionExecute => "rdbms::mysql::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsMysqlDbTransactionQueryStream => "rdbms::mysql::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsPostgresDbConnectionExecute => "rdbms::postgres::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsPostgresDbConnectionQuery => "rdbms::postgres::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsPostgresDbConnectionQueryStream => "rdbms::postgres::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsPostgresDbResultStreamGetColumns => "rdbms::postgres::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
+        (RdbmsPostgresDbResultStreamGetNext => "rdbms::postgres::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
+        (RdbmsPostgresDbTransactionQuery => "rdbms::postgres::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsPostgresDbTransactionExecute => "rdbms::postgres::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsPostgresDbTransactionQueryStream => "rdbms::postgres::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (KeyvalueEventualGet => "keyvalue::eventual", "get", KVBucketAndKey, KVGet),
+        (KeyvalueEventualSet => "keyvalue::eventual", "set", KVBucketKeyAndSize, KVUnit),
+        (KeyvalueEventualDelete => "keyvalue::eventual", "delete", KVBucketAndKey, KVUnit),
+        (KeyvalueEventualExists => "keyvalue::eventual", "exists", KVBucketAndKey, KVDelete),
+        (KeyvalueEventualBatchGetMany => "keyvalue::eventual_batch", "get_many", KVBucketAndKeys, KVGetMany),
+        (KeyvalueEventualBatchGetKeys => "keyvalue::eventual_batch", "get_keys", KVBucket, KVKeys),
+        (KeyvalueEventualBatchSetMany => "keyvalue::eventual_batch", "set_many", KVBucketAndKeySizePairs, KVUnit),
+        (KeyvalueEventualBatchDeleteMany => "keyvalue::eventual_batch", "delete_many", KVBucketAndKeys, KVUnit),
+        (RandomInsecureSeedInsecureSeed => "random::insecure_seed", "insecure_seed", NoInput, RandomSeed),
+        (RandomInsecureGetInsecureRandomBytes => "random::insecure", "get_insecure_random_bytes", RandomBytes, RandomBytes),
+        (RandomInsecureGetInsecureRandomU64 => "random::insecure", "get_insecure_random_u64", NoInput, RandomU64),
+        (RandomGetRandomBytes => "random", "get_random_bytes", RandomBytes, RandomBytes),
+        (RandomGetRandomU64 => "random", "get_random_u64", NoInput, RandomU64),
+        (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke-and-await result", GolemRpcInvoke, GolemRpcInvokeAndAwait),
+        (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
+        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
+        (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
+        (IoPollReady => "io::poll", "ready", NoInput, PollReady),
+        (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
+        (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),
+        (HttpTypesIncomingBodyStreamRead => "http::types::incoming_body_stream", "read", HttpRequest, StreamChunk),
+        (HttpTypesIncomingBodyStreamBlockingRead => "http::types::incoming_body_stream", "blocking_read", HttpRequest, StreamChunk),
+        (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
+        (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
+        (WallClockNow => "wall_clock", "now", NoInput, WallClock),
+        (WallClockResolution => "wall_clock", "resolution", NoInput, WallClock),
+        (MonotonicClockNow => "monotonic_clock", "now", NoInput, MonotonicClockTimestamp),
+        (MonotonicClockResolution => "monotonic_clock", "resolution", NoInput, MonotonicClockTimestamp),
+        (MonotonicClockSubscribeDuration => "monotonic_clock", "subscribe_duration", MonotonicClockDuration, MonotonicClockTimestamp),
+        (BlobstoreBlobstoreCreateContainer => "blobstore::blobstore", "create_container", BlobStoreContainer, BlobStoreTimestamp),
+        (BlobstoreBlobstoreGetContainer => "blobstore::blobstore", "get_container", BlobStoreContainer, BlobStoreOptionalTimestamp),
+        (BlobstoreBlobstoreDeleteContainer => "blobstore::blobstore", "delete_container", BlobStoreContainer, BlobStoreUnit),
+        (BlobstoreBlobstoreContainerExists => "blobstore::blobstore", "container_exists", BlobStoreContainer, BlobStoreContains),
+        (BlobstoreBlobstoreCopyObject => "blobstore::blobstore", "copy_object", BlobStoreCopyOrMove, BlobStoreUnit),
+        (BlobstoreBlobstoreMoveObject => "blobstore::blobstore", "move_object", BlobStoreCopyOrMove, BlobStoreUnit),
+        (BlobstoreContainerGetData => "blobstore::container", "get_data", BlobStoreGetData, BlobStoreGetData),
+        (BlobstoreContainerWriteData => "blobstore::container", "write_data", BlobStoreWriteData, BlobStoreUnit),
+        (BlobstoreContainerListObject => "blobstore::container", "list_object", BlobStoreContainer, BlobStoreListObjects),
+        (BlobstoreContainerDeleteObject => "blobstore::container", "delete_object", BlobStoreContainerAndObject, BlobStoreUnit),
+        (BlobstoreContainerDeleteObjects => "blobstore::container", "delete_objects", BlobStoreContainerAndObjects, BlobStoreUnit),
+        (BlobstoreContainerHasObject => "blobstore::container", "has_object", BlobStoreContainerAndObject, BlobStoreContains),
+        (BlobstoreContainerObjectInfo => "blobstore::container", "object_info", BlobStoreContainerAndObject, BlobStoreObjectMetadata),
+        (BlobstoreContainerClear => "blobstore::container", "clear", BlobStoreContainer, BlobStoreUnit),
+        (FilesystemTypesDescriptorStat => "filesystem::types::descriptor", "stat", FileSystemPath, FileSystemStat),
+        (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat),
+        (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName),
+        (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
+        (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
+        (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
+        (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
+        (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),
+        (GolemApiUpdateWorker => "golem::api", "update_worker", GolemApiUpdateAgent, GolemApiUnit),
+        (GolemApiGetSelfMetadata => "golem::api", "get_self_metadata", NoInput, GolemApiSelfAgentMetadata),
+        (GolemApiGetAgentMetadata => "golem::api", "get_agent_metadata", GolemApiAgentId, GolemApiAgentMetadata),
+        (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit),
+        (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
+        (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
+        (GolemApiResolveWorkerIdStrict => "golem::api", "resolve_worker_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
+        (GolemApiFork => "golem::api", "fork", GolemApiFork, GolemApiFork)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
     Inline(T),

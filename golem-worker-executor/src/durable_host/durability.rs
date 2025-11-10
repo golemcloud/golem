@@ -23,7 +23,8 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, PersistenceLevel,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
+    PersistenceLevel,
 };
 use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -432,29 +433,23 @@ pub enum OplogEntryVersion {
     V2,
 }
 
-pub struct Durability {
-    interface: &'static str,
-    function: &'static str,
+pub struct Durability<Pair: HostPayloadPair> {
     function_type: DurableFunctionType,
     begin_index: OplogIndex,
     durable_execution_state: DurableExecutionState,
 }
 
-impl Durability {
+impl<Pair: HostPayloadPair> Durability<Pair> {
     pub async fn new(
         ctx: &mut impl DurabilityHost,
-        interface: &'static str,
-        function: &'static str,
         function_type: DurableFunctionType,
     ) -> Result<Self, WorkerExecutorError> {
-        ctx.observe_function_call(interface, function);
+        ctx.observe_function_call(Pair::INTERFACE, Pair::FUNCTION);
 
         let begin_index = ctx.begin_durable_function(&function_type).await?;
         let durable_execution_state = ctx.durable_execution_state();
 
         Ok(Self {
-            interface,
-            function,
             function_type,
             begin_index,
             durable_execution_state,
@@ -483,16 +478,12 @@ impl Durability {
         }
     }
 
-    pub async fn persist<Req, Resp>(
+    pub async fn persist(
         &self,
         ctx: &mut impl DurabilityHost,
-        request: Req,
-        response: Resp,
-    ) -> Result<Resp, WorkerExecutorError>
-    where
-        Req: Into<HostRequest>,
-        Resp: Into<HostResponse> + TryFrom<HostResponse, Error = String>,
-    {
+        request: Pair::Req,
+        response: Pair::Resp,
+    ) -> Result<Pair::Resp, WorkerExecutorError> {
         let response = self
             .persist_raw(ctx, request.into(), response.into())
             .await?;
@@ -506,13 +497,13 @@ impl Durability {
         response: HostResponse,
     ) -> Result<HostResponse, WorkerExecutorError> {
         if self.durable_execution_state.snapshotting_mode.is_none() {
-            let function_name = self.function_name();
+            let function_name = Pair::FQFN;
 
             ctx.persist_durable_function_invocation(
                 function_name.to_string(),
                 &request,
                 &response,
-                self.function_type.clone(),
+                self.function_type,
             )
             .await;
             ctx.end_durable_function(&self.function_type, self.begin_index, false)
@@ -521,13 +512,10 @@ impl Durability {
         Ok(response)
     }
 
-    pub async fn replay<Resp>(
+    pub async fn replay(
         &self,
         ctx: &mut impl DurabilityHost,
-    ) -> Result<Resp, WorkerExecutorError>
-    where
-        Resp: TryFrom<HostResponse, Error = String>,
-    {
+    ) -> Result<Pair::Resp, WorkerExecutorError> {
         let response = self.replay_raw(ctx).await?;
         response
             .try_into()
@@ -540,22 +528,13 @@ impl Durability {
     ) -> Result<HostResponse, WorkerExecutorError> {
         let oplog_entry = ctx.read_persisted_durable_function_invocation().await?;
 
-        let function_name = self.function_name();
-        Self::validate_oplog_entry(&oplog_entry, &function_name)?;
+        let function_name = Pair::FQFN;
+        Self::validate_oplog_entry(&oplog_entry, function_name)?;
 
         ctx.end_durable_function(&self.function_type, self.begin_index, false)
             .await?;
 
         Ok(oplog_entry.response)
-    }
-
-    fn function_name(&self) -> String {
-        if self.interface.is_empty() {
-            // For backward compatibility - some of the recorded function names were not following the pattern
-            self.function.to_string()
-        } else {
-            format!("{}::{}", self.interface, self.function)
-        }
     }
 
     fn validate_oplog_entry(
