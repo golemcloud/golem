@@ -1042,6 +1042,7 @@ dependencies = [
 [[package]]
 name = "wasi-async-runtime"
 version = "0.1.2"
+source = "git+https://github.com/golemcloud/wasm-http-tools.git#9679f90fe6976bb064140be5c9848fb0075dec04"
 dependencies = [
  "hashbrown 0.14.5",
  "slab",
