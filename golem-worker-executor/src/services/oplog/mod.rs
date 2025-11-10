@@ -19,6 +19,7 @@ pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, Comp
 use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
     PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
@@ -40,7 +41,6 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use golem_common::model::oplog::host_functions::HostFunctionName;
 
 mod blob;
 mod compressed;

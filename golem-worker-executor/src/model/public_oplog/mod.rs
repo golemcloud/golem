@@ -14,9 +14,6 @@
 
 pub mod wit;
 
-use crate::durable_host::wasm_rpc::serialized::{
-    EnrichedSerializableInvokeRequest, EnrichedSerializableScheduleInvocationRequest,
-};
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
@@ -296,6 +293,19 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let host_response: HostResponse = oplog_service
                     .download_payload(owned_worker_id, response)
                     .await?;
+
+                // Enriching data
+                let host_request = match host_request {
+                    HostRequest::GolemRpcInvoke(inner) => HostRequest::GolemRpcInvoke(
+                        enrich_golem_rpc_invoke(components, inner).await,
+                    ),
+                    HostRequest::GolemRpcScheduledInvocation(inner) => {
+                        HostRequest::GolemRpcScheduledInvocation(
+                            enrich_golem_rpc_scheduled_invocation(components, inner).await,
+                        )
+                    }
+                    other => other,
+                };
 
                 Ok(PublicOplogEntry::ImportedFunctionInvoked(
                     ImportedFunctionInvokedParams {
@@ -767,37 +777,26 @@ async fn try_resolve_agent_id(
     }
 }
 
-async fn enrich_serializable_invoke_request(
+async fn enrich_golem_rpc_invoke(
     components: Arc<dyn ComponentService>,
-    payload: HostRequestGolemRpcInvoke,
-) -> EnrichedSerializableInvokeRequest {
+    mut payload: HostRequestGolemRpcInvoke,
+) -> HostRequestGolemRpcInvoke {
     let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
-    EnrichedSerializableInvokeRequest {
-        remote_worker_id: payload.remote_worker_id,
-        remote_agent_type: agent_id
-            .as_ref()
-            .map(|agent_id| agent_id.agent_type.clone()),
-        remote_agent_parameters: agent_id.map(|agent_id| agent_id.parameters),
-        idempotency_key: payload.idempotency_key,
-        function_name: payload.function_name,
-        function_params: payload.function_params,
-    }
+    payload.remote_agent_type = agent_id
+        .as_ref()
+        .map(|agent_id| agent_id.agent_type.clone());
+    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
+    payload
 }
 
-async fn enrich_serializable_schedule_invocation_request(
+async fn enrich_golem_rpc_scheduled_invocation(
     components: Arc<dyn ComponentService>,
-    payload: HostRequestGolemRpcScheduledInvocation,
-) -> EnrichedSerializableScheduleInvocationRequest {
+    mut payload: HostRequestGolemRpcScheduledInvocation,
+) -> HostRequestGolemRpcScheduledInvocation {
     let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
-    EnrichedSerializableScheduleInvocationRequest {
-        remote_worker_id: payload.remote_worker_id,
-        remote_agent_type: agent_id
-            .as_ref()
-            .map(|agent_id| agent_id.agent_type.clone()),
-        remote_agent_parameters: agent_id.map(|agent_id| agent_id.parameters),
-        idempotency_key: payload.idempotency_key,
-        function_name: payload.function_name,
-        function_params: payload.function_params,
-        datetime: payload.datetime,
-    }
+    payload.remote_agent_type = agent_id
+        .as_ref()
+        .map(|agent_id| agent_id.agent_type.clone());
+    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
+    payload
 }

@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod serialized;
-
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
@@ -34,7 +32,13 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
 };
-use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation, HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
+    HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
+    HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
+};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
@@ -129,6 +133,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &function_params,
                 )
                 .await,
+                remote_agent_type: None,
+                remote_agent_parameters: None,
             };
             let stack = self
                 .state
@@ -239,6 +245,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &function_params,
                 )
                 .await,
+                remote_agent_type: None,
+                remote_agent_parameters: None,
             };
             let stack = self
                 .state
@@ -333,6 +341,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 &function_params,
             )
             .await,
+            remote_agent_type: None,
+            remote_agent_parameters: None,
         };
         let result = if self.state.is_live() {
             let rpc = self.rpc();
@@ -452,6 +462,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await,
                 datetime: datetime.into(),
+                remote_agent_type: None,
+                remote_agent_parameters: None,
             };
 
             let stack = self
@@ -808,6 +820,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             function_params,
                         )
                         .await,
+                        remote_agent_type: None,
+                        remote_agent_parameters: None
                     };
 
                     tx.send(std::mem::replace(

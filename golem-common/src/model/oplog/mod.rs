@@ -28,6 +28,7 @@ pub use public_types::*;
 pub use raw_types::*;
 
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
+use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::regions::OplogRegion;
 use crate::model::worker::WasiConfigVars;
 use crate::model::{
@@ -41,7 +42,6 @@ use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use crate::model::oplog::host_functions::HostFunctionName;
 
 // Generates two primary types:
 // - OplogEntry

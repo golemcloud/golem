@@ -17,7 +17,7 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::model::agent::RegisteredAgentType;
+use crate::model::agent::{DataValue, RegisteredAgentType};
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -126,6 +126,10 @@ oplog_payload! {
             idempotency_key: IdempotencyKey,
             function_name: String,
             function_params: Vec<ValueAndType>,
+            #[from_value(skip)]
+            remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[from_value(skip)]
+            remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocation {
             remote_worker_id: WorkerId,
@@ -133,6 +137,10 @@ oplog_payload! {
             function_name: String,
             function_params: Vec<ValueAndType>,
             datetime: SerializableDateTime,
+            #[from_value(skip)]
+            remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[from_value(skip)]
+            remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocationCancellation {
             invocation: SerializableScheduledInvocation

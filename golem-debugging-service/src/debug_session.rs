@@ -15,11 +15,14 @@
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use golem_common::model::auth::Namespace;
-use golem_common::model::oplog::host_functions::{host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName};
+use golem_common::model::oplog::host_functions::{
+    host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
+};
 use golem_common::model::oplog::public_oplog_entry::{
     CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
     FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, LogParams,
 };
+use golem_common::model::oplog::types::decode_span_data;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
@@ -32,7 +35,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
-use golem_common::model::oplog::types::decode_span_data;
 
 // A shared debug session which will be internally used by the custom oplog service
 // dedicated to running debug executor
@@ -277,14 +279,18 @@ fn get_oplog_entry_from_public_oplog_entry(
                 }
             };
 
-            let request =
-                OplogPayload::Inline(Box::new(host_request_from_value_and_type(&function_name, request)?));
-            let response =
-                OplogPayload::Inline(Box::new(host_response_from_value_and_type(&function_name, response)?));
+            let request = OplogPayload::Inline(Box::new(host_request_from_value_and_type(
+                &function_name,
+                request,
+            )?));
+            let response = OplogPayload::Inline(Box::new(host_response_from_value_and_type(
+                &function_name,
+                response,
+            )?));
 
             Ok(OplogEntry::ImportedFunctionInvoked {
                 timestamp,
-                function_name: HostFunctionName::from_str(&function_name),
+                function_name: HostFunctionName::from(function_name.as_str()),
                 request,
                 response,
                 durable_function_type,
@@ -308,7 +314,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 idempotency_key: exported_function_invoked_parameters.idempotency_key,
                 trace_id: exported_function_invoked_parameters.trace_id,
                 trace_states: exported_function_invoked_parameters.trace_states,
-                invocation_context: decode_span_data(exported_function_invoked_parameters.invocation_context)
+                invocation_context: decode_span_data(
+                    exported_function_invoked_parameters.invocation_context,
+                ),
             })
         }
 

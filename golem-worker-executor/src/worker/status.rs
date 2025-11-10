@@ -769,6 +769,7 @@ mod test {
     use async_trait::async_trait;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
+    use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
         DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
         OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
@@ -787,7 +788,6 @@ mod test {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
-    use golem_common::model::oplog::host_functions::HostFunctionName;
 
     #[test]
     async fn empty() {

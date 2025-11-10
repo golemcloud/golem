@@ -191,29 +191,29 @@ macro_rules! host_payload_pairs {
             }
         )*
 
-        pub fn host_request_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<crate::model::oplog::payload::HostRequest, String> {
+        pub fn host_request_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<$crate::model::oplog::payload::HostRequest, String> {
             match fqfn {
                 $(
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_req = "HostRequest" + $reqtype =>
-                            Ok(crate::model::oplog::payload::HostRequest::$reqtype(<crate::model::oplog::payload::$inner_req as golem_wasm::FromValue>::from_value(value_and_type.value)?))
+                            Ok($crate::model::oplog::payload::HostRequest::$reqtype(<$crate::model::oplog::payload::$inner_req as golem_wasm::FromValue>::from_value(value_and_type.value)?))
                         }
                 ),*,
-                _ => Ok(crate::model::oplog::payload::HostRequest::Custom(value_and_type))
+                _ => Ok($crate::model::oplog::payload::HostRequest::Custom(value_and_type))
             }
         }
 
-        pub fn host_response_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<crate::model::oplog::payload::HostResponse, String> {
+        pub fn host_response_from_value_and_type(fqfn: &str, value_and_type: golem_wasm::ValueAndType) -> Result<$crate::model::oplog::payload::HostResponse, String> {
             match fqfn {
                 $(
                     concat!($iface, "::", $func) =>
                         ident_mash::mash! {
                             inner_resp = "HostResponse" + $resptype =>
-                            Ok(crate::model::oplog::payload::HostResponse::$resptype(<crate::model::oplog::payload::$inner_resp as golem_wasm::FromValue>::from_value(value_and_type.value)?))
+                            Ok($crate::model::oplog::payload::HostResponse::$resptype(<$crate::model::oplog::payload::$inner_resp as golem_wasm::FromValue>::from_value(value_and_type.value)?))
                         }
                 ),*,
-                _ => Ok(crate::model::oplog::payload::HostResponse::Custom(value_and_type))
+                _ => Ok($crate::model::oplog::payload::HostResponse::Custom(value_and_type))
             }
         }
 
@@ -225,8 +225,8 @@ macro_rules! host_payload_pairs {
             ),*
         }
 
-        impl HostFunctionName {
-            pub fn from_str(s: &str) -> Self {
+        impl From<&str> for HostFunctionName {
+            fn from(s: &str) -> Self {
                 match s {
                     $(
                         concat!($iface, "::", $func) => HostFunctionName::$typename
