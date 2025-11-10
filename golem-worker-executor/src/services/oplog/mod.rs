@@ -16,10 +16,13 @@ use crate::model::ExecutionStatus;
 use async_trait::async_trait;
 pub use blob::BlobOplogArchiveService;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
-use desert_rust::{BinaryCodec};
+use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
+    PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
+};
 use golem_common::model::{
     ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata, WorkerStatusRecord,
@@ -148,7 +151,7 @@ pub trait OplogService: Debug + Send + Sync {
         &self,
         owned_worker_id: &OwnedWorkerId,
         payload_id: PayloadId,
-        md5_hash: Vec<u8>
+        md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
 }
 
@@ -213,7 +216,11 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String>;
 
     /// Downloads a big oplog payload by its reference
-    async fn download_raw_payload(&self, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String>;
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String>;
 
     /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
     async fn switch_persistence_level(&self, mode: PersistenceLevel);
@@ -231,9 +238,11 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-
     /// Uploads a big oplog payload and returns a reference to it
-    async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(&self, data: &T) -> Result<OplogPayload<T>, String> {
+    async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
+        &self,
+        data: &T,
+    ) -> Result<OplogPayload<T>, String> {
         let bytes = serialize(&data)?;
         let raw_payload = self.upload_raw_payload(bytes).await?;
         let payload = raw_payload.into_payload()?;
@@ -241,15 +250,17 @@ pub trait OplogOps: Oplog {
     }
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(&self, payload: OplogPayload<T>) -> Result<T, String> {
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
+        &self,
+        payload: OplogPayload<T>,
+    ) -> Result<T, String> {
         match payload {
-            OplogPayload::Inline(value) => {
-                Ok(value)
-            }
-            OplogPayload::SerializedInline(data) => {
-                deserialize(&data)
-            }
-            OplogPayload::External { payload_id, md5_hash } => {
+            OplogPayload::Inline(value) => Ok(value),
+            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
                 deserialize(&bytes)
             }
@@ -341,6 +352,45 @@ pub trait OplogOps: Oplog {
 
 #[async_trait]
 impl<O: Oplog + ?Sized> OplogOps for O {}
+
+#[async_trait]
+pub trait OplogServiceOps: OplogService {
+    /// Uploads a big oplog payload and returns a reference to it
+    async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &T,
+    ) -> Result<OplogPayload<T>, String> {
+        let bytes = serialize(&data)?;
+        let raw_payload = self.upload_raw_payload(owned_worker_id, bytes).await?;
+        let payload = raw_payload.into_payload()?;
+        Ok(payload)
+    }
+
+    /// Downloads a big oplog payload by its reference
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: OplogPayload<T>,
+    ) -> Result<T, String> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(value),
+            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => {
+                let bytes = self
+                    .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+                    .await?;
+                deserialize(&bytes)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 
 #[derive(Clone)]
 struct OpenOplogEntry {

@@ -16,13 +16,13 @@ pub mod wit;
 
 use crate::durable_host::wasm_rpc::serialized::{
     EnrichedSerializableInvokeRequest, EnrichedSerializableScheduleInvocationRequest,
-    SerializableScheduleInvocationRequest,
 };
 use crate::services::component::ComponentService;
-use crate::services::oplog::{OplogOps, OplogService};
+use crate::services::oplog::OplogService;
 use crate::services::plugins::Plugins;
 use crate::services::projects::ProjectService;
 
+use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use desert_rust::BinaryDeserializer;
 use golem_common::model::agent::AgentId;
@@ -40,7 +40,9 @@ use golem_common::model::oplog::public_oplog_entry::{
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
     SuccessfulUpdateParams, SuspendParams,
 };
-use golem_common::model::oplog::types::{encode_span_data, SerializableInvokeRequest};
+use golem_common::model::oplog::types::{
+    encode_span_data, SerializableInvokeRequest, SerializableScheduleInvocationRequest,
+};
 use golem_common::model::oplog::{
     ExportedFunctionParameters, HostRequest, HostResponse, ManualUpdateParameters, OplogEntry,
     OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
@@ -225,7 +227,7 @@ pub trait PublicOplogEntryOps: Sized {
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
-        oplog_index: OplogIndex,
+        _oplog_index: OplogIndex,
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
@@ -293,10 +295,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 durable_function_type,
             } => {
                 let host_request: HostRequest = oplog_service
-                    .download_payload(owned_worker_id, &request)
+                    .download_payload(owned_worker_id, request)
                     .await?;
                 let host_response: HostResponse = oplog_service
-                    .download_payload(owned_worker_id, &response)
+                    .download_payload(owned_worker_id, response)
                     .await?;
 
                 Ok(PublicOplogEntry::ImportedFunctionInvoked(
@@ -319,7 +321,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation_context,
             } => {
                 let params: Vec<Value> = oplog_service
-                    .download_payload(owned_worker_id, &request)
+                    .download_payload(owned_worker_id, request)
                     .await?;
 
                 let metadata = components
@@ -358,14 +360,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 response,
                 consumed_fuel,
             } => {
-                let payload_bytes = oplog_service
-                    .download_payload(owned_worker_id, &response)
+                let value_and_type = oplog_service
+                    .download_payload(owned_worker_id, response)
                     .await?;
-                let value_and_type: Option<ValueAndType> = try_deserialize(
-                    oplog_index,
-                    "ExportedFunctionCompleted payload",
-                    &payload_bytes,
-                )?;
+
                 Ok(PublicOplogEntry::ExportedFunctionCompleted(
                     ExportedFunctionCompletedParams {
                         timestamp,
@@ -507,10 +505,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     }
                     UpdateDescription::SnapshotBased { payload, .. } => {
                         let bytes = oplog_service
-                            .download_payload(owned_worker_id, &payload)
+                            .download_payload(owned_worker_id, payload)
                             .await?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
-                            payload: bytes.to_vec(),
+                            payload: bytes,
                         })
                     }
                 };
@@ -757,20 +755,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             )),
         }
     }
-}
-
-fn try_deserialize<T: BinaryDeserializer>(
-    oplog_idx: OplogIndex,
-    what: &str,
-    data: &[u8],
-) -> Result<T, String> {
-    core_try_deserialize(data)
-        .map_err(|err| format!("Oplog entry #{oplog_idx} - {what}: {err}"))?
-        .ok_or("Unexpected oplog payload, cannot deserialize".to_string())
-}
-
-fn no_payload() -> Result<ValueAndType, String> {
-    Ok(ValueAndType::new(Value::Option(None), option(str())))
 }
 
 async fn try_resolve_agent_id(

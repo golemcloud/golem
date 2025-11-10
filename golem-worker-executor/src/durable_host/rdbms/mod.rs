@@ -19,7 +19,6 @@ use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, R
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use futures::StreamExt;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
     HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,

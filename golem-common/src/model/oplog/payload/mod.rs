@@ -23,13 +23,7 @@ use crate::model::oplog::payload::types::{
     SerializableSocketError,
 };
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
-use crate::model::oplog::types::{
-    AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
-    SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse,
-    SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses,
-    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError,
-    SerializableScheduledInvocation, SerializableStreamError,
-};
+use crate::model::oplog::types::{AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleInvocationRequest, SerializableScheduledInvocation, SerializableStreamError};
 use crate::model::oplog::PayloadId;
 use crate::model::{
     ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
@@ -124,6 +118,9 @@ oplog_payload! {
             request: SerializableInvokeRequest
         },
         GolemRpcScheduledInvocation {
+            invocation: SerializableScheduleInvocationRequest
+        },
+        GolemRpcScheduledInvocationCancellation {
             invocation: SerializableScheduledInvocation
         },
         HttpRequest {
@@ -253,6 +250,7 @@ oplog_payload! {
         GolemRpcScheduledInvocation {
             invocation: SerializableScheduledInvocation
         },
+        GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
         GolemRpcUnit {},
         HttpFutureTrailersGet {
             result:  Result<Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableHttpErrorCode>, ()>>, String>

@@ -84,6 +84,15 @@ impl From<wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> for Seriali
     }
 }
 
+impl From<golem_wasm::wasi::clocks::wall_clock::Datetime> for SerializableDateTime {
+    fn from(value: golem_wasm::wasi::clocks::wall_clock::Datetime) -> Self {
+        Self {
+            seconds: value.seconds,
+            nanoseconds: value.nanoseconds,
+        }
+    }
+}
+
 impl From<SerializableDateTime> for wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime {
     fn from(value: SerializableDateTime) -> Self {
         Self {
@@ -1346,6 +1355,16 @@ impl SerializableScheduledInvocation {
             },
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableScheduleInvocationRequest {
+    pub remote_worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    pub function_params: Vec<ValueAndType>,
+    pub datetime: SerializableDateTime,
 }
 
 pub fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {

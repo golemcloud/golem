@@ -14,7 +14,6 @@
 
 pub mod serialized;
 
-use self::serialized::SerializableScheduleInvocationRequest;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
@@ -26,23 +25,22 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::types::{
-    SerializableDateTime, SerializableInvokeRequest, SerializableInvokeResult,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleInvocationRequest,
     SerializableScheduledInvocation,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
-    HostRequestNoInput, HostResponse, HostResponseGolemApiIdempotencyKey,
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit, OplogEntry,
-    PersistenceLevel,
+    DurableFunctionType, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
+    HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
+    HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
-use golem_common::serialization::{deserialize, serialize, try_deserialize};
+use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::golem_rpc_0_2_x::types::{
@@ -123,7 +121,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             return Err(anyhow!("RPC calls to the same agent are not supported"));
         }
 
-        let result: Result<Option<WitValue>, RpcError> = if durability.is_live() {
+        let result = if durability.is_live() {
             let request = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
@@ -156,33 +154,28 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
+
             durability
                 .persist(
                     self,
                     HostRequestGolemRpcInvoke { request },
                     HostResponseGolemRpcInvokeAndAwait {
-                        result: result.clone(),
+                        result: result.map_err(|err| err.into()),
                     },
                 )
-                .await?;
-            result.map(|value_and_type| value_and_type.map(WitValue::from))
+                .await
         } else {
-            let result: HostResponseGolemRpcInvokeAndAwait = durability.replay(self).await?;
-
-            match result.result {
-                Ok(value_and_type) => Ok(value_and_type.map(WitValue::from)),
-                Err(err) => Err(err.into()),
-            }
-        };
+            durability.replay(self).await
+        }?;
 
         self.finish_span(span.span_id()).await?;
 
-        match result {
-            Ok(wit_value) => {
+        match result.result {
+            Ok(value_and_type) => {
                 // Temporary wrapping of the WitValue in a tuple to keep the original WIT interface
-                let wit_value = match wit_value {
-                    Some(wit_value) => {
-                        let value: Value = wit_value.into();
+                let wit_value = match value_and_type {
+                    Some(value_and_type) => {
+                        let value: Value = value_and_type.value;
                         let wrapped = Value::Tuple(vec![value]);
                         WitValue::from(wrapped)
                     }
@@ -192,8 +185,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Ok(Ok(wit_value))
             }
             Err(err) => {
-                error!("RPC error: {err}");
-                Ok(Err(err.into()))
+                let rpc_error: RpcError = err.into();
+                error!("RPC error: {rpc_error}");
+                Ok(Err(rpc_error.into()))
             }
         }
     }
@@ -241,8 +235,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             return Err(anyhow!("RPC calls to the same agent are not supported"));
         }
 
-        let result: Result<(), RpcError> = if durability.is_live() {
-            let input = SerializableInvokeRequest {
+        let result = if durability.is_live() {
+            let request = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -274,18 +268,27 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, input, result).await
+
+            let result = result.map_err(|err| err.into());
+            durability
+                .persist(
+                    self,
+                    HostRequestGolemRpcInvoke { request },
+                    HostResponseGolemRpcUnitOrFailure { result },
+                )
+                .await
         } else {
             durability.replay(self).await
         };
 
         self.finish_span(span.span_id()).await?;
 
-        match result {
-            Ok(result) => Ok(Ok(result)),
+        match result?.result {
+            Ok(_) => Ok(Ok(())),
             Err(err) => {
-                error!("RPC error for: {err}");
-                Ok(Err(err.into()))
+                let rpc_error: RpcError = err.into();
+                error!("RPC error for: {rpc_error}");
+                Ok(Err(rpc_error.into()))
             }
         }
     }
@@ -462,7 +465,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     &function_params,
                 )
                 .await,
-                datetime: <SerializableDateTime as From<DateTime<Utc>>>::from(datetime.into()),
+                datetime: datetime.into(),
             };
 
             let stack = self
@@ -484,13 +487,15 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .schedule(datetime.into(), action)
                 .await;
 
-            let invocation = SerializableScheduledInvocation::from_domain(&result)
-                .map_err(|err| anyhow!(err))?;
+            let invocation =
+                SerializableScheduledInvocation::from_domain(result).map_err(|err| anyhow!(err))?;
 
             durability
                 .persist(
                     self,
-                    HostRequestGolemRpcInvoke { request },
+                    HostRequestGolemRpcScheduledInvocation {
+                        invocation: request,
+                    },
                     HostResponseGolemRpcScheduledInvocation { invocation },
                 )
                 .await
@@ -694,7 +699,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     (
                         Err(anyhow!(message)),
                         request.clone(),
-                        SerializableInvokeResult::Failed(message),
+                        SerializableInvokeResult::Failed(message.to_string()),
                         begin_index,
                     )
                 }
@@ -740,11 +745,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             Ok(Err(rpc_error)) => (
                                 Ok(Some(Err(rpc_error.clone().into()))),
                                 request,
-                                SerializableInvokeResult::Completed(Err(rpc_error)),
+                                SerializableInvokeResult::Completed(Err(rpc_error.into())),
                                 begin_index,
                             ),
                             Err(err) => {
-                                let serializable_err = (&err).into();
+                                let serializable_err = err.to_string();
                                 (
                                     Err(err),
                                     request,
@@ -853,21 +858,27 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             }
 
             if self.state.snapshotting_mode.is_none() {
+                let is_pending = matches!(
+                    serializable_invoke_result,
+                    SerializableInvokeResult::Pending
+                );
+
                 self.state
                     .oplog
                     .add_imported_function_invoked(
                         "golem::rpc::future-invoke-result::get".to_string(),
-                        &serializable_invoke_request,
-                        &serializable_invoke_result,
+                        &HostRequest::GolemRpcInvoke(HostRequestGolemRpcInvoke {
+                            request: serializable_invoke_request,
+                        }),
+                        &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
+                            result: serializable_invoke_result,
+                        }),
                         DurableFunctionType::WriteRemote,
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize RPC response: {err}"));
 
-                if !matches!(
-                    serializable_invoke_result,
-                    SerializableInvokeResult::Pending
-                ) {
+                if !is_pending {
                     self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                         .await?;
 
@@ -972,9 +983,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         };
                         Ok(Some(Ok(wit_value)))
                     }
-                    Err(error) => Ok(Some(Err(error.into()))),
+                    Err(error) => {
+                        let rpc_error: RpcError = error.into();
+                        Ok(Some(Err(rpc_error.into())))
+                    }
                 },
-                SerializableInvokeResult::Failed(error) => Err(error.into()),
+                SerializableInvokeResult::Failed(error) => {
+                    Err(RpcError::RemoteInternalError { details: error }.into())
+                }
             }
         }
     }
@@ -1008,7 +1024,7 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             durability
                 .persist(
                     self,
-                    HostRequestGolemRpcScheduledInvocation {
+                    HostRequestGolemRpcScheduledInvocationCancellation {
                         invocation: serialized_scheduled_invocation,
                     },
                     HostResponseGolemRpcUnit {},

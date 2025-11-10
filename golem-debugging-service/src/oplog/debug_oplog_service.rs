@@ -15,9 +15,10 @@
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_common::base_model::ProjectId;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
+};
 use golem_common::model::{
     ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord,
 };
@@ -140,19 +141,22 @@ impl OplogService for DebugOplogService {
     }
 
     // DebugService shouldn't upload any data to the oplog
-    async fn upload_payload(
+    async fn upload_raw_payload(
         &self,
         _owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String> {
-        Ok(OplogPayload::Inline(data.to_vec()))
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
+        Ok(RawOplogPayload::SerializedInline(data))
     }
 
-    async fn download_payload(
+    async fn download_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String> {
-        self.inner.download_payload(owned_worker_id, payload).await
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.inner
+            .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+            .await
     }
 }

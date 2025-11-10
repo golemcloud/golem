@@ -32,16 +32,6 @@ pub struct EnrichedSerializableInvokeRequest {
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue)]
 #[desert(evolution())]
-pub struct SerializableScheduleInvocationRequest {
-    pub remote_worker_id: WorkerId,
-    pub idempotency_key: IdempotencyKey,
-    pub function_name: String,
-    pub function_params: Vec<ValueAndType>,
-    pub datetime: SerializableDateTime,
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue)]
-#[desert(evolution())]
 pub struct EnrichedSerializableScheduleInvocationRequest {
     pub remote_worker_id: WorkerId,
     pub remote_agent_type: Option<String>,

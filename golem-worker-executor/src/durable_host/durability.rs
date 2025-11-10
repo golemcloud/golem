@@ -360,39 +360,33 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 self.state.replay_state,
                 OplogEntry::ImportedFunctionInvoked
             )?;
-            let payload = match oplog_entry {
-                OplogEntry::ImportedFunctionInvoked { response, .. } => Ok(response),
-                _ => Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "ImportedFunctionInvoked",
-                    format!("{oplog_entry:?}"),
-                )),
-            }?;
-
-            let response = self
-                .public_state
-                .worker()
-                .oplog()
-                .download_payload(payload)
-                .await
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "ImportedFunctionInvoked payload cannot be downloaded: {err}"
-                    ))
-                })?;
-
             match oplog_entry {
                 OplogEntry::ImportedFunctionInvoked {
                     timestamp,
                     function_name,
                     durable_function_type,
-                    ..
-                } => Ok(PersistedDurableFunctionInvocation {
-                    timestamp,
-                    function_name,
                     response,
-                    function_type: durable_function_type,
-                    oplog_entry_version: OplogEntryVersion::V2,
-                }),
+                    ..
+                } => {
+                    let response = self
+                        .public_state
+                        .worker()
+                        .oplog()
+                        .download_payload(response)
+                        .await
+                        .map_err(|err| {
+                            WorkerExecutorError::runtime(format!(
+                                "ImportedFunctionInvoked payload cannot be downloaded: {err}"
+                            ))
+                        })?;
+                    Ok(PersistedDurableFunctionInvocation {
+                        timestamp,
+                        function_name,
+                        response,
+                        function_type: durable_function_type,
+                        oplog_entry_version: OplogEntryVersion::V2,
+                    })
+                }
                 _ => Err(WorkerExecutorError::unexpected_oplog_entry(
                     "ImportedFunctionInvoked",
                     format!("{oplog_entry:?}"),

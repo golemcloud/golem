@@ -618,7 +618,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     metadata.last_known_status = last_known_status.clone();
                 }
                 if let Some(status) =
-                    calculate_last_known_status(self, &owned_worker_id, result.last_known_status)
+                    calculate_last_known_status(&self.state, &owned_worker_id, result.last_known_status)
                         .await
                 {
                     metadata.last_known_status = status;
@@ -862,7 +862,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(result.into()),
+            Ok(result) => Ok(match result {
+                golem_common::model::ForkResult::Original => ForkResult::Original,
+                golem_common::model::ForkResult::Forked => ForkResult::Forked,
+            }),
             Err(err) => Err(anyhow!(err)),
         }
     }

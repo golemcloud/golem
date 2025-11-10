@@ -697,7 +697,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         .await
                         .unwrap_or_else(|err| {
                             panic!(
-                                "failed to deserialize function response: {oplog_entry:?}: {err}"
+                                "failed to deserialize function response: {err}"
                             )
                         });
                     match response {
