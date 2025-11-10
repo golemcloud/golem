@@ -31,8 +31,7 @@ use golem_common::model::oplog::payload_pairs::{
     GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{
-    SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleInvocationRequest,
-    SerializableScheduledInvocation,
+    SerializableInvokeResult, SerializableScheduledInvocation,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostRequestGolemRpcInvoke,
@@ -124,7 +123,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
 
         let result = if durability.is_live() {
-            let request = SerializableInvokeRequest {
+            let request = HostRequestGolemRpcInvoke {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -160,7 +159,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             durability
                 .persist(
                     self,
-                    HostRequestGolemRpcInvoke { request },
+                    request,
                     HostResponseGolemRpcInvokeAndAwait {
                         result: result.map_err(|err| err.into()),
                     },
@@ -234,7 +233,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         }
 
         let result = if durability.is_live() {
-            let request = SerializableInvokeRequest {
+            let request = HostRequestGolemRpcInvoke {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -269,11 +268,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
             let result = result.map_err(|err| err.into());
             durability
-                .persist(
-                    self,
-                    HostRequestGolemRpcInvoke { request },
-                    HostResponseGolemRpcUnitOrFailure { result },
-                )
+                .persist(self, request, HostResponseGolemRpcUnitOrFailure { result })
                 .await
         } else {
             durability.replay(self).await
@@ -332,7 +327,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let worker_id = self.worker_id().clone();
         let created_by = self.created_by().clone();
-        let request = SerializableInvokeRequest {
+        let request = HostRequestGolemRpcInvoke {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
@@ -450,7 +445,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let idempotency_key =
                 IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
 
-            let request = SerializableScheduleInvocationRequest {
+            let request = HostRequestGolemRpcScheduledInvocation {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
@@ -489,9 +484,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             durability
                 .persist(
                     self,
-                    HostRequestGolemRpcScheduledInvocation {
-                        invocation: request,
-                    },
+                    request,
                     HostResponseGolemRpcScheduledInvocation { invocation },
                 )
                 .await
@@ -560,15 +553,14 @@ impl From<RpcError> for golem_wasm::RpcError {
 #[allow(clippy::large_enum_variant)]
 enum FutureInvokeResultState {
     Pending {
-        request: SerializableInvokeRequest,
-        handle:
-            AbortOnDropJoinHandle<Result<Result<Option<ValueAndType>, RpcError>, anyhow::Error>>,
+        request: HostRequestGolemRpcInvoke,
+        handle: AbortOnDropJoinHandle<Result<Result<Option<ValueAndType>, RpcError>, Error>>,
         span_id: SpanId,
         begin_index: OplogIndex,
     },
     Completed {
-        request: SerializableInvokeRequest,
-        result: Result<Result<Option<ValueAndType>, RpcError>, anyhow::Error>,
+        request: HostRequestGolemRpcInvoke,
+        result: Result<Result<Option<ValueAndType>, RpcError>, Error>,
         span_id: SpanId,
         begin_index: OplogIndex,
     },
@@ -586,7 +578,7 @@ enum FutureInvokeResultState {
         begin_index: OplogIndex,
     },
     Consumed {
-        request: SerializableInvokeRequest,
+        request: HostRequestGolemRpcInvoke,
         begin_index: OplogIndex,
     },
 }
@@ -682,7 +674,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             #[allow(clippy::type_complexity)]
             let (result, serializable_invoke_request, serializable_invoke_result, begin_index): (
                 Result<Option<Result<Option<ValueAndType>, golem_wasm::RpcError>>, Error>,
-                SerializableInvokeRequest,
+                HostRequestGolemRpcInvoke,
                 SerializableInvokeResult,
                 OplogIndex,
             ) = match entry {
@@ -810,7 +802,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     else {
                         return Err(anyhow!("unexpected state entry".to_string()));
                     };
-                    let request = SerializableInvokeRequest {
+                    let request = HostRequestGolemRpcInvoke {
                         remote_worker_id: remote_worker_id.worker_id(),
                         idempotency_key: idempotency_key.clone(),
                         function_name: function_name.clone(),
@@ -863,9 +855,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     .oplog
                     .add_imported_function_invoked(
                         "golem::rpc::future-invoke-result::get".to_string(),
-                        &HostRequest::GolemRpcInvoke(HostRequestGolemRpcInvoke {
-                            request: serializable_invoke_request,
-                        }),
+                        &HostRequest::GolemRpcInvoke(serializable_invoke_request),
                         &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
                             result: serializable_invoke_result,
                         }),

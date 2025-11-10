@@ -25,7 +25,7 @@ use golem_common::model::oplog::payload_pairs::{
 };
 use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestHttpRequest, HostResponse,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::ScheduleId;
@@ -476,7 +476,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                 let _ = durability
                     .persist(
                         self,
-                        HostRequestHttpRequest { request },
+                        request,
                         HostResponseHttpFutureTrailersGet {
                             result: to_serialize,
                         },
@@ -654,7 +654,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .oplog
                     .add_imported_function_invoked(
                         HttpTypesFutureIncomingResponseGet::FQFN.to_string(),
-                        &HostRequest::HttpRequest(HostRequestHttpRequest { request }),
+                        &HostRequest::HttpRequest(request),
                         &HostResponse::HttpResponse(HostResponseHttpResponse {
                             response: serializable_response,
                         }),

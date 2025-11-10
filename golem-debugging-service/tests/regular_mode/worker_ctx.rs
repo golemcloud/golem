@@ -5,7 +5,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,

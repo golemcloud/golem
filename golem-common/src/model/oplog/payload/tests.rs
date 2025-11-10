@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Timelike;
-use desert_rust::BinaryCodec;
-use golem_wasm::{FromValue, IntoValue};
-use std::fmt::Display;
-use std::str::FromStr;
-
 use test_r::test;
 
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
-    SerializableDateTime, SerializableHttpErrorCode, SerializableIpAddress,
-    SerializableIpAddresses, SerializableStreamError, SerializedHttpVersion,
+    SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
+    SerializableIpAddress, SerializableIpAddresses,
 };
 use crate::model::oplog::{OplogIndex, WorkerError};
 use crate::model::Timestamp;
@@ -61,123 +55,6 @@ fn systemtime_strat() -> impl Strategy<Value = SystemTime> {
     (0..(u64::MAX / 1_000_000_000), 0..999_999_999u32).prop_map(|(seconds, nanoseconds)| {
         SystemTime::UNIX_EPOCH.add(Duration::new(seconds, nanoseconds))
     })
-}
-
-fn anyhow_strat() -> impl Strategy<Value = anyhow::Error> {
-    ".*".prop_map(anyhow::Error::msg)
-}
-
-fn fserror_strat() -> impl Strategy<Value = FsError> {
-    prop_oneof! {
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Access)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::WouldBlock)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Already)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::BadDescriptor)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Busy)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Deadlock)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Quota)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Exist)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::FileTooLarge)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::IllegalByteSequence)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::InProgress)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Interrupted)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Invalid)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Io)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::IsDirectory)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Loop)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::TooManyLinks)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::MessageSize)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NameTooLong)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NoDevice)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NoEntry)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NoLock)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::InsufficientMemory)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::InsufficientSpace)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NotDirectory)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NotEmpty)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NotRecoverable)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Unsupported)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NoTty)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NoSuchDevice)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Overflow)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::NotPermitted)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::Pipe)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::ReadOnly)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::InvalidSeek)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::TextFileBusy)),
-        LazyJust::new(|| FsError::from(filesystem::types::ErrorCode::CrossDevice)),
-        anyhow_strat().prop_map(FsError::trap),
-    }
-}
-
-fn uuid_strat() -> impl Strategy<Value = Uuid> {
-    (any::<u64>(), any::<u64>()).prop_map(|(a, b)| Uuid::from_u64_pair(a, b))
-}
-
-fn componentid_strat() -> impl Strategy<Value = ComponentId> {
-    uuid_strat().prop_map(ComponentId)
-}
-
-fn workerid_strat() -> impl Strategy<Value = WorkerId> {
-    (componentid_strat(), ".+").prop_map(|(component_id, worker_name)| WorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
-fn promiseid_strat() -> impl Strategy<Value = PromiseId> {
-    (workerid_strat(), any::<u64>()).prop_map(|(worker_id, oplog_idx)| PromiseId {
-        worker_id,
-        oplog_idx: OplogIndex::from_u64(oplog_idx),
-    })
-}
-
-fn shardid_strat() -> impl Strategy<Value = ShardId> {
-    any::<i64>().prop_map(ShardId::new)
-}
-
-fn workererror_strat() -> impl Strategy<Value = WorkerError> {
-    prop_oneof! {
-        Just(WorkerError::OutOfMemory),
-        Just(WorkerError::StackOverflow),
-        ".*".prop_map(WorkerError::InvalidRequest),
-        ".*".prop_map(WorkerError::Unknown),
-    }
-}
-
-fn socketerror_strat() -> impl Strategy<Value = SocketError> {
-    prop_oneof! {
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::Unknown)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::AccessDenied)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::NotSupported)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::InvalidArgument)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::OutOfMemory)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::Timeout)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::ConcurrencyConflict)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::NotInProgress)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::WouldBlock)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::InvalidState)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::NewSocketLimit)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::AddressNotBindable)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::AddressInUse)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::RemoteUnreachable)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::ConnectionRefused)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::ConnectionReset)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::ConnectionAborted)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::DatagramTooLarge)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::NameUnresolvable)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::TemporaryResolverFailure)),
-        LazyJust::new(|| SocketError::from(sockets::network::ErrorCode::PermanentResolverFailure)),
-        anyhow_strat().prop_map(SocketError::trap),
-    }
-}
-
-fn streamerror_strat() -> impl Strategy<Value = StreamError> {
-    prop_oneof! {
-        LazyJust::new(|| StreamError::Closed),
-        anyhow_strat().prop_map(StreamError::LastOperationFailed),
-        anyhow_strat().prop_map(StreamError::Trap)
-    }
 }
 
 fn ipaddress_strat() -> impl Strategy<Value = IpAddress> {
@@ -331,7 +208,7 @@ fn error_code_strat() -> impl Strategy<Value = ErrorCode> {
 proptest! {
     #[test]
     fn test_http_version_roundtrip(version in version_strat()) {
-        let serialized: SerializedHttpVersion = version.try_into().unwrap();
+        let serialized: SerializableHttpVersion = version.try_into().unwrap();
         let deserialized: Version = serialized.into();
         prop_assert_eq!(version, deserialized);
     }

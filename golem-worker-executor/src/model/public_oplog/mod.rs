@@ -39,11 +39,10 @@ use golem_common::model::oplog::public_oplog_entry::{
     RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
     SuccessfulUpdateParams, SuspendParams,
 };
-use golem_common::model::oplog::types::{
-    encode_span_data, SerializableInvokeRequest, SerializableScheduleInvocationRequest,
-};
+use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
-    ExportedFunctionParameters, HostRequest, HostResponse, ManualUpdateParameters, OplogEntry,
+    ExportedFunctionParameters, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostResponse, ManualUpdateParameters, OplogEntry,
     OplogIndex, PluginInstallationDescription, PublicAttribute, PublicOplogEntry,
     PublicUpdateDescription, PublicWorkerInvocation, SnapshotBasedUpdateParameters,
     UpdateDescription,
@@ -770,7 +769,7 @@ async fn try_resolve_agent_id(
 
 async fn enrich_serializable_invoke_request(
     components: Arc<dyn ComponentService>,
-    payload: SerializableInvokeRequest,
+    payload: HostRequestGolemRpcInvoke,
 ) -> EnrichedSerializableInvokeRequest {
     let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
     EnrichedSerializableInvokeRequest {
@@ -787,7 +786,7 @@ async fn enrich_serializable_invoke_request(
 
 async fn enrich_serializable_schedule_invocation_request(
     components: Arc<dyn ComponentService>,
-    payload: SerializableScheduleInvocationRequest,
+    payload: HostRequestGolemRpcScheduledInvocation,
 ) -> EnrichedSerializableScheduleInvocationRequest {
     let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
     EnrichedSerializableScheduleInvocationRequest {

@@ -441,46 +441,12 @@ impl TryFrom<SerializableDbColumn> for DbColumn {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::services::rdbms::mysql::{types as mysql_types, MysqlType};
-    use crate::services::rdbms::{DbResult, DbRow};
-    use assert2::check;
+    use crate::services::rdbms::mysql::types as mysql_types;
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
-    use desert_rust::BinaryCodec;
-    use golem_common::serialization::{serialize, try_deserialize};
-    use golem_wasm::IntoValueAndType;
     use serde_json::json;
     use std::str::FromStr;
-    use test_r::test;
     use uuid::Uuid;
-
-    fn check_serialization<T: BinaryCodec + PartialEq>(value: T) {
-        let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
-        check!(value2.unwrap() == value);
-    }
-
-    fn check_type_and_value<T: IntoValueAndType>(value: T) {
-        let value_and_type = value.into_value_and_type();
-        let value_and_type_json = serde_json::to_string(&value_and_type);
-        check!(value_and_type_json.is_ok());
-    }
-
-    pub(crate) fn get_test_db_columns() -> Vec<mysql_types::DbColumn> {
-        let types = get_test_db_column_types();
-        let mut columns: Vec<mysql_types::DbColumn> = Vec::with_capacity(types.len());
-
-        for (i, ct) in types.iter().enumerate() {
-            let c = mysql_types::DbColumn {
-                ordinal: i as u64,
-                name: format!("column-{i}"),
-                db_type: ct.clone(),
-                db_type_name: ct.to_string(),
-            };
-            columns.push(c);
-        }
-        columns
-    }
 
     pub(crate) fn get_test_db_column_types() -> Vec<mysql_types::DbColumnType> {
         vec![

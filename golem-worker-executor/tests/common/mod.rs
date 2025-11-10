@@ -1,7 +1,6 @@
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
@@ -13,8 +12,8 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, PayloadId, PersistenceLevel, RawOplogPayload,
-    TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload,
+    TimestampedUpdateDescription,
 };
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,

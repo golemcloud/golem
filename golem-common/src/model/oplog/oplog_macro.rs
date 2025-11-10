@@ -179,8 +179,8 @@ macro_rules! host_payload_pairs {
                 pub struct $typename;
 
                 impl $crate::model::oplog::payload::HostPayloadPair for $typename {
-                    type Req = crate::model::oplog::payload::$inner_req;
-                    type Resp = crate::model::oplog::payload::$inner_resp;
+                    type Req = $crate::model::oplog::payload::$inner_req;
+                    type Resp = $crate::model::oplog::payload::$inner_resp;
 
                     const INTERFACE: &'static str = $iface;
                     const FUNCTION: &'static str = $func;

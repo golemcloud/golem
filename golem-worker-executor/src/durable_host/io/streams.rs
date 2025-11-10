@@ -25,7 +25,7 @@ use golem_common::model::oplog::payload_pairs::{
     HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
     HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
 };
-use golem_common::model::oplog::types::{SerializableHttpRequest, SerializableStreamError};
+use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponseStreamChunk, HostResponseStreamSkip,
     OplogIndex,
@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability
                     .persist(
                         self,
-                        HostRequestHttpRequest { request },
+                        request,
                         HostResponseStreamChunk {
                             result: result.map_err(SerializableStreamError::from),
                         },
@@ -108,7 +108,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability
                     .persist(
                         self,
-                        HostRequestHttpRequest { request },
+                        request,
                         HostResponseStreamChunk {
                             result: result.map_err(SerializableStreamError::from),
                         },
@@ -146,7 +146,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability
                     .persist(
                         self,
-                        HostRequestHttpRequest { request },
+                        request,
                         HostResponseStreamSkip {
                             result: result.map_err(SerializableStreamError::from),
                         },
@@ -190,7 +190,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 durability
                     .persist(
                         self,
-                        HostRequestHttpRequest { request },
+                        request,
                         HostResponseStreamSkip {
                             result: result.map_err(SerializableStreamError::from),
                         },
@@ -391,7 +391,7 @@ fn get_http_request_begin_idx<Ctx: WorkerCtx>(
 fn get_http_stream_request<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
-) -> Result<SerializableHttpRequest, StreamError> {
+) -> Result<HostRequestHttpRequest, StreamError> {
     let request_state = ctx.state.open_http_requests.get(&handle).ok_or_else(|| {
         StreamError::Trap(anyhow!(
             "No matching HTTP request is associated with resource handle"

@@ -54,29 +54,6 @@ fn tracing() -> Tracing {
     Tracing::init()
 }
 
-fn rounded_span_data(invocation_context: Vec<SpanData>) -> Vec<SpanData> {
-    invocation_context
-        .into_iter()
-        .map(|span_data| match span_data {
-            SpanData::ExternalSpan { span_id } => SpanData::ExternalSpan { span_id },
-            SpanData::LocalSpan {
-                span_id,
-                start,
-                parent_id,
-                linked_context,
-                attributes,
-                inherited,
-            } => SpanData::LocalSpan {
-                span_id,
-                start: start.rounded(),
-                parent_id,
-                linked_context: linked_context.map(rounded_span_data),
-                attributes,
-                inherited,
-            },
-        })
-        .collect()
-}
 fn default_last_known_status() -> read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord> {
     read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
         WorkerStatusRecord::default(),
@@ -602,7 +579,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         let entry = oplog
             .add_imported_function_invoked(
                 "test-function".to_string(),
-                &HostRequest::Custom("request".into_value_and_type()),
+                &HostRequest::Custom(i.into_value_and_type()),
                 &HostResponse::Custom("response".into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )

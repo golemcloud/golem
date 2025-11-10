@@ -255,7 +255,7 @@ pub trait OplogOps: Oplog {
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
-            OplogPayload::Inline(value) => Ok(value),
+            OplogPayload::Inline(value) => Ok(*value),
             OplogPayload::SerializedInline(data) => deserialize(&data),
             OplogPayload::External {
                 payload_id,
@@ -374,7 +374,7 @@ pub trait OplogServiceOps: OplogService {
         payload: OplogPayload<T>,
     ) -> Result<T, String> {
         match payload {
-            OplogPayload::Inline(value) => Ok(value),
+            OplogPayload::Inline(value) => Ok(*value),
             OplogPayload::SerializedInline(data) => deserialize(&data),
             OplogPayload::External {
                 payload_id,

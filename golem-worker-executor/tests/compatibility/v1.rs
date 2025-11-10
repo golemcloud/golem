@@ -28,6 +28,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::path::Path;
 
+#[allow(unused)]
 fn is_deserializable<T: BinaryCodec + PartialEq + Debug>(old: &Path, new: &Path) {
     let old = std::fs::read(old).unwrap();
     let new = std::fs::read(new).unwrap();
@@ -40,6 +41,7 @@ fn is_deserializable<T: BinaryCodec + PartialEq + Debug>(old: &Path, new: &Path)
     assert_eq!(old_decoded, new_decoded);
 }
 
+#[allow(unused)]
 pub(crate) fn backward_compatible_custom<T: BinaryCodec + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
@@ -54,6 +56,7 @@ pub(crate) fn backward_compatible_custom<T: BinaryCodec + Debug + 'static>(
     file.flush().unwrap();
 }
 
+#[allow(unused)]
 pub(crate) fn backward_compatible<T: BinaryCodec + PartialEq + Debug + 'static>(
     name: impl AsRef<str>,
     mint: &mut Mint,
@@ -62,6 +65,7 @@ pub(crate) fn backward_compatible<T: BinaryCodec + PartialEq + Debug + 'static>(
     backward_compatible_custom(name, mint, value, Box::new(is_deserializable::<T>))
 }
 
+#[allow(unused)]
 fn is_deserializable_wit_value(old: &Path, new: &Path) {
     let old = std::fs::read(old).unwrap();
     let new = std::fs::read(new).unwrap();
@@ -79,6 +83,7 @@ fn is_deserializable_wit_value(old: &Path, new: &Path) {
 
 /// Special case for WitValue which does not implement PartialEq at the moment but can be converted
 /// to Value for comparison.
+#[allow(unused)]
 fn backward_compatible_wit_value(name: impl AsRef<str>, mint: &mut Mint, value: WitValue) {
     backward_compatible_custom(name, mint, value, Box::new(is_deserializable_wit_value))
 }

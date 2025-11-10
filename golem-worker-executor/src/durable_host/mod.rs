@@ -85,10 +85,10 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::types::SerializableHttpRequest;
 use golem_common::model::oplog::{
-    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
+    PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -2590,7 +2590,7 @@ struct HttpRequestState {
     /// The BeginRemoteWrite entry's index
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
-    pub request: SerializableHttpRequest,
+    pub request: HostRequestHttpRequest,
     /// SpanId
     pub span_id: SpanId,
 }

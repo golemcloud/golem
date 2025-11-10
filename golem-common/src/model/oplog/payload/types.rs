@@ -658,7 +658,7 @@ impl FromValue for SerializableSocketErrorCode {
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
-pub enum SerializedHttpVersion {
+pub enum SerializableHttpVersion {
     Http09,
     /// `HTTP/1.0`
     Http10,
@@ -670,34 +670,34 @@ pub enum SerializedHttpVersion {
     Http3,
 }
 
-impl TryFrom<Version> for SerializedHttpVersion {
+impl TryFrom<Version> for SerializableHttpVersion {
     type Error = String;
 
     fn try_from(value: Version) -> Result<Self, Self::Error> {
         if value == Version::HTTP_09 {
-            Ok(SerializedHttpVersion::Http09)
+            Ok(SerializableHttpVersion::Http09)
         } else if value == Version::HTTP_10 {
-            Ok(SerializedHttpVersion::Http10)
+            Ok(SerializableHttpVersion::Http10)
         } else if value == Version::HTTP_11 {
-            Ok(SerializedHttpVersion::Http11)
+            Ok(SerializableHttpVersion::Http11)
         } else if value == Version::HTTP_2 {
-            Ok(SerializedHttpVersion::Http2)
+            Ok(SerializableHttpVersion::Http2)
         } else if value == Version::HTTP_3 {
-            Ok(SerializedHttpVersion::Http3)
+            Ok(SerializableHttpVersion::Http3)
         } else {
             Err(format!("Unknown HTTP version: {value:?}"))
         }
     }
 }
 
-impl From<SerializedHttpVersion> for Version {
-    fn from(value: SerializedHttpVersion) -> Self {
+impl From<SerializableHttpVersion> for Version {
+    fn from(value: SerializableHttpVersion) -> Self {
         match value {
-            SerializedHttpVersion::Http09 => Version::HTTP_09,
-            SerializedHttpVersion::Http10 => Version::HTTP_10,
-            SerializedHttpVersion::Http11 => Version::HTTP_11,
-            SerializedHttpVersion::Http2 => Version::HTTP_2,
-            SerializedHttpVersion::Http3 => Version::HTTP_3,
+            SerializableHttpVersion::Http09 => Version::HTTP_09,
+            SerializableHttpVersion::Http10 => Version::HTTP_10,
+            SerializableHttpVersion::Http11 => Version::HTTP_11,
+            SerializableHttpVersion::Http2 => Version::HTTP_2,
+            SerializableHttpVersion::Http3 => Version::HTTP_3,
         }
     }
 }
@@ -1093,14 +1093,6 @@ impl Display for SerializableHttpMethod {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct SerializableHttpRequest {
-    pub uri: String,
-    pub method: SerializableHttpMethod,
-    pub headers: HashMap<String, String>,
-}
-
 /// A subset of WorkerMetadata visible for guests (and serializable to oplog)
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
 pub struct AgentMetadataForGuests {
@@ -1269,15 +1261,6 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
-pub struct SerializableInvokeRequest {
-    pub remote_worker_id: WorkerId,
-    pub idempotency_key: IdempotencyKey,
-    pub function_name: String,
-    pub function_params: Vec<ValueAndType>,
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
 pub enum SerializableInvokeResult {
     Failed(String),
     Pending,
@@ -1355,16 +1338,6 @@ impl SerializableScheduledInvocation {
             },
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
-pub struct SerializableScheduleInvocationRequest {
-    pub remote_worker_id: WorkerId,
-    pub idempotency_key: IdempotencyKey,
-    pub function_name: String,
-    pub function_params: Vec<ValueAndType>,
-    pub datetime: SerializableDateTime,
 }
 
 pub fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {

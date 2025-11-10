@@ -767,8 +767,6 @@ mod test {
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
     };
     use async_trait::async_trait;
-    use bytes::Bytes;
-    use desert_rust::{BinaryDeserializer, BinarySerializer};
     use golem_common::base_model::OplogIndex;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::{
@@ -783,7 +781,6 @@ mod test {
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::read_only_lock;
-    use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use pretty_assertions::assert_eq;
@@ -917,7 +914,7 @@ mod test {
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
@@ -952,7 +949,7 @@ mod test {
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
@@ -987,7 +984,7 @@ mod test {
         let k2 = IdempotencyKey::fresh();
         let update2 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
@@ -1047,7 +1044,7 @@ mod test {
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
@@ -1083,11 +1080,11 @@ mod test {
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
         let update2 = UpdateDescription::SnapshotBased {
             target_version: 2,
-            payload: OplogPayload::Inline(vec![]),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
@@ -1257,7 +1254,7 @@ mod test {
                 OplogEntry::ExportedFunctionInvoked {
                     timestamp: Timestamp::now_utc(),
                     function_name: function_name.to_string(),
-                    request: OplogPayload::Inline(request),
+                    request: OplogPayload::Inline(Box::new(request)),
                     idempotency_key: idempotency_key.clone(),
                     trace_id: TraceId::generate(),
                     trace_states: vec![],
@@ -1282,7 +1279,7 @@ mod test {
             self.add(
                 OplogEntry::ExportedFunctionCompleted {
                     timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(response),
+                    response: OplogPayload::Inline(Box::new(response)),
                     consumed_fuel: 0,
                 },
                 move |mut status| {
@@ -1307,8 +1304,8 @@ mod test {
                 OplogEntry::ImportedFunctionInvoked {
                     timestamp: Timestamp::now_utc(),
                     function_name: name.to_string(),
-                    request: OplogPayload::Inline(i),
-                    response: OplogPayload::Inline(o),
+                    request: OplogPayload::Inline(Box::new(i)),
+                    response: OplogPayload::Inline(Box::new(o)),
                     durable_function_type: func_type,
                 },
                 |status| status,
@@ -1647,17 +1644,17 @@ mod test {
 
         async fn upload_raw_payload(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            data: Vec<u8>,
+            _owned_worker_id: &OwnedWorkerId,
+            _data: Vec<u8>,
         ) -> Result<RawOplogPayload, String> {
             unreachable!()
         }
 
         async fn download_raw_payload(
             &self,
-            owned_worker_id: &OwnedWorkerId,
-            payload_id: PayloadId,
-            md5_hash: Vec<u8>,
+            _owned_worker_id: &OwnedWorkerId,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
             unreachable!()
         }

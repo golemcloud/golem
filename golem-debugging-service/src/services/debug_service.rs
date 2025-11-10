@@ -690,7 +690,6 @@ impl DebugService for DebugServiceDefault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
     use golem_common::model::oplog::{OplogEntry, OplogPayload, PayloadId, RawOplogPayload};
     use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
     use golem_common::model::Timestamp;
@@ -778,7 +777,7 @@ mod tests {
             if oplog_index == OplogIndex::from_u64(self.invocation_completion_index) {
                 OplogEntry::ExportedFunctionCompleted {
                     timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(None),
+                    response: OplogPayload::Inline(Box::new(None)),
                     consumed_fuel: 0,
                 }
             } else {
@@ -793,14 +792,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
             unimplemented!()
         }
 
         async fn download_raw_payload(
             &self,
-            payload_id: PayloadId,
-            md5_hash: Vec<u8>,
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
         ) -> Result<Vec<u8>, String> {
             unimplemented!()
         }

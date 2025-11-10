@@ -34,6 +34,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
+use golem_common::model::oplog::types::decode_span_data;
 
 // A shared debug session which will be internally used by the custom oplog service
 // dedicated to running debug executor
@@ -225,7 +226,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         }) => Ok(OplogEntry::ExportedFunctionCompleted {
             timestamp,
             consumed_fuel,
-            response: OplogPayload::Inline(response),
+            response: OplogPayload::Inline(Box::new(response)),
         }),
 
         PublicOplogEntry::Create(CreateParams {
@@ -279,9 +280,9 @@ fn get_oplog_entry_from_public_oplog_entry(
             };
 
             let request =
-                OplogPayload::Inline(host_request_from_value_and_type(&function_name, request)?);
+                OplogPayload::Inline(Box::new(host_request_from_value_and_type(&function_name, request)?));
             let response =
-                OplogPayload::Inline(host_response_from_value_and_type(&function_name, response)?);
+                OplogPayload::Inline(Box::new(host_response_from_value_and_type(&function_name, response)?));
 
             Ok(OplogEntry::ImportedFunctionInvoked {
                 timestamp,
@@ -300,7 +301,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|x| x.value)
                 .collect::<Vec<_>>();
 
-            let oplog_payload = OplogPayload::Inline(vals);
+            let oplog_payload = OplogPayload::Inline(Box::new(vals));
 
             Ok(OplogEntry::ExportedFunctionInvoked {
                 timestamp: exported_function_invoked_parameters.timestamp,
@@ -309,7 +310,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 idempotency_key: exported_function_invoked_parameters.idempotency_key,
                 trace_id: exported_function_invoked_parameters.trace_id,
                 trace_states: exported_function_invoked_parameters.trace_states,
-                invocation_context: vec![], // TODO: Make decode_public_span_data public in OSS and use it here
+                invocation_context: decode_span_data(exported_function_invoked_parameters.invocation_context)
             })
         }
 

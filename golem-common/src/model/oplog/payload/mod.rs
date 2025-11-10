@@ -25,15 +25,15 @@ use crate::model::oplog::payload::types::{
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
-    SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse,
-    SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses,
-    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError,
-    SerializableScheduleInvocationRequest, SerializableScheduledInvocation,
+    SerializableHttpErrorCode, SerializableHttpMethod, SerializableHttpResponse,
+    SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError,
+    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
 use crate::model::oplog::PayloadId;
 use crate::model::{
-    ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
+    ComponentId, ComponentVersion, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
+    RevertWorkerTarget, WorkerId,
 };
 use crate::oplog_payload;
 use crate::serialization::serialize;
@@ -122,16 +122,25 @@ oplog_payload! {
             request: Option<SerializableRdbmsRequest>
         },
         GolemRpcInvoke {
-            request: SerializableInvokeRequest
+            remote_worker_id: WorkerId,
+            idempotency_key: IdempotencyKey,
+            function_name: String,
+            function_params: Vec<ValueAndType>,
         },
         GolemRpcScheduledInvocation {
-            invocation: SerializableScheduleInvocationRequest
+            remote_worker_id: WorkerId,
+            idempotency_key: IdempotencyKey,
+            function_name: String,
+            function_params: Vec<ValueAndType>,
+            datetime: SerializableDateTime,
         },
         GolemRpcScheduledInvocationCancellation {
             invocation: SerializableScheduledInvocation
         },
         HttpRequest {
-            request: SerializableHttpRequest
+             uri: String,
+             method: SerializableHttpMethod,
+             headers: HashMap<String, String>,
         },
         KVBucket {
             bucket: String
@@ -404,7 +413,7 @@ pub mod payload_pairs {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogPayload<T: BinaryCodec + Debug + Clone + PartialEq> {
-    Inline(T),
+    Inline(Box<T>),
     SerializedInline(Vec<u8>),
     External {
         payload_id: PayloadId,
