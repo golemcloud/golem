@@ -15,17 +15,15 @@
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestNoInput, HostRequestRandomBytes, HostResponseRandomBytes,
-    HostResponseRandomU64,
+    payload_pairs, DurableFunctionType, HostRequestNoInput, HostRequestRandomBytes,
+    HostResponseRandomBytes, HostResponseRandomU64,
 };
 use wasmtime_wasi::p2::bindings::random::random::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_random_bytes(&mut self, length: u64) -> anyhow::Result<Vec<u8>> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::RandomGetRandomBytes>::new(
             self,
-            "random",
-            "get_random_bytes",
             DurableFunctionType::ReadLocal,
         )
         .await?;
@@ -46,10 +44,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_random_u64(&mut self) -> anyhow::Result<u64> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::RandomGetRandomU64>::new(
             self,
-            "random",
-            "get_random_u64",
             DurableFunctionType::ReadLocal,
         )
         .await?;

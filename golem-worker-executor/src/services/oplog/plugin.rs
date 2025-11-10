@@ -28,6 +28,7 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, PublicOplogEntry, RawOplogPayload,
 };
@@ -50,7 +51,6 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
-use golem_common::model::oplog::types::AgentMetadataForGuests;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {

@@ -342,7 +342,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .oplog()
-            .add_imported_function_invoked(function_name, &request, &response, function_type)
+            .add_imported_function_invoked(function_name, request, response, function_type)
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to serialize and store durable function invocation: {err}")
@@ -437,6 +437,7 @@ pub struct Durability<Pair: HostPayloadPair> {
     function_type: DurableFunctionType,
     begin_index: OplogIndex,
     durable_execution_state: DurableExecutionState,
+    _phantom: std::marker::PhantomData<Pair>,
 }
 
 impl<Pair: HostPayloadPair> Durability<Pair> {
@@ -453,6 +454,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
             function_type,
             begin_index,
             durable_execution_state,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -503,7 +505,7 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
                 function_name.to_string(),
                 &request,
                 &response,
-                self.function_type,
+                self.function_type.clone(),
             )
             .await;
             ctx.end_durable_function(&self.function_type, self.begin_index, false)

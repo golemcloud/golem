@@ -31,10 +31,15 @@ use wasmtime_wasi::runtime::spawn_blocking;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::payload_pairs::{
+    FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
+};
+use golem_common::model::oplog::types::{
+    FileSystemError, SerializableDateTime, SerializableFileTimes,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
 };
-use golem_common::model::oplog::types::{FileSystemError, SerializableDateTime, SerializableFileTimes};
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
@@ -182,14 +187,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::new(
-            self,
-            "filesystem::types::descriptor",
-            "stat",
-            DurableFunctionType::ReadLocal,
-        )
-        .await
-        .map_err(FsError::trap)?;
+        let durability =
+            Durability::<FilesystemTypesDescriptorStat>::new(self, DurableFunctionType::ReadLocal)
+                .await
+                .map_err(FsError::trap)?;
 
         let path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.clone(),
@@ -265,10 +266,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::new(
+        let durability = Durability::<FilesystemTypesDescriptorStatAt>::new(
             self,
-            "filesystem::types::descriptor",
-            "stat_at",
             DurableFunctionType::ReadLocal,
         )
         .await
@@ -279,8 +278,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
 
-        let stat =
-            HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await;
+        let stat = HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await;
         let stat = match stat {
             Ok(mut stat) => {
                 stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it

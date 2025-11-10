@@ -14,14 +14,17 @@
 
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput, HostResponseWallClock};
-use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 use golem_common::model::oplog::types::SerializableDateTime;
+use golem_common::model::oplog::{
+    payload_pairs, DurableFunctionType, HostRequestNoInput, HostResponseWallClock,
+};
+use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
         let durability =
-            Durability::new(self, "wall_clock", "now", DurableFunctionType::ReadLocal).await?;
+            Durability::<payload_pairs::WallClockNow>::new(self, DurableFunctionType::ReadLocal)
+                .await?;
 
         let result = if durability.is_live() {
             let result = Host::now(&mut self.as_wasi_view()).await?;
@@ -46,10 +49,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::WallClockResolution>::new(
             self,
-            "wall_clock",
-            "resolution",
             DurableFunctionType::ReadLocal,
         )
         .await?;

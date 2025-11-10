@@ -14,8 +14,8 @@
 
 pub mod matcher;
 mod oplog_macro;
-mod protobuf;
 pub mod payload;
+mod protobuf;
 mod public_types;
 mod raw_types;
 

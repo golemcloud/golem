@@ -17,9 +17,10 @@ use assert2::check;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
+use golem_api_grpc::proto::golem::worker::ExportedFunctionInvokedParameters;
 use golem_client::model::AnalysedType;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
+use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
@@ -1144,7 +1145,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             .iter()
             .filter(
                 |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-        ExportedFunctionInvokedParameters { function_name, .. }
+        ExportedFunctionInvokedParams { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
             .count(),

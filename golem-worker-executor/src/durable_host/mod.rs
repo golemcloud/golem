@@ -1350,7 +1350,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .oplog()
                 .add_exported_function_invoked(
                     full_function_name.to_string(),
-                    &function_input,
+                    function_input,
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,

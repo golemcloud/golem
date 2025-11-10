@@ -19,17 +19,15 @@ use crate::services::oplog::CommitLevel;
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
+    payload_pairs, DurableFunctionType, HostRequestMonotonicClockDuration, HostRequestNoInput,
     HostResponseMonotonicClockTimestamp,
 };
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::MonotonicClockNow>::new(
             self,
-            "monotonic_clock",
-            "now",
             DurableFunctionType::ReadLocal,
         )
         .await?;
@@ -51,10 +49,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Instant> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::MonotonicClockResolution>::new(
             self,
-            "monotonic_clock",
-            "resolution",
             DurableFunctionType::ReadLocal,
         )
         .await?;
@@ -84,10 +80,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         duration_in_nanos: Duration,
     ) -> anyhow::Result<Resource<Pollable>> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::MonotonicClockSubscribeDuration>::new(
             self,
-            "monotonic_clock",
-            "subscribe_duration",
             DurableFunctionType::ReadLocal,
         )
         .await?;

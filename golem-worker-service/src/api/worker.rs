@@ -29,7 +29,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerCreationRequest;
 use golem_common::model::{
     ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, PluginInstallationId,
-    ScanCursor, WorkerFilter, WorkerId,
+    RevertWorkerTarget, ScanCursor, WorkerFilter, WorkerId,
 };
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;

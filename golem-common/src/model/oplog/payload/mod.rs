@@ -23,7 +23,14 @@ use crate::model::oplog::payload::types::{
     SerializableSocketError,
 };
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
-use crate::model::oplog::types::{AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue, SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse, SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses, SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleInvocationRequest, SerializableScheduledInvocation, SerializableStreamError};
+use crate::model::oplog::types::{
+    AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
+    SerializableHttpErrorCode, SerializableHttpRequest, SerializableHttpResponse,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableIpAddresses,
+    SerializableRdbmsError, SerializableRdbmsRequest, SerializableRpcError,
+    SerializableScheduleInvocationRequest, SerializableScheduledInvocation,
+    SerializableStreamError,
+};
 use crate::model::oplog::PayloadId;
 use crate::model::{
     ComponentId, ComponentVersion, ForkResult, OplogIndex, PromiseId, RevertWorkerTarget, WorkerId,
@@ -343,13 +350,15 @@ pub mod payload_pairs {
         (RandomInsecureGetInsecureRandomU64 => "random::insecure", "get_insecure_random_u64", NoInput, RandomU64),
         (RandomGetRandomBytes => "random", "get_random_bytes", RandomBytes, RandomBytes),
         (RandomGetRandomU64 => "random", "get_random_u64", NoInput, RandomU64),
-        (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke-and-await result", GolemRpcInvoke, GolemRpcInvokeAndAwait),
+        (GolemRpcFutureInvokeResultGet => "golem::rpc::future-invoke-result", "get", GolemRpcInvoke, GolemRpcInvokeGet),
+        (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke_and_await", GolemRpcInvoke, GolemRpcInvokeAndAwait),
         (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
         (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
         (IoPollReady => "io::poll", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
         (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),
+        (HttpTypesFutureIncomingResponseGet => "http::types::future_incoming_response", "get", HttpRequest, HttpResponse),
         (HttpTypesIncomingBodyStreamRead => "http::types::incoming_body_stream", "read", HttpRequest, StreamChunk),
         (HttpTypesIncomingBodyStreamBlockingRead => "http::types::incoming_body_stream", "blocking_read", HttpRequest, StreamChunk),
         (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
@@ -384,6 +393,7 @@ pub mod payload_pairs {
         (GolemApiUpdateWorker => "golem::api", "update_worker", GolemApiUpdateAgent, GolemApiUnit),
         (GolemApiGetSelfMetadata => "golem::api", "get_self_metadata", NoInput, GolemApiSelfAgentMetadata),
         (GolemApiGetAgentMetadata => "golem::api", "get_agent_metadata", GolemApiAgentId, GolemApiAgentMetadata),
+        (GolemApiGetPromiseResult => "golem::api", "get_promise_result", NoInput, GolemApiPromiseResult),
         (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit),
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),

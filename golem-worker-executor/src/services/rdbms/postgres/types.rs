@@ -383,9 +383,7 @@ impl From<DbValue> for SerializableDbValue {
 
         fn add_db_value(target: &mut SerializableDbValue, value: DbValue) -> NodeIndex {
             match value {
-                DbValue::Character(v) => {
-                    add_node(target, SerializableDbValueNode::Tinyint(v as i8))
-                }
+                DbValue::Character(v) => add_node(target, SerializableDbValueNode::Tinyint(v)),
                 DbValue::Int2(v) => add_node(target, SerializableDbValueNode::Smallint(v)),
                 DbValue::Int4(v) => add_node(target, SerializableDbValueNode::Int(v)),
                 DbValue::Int8(v) => add_node(target, SerializableDbValueNode::Bigint(v)),

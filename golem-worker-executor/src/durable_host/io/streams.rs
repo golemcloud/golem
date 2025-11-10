@@ -21,6 +21,11 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::payload_pairs::{
+    HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
+    HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
+};
+use golem_common::model::oplog::types::{SerializableHttpRequest, SerializableStreamError};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponseStreamChunk, HostResponseStreamSkip,
     OplogIndex,
@@ -30,7 +35,6 @@ use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::body::{FailingStream, HostIncomingBodyStream};
-use golem_common::model::oplog::types::{SerializableHttpRequest, SerializableStreamError};
 
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(
@@ -42,10 +46,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self, &self_) {
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamRead>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "read",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -89,10 +91,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingRead>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "blocking_read",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -131,10 +131,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamSkip>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "skip",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -175,10 +173,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingSkip>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "blocking_skip",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;

@@ -36,6 +36,7 @@ use golem_common::model::auth::{Namespace, TokenSecret};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
+use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{
     ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,
     IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, WorkerFilter, WorkerId,
@@ -45,7 +46,6 @@ use golem_service_base::clients::limit::LimitService;
 use golem_service_base::clients::project::ProjectService;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm::analysis::AnalysedFunctionResult;

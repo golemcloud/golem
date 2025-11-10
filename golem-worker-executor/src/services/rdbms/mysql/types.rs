@@ -304,7 +304,7 @@ impl From<DbValue> for SerializableDbValue {
                 DbValue::Boolean(v) => add_node(target, SerializableDbValueNode::Boolean(v)),
                 DbValue::Tinyint(v) => add_node(target, SerializableDbValueNode::Tinyint(v)),
                 DbValue::Smallint(v) => add_node(target, SerializableDbValueNode::Smallint(v)),
-                DbValue::Mediumint(v) => add_node(target, SerializableDbValueNode::Int(v as i32)),
+                DbValue::Mediumint(v) => add_node(target, SerializableDbValueNode::Int(v)),
                 DbValue::Int(v) => add_node(target, SerializableDbValueNode::Int(v)),
                 DbValue::Bigint(v) => add_node(target, SerializableDbValueNode::Bigint(v)),
                 DbValue::TinyintUnsigned(v) => {

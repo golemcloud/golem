@@ -15,9 +15,10 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
-use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::OplogIndex;
-use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{
+    OplogIndex, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};

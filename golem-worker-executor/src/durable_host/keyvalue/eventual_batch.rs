@@ -19,6 +19,10 @@ use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::payload_pairs::{
+    KeyvalueEventualBatchDeleteMany, KeyvalueEventualBatchGetKeys, KeyvalueEventualBatchGetMany,
+    KeyvalueEventualBatchSetMany,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestKVBucket, HostRequestKVBucketAndKeySizePairs,
     HostRequestKVBucketAndKeys, HostResponseKVGetMany, HostResponseKVKeys, HostResponseKVUnit,
@@ -40,13 +44,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual_batch",
-            "get_many",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualBatchGetMany>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
         let result = if durability.is_live() {
             let input = HostRequestKVBucketAndKeys {
                 bucket: bucket.clone(),
@@ -104,13 +104,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual_batch",
-            "get_keys",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualBatchGetKeys>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
         let result = if durability.is_live() {
             let result = self
                 .state
@@ -166,13 +162,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual_batch",
-            "set_many",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualBatchSetMany>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let result = if durability.is_live() {
             let input = HostRequestKVBucketAndKeySizePairs {
@@ -218,10 +210,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
+        let durability = Durability::<KeyvalueEventualBatchDeleteMany>::new(
             self,
-            "keyvalue::eventual_batch",
-            "delete_many",
             DurableFunctionType::WriteRemote,
         )
         .await?;

@@ -17,7 +17,9 @@ use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CommitLevel, Oplog};
 use async_mutex::Mutex;
 use async_trait::async_trait;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload};
+use golem_common::model::oplog::{
+    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
+};
 use golem_common::model::OwnedWorkerId;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -174,14 +176,19 @@ impl Oplog for EphemeralOplog {
         self.target.length().await
     }
 
-
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         self.primary.upload_raw_payload(data).await
     }
 
-    async fn download_raw_payload(&self, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
-        self.primary.download_raw_payload(payload_id, md5_hash).await
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.primary
+            .download_raw_payload(payload_id, md5_hash)
+            .await
     }
 }

@@ -29,14 +29,14 @@ use golem_common::model::{AccountId, ComponentId, ComponentType, WorkerStatusRec
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{init_tracing, TracingConfig};
 
+use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-
-use super::*;
+use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 
 struct Tracing;
 
@@ -248,8 +248,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry1 = oplog
         .add_imported_function_invoked(
             "f1".to_string(),
-            &"request".to_string(),
-            &"response".to_string(),
+            &HostRequest::Custom("request".into_value_and_type()),
+            &HostResponse::Custom("response".into_value_and_type()),
             DurableFunctionType::ReadRemote,
         )
         .await
@@ -258,7 +258,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry2 = oplog
         .add_exported_function_invoked(
             "f2".to_string(),
-            &"request".to_string(),
+            &vec!["request".into_value()],
             IdempotencyKey::fresh(),
             InvocationContextStack::fresh(),
         )
@@ -266,13 +266,13 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry3 = oplog
-        .add_exported_function_completed(&"response".to_string(), 42)
+        .add_exported_function_completed(&Some("response".into_value_and_type()), 42)
         .await
         .unwrap()
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, &[1, 2, 3])
+        .create_snapshot_based_update_description(11, vec![1, 2, 3])
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -307,23 +307,47 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         ]
     );
 
-    let p1 = oplog
-        .get_payload_of_entry::<String>(&entry1)
-        .await
-        .unwrap()
-        .unwrap();
-    let p2 = oplog
-        .get_payload_of_entry::<String>(&entry2)
-        .await
-        .unwrap()
-        .unwrap();
-    let p3 = oplog
-        .get_payload_of_entry::<String>(&entry3)
-        .await
-        .unwrap()
-        .unwrap();
+    let p1 = match entry1 {
+        OplogEntry::ImportedFunctionInvoked { response, .. } => {
+            let response = oplog_service
+                .download_payload(&owned_worker_id, response)
+                .await
+                .unwrap();
+            match response {
+                HostResponse::Custom(vnt) => String::from_value_and_type(vnt).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
+    let p2 = match entry2 {
+        OplogEntry::ExportedFunctionInvoked { request, .. } => {
+            let request = oplog_service
+                .download_payload(&owned_worker_id, request)
+                .await
+                .unwrap();
+            match request.first() {
+                Some(value) => String::from_value(value.clone()).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
+    let p3 = match entry3 {
+        OplogEntry::ExportedFunctionCompleted { response, .. } => {
+            let response = oplog_service
+                .download_payload(&owned_worker_id, response)
+                .await
+                .unwrap();
+            match response {
+                Some(vnt) => String::from_value_and_type(vnt).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
     let p4 = oplog
-        .get_upload_description_payload(&desc)
+        .get_upload_description_payload(desc)
         .await
         .unwrap()
         .unwrap();
@@ -368,8 +392,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry1 = oplog
         .add_imported_function_invoked(
             "f1".to_string(),
-            &"request".to_string(),
-            &large_payload1,
+            &HostRequest::Custom("request".into_value_and_type()),
+            &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
             DurableFunctionType::ReadRemote,
         )
         .await
@@ -378,7 +402,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry2 = oplog
         .add_exported_function_invoked(
             "f2".to_string(),
-            &large_payload2,
+            &vec![large_payload2.clone().into_value()],
             IdempotencyKey::fresh(),
             InvocationContextStack::fresh(),
         )
@@ -386,13 +410,13 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .unwrap()
         .rounded();
     let entry3 = oplog
-        .add_exported_function_completed(&large_payload3, 42)
+        .add_exported_function_completed(&Some(large_payload3.clone().into_value_and_type()), 42)
         .await
         .unwrap()
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, &large_payload4)
+        .create_snapshot_based_update_description(11, large_payload4.clone())
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -427,23 +451,47 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         ]
     );
 
-    let p1 = oplog
-        .get_payload_of_entry::<Vec<u8>>(&entry1)
-        .await
-        .unwrap()
-        .unwrap();
-    let p2 = oplog
-        .get_payload_of_entry::<Vec<u8>>(&entry2)
-        .await
-        .unwrap()
-        .unwrap();
-    let p3 = oplog
-        .get_payload_of_entry::<Vec<u8>>(&entry3)
-        .await
-        .unwrap()
-        .unwrap();
+    let p1 = match entry1 {
+        OplogEntry::ImportedFunctionInvoked { response, .. } => {
+            let response = oplog_service
+                .download_payload(&owned_worker_id, response)
+                .await
+                .unwrap();
+            match response {
+                HostResponse::Custom(vnt) => Vec::<u8>::from_value_and_type(vnt).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
+    let p2 = match entry2 {
+        OplogEntry::ExportedFunctionInvoked { request, .. } => {
+            let request = oplog_service
+                .download_payload(&owned_worker_id, request)
+                .await
+                .unwrap();
+            match request.first() {
+                Some(value) => Vec::<u8>::from_value(value.clone()).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
+    let p3 = match entry3 {
+        OplogEntry::ExportedFunctionCompleted { response, .. } => {
+            let response = oplog_service
+                .download_payload(&owned_worker_id, response)
+                .await
+                .unwrap();
+            match response {
+                Some(vnt) => Vec::<u8>::from_value_and_type(vnt).unwrap(),
+                _ => panic!("unexpected entry"),
+            }
+        }
+        _ => panic!("unexpected entry"),
+    };
     let p4 = oplog
-        .get_upload_description_payload(&desc)
+        .get_upload_description_payload(desc)
         .await
         .unwrap()
         .unwrap();
@@ -554,8 +602,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         let entry = oplog
             .add_imported_function_invoked(
                 "test-function".to_string(),
-                &"request".to_string(),
-                &i,
+                &HostRequest::Custom("request".into_value_and_type()),
+                &HostResponse::Custom("response".into_value_and_type()),
                 DurableFunctionType::ReadLocal,
             )
             .await
@@ -1473,13 +1521,13 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             1,
             Vec::new(),
             Vec::new(),
-            BTreeMap::new(),
             project_id.clone(),
             account_id.clone(),
             None,
             100,
             100,
             HashSet::new(),
+            BTreeMap::new(),
         );
 
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);

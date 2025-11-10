@@ -227,24 +227,24 @@ fn worker_filter_matches() {
         StringFilterComparator::Equal,
         "value1".to_string(),
     )
-        .and(WorkerFilter::new_status(
-            FilterComparator::Equal,
-            WorkerStatus::Idle,
-        ))
-        .matches(&worker_metadata));
+    .and(WorkerFilter::new_status(
+        FilterComparator::Equal,
+        WorkerStatus::Idle,
+    ))
+    .matches(&worker_metadata));
 
     assert!(WorkerFilter::new_env(
         "env1".to_string(),
         StringFilterComparator::Equal,
         "value2".to_string(),
     )
-        .not()
-        .and(
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running).or(
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle)
-            )
+    .not()
+    .and(
+        WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running).or(
+            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle)
         )
-        .matches(&worker_metadata));
+    )
+    .matches(&worker_metadata));
 
     assert!(
         WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
@@ -271,14 +271,14 @@ fn worker_filter_matches() {
         StringFilterComparator::Equal,
         "value1".to_string(),
     )
-        .matches(&worker_metadata));
+    .matches(&worker_metadata));
 
     assert!(!WorkerFilter::new_wasi_config_vars(
         "var1".to_string(),
         StringFilterComparator::Equal,
         "value2".to_string(),
     )
-        .matches(&worker_metadata));
+    .matches(&worker_metadata));
 }
 
 #[test]

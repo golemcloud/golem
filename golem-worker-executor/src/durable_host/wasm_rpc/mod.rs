@@ -26,6 +26,10 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
+use golem_common::model::oplog::payload_pairs::{
+    GolemRpcCancellationTokenCancel, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
+    GolemRpcWasmRpcScheduleInvocation,
+};
 use golem_common::model::oplog::types::{
     SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleInvocationRequest,
     SerializableScheduledInvocation,
@@ -109,10 +113,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
                 .await?;
 
-        let durability = Durability::new(
+        let durability = Durability::<GolemRpcWasmRpcInvokeAndAwaitResult>::new(
             self,
-            "golem::rpc::wasm-rpc",
-            "invoke-and-await result",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -223,13 +225,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &function_name, &idempotency_key)
                 .await?;
 
-        let durability = Durability::new(
-            self,
-            "golem::rpc::wasm-rpc",
-            "invoke",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemRpcWasmRpcInvoke>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         if remote_worker_id == own_worker_id {
             return Err(anyhow!("RPC calls to the same agent are not supported"));
@@ -429,10 +427,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<golem_wasm::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
-        let durability = Durability::new(
+        let durability = Durability::<GolemRpcWasmRpcScheduleInvocation>::new(
             self,
-            "golem::rpc::wasm-rpc",
-            "schedule_invocation",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -1008,10 +1004,8 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
         let serialized_scheduled_invocation: SerializableScheduledInvocation =
             deserialize(&entry.schedule_id).expect("Failed to deserialize cancellation token");
 
-        let durability = Durability::new(
+        let durability = Durability::<GolemRpcCancellationTokenCancel>::new(
             self,
-            "golem::rpc::cancellation-token",
-            "cancel",
             DurableFunctionType::WriteRemote,
         )
         .await?;

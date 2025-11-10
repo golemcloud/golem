@@ -22,8 +22,7 @@ use crate::services::oplog::{
 };
 use async_trait::async_trait;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel,
-    RawOplogPayload,
+    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::{
     ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
@@ -811,10 +810,15 @@ impl Oplog for MultiLayerOplog {
         self.primary.upload_raw_payload(data).await
     }
 
-    async fn download_raw_payload(&self, payload_id: PayloadId, md5_hash: Vec<u8>) -> Result<Vec<u8>, String> {
-        self.primary.download_raw_payload(payload_id, md5_hash).await
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.primary
+            .download_raw_payload(payload_id, md5_hash)
+            .await
     }
-
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {
         self.primary.switch_persistence_level(mode).await;

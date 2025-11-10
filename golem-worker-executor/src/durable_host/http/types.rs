@@ -20,9 +20,12 @@ use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use desert_rust::BinaryCodec;
+use golem_common::model::oplog::payload_pairs::{
+    HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
+};
 use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostRequestHttpRequest, HostResponse,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestHttpRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::ScheduleId;
@@ -442,10 +445,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         if let Some(request_state) = self.state.open_http_requests.get(&self_.rep()) {
             let request = request_state.request.clone();
 
-            let durability = Durability::new(
+            let durability = Durability::<HttpTypesFutureTrailersGet>::new(
                 self,
-                "golem http::types::future_trailers",
-                "get",
                 DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
             )
             .await?;
@@ -652,7 +653,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
-                        "http::types::future_incoming_response::get".to_string(),
+                        HttpTypesFutureIncomingResponseGet::FQFN.to_string(),
                         &HostRequest::HttpRequest(HostRequestHttpRequest { request }),
                         &HostResponse::HttpResponse(HostResponseHttpResponse {
                             response: serializable_response,
@@ -696,9 +697,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         .download_payload(response)
                         .await
                         .unwrap_or_else(|err| {
-                            panic!(
-                                "failed to deserialize function response: {err}"
-                            )
+                            panic!("failed to deserialize function response: {err}")
                         });
                     match response {
                         HostResponse::HttpResponse(response) => response.response,

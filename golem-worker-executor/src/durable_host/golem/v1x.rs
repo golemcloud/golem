@@ -35,6 +35,13 @@ use desert_rust::{
     BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
+use golem_common::model::oplog::payload_pairs::{
+    GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
+    GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
+    GolemApiGetSelfMetadata, GolemApiResolveComponentId, GolemApiResolveWorkerIdStrict,
+    GolemApiRevertWorker, GolemApiUpdateWorker,
+};
+use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
     HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiFork,
@@ -56,7 +63,6 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{subscribe, IoView};
-use golem_common::model::oplog::types::AgentMetadataForGuests;
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -124,13 +130,8 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "create_promise",
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiCreatePromise>::new(self, DurableFunctionType::WriteLocal).await?;
 
         let result = if durability.is_live() {
             let oplog_idx = self.state.current_oplog_index().await.next();
@@ -176,13 +177,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         promise_id: golem_api_1_x::host::PromiseId,
         data: Vec<u8>,
     ) -> anyhow::Result<bool> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "complete_promise",
-            DurableFunctionType::WriteLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiCompletePromise>::new(self, DurableFunctionType::WriteLocal)
+                .await?;
 
         let promise_id: PromiseId = promise_id.into();
         let result = if durability.is_live() {
@@ -480,10 +477,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn generate_idempotency_key(&mut self) -> anyhow::Result<golem_api_1_x::host::Uuid> {
-        let durability = Durability::new(
+        let durability = Durability::<GolemApiGenerateIdempotencyKey>::new(
             self,
-            "golem api",
-            "generate_idempotency_key",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -518,13 +513,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_version: ComponentVersion,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "update-worker",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let agent_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &agent_id);
@@ -565,13 +555,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<golem_api_1_x::host::AgentMetadata> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "get_self_metadata",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiGetSelfMetadata>::new(self, DurableFunctionType::ReadLocal)
+                .await?;
 
         let result = if durability.is_live() {
             let metadata = self
@@ -599,13 +585,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_id: golem_api_1_x::host::AgentId,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentMetadata>> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "get_agent_metadata",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiGetAgentMetadata>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let agent_id: WorkerId = agent_id.into();
 
@@ -617,9 +599,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 if let Some(last_known_status) = &result.last_known_status {
                     metadata.last_known_status = last_known_status.clone();
                 }
-                if let Some(status) =
-                    calculate_last_known_status(&self.state, &owned_worker_id, result.last_known_status)
-                        .await
+                if let Some(status) = calculate_last_known_status(
+                    &self.state,
+                    &owned_worker_id,
+                    result.last_known_status,
+                )
+                .await
                 {
                     metadata.last_known_status = status;
                 }
@@ -648,13 +633,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_worker_id: golem_api_1_x::host::AgentId,
         oplog_idx_cut_off: golem_api_1_x::host::OplogIndex,
     ) -> anyhow::Result<()> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "fork-worker",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiForkWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let source_worker_id: WorkerId = source_worker_id.into();
         let target_worker_id: WorkerId = target_worker_id.into();
@@ -692,13 +672,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::host::AgentId,
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<()> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "revert-worker",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiRevertWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
             let agent_id: WorkerId = agent_id.into();
@@ -728,13 +703,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         component_slug: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
-        let durability = Durability::new(
-            self,
-            "golem::api",
-            "resolve_component_id",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiResolveComponentId>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let result = if durability.is_live() {
             let result = self
@@ -783,10 +754,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         component_slug: String,
         agent_name: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
-        let durability = Durability::new(
+        let durability = Durability::<GolemApiResolveWorkerIdStrict>::new(
             self,
-            "golem::api",
-            "resolve_worker_id_strict",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -820,7 +789,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn fork(&mut self, new_name: String) -> anyhow::Result<ForkResult> {
         let durability =
-            Durability::new(self, "golem::api", "fork", DurableFunctionType::WriteRemote).await?;
+            Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
             let target_agent_id = WorkerId {
@@ -972,13 +941,9 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
         &mut self,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        let durability = Durability::new(
-            self,
-            "golem::api::get-promise-result",
-            "get",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemApiGetPromiseResult>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let result = if durability.is_live() {
             let entry = self.table().get(&resource)?;

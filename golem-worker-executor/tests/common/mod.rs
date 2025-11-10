@@ -13,12 +13,13 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, PersistenceLevel, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogPayload, PayloadId, PersistenceLevel, RawOplogPayload,
+    TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
-    IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RdbmsPoolKey,
+    RetryConfig, TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -68,8 +69,7 @@ use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
-    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus,
-    RdbmsTransactionStatus, RdbmsType,
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
@@ -571,12 +571,12 @@ impl UpdateManagement for TestWorkerCtx {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -1218,12 +1218,16 @@ impl Oplog for TestOplog {
         self.oplog.length().await
     }
 
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
-        self.oplog.upload_payload(data).await
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.oplog.upload_raw_payload(data).await
     }
 
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
-        self.oplog.download_payload(payload).await
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.oplog.download_raw_payload(payload_id, md5_hash).await
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {

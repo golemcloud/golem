@@ -30,6 +30,7 @@ use crate::preview2::wasi::blobstore::blobstore::{
     Container, ContainerName, Error, Host, ObjectId,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::payload_pairs;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_container(
@@ -37,10 +38,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreCreateContainer>::new(
             self,
-            "blobstore::blobstore",
-            "create_container",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -86,10 +85,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreGetContainer>::new(
             self,
-            "blobstore::blobstore",
-            "get_container",
             DurableFunctionType::ReadRemote,
         )
         .await?;
@@ -132,10 +129,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreDeleteContainer>::new(
             self,
-            "blobstore::blobstore",
-            "delete_container",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -170,10 +165,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreContainerExists>::new(
             self,
-            "blobstore::blobstore",
-            "container_exists",
             DurableFunctionType::ReadRemote,
         )
         .await?;
@@ -209,10 +202,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreCopyObject>::new(
             self,
-            "blobstore::blobstore",
-            "copy_object",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -254,10 +245,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::BlobstoreBlobstoreMoveObject>::new(
             self,
-            "blobstore::blobstore",
-            "move_object",
             DurableFunctionType::WriteRemote,
         )
         .await?;

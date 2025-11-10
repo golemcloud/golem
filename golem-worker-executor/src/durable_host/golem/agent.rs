@@ -20,6 +20,9 @@ use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::AgentId;
+use golem_common::model::oplog::payload_pairs::{
+    GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestNoInput,
     HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
@@ -27,13 +30,9 @@ use golem_common::model::oplog::{
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<host::RegisteredAgentType>> {
-        let durability = Durability::new(
-            self,
-            "golem_agent",
-            "get_all_agent_types",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
         let result = if durability.is_live() {
             let project_id = &self.owned_worker_id.project_id;
             let result = self
@@ -63,13 +62,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         agent_type_name: String,
     ) -> anyhow::Result<Option<host::RegisteredAgentType>> {
-        let durability = Durability::new(
-            self,
-            "golem_agent",
-            "get_agent_type",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
         let result = if durability.is_live() {
             let project_id = &self.owned_worker_id.project_id;
             let result = self

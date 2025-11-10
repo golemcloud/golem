@@ -15,6 +15,9 @@
 use crate::model::params::PlaybackOverride;
 use async_trait::async_trait;
 use golem_common::model::auth::Namespace;
+use golem_common::model::oplog::payload_pairs::{
+    host_request_from_value_and_type, host_response_from_value_and_type,
+};
 use golem_common::model::oplog::public_oplog_entry::{
     CreateParams, CreateResourceParams, DropResourceParams, ExportedFunctionCompletedParams,
     FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, LogParams,
@@ -274,6 +277,11 @@ fn get_oplog_entry_from_public_oplog_entry(
                     DurableFunctionType::WriteRemoteTransaction(params.index)
                 }
             };
+
+            let request =
+                OplogPayload::Inline(host_request_from_value_and_type(&function_name, request)?);
+            let response =
+                OplogPayload::Inline(host_response_from_value_and_type(&function_name, response)?);
 
             Ok(OplogEntry::ImportedFunctionInvoked {
                 timestamp,

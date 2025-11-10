@@ -14,15 +14,15 @@
 
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed};
+use golem_common::model::oplog::{
+    payload_pairs, DurableFunctionType, HostRequestNoInput, HostResponseRandomSeed,
+};
 use wasmtime_wasi::p2::bindings::random::insecure_seed::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn insecure_seed(&mut self) -> anyhow::Result<(u64, u64)> {
-        let durability = Durability::new(
+        let durability = Durability::<payload_pairs::RandomInsecureSeedInsecureSeed>::new(
             self,
-            "random::insecure_seed",
-            "insecure_seed",
             DurableFunctionType::ReadLocal,
         )
         .await?;

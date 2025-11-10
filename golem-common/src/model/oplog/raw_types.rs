@@ -15,6 +15,7 @@
 use crate::base_model::{ComponentVersion, OplogIndex};
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::public_oplog_entry::{BinaryCodec, Deserialize, Serialize};
+use crate::model::oplog::OplogPayload;
 use crate::model::Timestamp;
 use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
@@ -23,7 +24,6 @@ use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::model::oplog::OplogPayload;
 
 pub struct OplogIndexRange {
     current: u64,

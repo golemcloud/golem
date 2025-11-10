@@ -16,9 +16,7 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
-use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{
     ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord,
 };

@@ -20,27 +20,32 @@ use std::str::FromStr;
 
 use test_r::test;
 
-use crate::model::oplog::types::{SerializableDateTime, SerializableHttpErrorCode, SerializableIpAddress, SerializableIpAddresses, SerializableStreamError, SerializedHttpVersion};
-use crate::model::oplog::{OplogIndex, WorkerError};
-use crate::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::raw_types::SpanData;
-use crate::model::invocation_context::{SpanId, AttributeValue};
+use crate::model::oplog::types::{
+    SerializableDateTime, SerializableHttpErrorCode, SerializableIpAddress,
+    SerializableIpAddresses, SerializableStreamError, SerializedHttpVersion,
+};
+use crate::model::oplog::{OplogIndex, WorkerError};
 use crate::model::Timestamp;
+use crate::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
+use proptest::option::of;
 use proptest::prelude::*;
 use proptest::strategy::LazyJust;
+use std::num::NonZeroU64;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
-use http::Version;
-use proptest::option::of;
 use uuid::Uuid;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
 use wasmtime_wasi::p2::bindings::{filesystem, sockets};
 use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
-use wasmtime_wasi_http::bindings::http::types::{DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload};
-use std::num::NonZeroU64;
+use wasmtime_wasi_http::bindings::http::types::{
+    DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
+};
 
 fn datetime_strat(
 ) -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {
@@ -189,18 +194,25 @@ fn span_data_strat() -> impl Strategy<Value = SpanData> {
             any::<i64>(),
             of(any::<u64>().prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap()))),
             vec((any::<String>(), any::<String>()), 0..5).prop_map(|v| {
-                v.into_iter().map(|(k, v)| (k, AttributeValue::String(v))).collect()
+                v.into_iter()
+                    .map(|(k, v)| (k, AttributeValue::String(v)))
+                    .collect()
             }),
             any::<bool>()
-        ).prop_map(|(span_id, _start, parent_id, attributes, inherited)| SpanData::LocalSpan {
-            span_id,
-            start: Timestamp(iso_ts::Timestamp::parse("2023-01-01T00:00:00Z").unwrap()),
-            parent_id,
-            linked_context: None,
-            attributes,
-            inherited,
-        }),
-        any::<u64>().prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap())).prop_map(|span_id| SpanData::ExternalSpan { span_id }),
+        )
+            .prop_map(|(span_id, _start, parent_id, attributes, inherited)| {
+                SpanData::LocalSpan {
+                    span_id,
+                    start: Timestamp(iso_ts::Timestamp::parse("2023-01-01T00:00:00Z").unwrap()),
+                    parent_id,
+                    linked_context: None,
+                    attributes,
+                    inherited,
+                }
+            }),
+        any::<u64>()
+            .prop_map(|x| SpanId(NonZeroU64::new(x + 1).unwrap()))
+            .prop_map(|span_id| SpanData::ExternalSpan { span_id }),
     ]
 }
 

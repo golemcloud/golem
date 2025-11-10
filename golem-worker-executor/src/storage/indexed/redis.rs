@@ -173,10 +173,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 false,
                 None,
                 id.to_string(),
-                (
-                    Key::from(Self::KEY),
-                    Value::Bytes(Bytes::from(value)),
-                ),
+                (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
             )
             .await
             .map_err(|e| e.to_string())?;

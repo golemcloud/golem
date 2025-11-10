@@ -16,6 +16,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendF
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{Duration, Utc};
+use golem_common::model::oplog::payload_pairs::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
@@ -29,7 +30,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
         let durability =
-            Durability::new(self, "io::poll", "ready", DurableFunctionType::ReadLocal).await?;
+            Durability::<IoPollReady>::new(self, DurableFunctionType::ReadLocal).await?;
 
         let result = if durability.is_live() {
             let result = HostPollable::ready(&mut self.as_wasi_view().0, self_)
@@ -92,7 +93,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         let durability =
-            Durability::new(self, "io::poll", "poll", DurableFunctionType::ReadLocal).await?;
+            Durability::<IoPollPoll>::new(self, DurableFunctionType::ReadLocal).await?;
 
         let result: Result<HostResponsePollResult, Duration> = if durability.is_live() {
             let count = in_.len();
@@ -114,9 +115,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         };
 
         match result {
-            Ok(result) => {
-                result.result.map_err(|err| anyhow!(err))
-            }
+            Ok(result) => result.result.map_err(|err| anyhow!(err)),
             Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
                 Err(InterruptKind::Suspend.into())

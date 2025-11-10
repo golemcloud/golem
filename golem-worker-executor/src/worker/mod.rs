@@ -42,6 +42,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
@@ -53,7 +54,6 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_common::model::RevertWorkerTarget;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};

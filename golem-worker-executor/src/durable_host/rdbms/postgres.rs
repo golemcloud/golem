@@ -18,7 +18,8 @@ use crate::durable_host::rdbms::{
     db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
     db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
     db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
-    FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
+    FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
+    RdbmsTransactionEntry,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::rdbms::postgres::{
@@ -34,10 +35,22 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::workerctx::WorkerCtx;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
+use golem_common::model::oplog::payload_pairs::*;
 use std::ops::Bound;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
+
+impl RdbmsDurabilityPairs for PostgresType {
+    type ConnExecute = RdbmsPostgresDbConnectionExecute;
+    type ConnQuery = RdbmsPostgresDbConnectionQuery;
+    type ConnQueryStream = RdbmsPostgresDbConnectionQueryStream;
+    type TxnExecute = RdbmsPostgresDbTransactionExecute;
+    type TxnQuery = RdbmsPostgresDbTransactionQuery;
+    type TxnQueryStream = RdbmsPostgresDbTransactionQueryStream;
+    type StreamGetColumns = RdbmsPostgresDbResultStreamGetColumns;
+    type StreamGetNext = RdbmsPostgresDbResultStreamGetNext;
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -281,7 +294,9 @@ impl From<crate::services::rdbms::RdbmsError> for Error {
             crate::services::rdbms::RdbmsError::QueryExecutionFailure(v) => {
                 Self::QueryExecutionFailure(v)
             }
-            crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
+            crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => {
+                Self::QueryResponseFailure(v)
+            }
             crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
         }
     }
@@ -413,7 +428,9 @@ impl TryFrom<Numrange> for golem_common::model::oplog::payload::types::ValuesRan
     }
 }
 
-impl TryFrom<Daterange> for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate> {
+impl TryFrom<Daterange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>
+{
     type Error = String;
 
     fn try_from(value: Daterange) -> Result<Self, Self::Error> {
@@ -431,7 +448,9 @@ impl TryFrom<Daterange> for golem_common::model::oplog::payload::types::ValuesRa
     }
 }
 
-impl TryFrom<Tsrange> for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime> {
+impl TryFrom<Tsrange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>
+{
     type Error = String;
 
     fn try_from(value: Tsrange) -> Result<Self, Self::Error> {
@@ -449,7 +468,9 @@ impl TryFrom<Tsrange> for golem_common::model::oplog::payload::types::ValuesRang
     }
 }
 
-impl TryFrom<Tstzrange> for golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>> {
+impl TryFrom<Tstzrange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>
+{
     type Error = String;
 
     fn try_from(value: Tstzrange) -> Result<Self, Self::Error> {
@@ -515,8 +536,14 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<BigDecimal>> f
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>> for Tstzrange {
-    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>>
+    for Tstzrange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<
+            chrono::DateTime<chrono::Utc>,
+        >,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
             match v {
                 Bound::Included(v) => Tstzbound::Included(v.into()),
@@ -531,8 +558,12 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTi
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>> for Tsrange {
-    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>>
+    for Tsrange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
             match v {
                 Bound::Included(v) => Tsbound::Included(v.into()),
@@ -547,8 +578,12 @@ impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveD
     }
 }
 
-impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>> for Daterange {
-    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>>
+    for Daterange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
             match v {
                 Bound::Included(v) => Datebound::Included(v.into()),
@@ -958,7 +993,10 @@ fn to_db_value(
                 .value
                 .clone();
             DbValueWithResourceRep::new(
-                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(v.name, value.value))),
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
+                    v.name,
+                    value.value,
+                ))),
                 DbValueResourceRep::Domain(v.value.rep()),
             )
         }
@@ -969,7 +1007,10 @@ fn to_db_value(
             DbValueWithResourceRep::new(
                 postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     v.name,
-                    golem_common::model::oplog::payload::types::ValuesRange::new(start_value, end_value),
+                    golem_common::model::oplog::payload::types::ValuesRange::new(
+                        start_value,
+                        end_value,
+                    ),
                 ))),
                 DbValueResourceRep::Range((start_rep, end_rep)),
             )

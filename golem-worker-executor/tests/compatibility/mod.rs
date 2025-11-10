@@ -16,9 +16,6 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use test_r::inherit_test_dep;
 
 pub mod v1;
-pub mod v1_1;
-pub mod v1_2;
-pub mod v1_3;
 pub mod worker_recovery;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

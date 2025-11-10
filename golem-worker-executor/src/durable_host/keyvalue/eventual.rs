@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::oplog::payload_pairs::{
+    KeyvalueEventualDelete, KeyvalueEventualExists, KeyvalueEventualGet, KeyvalueEventualSet,
+};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestKVBucketAndKey, HostRequestKVBucketKeyAndSize,
     HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
@@ -41,13 +44,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual",
-            "get",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualGet>::new(self, DurableFunctionType::ReadRemote).await?;
 
         let result = if durability.is_live() {
             let result = self
@@ -106,13 +104,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .unwrap()
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual",
-            "set",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualSet>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
             let input = HostRequestKVBucketKeyAndSize {
@@ -156,13 +149,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual",
-            "delete",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualDelete>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let result = if durability.is_live() {
             let input = HostRequestKVBucketAndKey {
@@ -205,13 +194,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::new(
-            self,
-            "keyvalue::eventual",
-            "exists",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualExists>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let result = if durability.is_live() {
             let input = HostRequestKVBucketAndKey {
