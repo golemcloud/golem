@@ -11,71 +11,71 @@ trait FooAgent {
 
     fn get_id(&self) -> String;
 
-    fn fun_string(&self, string: String) -> String;
+    async fn fun_string(&self, string: String) -> String;
 
-    fn fun_u8(&mut self, number: u8) -> u8;
+    async fn fun_u8(&mut self, number: u8) -> u8;
 
-    fn fun_i8(&mut self, number: i8) -> i8;
+    async fn fun_i8(&mut self, number: i8) -> i8;
 
-    fn fun_u16(&mut self, number: u16) -> u16;
+    async fn fun_u16(&mut self, number: u16) -> u16;
 
-    fn fun_i16(&mut self, number: i16) -> i16;
+    async fn fun_i16(&mut self, number: i16) -> i16;
 
-    fn fun_i32(&mut self, number: i32) -> i32;
+    async fn fun_i32(&mut self, number: i32) -> i32;
 
-    fn fun_u32(&mut self, number: u32) -> u32;
+    async fn fun_u32(&mut self, number: u32) -> u32;
 
-    fn fun_u64(&mut self, number: u64) -> u64;
+    async fn fun_u64(&mut self, number: u64) -> u64;
 
-    fn fun_i64(&mut self, number: i64) -> i64;
+    async fn fun_i64(&mut self, number: i64) -> i64;
 
-    fn fun_f32(&mut self, number: f32) -> f32;
+    async fn fun_f32(&mut self, number: f32) -> f32;
 
-    fn fun_f64(&mut self, number: f64) -> f64;
+    async fn fun_f64(&mut self, number: f64) -> f64;
 
-    fn fun_boolean(&self, boolean: bool) -> bool;
+    async fn fun_boolean(&self, boolean: bool) -> bool;
 
-    fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives;
+    async fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives;
 
-    fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
+    async fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // fn fun_tuple_complex(
+    // async fn fun_tuple_complex(
     //     &mut self,
     //     tuple: (String, f64, AllPrimitives, bool),
     // ) -> (String, f64, AllPrimitives, bool);
     //
-    fn fun_collections(&mut self, collections: Collections) -> Collections;
+    async fn fun_collections(&mut self, collections: Collections) -> Collections;
 
-    fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
+    async fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
 
-    fn fun_struct_nested(&mut self, nested_struct: NestedStruct) -> NestedStruct;
+    async fn fun_struct_nested(&mut self, nested_struct: NestedStruct) -> NestedStruct;
 
-    fn fun_struct_complex(&mut self, complex_struct: ComplexStruct) -> ComplexStruct;
+    async fn fun_struct_complex(&mut self, complex_struct: ComplexStruct) -> ComplexStruct;
 
-    fn fun_simple_enum(&mut self, simple_enum: SimpleEnum) -> SimpleEnum;
+    async fn fun_simple_enum(&mut self, simple_enum: SimpleEnum) -> SimpleEnum;
 
-    fn fun_complex_enum(&mut self, complex_enum: ComplexEnum) -> ComplexEnum;
+    async fn fun_complex_enum(&mut self, complex_enum: ComplexEnum) -> ComplexEnum;
 
-    fn fun_result(&mut self, result: Result<String, String>) -> Result<String, String>;
+    async fn fun_result(&mut self, result: Result<String, String>) -> Result<String, String>;
 
-    fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String>;
+    async fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String>;
 
-    fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
+    async fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+    // async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
 
-    fn fun_result_complex(
+    async fn fun_result_complex(
         &mut self,
         result: Result<NestedStruct, ComplexEnum>,
     ) -> Result<NestedStruct, ComplexEnum>;
 
-    fn fun_option(&mut self, option: Option<String>) -> Option<String>;
+    async fn fun_option(&mut self, option: Option<String>) -> Option<String>;
 
-    fn fun_option_complex(&mut self, option: Option<NestedStruct>) -> Option<NestedStruct>;
+    async fn fun_option_complex(&mut self, option: Option<NestedStruct>) -> Option<NestedStruct>;
 
-    fn fun_enum_with_only_literals(
+    async fn fun_enum_with_only_literals(
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
@@ -97,119 +97,119 @@ impl FooAgent for FooAgentImpl {
         self.get_agent_id()
     }
 
-    fn fun_string(&self, string: String) -> String {
-        self.client.fun_string(string)
+    async fn fun_string(&self, string: String) -> String {
+        self.client.fun_string(string).await
     }
 
-    fn fun_u8(&mut self, number: u8) -> u8 {
-        self.client.fun_u8(number)
+    async fn fun_u8(&mut self, number: u8) -> u8 {
+        self.client.fun_u8(number).await
     }
 
-    fn fun_i8(&mut self, number: i8) -> i8 {
-        self.client.fun_i8(number)
+    async fn fun_i8(&mut self, number: i8) -> i8 {
+        self.client.fun_i8(number).await
     }
 
-    fn fun_u16(&mut self, number: u16) -> u16 {
-        self.client.fun_u16(number)
+    async fn fun_u16(&mut self, number: u16) -> u16 {
+        self.client.fun_u16(number).await
     }
 
-    fn fun_i16(&mut self, number: i16) -> i16 {
-        self.client.fun_i16(number)
+    async fn fun_i16(&mut self, number: i16) -> i16 {
+        self.client.fun_i16(number).await
     }
 
-    fn fun_i32(&mut self, number: i32) -> i32 {
-        self.client.fun_i32(number)
+    async fn fun_i32(&mut self, number: i32) -> i32 {
+        self.client.fun_i32(number).await
     }
 
-    fn fun_u32(&mut self, number: u32) -> u32 {
-        self.client.fun_u32(number)
+    async fn fun_u32(&mut self, number: u32) -> u32 {
+        self.client.fun_u32(number).await
     }
 
-    fn fun_u64(&mut self, number: u64) -> u64 {
-        self.client.fun_u64(number)
+    async fn fun_u64(&mut self, number: u64) -> u64 {
+        self.client.fun_u64(number).await
     }
 
-    fn fun_i64(&mut self, number: i64) -> i64 {
-        self.client.fun_i64(number)
+    async fn fun_i64(&mut self, number: i64) -> i64 {
+        self.client.fun_i64(number).await
     }
 
-    fn fun_f32(&mut self, number: f32) -> f32 {
-        self.client.fun_f32(number)
+    async fn fun_f32(&mut self, number: f32) -> f32 {
+        self.client.fun_f32(number).await
     }
 
-    fn fun_f64(&mut self, number: f64) -> f64 {
-        self.client.fun_f64(number)
+    async fn fun_f64(&mut self, number: f64) -> f64 {
+        self.client.fun_f64(number).await
     }
 
-    fn fun_boolean(&self, boolean: bool) -> bool {
-        self.client.fun_boolean(boolean)
+    async fn fun_boolean(&self, boolean: bool) -> bool {
+        self.client.fun_boolean(boolean).await
     }
 
-    fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives {
-        self.client.fun_all_primitives(all_primitives)
+    async fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives {
+        self.client.fun_all_primitives(all_primitives).await
     }
 
-    fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool) {
-        self.client.fun_tuple_simple(tuple)
+    async fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool) {
+        self.client.fun_tuple_simple(tuple).await
     }
 
-    fn fun_collections(&mut self, collections: Collections) -> Collections {
-        self.client.fun_collections(collections)
+    async fn fun_collections(&mut self, collections: Collections) -> Collections {
+        self.client.fun_collections(collections).await
     }
 
-    fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct {
-        self.client.fun_struct_simple(simple_struct)
+    async fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct {
+        self.client.fun_struct_simple(simple_struct).await
     }
 
-    fn fun_struct_nested(&mut self, nested_struct: NestedStruct) -> NestedStruct {
-        self.client.fun_struct_nested(nested_struct)
+    async fn fun_struct_nested(&mut self, nested_struct: NestedStruct) -> NestedStruct {
+        self.client.fun_struct_nested(nested_struct).await
     }
 
-    fn fun_struct_complex(&mut self, complex_struct: ComplexStruct) -> ComplexStruct {
-        self.client.fun_struct_complex(complex_struct)
+    async fn fun_struct_complex(&mut self, complex_struct: ComplexStruct) -> ComplexStruct {
+        self.client.fun_struct_complex(complex_struct).await
     }
 
-    fn fun_simple_enum(&mut self, simple_enum: SimpleEnum) -> SimpleEnum {
-        self.client.fun_simple_enum(simple_enum)
+    async fn fun_simple_enum(&mut self, simple_enum: SimpleEnum) -> SimpleEnum {
+        self.client.fun_simple_enum(simple_enum).await
     }
 
-    fn fun_complex_enum(&mut self, complex_enum: ComplexEnum) -> ComplexEnum {
-        self.client.fun_complex_enum(complex_enum)
+    async fn fun_complex_enum(&mut self, complex_enum: ComplexEnum) -> ComplexEnum {
+        self.client.fun_complex_enum(complex_enum).await
     }
 
-    fn fun_result(&mut self, result: Result<String, String>) -> Result<String, String> {
-        self.client.fun_result(result)
+    async fn fun_result(&mut self, result: Result<String, String>) -> Result<String, String> {
+        self.client.fun_result(result).await
     }
 
-    fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String> {
-        self.client.fun_result_unit_ok(result)
+    async fn fun_result_unit_ok(&mut self, result: Result<(), String>) -> Result<(), String> {
+        self.client.fun_result_unit_ok(result).await
     }
 
-    fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()> {
-        self.client.fun_result_unit_err(result)
+    async fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()> {
+        self.client.fun_result_unit_err(result).await
     }
 
-    fn fun_result_complex(
+    async fn fun_result_complex(
         &mut self,
         result: Result<NestedStruct, ComplexEnum>,
     ) -> Result<NestedStruct, ComplexEnum> {
-        self.client.fun_result_complex(result)
+        self.client.fun_result_complex(result).await
     }
 
-    fn fun_option(&mut self, option: Option<String>) -> Option<String> {
-        self.client.fun_option(option)
+    async fn fun_option(&mut self, option: Option<String>) -> Option<String> {
+        self.client.fun_option(option).await
     }
 
-    fn fun_option_complex(&mut self, option: Option<NestedStruct>) -> Option<NestedStruct> {
-        self.client.fun_option_complex(option)
+    async fn fun_option_complex(&mut self, option: Option<NestedStruct>) -> Option<NestedStruct> {
+        self.client.fun_option_complex(option).await
     }
 
-    fn fun_enum_with_only_literals(
+    async fn fun_enum_with_only_literals(
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals {
         self.client
-            .fun_enum_with_only_literals(enum_with_only_literals)
+            .fun_enum_with_only_literals(enum_with_only_literals).await
     }
 }
 
