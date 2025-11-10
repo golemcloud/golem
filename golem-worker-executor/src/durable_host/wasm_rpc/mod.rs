@@ -26,20 +26,15 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
+use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
     GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
 };
-use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation,
-    HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
-    HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
-};
+use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostRequestGolemRpcScheduledInvocationCancellation, HostResponse, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet, HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit, HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel};
 use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
@@ -854,7 +849,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
-                        "golem::rpc::future-invoke-result::get".to_string(),
+                        GolemRpcFutureInvokeResultGet::HOST_FUNCTION_NAME,
                         &HostRequest::GolemRpcInvoke(serializable_invoke_request),
                         &HostResponse::GolemRpcInvokeGet(HostResponseGolemRpcInvokeGet {
                             result: serializable_invoke_result,

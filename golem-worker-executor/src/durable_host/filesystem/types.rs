@@ -31,7 +31,7 @@ use wasmtime_wasi::runtime::spawn_blocking;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
 };
 use golem_common::model::oplog::types::{

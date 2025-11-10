@@ -31,7 +31,7 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bit_vec::BitVec;
-use golem_common::model::oplog::payload_pairs::*;
+use golem_common::model::oplog::host_functions::*;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
 

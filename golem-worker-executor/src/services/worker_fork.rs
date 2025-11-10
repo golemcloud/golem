@@ -39,7 +39,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::payload_pairs::GolemApiFork;
+use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemApiFork, HostResponse,
     HostResponseGolemApiFork, OplogIndex, OplogIndexRange,
@@ -563,7 +563,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 
         let _ = new_oplog
             .add_imported_function_invoked(
-                GolemApiFork::FQFN.to_string(),
+                GolemApiFork::HOST_FUNCTION_NAME,
                 &HostRequest::GolemApiFork(HostRequestGolemApiFork {
                     name: target_worker_id.worker_name.clone(),
                 }),

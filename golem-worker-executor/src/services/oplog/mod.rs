@@ -40,6 +40,7 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 
 mod blob;
 mod compressed;
@@ -269,7 +270,7 @@ pub trait OplogOps: Oplog {
 
     async fn add_imported_function_invoked(
         &self,
-        function_name: String,
+        function_name: HostFunctionName,
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,

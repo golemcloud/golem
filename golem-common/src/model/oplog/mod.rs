@@ -41,6 +41,7 @@ use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use crate::model::oplog::host_functions::HostFunctionName;
 
 // Generates two primary types:
 // - OplogEntry
@@ -269,7 +270,7 @@ oplog_entry! {
     ImportedFunctionInvoked {
         hint: false
         raw {
-            function_name: String,
+            function_name: HostFunctionName,
             request: OplogPayload<HostRequest>,
             response: OplogPayload<HostResponse>,
             durable_function_type: DurableFunctionType,

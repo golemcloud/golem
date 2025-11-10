@@ -23,7 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use golem_common::config::RedisConfig;
-use golem_common::model::oplog::{LogLevel, SpanData, WorkerError};
+use golem_common::model::oplog::{LogLevel, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AccountId, ComponentId, ComponentType, WorkerStatusRecord};
 use golem_common::redis::RedisPool;
@@ -224,7 +224,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = oplog
         .add_imported_function_invoked(
-            "f1".to_string(),
+            HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom("response".into_value_and_type()),
             DurableFunctionType::ReadRemote,
@@ -368,7 +368,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let last_oplog_idx = oplog.current_oplog_index().await;
     let entry1 = oplog
         .add_imported_function_invoked(
-            "f1".to_string(),
+            HostFunctionName::Custom("f1".to_string()),
             &HostRequest::Custom("request".into_value_and_type()),
             &HostResponse::Custom(large_payload1.clone().into_value_and_type()),
             DurableFunctionType::ReadRemote,
@@ -578,7 +578,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
     for i in 0..n {
         let entry = oplog
             .add_imported_function_invoked(
-                "test-function".to_string(),
+                HostFunctionName::Custom("test-function".to_string()),
                 &HostRequest::Custom(i.into_value_and_type()),
                 &HostResponse::Custom("response".into_value_and_type()),
                 DurableFunctionType::ReadLocal,

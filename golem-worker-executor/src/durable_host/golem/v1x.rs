@@ -35,7 +35,7 @@ use desert_rust::{
     BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
 };
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
     GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
     GolemApiGetSelfMetadata, GolemApiResolveComponentId, GolemApiResolveWorkerIdStrict,

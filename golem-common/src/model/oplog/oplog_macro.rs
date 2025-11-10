@@ -185,6 +185,8 @@ macro_rules! host_payload_pairs {
                     const INTERFACE: &'static str = $iface;
                     const FUNCTION: &'static str = $func;
                     const FQFN: &'static str = concat!($iface, "::", $func);
+
+                    const HOST_FUNCTION_NAME: HostFunctionName = HostFunctionName::$typename;
                 }
             }
         )*
@@ -212,6 +214,36 @@ macro_rules! host_payload_pairs {
                         }
                 ),*,
                 _ => Ok(crate::model::oplog::payload::HostResponse::Custom(value_and_type))
+            }
+        }
+
+        #[derive(Debug, Clone, PartialEq, desert_rust::BinaryCodec)]
+        pub enum HostFunctionName {
+            Custom(String),
+            $(
+                $typename
+            ),*
+        }
+
+        impl HostFunctionName {
+            pub fn from_str(s: &str) -> Self {
+                match s {
+                    $(
+                        concat!($iface, "::", $func) => HostFunctionName::$typename
+                    ),*,
+                    _ => HostFunctionName::Custom(s.to_string())
+                }
+            }
+        }
+
+        impl std::fmt::Display for HostFunctionName {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    HostFunctionName::Custom(name) => write!(f, "{}", name),
+                    $(
+                        HostFunctionName::$typename => write!(f, "{}", <$typename as $crate::model::oplog::payload::HostPayloadPair>::FQFN)
+                    ),*
+                }
             }
         }
     }

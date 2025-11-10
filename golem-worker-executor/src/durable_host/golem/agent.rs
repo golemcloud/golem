@@ -20,7 +20,7 @@ use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::AgentId;
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
 };
 use golem_common::model::oplog::{

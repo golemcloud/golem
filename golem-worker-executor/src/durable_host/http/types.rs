@@ -20,7 +20,7 @@ use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use desert_rust::BinaryCodec;
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
 use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
@@ -653,7 +653,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
-                        HttpTypesFutureIncomingResponseGet::FQFN.to_string(),
+                        HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
                         &HostRequest::HttpRequest(request),
                         &HostResponse::HttpResponse(HostResponseHttpResponse {
                             response: serializable_response,

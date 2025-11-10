@@ -20,9 +20,7 @@ use crate::model::oplog::types::{
     SerializableDateTime, SerializableHttpErrorCode, SerializableHttpVersion,
     SerializableIpAddress, SerializableIpAddresses,
 };
-use crate::model::oplog::{OplogIndex, WorkerError};
 use crate::model::Timestamp;
-use crate::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -32,11 +30,7 @@ use proptest::strategy::LazyJust;
 use std::num::NonZeroU64;
 use std::ops::Add;
 use std::time::{Duration, SystemTime};
-use uuid::Uuid;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
-use wasmtime_wasi::p2::bindings::{filesystem, sockets};
-use wasmtime_wasi::p2::{FsError, SocketError};
-use wasmtime_wasi::StreamError;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
 };

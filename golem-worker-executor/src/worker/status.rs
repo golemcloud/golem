@@ -787,6 +787,7 @@ mod test {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
 
     #[test]
     async fn empty() {
@@ -1303,7 +1304,7 @@ mod test {
             self.add(
                 OplogEntry::ImportedFunctionInvoked {
                     timestamp: Timestamp::now_utc(),
-                    function_name: name.to_string(),
+                    function_name: HostFunctionName::Custom(name.to_string()),
                     request: OplogPayload::Inline(Box::new(i)),
                     response: OplogPayload::Inline(Box::new(o)),
                     durable_function_type: func_type,

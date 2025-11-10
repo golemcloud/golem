@@ -324,9 +324,11 @@ pub trait HostPayloadPair {
     const INTERFACE: &'static str;
     const FUNCTION: &'static str;
     const FQFN: &'static str;
+
+    const HOST_FUNCTION_NAME: host_functions::HostFunctionName;
 }
 
-pub mod payload_pairs {
+pub mod host_functions {
     use crate::host_payload_pairs;
 
     host_payload_pairs! {

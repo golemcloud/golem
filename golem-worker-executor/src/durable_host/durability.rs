@@ -33,6 +33,7 @@ use std::fmt::{Debug, Display};
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
+use golem_common::model::oplog::host_functions::HostFunctionName;
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -84,7 +85,7 @@ pub trait DurabilityHost {
     /// Writes a record to the worker's oplog representing a durable function invocation
     async fn persist_durable_function_invocation(
         &self,
-        function_name: String,
+        function_name: HostFunctionName,
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,
@@ -269,7 +270,7 @@ impl<Ctx: WorkerCtx> durability::Host for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<()> {
         DurabilityHost::persist_durable_function_invocation(
             self,
-            function_name,
+            HostFunctionName::Custom(function_name),
             &HostRequest::Custom(request.into()),
             &HostResponse::Custom(response.into()),
             function_type.into(),
@@ -334,7 +335,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
     async fn persist_durable_function_invocation(
         &self,
-        function_name: String,
+        function_name: HostFunctionName,
         request: &HostRequest,
         response: &HostResponse,
         function_type: DurableFunctionType,
@@ -382,7 +383,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                         })?;
                     Ok(PersistedDurableFunctionInvocation {
                         timestamp,
-                        function_name,
+                        function_name: function_name.to_string(),
                         response,
                         function_type: durable_function_type,
                         oplog_entry_version: OplogEntryVersion::V2,
@@ -499,10 +500,8 @@ impl<Pair: HostPayloadPair> Durability<Pair> {
         response: HostResponse,
     ) -> Result<HostResponse, WorkerExecutorError> {
         if self.durable_execution_state.snapshotting_mode.is_none() {
-            let function_name = Pair::FQFN;
-
             ctx.persist_durable_function_invocation(
-                function_name.to_string(),
+                Pair::HOST_FUNCTION_NAME,
                 &request,
                 &response,
                 self.function_type.clone(),

@@ -35,7 +35,7 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::workerctx::WorkerCtx;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use golem_common::model::oplog::payload_pairs::*;
+use golem_common::model::oplog::host_functions::*;
 use std::ops::Bound;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};

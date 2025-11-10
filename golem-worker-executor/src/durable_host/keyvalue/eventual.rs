@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     KeyvalueEventualDelete, KeyvalueEventualExists, KeyvalueEventualGet, KeyvalueEventualSet,
 };
 use golem_common::model::oplog::{

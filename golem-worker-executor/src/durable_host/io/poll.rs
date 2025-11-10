@@ -16,7 +16,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendF
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{Duration, Utc};
-use golem_common::model::oplog::payload_pairs::{IoPollPoll, IoPollReady};
+use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,

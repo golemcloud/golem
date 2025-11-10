@@ -30,7 +30,7 @@ use crate::preview2::wasi::blobstore::blobstore::{
     Container, ContainerName, Error, Host, ObjectId,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::payload_pairs;
+use golem_common::model::oplog::host_functions;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn create_container(
@@ -38,7 +38,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreCreateContainer>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreCreateContainer>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -85,7 +85,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreGetContainer>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreGetContainer>::new(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -129,7 +129,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreDeleteContainer>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreDeleteContainer>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -165,7 +165,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreContainerExists>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreContainerExists>::new(
             self,
             DurableFunctionType::ReadRemote,
         )
@@ -202,7 +202,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreCopyObject>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreCopyObject>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -245,7 +245,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
         let account_id = self.state.owned_worker_id.project_id();
-        let durability = Durability::<payload_pairs::BlobstoreBlobstoreMoveObject>::new(
+        let durability = Durability::<host_functions::BlobstoreBlobstoreMoveObject>::new(
             self,
             DurableFunctionType::WriteRemote,
         )

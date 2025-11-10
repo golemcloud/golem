@@ -17,7 +17,7 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::payload_pairs::SocketsIpNameLookupResolveAddresses;
+use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
 use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableSocketError};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestSocketsResolveName, HostResponseSocketsResolveName,

@@ -21,7 +21,7 @@ use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
     HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
 };

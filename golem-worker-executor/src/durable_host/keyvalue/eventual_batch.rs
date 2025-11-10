@@ -19,7 +19,7 @@ use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::payload_pairs::{
+use golem_common::model::oplog::host_functions::{
     KeyvalueEventualBatchDeleteMany, KeyvalueEventualBatchGetKeys, KeyvalueEventualBatchGetMany,
     KeyvalueEventualBatchSetMany,
 };

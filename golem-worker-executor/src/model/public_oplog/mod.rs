@@ -300,7 +300,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::ImportedFunctionInvoked(
                     ImportedFunctionInvokedParams {
                         timestamp,
-                        function_name,
+                        function_name: function_name.to_string(),
                         request: host_request.into_value_and_type(),
                         response: host_response.into_value_and_type(),
                         durable_function_type: durable_function_type.into(),
