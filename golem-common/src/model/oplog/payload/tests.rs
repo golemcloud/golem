@@ -303,4 +303,13 @@ proptest! {
         let decoded = super::types::decode_span_data(encoded);
         prop_assert_eq!(value, decoded);
     }
+
+    #[test]
+    fn roundtrip_ip_address_binary_serialization(value in ipaddress_strat()) {
+        let serialized: SerializableIpAddress = value.into();
+        let bytes = desert_rust::serialize_to_byte_vec(&serialized).unwrap();
+        let deserialized: SerializableIpAddress = desert_rust::deserialize(&bytes).unwrap();
+        prop_assert_eq!(serialized, deserialized);
+    }
+
 }

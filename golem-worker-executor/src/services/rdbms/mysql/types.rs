@@ -304,7 +304,7 @@ impl From<DbValue> for SerializableDbValue {
                 DbValue::Boolean(v) => add_node(target, SerializableDbValueNode::Boolean(v)),
                 DbValue::Tinyint(v) => add_node(target, SerializableDbValueNode::Tinyint(v)),
                 DbValue::Smallint(v) => add_node(target, SerializableDbValueNode::Smallint(v)),
-                DbValue::Mediumint(v) => add_node(target, SerializableDbValueNode::Int(v)),
+                DbValue::Mediumint(v) => add_node(target, SerializableDbValueNode::Mediumint(v)),
                 DbValue::Int(v) => add_node(target, SerializableDbValueNode::Int(v)),
                 DbValue::Bigint(v) => add_node(target, SerializableDbValueNode::Bigint(v)),
                 DbValue::TinyintUnsigned(v) => {
@@ -326,22 +326,22 @@ impl From<DbValue> for SerializableDbValue {
                 DbValue::Double(v) => add_node(target, SerializableDbValueNode::Double(v)),
                 DbValue::Decimal(v) => add_node(target, SerializableDbValueNode::Decimal(v)),
                 DbValue::Date(v) => add_node(target, SerializableDbValueNode::Date(v)),
-                DbValue::Datetime(v) => add_node(target, SerializableDbValueNode::Timestamptz(v)),
+                DbValue::Datetime(v) => add_node(target, SerializableDbValueNode::Datetimetz(v)),
                 DbValue::Timestamp(v) => add_node(target, SerializableDbValueNode::Timestamptz(v)),
                 DbValue::Time(v) => add_node(target, SerializableDbValueNode::Time(v)),
                 DbValue::Year(v) => add_node(target, SerializableDbValueNode::Year(v)),
                 DbValue::Fixchar(v) => add_node(target, SerializableDbValueNode::Bpchar(v)),
                 DbValue::Varchar(v) => add_node(target, SerializableDbValueNode::Varchar(v)),
-                DbValue::Tinytext(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Tinytext(v) => add_node(target, SerializableDbValueNode::Tinytext(v)),
                 DbValue::Text(v) => add_node(target, SerializableDbValueNode::Text(v)),
-                DbValue::Mediumtext(v) => add_node(target, SerializableDbValueNode::Text(v)),
-                DbValue::Longtext(v) => add_node(target, SerializableDbValueNode::Text(v)),
-                DbValue::Binary(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
-                DbValue::Varbinary(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
-                DbValue::Tinyblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
-                DbValue::Blob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
-                DbValue::Mediumblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
-                DbValue::Longblob(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Mediumtext(v) => add_node(target, SerializableDbValueNode::Mediumtext(v)),
+                DbValue::Longtext(v) => add_node(target, SerializableDbValueNode::Longtext(v)),
+                DbValue::Binary(v) => add_node(target, SerializableDbValueNode::Binary(v)),
+                DbValue::Varbinary(v) => add_node(target, SerializableDbValueNode::Varbinary(v)),
+                DbValue::Tinyblob(v) => add_node(target, SerializableDbValueNode::Tinyblob(v)),
+                DbValue::Blob(v) => add_node(target, SerializableDbValueNode::Blob(v)),
+                DbValue::Mediumblob(v) => add_node(target, SerializableDbValueNode::Mediumblob(v)),
+                DbValue::Longblob(v) => add_node(target, SerializableDbValueNode::Longblob(v)),
                 DbValue::Enumeration(v) => add_node(
                     target,
                     SerializableDbValueNode::Enumeration(
@@ -376,6 +376,7 @@ impl TryFrom<SerializableDbValue> for DbValue {
             SerializableDbValueNode::Boolean(v) => Ok(DbValue::Boolean(v)),
             SerializableDbValueNode::Tinyint(v) => Ok(DbValue::Tinyint(v)),
             SerializableDbValueNode::Smallint(v) => Ok(DbValue::Smallint(v)),
+            SerializableDbValueNode::Mediumint(v) => Ok(DbValue::Mediumint(v)),
             SerializableDbValueNode::Int(v) => Ok(DbValue::Int(v)),
             SerializableDbValueNode::Bigint(v) => Ok(DbValue::Bigint(v)),
             SerializableDbValueNode::TinyintUnsigned(v) => Ok(DbValue::TinyintUnsigned(v)),
@@ -387,13 +388,22 @@ impl TryFrom<SerializableDbValue> for DbValue {
             SerializableDbValueNode::Double(v) => Ok(DbValue::Double(v)),
             SerializableDbValueNode::Decimal(v) => Ok(DbValue::Decimal(v)),
             SerializableDbValueNode::Date(v) => Ok(DbValue::Date(v)),
-            SerializableDbValueNode::Timestamptz(v) => Ok(DbValue::Datetime(v)),
+            SerializableDbValueNode::Datetimetz(v) => Ok(DbValue::Datetime(v)),
+            SerializableDbValueNode::Timestamptz(v) => Ok(DbValue::Timestamp(v)),
             SerializableDbValueNode::Time(v) => Ok(DbValue::Time(v)),
             SerializableDbValueNode::Year(v) => Ok(DbValue::Year(v)),
             SerializableDbValueNode::Bpchar(v) => Ok(DbValue::Fixchar(v)),
             SerializableDbValueNode::Varchar(v) => Ok(DbValue::Varchar(v)),
+            SerializableDbValueNode::Tinytext(v) => Ok(DbValue::Tinytext(v)),
             SerializableDbValueNode::Text(v) => Ok(DbValue::Text(v)),
-            SerializableDbValueNode::Bytea(v) => Ok(DbValue::Blob(v)),
+            SerializableDbValueNode::Mediumtext(v) => Ok(DbValue::Mediumtext(v)),
+            SerializableDbValueNode::Longtext(v) => Ok(DbValue::Longtext(v)),
+            SerializableDbValueNode::Binary(v) => Ok(DbValue::Binary(v)),
+            SerializableDbValueNode::Varbinary(v) => Ok(DbValue::Varbinary(v)),
+            SerializableDbValueNode::Tinyblob(v) => Ok(DbValue::Tinyblob(v)),
+            SerializableDbValueNode::Blob(v) => Ok(DbValue::Blob(v)),
+            SerializableDbValueNode::Mediumblob(v) => Ok(DbValue::Mediumblob(v)),
+            SerializableDbValueNode::Longblob(v) => Ok(DbValue::Longblob(v)),
             SerializableDbValueNode::Enumeration(e) => Ok(DbValue::Enumeration(e.value)),
             SerializableDbValueNode::Set(v) => Ok(DbValue::Set(v)),
             SerializableDbValueNode::Bit(v) => Ok(DbValue::Bit(v)),
@@ -544,5 +554,143 @@ pub mod tests {
             mysql_types::DbValue::Year(2020),
             mysql_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
         ]
+    }
+
+    mod roundtrip_tests {
+        use super::super::*;
+        use golem_common::model::oplog::payload::types::SerializableDbValue;
+        use serde_json::json;
+        use std::str::FromStr;
+        use test_r::test;
+
+        #[test]
+        fn test_dbvalue_roundtrip_simple_types() {
+            let test_values = vec![
+                DbValue::Int(42),
+                DbValue::Varchar("hello".to_string()),
+                DbValue::Boolean(true),
+                DbValue::Null,
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for {:?}",
+                    original
+                );
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_numeric_types() {
+            let test_values = vec![
+                DbValue::Tinyint(1),
+                DbValue::Smallint(2),
+                DbValue::Mediumint(3),
+                DbValue::Bigint(5),
+                DbValue::Float(6.0),
+                DbValue::Double(7.0),
+                DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
+                DbValue::TinyintUnsigned(10),
+                DbValue::SmallintUnsigned(20),
+                DbValue::MediumintUnsigned(30),
+                DbValue::IntUnsigned(40),
+                DbValue::BigintUnsigned(50),
+            ];
+
+            for value in test_values {
+                let serialized: SerializableDbValue = value.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(value, deserialized, "roundtrip failed for numeric type");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_temporal_types() {
+            let test_values = vec![
+                DbValue::Date(chrono::NaiveDate::from_ymd_opt(2030, 10, 12).unwrap()),
+                DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
+                    chrono::NaiveDateTime::new(
+                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    ),
+                    chrono::Utc,
+                )),
+                DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+                DbValue::Year(2020),
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for temporal type");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_string_types() {
+            let test_values = vec![
+                DbValue::Fixchar("fixed".to_string()),
+                DbValue::Varchar("varchar".to_string()),
+                DbValue::Tinytext("tiny".to_string()),
+                DbValue::Text("text".to_string()),
+                DbValue::Mediumtext("medium".to_string()),
+                DbValue::Longtext("long".to_string()),
+                DbValue::Enumeration("enum_value".to_string()),
+                DbValue::Set("set_value".to_string()),
+                DbValue::Json(json!({"key": "value"}).to_string()),
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for string type");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_binary_types() {
+            let test_values = vec![
+                DbValue::Binary(vec![1, 2, 3]),
+                DbValue::Varbinary(vec![4, 5, 6]),
+                DbValue::Tinyblob(vec![7, 8, 9]),
+                DbValue::Blob(vec![10, 11, 12]),
+                DbValue::Mediumblob(vec![13, 14, 15]),
+                DbValue::Longblob(vec![16, 17, 18]),
+                DbValue::Bit(BitVec::from_iter([true, false, true])),
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for binary type");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_all_test_values() {
+            let test_values = super::get_test_db_values();
+
+            for (idx, original) in test_values.into_iter().enumerate() {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized
+                    .try_into()
+                    .expect(&format!("deserialization failed for test value {}", idx));
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for test value at index {}",
+                    idx
+                );
+            }
+        }
     }
 }

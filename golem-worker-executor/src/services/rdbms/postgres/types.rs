@@ -572,7 +572,7 @@ impl TryFrom<SerializableDbValue> for DbValue {
             }
         }
 
-        if value.nodes.len() == 1 {
+        if value.nodes.is_empty() {
             return Err("Empty SerializableDbValue".to_string());
         }
 
@@ -1401,5 +1401,107 @@ pub mod tests {
                 ),
             ))),
         ]
+    }
+
+    mod roundtrip_tests {
+        use super::super::*;
+        use golem_common::model::oplog::payload::types::SerializableDbValue;
+        use test_r::test;
+
+        #[test]
+        fn test_dbvalue_roundtrip_simple_types() {
+            let test_values = vec![
+                DbValue::Int4(42),
+                DbValue::Text("hello".to_string()),
+                DbValue::Boolean(true),
+                DbValue::Null,
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for {:?}", original);
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_arrays() {
+            let test_values = vec![
+                DbValue::Array(vec![
+                    DbValue::Int4(1),
+                    DbValue::Int4(2),
+                    DbValue::Int4(3),
+                ]),
+                DbValue::Array(vec![
+                    DbValue::Text("a".to_string()),
+                    DbValue::Text("b".to_string()),
+                ]),
+                DbValue::Array(vec![]),
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for array");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_composite() {
+            let original = DbValue::Composite(Composite::new(
+                "test_composite".to_string(),
+                vec![
+                    DbValue::Int4(42),
+                    DbValue::Text("hello".to_string()),
+                ],
+            ));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for composite");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_domain() {
+            let original = DbValue::Domain(Box::new(Domain::new(
+                "my_domain".to_string(),
+                DbValue::Int8(100),
+            )));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for domain");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_range() {
+            let original = DbValue::Range(Box::new(Range::new(
+                "int4range".to_string(),
+                ValuesRange::new(
+                    std::collections::Bound::Included(DbValue::Int4(1)),
+                    std::collections::Bound::Excluded(DbValue::Int4(10)),
+                ),
+            )));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for range");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_all_test_values() {
+            let test_values = super::get_test_db_values();
+
+            for (idx, original) in test_values.into_iter().enumerate() {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue =
+                    serialized.try_into().expect(&format!("deserialization failed for test value {}", idx));
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for test value {} at index {}",
+                    idx, idx
+                );
+            }
+        }
     }
 }

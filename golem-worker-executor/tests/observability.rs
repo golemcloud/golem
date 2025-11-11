@@ -270,7 +270,10 @@ async fn get_oplog_with_api_changing_updates(
         .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 17);
+
+    let _ = executor.check_oplog_is_queryable(&worker_id).await;
+
+    assert_eq!(oplog.len(), 11);
 }
 
 #[test]

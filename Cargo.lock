@@ -2988,9 +2988,9 @@ dependencies = [
 
 [[package]]
 name = "desert_core"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be2b849ed8f5ff33cf37f12dddc512ae06a394cb256938516b249c2afcadf084"
+checksum = "e5260e1dc286b2bb7e4de5f6475ac25261b90b670aad4d82eb2d22c5c7372a5e"
 dependencies = [
  "bigdecimal",
  "bit-vec 0.6.3",
@@ -3005,15 +3005,16 @@ dependencies = [
  "nonempty-collections",
  "once_cell",
  "serde_json",
+ "stable-intrinsics",
  "url",
  "uuid",
 ]
 
 [[package]]
 name = "desert_macro"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f69bdc4ae6ce9a3e03b557468bdb2de9fa7903af66d681e7e24b4d84562683a"
+checksum = "c8030aa9493e9bfe934f29746ff6d53083bb78bcd0d3e8a26462175c4cd9210d"
 dependencies = [
  "bytes 1.10.1",
  "desert_core",
@@ -3025,9 +3026,9 @@ dependencies = [
 
 [[package]]
 name = "desert_rust"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c54698e753d8697a1d2ba2fdb51d8774edef29cce60e0c33d8e2efe66312239"
+checksum = "613c7a38c5910b58f6ecf2ee304787268e3aa8e93d3153f176510d3b4ad58c33"
 dependencies = [
  "desert_core",
  "desert_macro",
@@ -10664,6 +10665,15 @@ dependencies = [
  "futures-io",
  "futures_codec",
  "memchr",
+]
+
+[[package]]
+name = "stable-intrinsics"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "280951ef0d09e36756bee26e4d72f3d7af006ebd6bea4e1d021d010ab08b47be"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
