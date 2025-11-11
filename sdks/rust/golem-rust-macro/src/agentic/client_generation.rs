@@ -72,6 +72,8 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             }
 
             let method_name = &method.sig.ident;
+            let trigger_method_name = format_ident!("trigger_{}", method_name);
+            let schedule_method_name = format_ident!("schedule_{}", method_name);
 
             let remote_method_name = rpc_invoke_method_name(&agent_type_name, &method_name.to_string());
 
@@ -80,6 +82,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                    #remote_method_name
                 }
             };
+
 
             let inputs: Vec<_> = method.sig.inputs.iter().collect();
 
@@ -137,6 +140,33 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           <#return_type as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
 
                         }
+
+                        pub fn #trigger_method_name(#(#inputs),*) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+
+                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke(
+                            #remote_method_name_token,
+                            &wit_values
+                          );
+
+                          rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
+                        }
+
+                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+
+                          wasm_rpc.schedule_invocation(
+                            scheduled_time,
+                            #remote_method_name_token,
+                            &wit_values
+                          );
+                        }
                      }),
                   (ParamType::Tuple, ParamType::Multimodal) => {
                     Some(quote!{
@@ -162,6 +192,33 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           // If its multimodal, we cannot use Schema instance directly, we need to enumerate the values from multimodal
                           // and apply them separately.
                           todo!("Multimodal output parameter handling not implemented yet");
+                        }
+
+                        pub fn #trigger_method_name(#(#inputs),*) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+
+                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke(
+                            #remote_method_name_token,
+                            &wit_values
+                          );
+
+                          rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
+                        }
+
+                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
+
+                          wasm_rpc.schedule_invocation(
+                            scheduled_time,
+                            #remote_method_name_token,
+                            &wit_values
+                          );
                         }
                      })
                   },

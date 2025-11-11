@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wasm_rpc::WitValue;
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
+use crate::wasm_rpc::WitValue;
+use golem_wasm::analysis::{AnalysedType, TypeResult};
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::{Value, WitType};
 
 pub trait Schema {
     fn get_type() -> ElementSchema;
@@ -75,5 +76,30 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
             }
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
+    }
+}
+
+impl Schema for () {
+    fn get_type() -> ElementSchema {
+        let analysed_type = AnalysedType::Result(TypeResult {
+            name: None,
+            owner: None,
+            ok: None,
+            err: None,
+        });
+        let wit_type = WitType::from(analysed_type);
+        ElementSchema::ComponentModel(wit_type)
+    }
+
+    fn to_element_value(self) -> Result<ElementValue, String> {
+        let value = Value::Result(Ok(None));
+        Ok(ElementValue::ComponentModel(WitValue::from(value)))
+    }
+
+    fn from_element_value(_value: ElementValue, _schema: ElementSchema) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        Ok(())
     }
 }

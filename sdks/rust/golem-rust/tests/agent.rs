@@ -16,6 +16,7 @@
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
+    use golem_wasm::golem_rpc_0_2_x::types::Datetime;
 
     #[agent_definition]
     trait Echo {
@@ -78,6 +79,8 @@ mod tests {
         async fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         async fn echo_option(&self, option: Option<String>) -> Option<String>;
         async fn rpc_call(&self, string: String) -> String;
+        fn rpc_call_trigger(&self, string: String);
+        fn rpc_call_schedule(&self, string: String);
     }
 
     struct EchoAsyncImpl {
@@ -120,6 +123,22 @@ mod tests {
         async fn rpc_call(&self, string: String) -> String {
             let client = EchoClient::get(self.id.clone());
             client.echo(string).await
+        }
+
+        fn rpc_call_trigger(&self, string: String) {
+            let client = EchoClient::get(self.id.clone());
+            client.trigger_echo(string);
+        }
+
+        fn rpc_call_schedule(&self, string: String) {
+            let client = EchoClient::get(self.id.clone());
+            client.schedule_echo(
+                string,
+                Datetime {
+                    seconds: 1,
+                    nanoseconds: 1,
+                },
+            );
         }
     }
 
