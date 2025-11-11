@@ -1420,18 +1420,18 @@ pub mod tests {
             for original in test_values {
                 let serialized: SerializableDbValue = original.clone().into();
                 let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
-                assert_eq!(original, deserialized, "roundtrip failed for {:?}", original);
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for {:?}",
+                    original
+                );
             }
         }
 
         #[test]
         fn test_dbvalue_roundtrip_arrays() {
             let test_values = vec![
-                DbValue::Array(vec![
-                    DbValue::Int4(1),
-                    DbValue::Int4(2),
-                    DbValue::Int4(3),
-                ]),
+                DbValue::Array(vec![DbValue::Int4(1), DbValue::Int4(2), DbValue::Int4(3)]),
                 DbValue::Array(vec![
                     DbValue::Text("a".to_string()),
                     DbValue::Text("b".to_string()),
@@ -1450,10 +1450,7 @@ pub mod tests {
         fn test_dbvalue_roundtrip_composite() {
             let original = DbValue::Composite(Composite::new(
                 "test_composite".to_string(),
-                vec![
-                    DbValue::Int4(42),
-                    DbValue::Text("hello".to_string()),
-                ],
+                vec![DbValue::Int4(42), DbValue::Text("hello".to_string())],
             ));
 
             let serialized: SerializableDbValue = original.clone().into();
@@ -1494,8 +1491,9 @@ pub mod tests {
 
             for (idx, original) in test_values.into_iter().enumerate() {
                 let serialized: SerializableDbValue = original.clone().into();
-                let deserialized: DbValue =
-                    serialized.try_into().expect(&format!("deserialization failed for test value {}", idx));
+                let deserialized: DbValue = serialized
+                    .try_into()
+                    .expect(&format!("deserialization failed for test value {}", idx));
                 assert_eq!(
                     original, deserialized,
                     "roundtrip failed for test value {} at index {}",

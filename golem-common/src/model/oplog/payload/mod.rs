@@ -458,8 +458,7 @@ impl<T: BinaryCodec + Debug + Clone + PartialEq> BinarySerializer for OplogPaylo
         match self {
             OplogPayload::Inline(value) => {
                 context.write_u8(0);
-                let bytes = serialize(value)
-                    .map_err(|err| desert_rust::Error::SerializationFailure(err))?;
+                let bytes = serialize(value).map_err(desert_rust::Error::SerializationFailure)?;
                 bytes.serialize(context)
             }
             OplogPayload::SerializedInline(bytes) => {

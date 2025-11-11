@@ -19,9 +19,7 @@ use crate::model::oplog::DurableFunctionType;
 use crate::model::plugin::{PluginDefinition, PluginInstallation};
 use crate::model::{Empty, IdempotencyKey, RetryConfig, Timestamp};
 use desert_rust::BinaryCodec;
-use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
-use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{IntoValue, Value, ValueAndType, WitValue};
+use golem_wasm::ValueAndType;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -55,7 +53,9 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object)]
+#[derive(
+    Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object,
+)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionParameters {
