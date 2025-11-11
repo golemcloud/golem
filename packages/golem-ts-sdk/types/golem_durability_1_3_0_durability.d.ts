@@ -1,6 +1,6 @@
-declare module 'golem:durability/durability@1.2.1' {
-  import * as golemApi117Host from 'golem:api/host@1.1.7';
-  import * as golemApi117Oplog from 'golem:api/oplog@1.1.7';
+declare module 'golem:durability/durability@1.3.0' {
+  import * as golemApi130Host from 'golem:api/host@1.3.0';
+  import * as golemApi130Oplog from 'golem:api/oplog@1.3.0';
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
@@ -30,24 +30,14 @@ declare module 'golem:durability/durability@1.2.1' {
   export function currentDurableExecutionState(): DurableExecutionState;
   /**
    * Writes a record to the agent's oplog representing a durable function invocation
-   */
-  export function persistDurableFunctionInvocation(functionName: string, request: Uint8Array, response: Uint8Array, functionType: DurableFunctionType): void;
-  /**
-   * Writes a record to the agent's oplog representing a durable function invocation
    * The request and response are defined as pairs of value and type, which makes it
-   * self-describing for observers of oplogs. This is the recommended way to persist
-   * third-party function invocations.
+   * self-describing for observers of oplogs.
    */
-  export function persistTypedDurableFunctionInvocation(functionName: string, request: ValueAndType, response: ValueAndType, functionType: DurableFunctionType): void;
+  export function persistDurableFunctionInvocation(functionName: string, request: ValueAndType, response: ValueAndType, functionType: DurableFunctionType): void;
   /**
    * Reads the next persisted durable function invocation from the oplog during replay
    */
   export function readPersistedDurableFunctionInvocation(): PersistedDurableFunctionInvocation;
-  /**
-   * Reads the next persisted durable function invocation from the oplog during replay, assuming it
-   * was created with `persist-typed-durable-function-invocation`
-   */
-  export function readPersistedTypedDurableFunctionInvocation(): PersistedTypedDurableFunctionInvocation;
   export class LazyInitializedPollable {
     /**
      * Creates a `pollable` that is never ready until it gets attached to a real `pollable` implementation
@@ -60,9 +50,9 @@ declare module 'golem:durability/durability@1.2.1' {
     set(pollable: Pollable): void;
     subscribe(): Pollable;
   }
-  export type PersistenceLevel = golemApi117Host.PersistenceLevel;
-  export type OplogIndex = golemApi117Oplog.OplogIndex;
-  export type WrappedFunctionType = golemApi117Oplog.WrappedFunctionType;
+  export type PersistenceLevel = golemApi130Host.PersistenceLevel;
+  export type OplogIndex = golemApi130Oplog.OplogIndex;
+  export type WrappedFunctionType = golemApi130Oplog.WrappedFunctionType;
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type Pollable = wasiIo023Poll.Pollable;
   export type ValueAndType = golemRpc022Types.ValueAndType;
@@ -85,28 +75,10 @@ declare module 'golem:durability/durability@1.2.1' {
    */
   export type OplogEntryVersion = "v1" | "v2";
   /**
-   * Represents a raw persisted durable function invocation. This record is not self-describing, the `response` field
-   * can store an arbitrary data. This is used internally for some predefined invocations. For user-defined custom
-   * durability, the `typed` variants are recommended, as those contain type information about the payload that can
-   * be used by tools to observe the contents of the entries.
-   */
-  export type PersistedDurableFunctionInvocation = {
-    /** The timestamp of the invocation. */
-    timestamp: Datetime;
-    /** The invoked function's unique name */
-    functionName: string;
-    /** Arbitrary byte array storing the persisted result of the function */
-    response: Uint8Array;
-    /** Type of the durable function invocation */
-    functionType: DurableFunctionType;
-    /** Oplog entry version */
-    entryVersion: OplogEntryVersion;
-  };
-  /**
-   * The typed, self-describing version of `persisted-durable-function-invocation`. The difference is that the `response` field
+   * Represents a persisted durable function invocation. The `response` field
    * contains a value and its type information together, making the user-defined payload observable by external tools.
    */
-  export type PersistedTypedDurableFunctionInvocation = {
+  export type PersistedDurableFunctionInvocation = {
     /** The timestamp of the invocation. */
     timestamp: Datetime;
     /** The invoked function's unique name */

@@ -1,7 +1,7 @@
 /**
  * Invocation context support
  */
-declare module 'golem:api/context@1.1.7' {
+declare module 'golem:api/context@1.3.0' {
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   /**
    * Starts a new `span` with the given name, as a child of the current invocation context

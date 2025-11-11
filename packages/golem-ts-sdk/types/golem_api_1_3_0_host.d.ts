@@ -2,7 +2,7 @@
  * The Golem host API provides low level access to Golem specific features such as promises and control over
  * the durability and transactional guarantees the executor provides.
  */
-declare module 'golem:api/host@1.1.7' {
+declare module 'golem:api/host@1.3.0' {
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
   import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';

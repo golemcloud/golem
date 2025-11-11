@@ -200,7 +200,6 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     tag: 'smallint'
     val: number
   } |
-  /** s24 */
   {
     tag: 'mediumint'
     val: number
@@ -221,7 +220,6 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     tag: 'smallint-unsigned'
     val: number
   } |
-  /** u24 */
   {
     tag: 'mediumint-unsigned'
     val: number
