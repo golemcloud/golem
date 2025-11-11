@@ -2,7 +2,7 @@ use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
 use crate::{ResourceMode, Uri, WitNode, WitType, WitTypeNode, WitValue};
 use desert_rust::adt::{AdtMetadata, AdtSerializer};
 use desert_rust::{
-    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, Evolution,
     SerializationContext,
 };
 use lazy_static::lazy_static;
@@ -40,29 +40,51 @@ impl BinaryDeserializer for WitValue {
 }
 
 lazy_static! {
-    static ref WIT_NODE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_RECORD_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_VARIANT_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_ENUM_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_FLAGS_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_TUPLE_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_LIST_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_OPTION_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_RESULT_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_PRIM_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_NODE_HANDLE_VALUE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_RECORD_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_VARIANT_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_ENUM_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_FLAGS_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_TUPLE_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_LIST_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_OPTION_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_RESULT_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_HANDLE_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref WIT_TYPE_NODE_PRIM_TYPE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref NAMED_WIT_TYPE_NODE_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
+    static ref WIT_NODE_METADATA: AdtMetadata = AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_RECORD_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_VARIANT_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_ENUM_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_FLAGS_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_TUPLE_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_LIST_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_OPTION_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_RESULT_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_PRIM_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_NODE_HANDLE_VALUE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_RECORD_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_VARIANT_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_ENUM_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_FLAGS_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_TUPLE_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_LIST_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_OPTION_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_RESULT_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_HANDLE_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref WIT_TYPE_NODE_PRIM_TYPE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref NAMED_WIT_TYPE_NODE_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
 }
 
 impl BinarySerializer for WitNode {

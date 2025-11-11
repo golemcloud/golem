@@ -18,7 +18,7 @@ use crate::model::Timestamp;
 use desert_rust::adt::{AdtDeserializer, AdtMetadata, AdtSerializer};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
+    Evolution, SerializationContext,
 };
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{FromValue, IntoValue, Value};
@@ -323,6 +323,11 @@ impl LocalInvocationContextSpanBuilder {
             linked_context: None,
             inherited: false,
         }
+    }
+
+    pub fn rounded(mut self) -> Self {
+        self.start = self.start.rounded();
+        self
     }
 
     pub fn span_id(mut self, span_id: Option<SpanId>) -> Self {
@@ -676,10 +681,12 @@ impl PartialEq for InvocationContextSpan {
 }
 
 lazy_static! {
-    static ref INVOCATION_CONTEXT_SPAN_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
-    static ref INVOCATION_CONTEXT_SPAN_LOCAL_METADATA: AdtMetadata = AdtMetadata::new(vec![]);
+    static ref INVOCATION_CONTEXT_SPAN_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref INVOCATION_CONTEXT_SPAN_LOCAL_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
     static ref INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA: AdtMetadata =
-        AdtMetadata::new(vec![]);
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
 }
 
 impl BinarySerializer for InvocationContextSpan {
@@ -710,12 +717,15 @@ impl BinarySerializer for InvocationContextSpan {
                 serializer.finish()
             }
             InvocationContextSpan::ExternalParent { span_id } => {
-                let mut inner = AdtSerializer::new_v0(
-                    &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
-                    context,
-                );
-                inner.write_field("span_id", span_id)?;
-                inner.finish()
+                serializer.write_constructor(1, |context| {
+                    let mut inner = AdtSerializer::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                    );
+                    inner.write_field("span_id", span_id)?;
+                    inner.finish()
+                })?;
+                serializer.finish()
             }
         }
     }
@@ -804,6 +814,16 @@ impl InvocationContextStack {
     pub fn fresh() -> Self {
         let trace_id = TraceId::generate();
         let root = InvocationContextSpan::local().build();
+        Self {
+            trace_id,
+            spans: NEVec::new(root),
+            trace_states: Vec::new(),
+        }
+    }
+
+    pub fn fresh_rounded() -> Self {
+        let trace_id = TraceId::generate();
+        let root = InvocationContextSpan::local().rounded().build();
         Self {
             trace_id,
             spans: NEVec::new(root),

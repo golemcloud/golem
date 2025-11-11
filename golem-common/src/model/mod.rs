@@ -151,7 +151,7 @@ impl BinarySerializer for Timestamp {
             &(self
                 .0
                 .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
-                .whole_milliseconds() as i64),
+                .whole_milliseconds() as u64),
             context,
         )
     }
@@ -159,9 +159,9 @@ impl BinarySerializer for Timestamp {
 
 impl BinaryDeserializer for Timestamp {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
-        let timestamp: i64 = BinaryDeserializer::deserialize(context)?;
+        let timestamp: u64 = BinaryDeserializer::deserialize(context)?;
         Ok(Timestamp(
-            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
+            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp)),
         ))
     }
 }

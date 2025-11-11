@@ -237,7 +237,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             "f2".to_string(),
             &vec!["request".into_value()],
             IdempotencyKey::fresh(),
-            InvocationContextStack::fresh(),
+            InvocationContextStack::fresh_rounded(),
         )
         .await
         .unwrap()
@@ -261,10 +261,16 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await;
-    let r2 = oplog.read(last_oplog_idx.next().next()).await;
-    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
-    let r4 = oplog.read(last_oplog_idx.next().next().next().next()).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r3 = oplog
+        .read(last_oplog_idx.next().next().next())
+        .await
+        .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next())
+        .await
+        .rounded();
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
@@ -275,7 +281,10 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .read(&owned_worker_id, last_oplog_idx.next(), 4)
         .await;
     assert_eq!(
-        entries.into_values().collect::<Vec<_>>(),
+        entries
+            .into_values()
+            .map(|entry| entry.rounded())
+            .collect::<Vec<_>>(),
         vec![
             entry1.clone(),
             entry2.clone(),
@@ -381,7 +390,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             "f2".to_string(),
             &vec![large_payload2.clone().into_value()],
             IdempotencyKey::fresh(),
-            InvocationContextStack::fresh(),
+            InvocationContextStack::fresh_rounded(),
         )
         .await
         .unwrap()
@@ -405,10 +414,16 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
     oplog.commit(CommitLevel::Always).await;
 
-    let r1 = oplog.read(last_oplog_idx.next()).await;
-    let r2 = oplog.read(last_oplog_idx.next().next()).await;
-    let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
-    let r4 = oplog.read(last_oplog_idx.next().next().next().next()).await;
+    let r1 = oplog.read(last_oplog_idx.next()).await.rounded();
+    let r2 = oplog.read(last_oplog_idx.next().next()).await.rounded();
+    let r3 = oplog
+        .read(last_oplog_idx.next().next().next())
+        .await
+        .rounded();
+    let r4 = oplog
+        .read(last_oplog_idx.next().next().next().next())
+        .await
+        .rounded();
 
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
@@ -419,7 +434,10 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .read(&owned_worker_id, last_oplog_idx.next(), 4)
         .await;
     assert_eq!(
-        entries.into_values().collect::<Vec<_>>(),
+        entries
+            .into_values()
+            .map(|entry| entry.rounded())
+            .collect::<Vec<_>>(),
         vec![
             entry1.clone(),
             entry2.clone(),
