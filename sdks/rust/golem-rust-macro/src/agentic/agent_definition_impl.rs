@@ -155,9 +155,13 @@ fn get_agent_type_with_remote_client(
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
-                            output_parameters.push(quote! {
-                                ("return-value".to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
-                            });
+                            let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
+
+                            if !is_unit {
+                                output_parameters.push(quote! {
+                                    ("return-value".to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
+                                });
+                            }
                         }
                     };
                 },
@@ -177,9 +181,10 @@ fn get_agent_type_with_remote_client(
             };
 
             let output_schema = match output_param_type.param_type {
-                ParamType::Tuple => quote! {
-                    golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
-                },
+                ParamType::Tuple =>
+                    quote! {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
+                    },
                 ParamType::Multimodal => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#output_parameters),*])
                 },

@@ -111,6 +111,27 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                 syn::ReturnType::Default => quote! { () },
             };
 
+            let process_invoke_result = match &method.sig.output {
+                syn::ReturnType::Type(_, ty) => {
+                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
+
+                    if !is_unit {
+                        quote! {
+                            let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
+                            let element_schema = <#ty as golem_rust::agentic::Schema>::get_type();
+                            <#ty as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
+                        }
+                    } else {
+                        quote! {
+                            ()
+                        }
+                    }
+                },
+                syn::ReturnType::Default => quote! {
+                    ()
+                },
+            };
+
             // Depending on the input parameter type and output parameter type generate different implementations
             let input_parameter_type = get_input_param_type(&method.sig);
 
@@ -134,12 +155,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
 
-                          let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
-
-                          let element_schema = <#return_type as golem_rust::agentic::Schema>::get_type();
-
-                          <#return_type as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
-
+                          #process_invoke_result
                         }
 
                         pub fn #trigger_method_name(#(#inputs),*) {

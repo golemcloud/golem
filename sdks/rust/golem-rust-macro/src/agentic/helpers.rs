@@ -21,6 +21,7 @@ pub struct InputParamType {
 pub struct OutputParamType {
     pub param_type: ParamType,
     pub function_kind: FunctionKind,
+    pub is_unit: bool,
 }
 
 pub enum FunctionKind {
@@ -62,19 +63,30 @@ pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
                 return OutputParamType {
                     param_type: ParamType::Multimodal,
                     function_kind,
+                    is_unit: false,
                 };
             }
         } else if is_multimodal_type(ty) {
             return OutputParamType {
                 param_type: ParamType::Multimodal,
                 function_kind,
+                is_unit: false,
             };
         }
     }
 
+    let is_unit = match &sig.output {
+        ReturnType::Type(_, ty) => match &**ty {
+            Type::Tuple(tuple) => tuple.elems.is_empty(),
+            _ => false,
+        },
+        _ => true,
+    };
+
     OutputParamType {
         param_type: ParamType::Tuple,
         function_kind,
+        is_unit,
     }
 }
 

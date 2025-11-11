@@ -177,7 +177,7 @@ fn build_match_arms(
 
             let post_method_param_extraction_logic = match output_param_type.param_type {
                 ParamType::Tuple => match output_param_type.function_kind {
-                    FunctionKind::Async => Some(quote! {
+                    FunctionKind::Async if !output_param_type.is_unit => Some(quote! {
                         let result = self.#ident(#(#param_idents),*).await;
                         <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
                             golem_rust::agentic::custom_error(format!(
@@ -188,7 +188,11 @@ fn build_match_arms(
                             golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                         })
                     }),
-                    FunctionKind::Sync => Some(quote! {
+                    FunctionKind::Async => Some(quote! {
+                        let _ = self.#ident(#(#param_idents),*).await;
+                        Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
+                    }),
+                    FunctionKind::Sync if !output_param_type.is_unit => Some(quote! {
                         let result = self.#ident(#(#param_idents),*);
                         <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
                             golem_rust::agentic::custom_error(format!(
@@ -198,6 +202,10 @@ fn build_match_arms(
                         }).map(|element_value| {
                             golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                         })
+                    }),
+                    FunctionKind::Sync => Some(quote! {
+                        let _ = self.#ident(#(#param_idents),*);
+                        Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
                     }),
                 },
                 ParamType::Multimodal => None,
@@ -225,7 +233,7 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    call_back_for_non_multimodal: Option<proc_macro2::TokenStream>,
+    post_method_param_extraction_logic: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -265,10 +273,10 @@ fn generate_method_param_extraction(
         }
     }).collect();
 
-    match call_back_for_non_multimodal {
-        Some(call_back) => quote! {
+    match post_method_param_extraction_logic {
+        Some(post_method_param_extraction) => quote! {
             #(#extraction)*
-            #call_back
+            #post_method_param_extraction
         },
 
         None => quote! {

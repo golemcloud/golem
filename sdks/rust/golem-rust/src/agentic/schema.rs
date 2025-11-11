@@ -78,28 +78,3 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
         }
     }
 }
-
-impl Schema for () {
-    fn get_type() -> ElementSchema {
-        let analysed_type = AnalysedType::Result(TypeResult {
-            name: None,
-            owner: None,
-            ok: None,
-            err: None,
-        });
-        let wit_type = WitType::from(analysed_type);
-        ElementSchema::ComponentModel(wit_type)
-    }
-
-    fn to_element_value(self) -> Result<ElementValue, String> {
-        let value = Value::Result(Ok(None));
-        Ok(ElementValue::ComponentModel(WitValue::from(value)))
-    }
-
-    fn from_element_value(_value: ElementValue, _schema: ElementSchema) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        Ok(())
-    }
-}
