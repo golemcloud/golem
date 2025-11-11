@@ -17,7 +17,7 @@ import * as Either from '../src/newTypes/either';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect } from 'vitest';
-import * as GolemApiHostModule from 'golem:api/host@1.1.7';
+import * as GolemApiHostModule from 'golem:api/host@1.3.0';
 import {
   BarAgentClassName,
   BarAgentCustomClassName,

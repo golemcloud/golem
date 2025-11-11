@@ -28,7 +28,7 @@ import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getSelfMetadata } from 'golem:api/host@1.1.7';
+import { getSelfMetadata } from 'golem:api/host@1.3.0';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';

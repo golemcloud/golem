@@ -20,7 +20,7 @@ import { vi } from 'vitest';
 // it executes only when `initiate` is called.
 // Also, these mocks are just place-holders. We can override the behavior
 // per tests by spyOn.
-vi.mock('golem:api/host@1.1.7', () => ({
+vi.mock('golem:api/host@1.3.0', () => ({
   getSelfMetadata: () => ({
     workerId: {
       componentId: {
