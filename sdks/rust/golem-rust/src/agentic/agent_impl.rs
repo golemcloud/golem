@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::{
-    agentic::AgentTypeName,
+    agentic::{
+        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
+    },
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
 use crate::agentic::agent_registry;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-
-use golem_wasm::analysis::analysed_type::str;
 
 pub struct Component;
 
@@ -47,58 +47,27 @@ impl Guest for Component {
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
-        let initiate_result =
-            agent_registry::with_agent_initiator(&agent_type_name, |agent_initiator| {
-                agent_initiator.initiate(input)
-            });
-
-        if let Some(result) = initiate_result {
-            result.map(|_| ())
-        } else {
-            Err(AgentError::CustomError(
-                golem_wasm::ValueAndType::new(
-                    golem_wasm::Value::String(format!(
-                        "No agent implementation found for agent definition: {}",
-                        agent_type.type_name
-                    )),
-                    str(),
-                )
-                .into(),
-            ))
-        }
+        with_agent_initiator(
+            |initiator| async move { initiator.initiate(input).await.map(|_| ()) },
+            &agent_type_name,
+        )
     }
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
-        let result = agent_registry::with_agent_instance(|resolved_agent| {
+        with_agent_instance_async(|resolved_agent| async move {
             resolved_agent
                 .agent
                 .borrow_mut()
                 .as_mut()
                 .invoke(method_name, input)
-        });
-        if let Some(result) = result {
-            result
-        } else {
-            Err(AgentError::CustomError(
-                golem_wasm::ValueAndType::new(
-                    golem_wasm::Value::String("No agent instance found".to_string()),
-                    str(),
-                )
-                .into(),
-            ))
-        }
+                .await
+        })
     }
 
     fn get_definition() -> AgentType {
-        let agent_type = agent_registry::with_agent_instance(|resolved_agent| {
-            resolved_agent.agent.borrow().get_definition()
-        });
-
-        if let Some(agent) = agent_type {
-            agent
-        } else {
-            panic!("No agent instance found");
-        }
+        with_agent_instance(|resolved_agent| {
+            resolved_agent.agent.borrow().as_ref().get_definition()
+        })
     }
 
     fn discover_agent_types() -> Result<Vec<AgentType>, AgentError> {

@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
+use crate::wasm_rpc::WitValue;
+use golem_wasm::analysis::{AnalysedType, TypeResult};
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::{Value, WitType};
 
 pub trait Schema {
     fn get_type() -> ElementSchema;
@@ -25,6 +27,23 @@ pub trait Schema {
     fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String>
     where
         Self: Sized;
+
+    fn to_wit_value(self) -> Result<WitValue, String>
+    where
+        Self: Sized,
+    {
+        let element_value = self.to_element_value()?;
+
+        match element_value {
+            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+            ElementValue::UnstructuredBinary(_) => {
+                todo!("UnstructuredBinary to WitValue conversion not implemented")
+            }
+            ElementValue::UnstructuredText(_) => {
+                todo!("UnstructuredText to WitValue conversion not implemented")
+            }
+        }
+    }
 }
 
 impl<T: IntoValue + FromValueAndType> Schema for T {
