@@ -19,6 +19,7 @@ pub fn get_remote_client(
             let remote_client = quote! {
                 pub struct #remote_trait_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
+                    wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
                 }
 
                 impl #remote_trait_name {
@@ -35,7 +36,9 @@ pub fn get_remote_client(
 
                          let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
-                        #remote_trait_name { agent_id: agent_id }
+                         let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+
+                         #remote_trait_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
                     }
 
@@ -120,9 +123,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          let rpc_result_future = wasm_rpc.async_invoke_and_await(
+                          let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                             #remote_method_name_token,
                             &wit_values
                           );
@@ -145,9 +146,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke(
+                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
                             &wit_values
                           );
@@ -159,9 +158,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          wasm_rpc.schedule_invocation(
+                          self.wasm_rpc.schedule_invocation(
                             scheduled_time,
                             #remote_method_name_token,
                             &wit_values
@@ -175,9 +172,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed to serialize")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          let rpc_result_future = wasm_rpc.async_invoke_and_await(
+                          let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                               #remote_method_name_token,
                               &wit_values
                           );
@@ -198,9 +193,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = wasm_rpc.invoke(
+                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
                             &wit_values
                           );
@@ -212,9 +205,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
                             vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
 
-                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&self.agent_id);
-
-                          wasm_rpc.schedule_invocation(
+                          self.wasm_rpc.schedule_invocation(
                             scheduled_time,
                             #remote_method_name_token,
                             &wit_values

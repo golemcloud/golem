@@ -120,9 +120,25 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         assert!(outputs.success(), "function {func} failed");
     }
 
-    run_and_assert(&ctx, "get-agent-id", &[]).await;
+    run_and_assert(&ctx, "get-id", &[]).await;
 
-    run_and_assert(&ctx, "fun-string", &["\"sample\""]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-string}", &["\"sample\""]).await;
+
+    // Testing trigger invocation
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-string-fire-and-forget}",
+        &["\"sample\""],
+    )
+    .await;
+
+    // Testing scheduled invocation
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-string-later}",
+        &["\"sample\""],
+    )
+    .await;
 
     run_and_assert(&ctx, "fun-u8", &["42"]).await;
 
@@ -382,7 +398,7 @@ async fn test_ts_counter() {
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
 #[test]
-async fn test_ts_code_first_complex() {
+async fn test_ts_code_first_with_rpc_and_all_types() {
     let mut ctx = TestContext::new();
 
     let app_name = "ts-code-first";

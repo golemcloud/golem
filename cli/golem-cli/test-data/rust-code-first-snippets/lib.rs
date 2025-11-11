@@ -2,6 +2,7 @@ mod model;
 
 use golem_rust::agentic::Agent;
 use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
 use model::*;
 
@@ -12,6 +13,10 @@ trait FooAgent {
     fn get_id(&self) -> String;
 
     async fn fun_string(&self, string: String) -> String;
+
+    async fn fun_string_fire_and_forget(&self, string: String);
+
+    async fn fun_string_later(&self, string: String);
 
     async fn fun_u8(&mut self, number: u8) -> u8;
 
@@ -99,6 +104,14 @@ impl FooAgent for FooAgentImpl {
 
     async fn fun_string(&self, string: String) -> String {
         self.client.fun_string(string).await
+    }
+
+    async fn fun_string_fire_and_forget(&self, string: String) {
+        self.client.trigger_fun_string(string);
+    }
+
+    async fn fun_string_later(&self, string: String) {
+        self.client.schedule_fun_string(string, Datetime { seconds: 1, nanoseconds: 1 });
     }
 
     async fn fun_u8(&mut self, number: u8) -> u8 {
