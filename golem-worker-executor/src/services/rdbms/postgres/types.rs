@@ -1493,7 +1493,7 @@ pub mod tests {
                 let serialized: SerializableDbValue = original.clone().into();
                 let deserialized: DbValue = serialized
                     .try_into()
-                    .expect(&format!("deserialization failed for test value {}", idx));
+                    .unwrap_or_else(|_| panic!("deserialization failed for test value {}", idx));
                 assert_eq!(
                     original, deserialized,
                     "roundtrip failed for test value {} at index {}",

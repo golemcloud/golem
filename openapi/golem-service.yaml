@@ -10043,6 +10043,9 @@ components:
       discriminator:
         propertyName: type
         mapping:
+          Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
+          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
           ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
@@ -10057,20 +10060,17 @@ components:
           EndRemoteWrite: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
           PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
           PendingUpdate: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
+          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
           Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-          Create: '#/components/schemas/PublicOplogEntry_r#CreateParams'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
-          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
           CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
           StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
           FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
           SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
@@ -10082,6 +10082,9 @@ components:
           RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#RolledBackRemoteTransactionParams'
       type: object
       oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionCompletedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
@@ -10096,20 +10099,17 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#EndRemoteWriteParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingWorkerInvocationParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PendingUpdateParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ImportedFunctionInvokedParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#ExportedFunctionInvokedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
@@ -11560,15 +11560,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        createdBy:
+          type: string
         projectId:
           type: string
           format: uuid
-        createdBy:
-          type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -11581,18 +11577,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
       required:
       - timestamp
       - workerId
       - componentVersion
       - args
       - env
-      - projectId
       - createdBy
-      - wasiConfigVars
+      - projectId
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
+      - wasiConfigVars
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object

@@ -220,7 +220,7 @@ async fn can_append_and_get(
         .await
         .unwrap();
 
-    check!(result == vec![(1, value1.into()), (2, value2.into()), (3, value3.into())]);
+    check!(result == vec![(1, value1), (2, value2), (3, value3)]);
 }
 
 #[test]
@@ -273,7 +273,7 @@ async fn append_can_skip(
         .await
         .unwrap();
 
-    check!(result == vec![(4, value1.into()), (8, value2.into())]);
+    check!(result == vec![(4, value1), (8, value2)]);
 }
 
 #[test]
@@ -646,7 +646,7 @@ async fn first(
         .unwrap();
 
     check!(result1 == None);
-    check!(result2 == Some((5, value1.into())));
+    check!(result2 == Some((5, value1)));
 }
 
 #[test]
@@ -679,7 +679,7 @@ async fn last(
         .unwrap();
 
     check!(result1 == None);
-    check!(result2 == Some((7, value2.into())));
+    check!(result2 == Some((7, value2)));
 }
 
 #[test]
@@ -712,7 +712,7 @@ async fn closest_low(
         .unwrap();
 
     check!(result1 == None);
-    check!(result2 == Some((5, value1.into())));
+    check!(result2 == Some((5, value1)));
 }
 
 #[test]
@@ -745,7 +745,7 @@ async fn closest_match(
         .unwrap();
 
     check!(result1 == None);
-    check!(result2 == Some((5, value1.into())));
+    check!(result2 == Some((5, value1)));
 }
 
 #[test]
@@ -778,7 +778,7 @@ async fn closest_mid(
         .unwrap();
 
     check!(result1 == None);
-    check!(result2 == Some((7, value2.into())));
+    check!(result2 == Some((7, value2)));
 }
 
 #[test]
@@ -850,9 +850,9 @@ async fn drop_prefix_no_match(
     check!(
         result
             == vec![
-                (10, value1.into()),
-                (11, value2.into()),
-                (12, value3.into())
+                (10, value1),
+                (11, value2),
+                (12, value3)
             ]
     );
 }
@@ -890,7 +890,7 @@ async fn drop_prefix_partial(
         .await
         .unwrap();
 
-    check!(result == vec![(11, value2.into()), (12, value3.into())]);
+    check!(result == vec![(11, value2), (12, value3)]);
 }
 
 #[test]
