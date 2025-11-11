@@ -1,4 +1,4 @@
-use std::collections::{Bound, HashMap};
+use std::collections::Bound;
 
 use golem_rust::Schema;
 
@@ -122,4 +122,3 @@ pub struct ComplexStruct {
     pub enum_collections: EnumWithCollections,
     pub enum_complex: ComplexEnum,
 }
-

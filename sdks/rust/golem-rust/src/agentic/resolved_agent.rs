@@ -20,3 +20,12 @@ pub struct ResolvedAgent {
     pub agent: RefCell<Box<dyn Agent>>,
     pub agent_id: AgentId,
 }
+
+impl ResolvedAgent {
+    pub fn new(agent: Box<dyn Agent>, agent_id: AgentId) -> ResolvedAgent {
+        ResolvedAgent {
+            agent: RefCell::new(agent),
+            agent_id,
+        }
+    }
+}
