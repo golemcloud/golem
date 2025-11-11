@@ -1,4 +1,4 @@
-package golem:api@1.1.7;
+package golem:api@1.3.0;
 
 interface oplog-processor {
     use wasi:clocks/wall-clock@0.2.3.{datetime};

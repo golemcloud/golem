@@ -42,6 +42,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
@@ -53,7 +54,6 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1541,7 +1541,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.last_known_status.component_version,
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.wasi_config_vars.clone(),
                     initial_worker_metadata.project_id.clone(),
                     initial_worker_metadata.created_by.clone(),
                     initial_worker_metadata.parent.clone(),
@@ -1553,6 +1552,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
+                    initial_worker_metadata.wasi_config_vars.clone(),
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
@@ -2096,9 +2096,9 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::ExportedFunctionCompleted { .. } => {
+                OplogEntry::ExportedFunctionCompleted { response, .. } => {
                     let value: Option<ValueAndType> =
-                        services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+                        services.oplog().download_payload(response).await.expect("failed to deserialize function response payload");
 
                     Ok(value)
                 }

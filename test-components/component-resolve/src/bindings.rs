@@ -552,7 +552,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[resource-drop]get-agents"]
                             fn drop(_: u32);
@@ -653,7 +653,7 @@ pub mod golem {
                     unreachable!();
                     #[cfg(target_arch = "wasm32")]
                     {
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[resource-drop]get-promise-result"]
                             fn drop(_: u32);
@@ -844,7 +844,7 @@ pub mod golem {
                             None => (0i32, ::core::ptr::null_mut(), 0usize),
                         };
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[constructor]get-agents"]
                             fn wit_import18(
@@ -907,7 +907,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[method]get-agents.get-next"]
                             fn wit_import1(_: i32, _: *mut u8);
@@ -1119,7 +1119,7 @@ pub mod golem {
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[method]get-promise-result.subscribe"]
                             fn wit_import0(_: i32) -> i32;
@@ -1155,7 +1155,7 @@ pub mod golem {
                         );
                         let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        #[link(wasm_import_module = "golem:api/host@1.3.0")]
                         unsafe extern "C" {
                             #[link_name = "[method]get-promise-result.get"]
                             fn wit_import1(_: i32, _: *mut u8);
@@ -1203,7 +1203,7 @@ pub mod golem {
                     );
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "create-promise"]
                         fn wit_import1(_: *mut u8);
@@ -1259,7 +1259,7 @@ pub mod golem {
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-promise"]
                         fn wit_import5(
@@ -1316,7 +1316,7 @@ pub mod golem {
                     let ptr5 = vec5.as_ptr().cast::<u8>();
                     let len5 = vec5.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "complete-promise"]
                         fn wit_import6(
@@ -1360,7 +1360,7 @@ pub mod golem {
             pub fn get_oplog_index() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-oplog-index"]
                         fn wit_import0() -> i64;
@@ -1379,7 +1379,7 @@ pub mod golem {
             pub fn set_oplog_index(oplog_idx: OplogIndex) -> () {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "set-oplog-index"]
                         fn wit_import0(_: i64);
@@ -1397,7 +1397,7 @@ pub mod golem {
             pub fn oplog_commit(replicas: u8) -> () {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "oplog-commit"]
                         fn wit_import0(_: i32);
@@ -1417,7 +1417,7 @@ pub mod golem {
             pub fn mark_begin_operation() -> OplogIndex {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "mark-begin-operation"]
                         fn wit_import0() -> i64;
@@ -1436,7 +1436,7 @@ pub mod golem {
             pub fn mark_end_operation(begin: OplogIndex) -> () {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "mark-end-operation"]
                         fn wit_import0(_: i64);
@@ -1457,7 +1457,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 48]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-retry-policy"]
                         fn wit_import1(_: *mut u8);
@@ -1509,7 +1509,7 @@ pub mod golem {
                         None => (0i32, 0.0f64),
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "set-retry-policy"]
                         fn wit_import2(_: i32, _: i64, _: i64, _: f64, _: i32, _: f64);
@@ -1542,7 +1542,7 @@ pub mod golem {
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-oplog-persistence-level"]
                         fn wit_import0() -> i32;
@@ -1576,7 +1576,7 @@ pub mod golem {
                         PersistenceLevel::Smart => 2i32,
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "set-oplog-persistence-level"]
                         fn wit_import1(_: i32);
@@ -1593,7 +1593,7 @@ pub mod golem {
             pub fn get_idempotence_mode() -> bool {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-idempotence-mode"]
                         fn wit_import0() -> i32;
@@ -1614,7 +1614,7 @@ pub mod golem {
             pub fn set_idempotence_mode(idempotent: bool) -> () {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "set-idempotence-mode"]
                         fn wit_import0(_: i32);
@@ -1644,7 +1644,7 @@ pub mod golem {
                     let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "generate-idempotency-key"]
                         fn wit_import1(_: *mut u8);
@@ -1687,7 +1687,7 @@ pub mod golem {
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "update-agent"]
                         fn wit_import4(
@@ -1738,7 +1738,7 @@ pub mod golem {
                     );
                     let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-self-metadata"]
                         fn wit_import1(_: *mut u8);
@@ -1937,7 +1937,7 @@ pub mod golem {
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "get-agent-metadata"]
                         fn wit_import5(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
@@ -2171,7 +2171,7 @@ pub mod golem {
                     let ptr7 = vec7.as_ptr().cast::<u8>();
                     let len7 = vec7.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "fork-agent"]
                         fn wit_import8(
@@ -2245,7 +2245,7 @@ pub mod golem {
                         }
                     };
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "revert-agent"]
                         fn wit_import5(
@@ -2302,7 +2302,7 @@ pub mod golem {
                     let len0 = vec0.len();
                     let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "resolve-component-id"]
                         fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
@@ -2359,7 +2359,7 @@ pub mod golem {
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "resolve-agent-id"]
                         fn wit_import3(
@@ -2443,7 +2443,7 @@ pub mod golem {
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "resolve-agent-id-strict"]
                         fn wit_import3(
@@ -2511,7 +2511,7 @@ pub mod golem {
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                    #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "fork"]
                         fn wit_import1(_: *mut u8, _: usize) -> i32;
@@ -6559,7 +6559,7 @@ ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\
 c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
 d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
 resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
-s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.1.7\x05\x0b\x02\x03\0\x04\
+s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x02\x03\0\x04\
 \x08agent-id\x02\x03\0\x04\x0ccomponent-id\x01B\x09\x02\x03\x02\x01\x0c\x04\0\x08\
 agent-id\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x0ccomponent-id\x03\0\x02\x01k\x03\x01\
 k\x01\x01o\x03\x04\x05\x05\x01@\0\0\x06\x04\0\x03run\x01\x07\x04\0\x1egolem:it/c\

@@ -460,8 +460,8 @@ mod tests {
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
-    use bincode::Encode;
     use chrono::DateTime;
+    use desert_rust::BinarySerializer;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
@@ -504,7 +504,7 @@ mod tests {
         }
     }
 
-    fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
+    fn serialized_bytes<T: BinarySerializer>(entry: &T) -> Vec<u8> {
         golem_common::serialization::serialize(entry)
             .expect("failed to serialize entry")
             .to_vec()

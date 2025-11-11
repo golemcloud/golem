@@ -133,7 +133,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                     project_id: project_id.clone(),
                 },
                 &Self::key(component_id, component_version),
-                &bytes,
+                bytes,
             )
             .await
             .map_err(|err| {

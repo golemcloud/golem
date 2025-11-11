@@ -38,7 +38,7 @@ impl PluginWasmFilesService {
         &self,
         account_id: &AccountId,
         key: &PluginWasmFileKey,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         self.blob_storage
             .get_raw(
                 PLUGIN_WASM_FILES_LABEL,

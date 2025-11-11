@@ -33,7 +33,7 @@ pub use from::FromValue;
 pub use from::FromValueAndType;
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub struct ValueAndType {
     pub value: Value,
     pub typ: AnalysedType,

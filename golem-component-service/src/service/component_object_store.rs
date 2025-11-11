@@ -193,7 +193,7 @@ impl ComponentObjectStore for BlobStorageComponentObjectStore {
                     project_id: project_id.clone(),
                 },
                 &PathBuf::from(object_key),
-                &data,
+                data,
             )
             .await
             .map_err(|e| anyhow!(e))

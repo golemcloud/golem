@@ -12,24 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::invocation_context::{SpanId, TraceId};
-use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
-use crate::model::public_oplog::{
-    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
-    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
-    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
-    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
-    OplogCursor, PendingUpdateParameters, PendingWorkerInvocationParameters,
+use super::{
+    ExportedFunctionParameters, LogLevel, ManualUpdateParameters, OplogCursor,
     PluginInstallationDescription, PublicAttribute, PublicAttributeValue,
     PublicDurableFunctionType, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry,
     PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
-    RemoteTransactionParameters, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
-    SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
-    SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerError, WorkerResourceId,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
+use crate::base_model::OplogIndex;
+use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::oplog::public_oplog_entry::{
+    ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
+    BeginRemoteWriteParams, CancelPendingInvocationParams, ChangePersistenceLevelParams,
+    ChangeRetryPolicyParams, CommittedRemoteTransactionParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
+    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
+    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, ImportedFunctionInvokedParams,
+    InterruptedParams, JumpParams, LogParams, NoOpParams, PendingUpdateParams,
+    PendingWorkerInvocationParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RestartParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetSpanAttributeParams, StartSpanParams,
+    SuccessfulUpdateParams, SuspendParams,
+};
+use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
 use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
@@ -41,6 +47,76 @@ use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 use std::time::Duration;
+
+impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
+    fn from(value: PersistenceLevel) -> Self {
+        match value {
+            PersistenceLevel::PersistNothing => {
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing
+            }
+            PersistenceLevel::PersistRemoteSideEffects => {
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects
+            }
+            PersistenceLevel::Smart => {
+                golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart
+            }
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::PersistenceLevel> for PersistenceLevel {
+    fn from(value: golem_api_grpc::proto::golem::worker::PersistenceLevel) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistNothing => {
+                PersistenceLevel::PersistNothing
+            }
+            golem_api_grpc::proto::golem::worker::PersistenceLevel::PersistRemoteSideEffects => {
+                PersistenceLevel::PersistRemoteSideEffects
+            }
+            golem_api_grpc::proto::golem::worker::PersistenceLevel::Smart => {
+                PersistenceLevel::Smart
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerError> for WorkerError {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::WorkerError,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::worker_error::Error;
+        match value.error.ok_or("no error field")? {
+            Error::StackOverflow(_) => Ok(Self::StackOverflow),
+            Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
+            Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
+            Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+            Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
+        }
+    }
+}
+
+impl From<WorkerError> for golem_api_grpc::proto::golem::worker::WorkerError {
+    fn from(value: WorkerError) -> Self {
+        use golem_api_grpc::proto::golem::worker as grpc_worker;
+        use golem_api_grpc::proto::golem::worker::worker_error::Error;
+        let error = match value {
+            WorkerError::StackOverflow => Error::StackOverflow(grpc_worker::StackOverflow {}),
+            WorkerError::OutOfMemory => Error::OutOfMemory(grpc_worker::OutOfMemory {}),
+            WorkerError::InvalidRequest(details) => {
+                Error::InvalidRequest(grpc_worker::InvalidRequest { details })
+            }
+            WorkerError::Unknown(details) => {
+                Error::UnknownError(grpc_worker::UnknownError { details })
+            }
+            WorkerError::ExceededMemoryLimit => {
+                Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
+            }
+        };
+        Self { error: Some(error) }
+    }
+}
 
 impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
     fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
@@ -129,7 +205,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
 
     fn try_from(value: golem_api_grpc::proto::golem::worker::OplogEntry) -> Result<Self, String> {
         match value.entry.ok_or("Oplog entry is empty")? {
-            oplog_entry::Entry::Create(create) => Ok(PublicOplogEntry::Create(CreateParameters {
+            oplog_entry::Entry::Create(create) => Ok(PublicOplogEntry::Create(CreateParams {
                 timestamp: create.timestamp.ok_or("Missing timestamp field")?.into(),
                 worker_id: create
                     .worker_id
@@ -162,7 +238,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 ),
             })),
             oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
-                PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
+                PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
                     timestamp: imported_function_invoked
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -183,7 +259,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }),
             ),
             oplog_entry::Entry::ExportedFunctionInvoked(exported_function_invoked) => Ok(
-                PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
+                PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
                     timestamp: exported_function_invoked
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -206,7 +282,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }),
             ),
             oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => Ok(
-                PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
+                PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
                     timestamp: exported_function_completed
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -218,20 +294,18 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     consumed_fuel: exported_function_completed.consumed_fuel,
                 }),
             ),
-            oplog_entry::Entry::Suspend(suspend) => {
-                Ok(PublicOplogEntry::Suspend(TimestampParameter {
-                    timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
-            oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParameters {
+            oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
+                timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
+            oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
             })),
-            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(TimestampParameter {
+            oplog_entry::Entry::NoOp(no_op) => Ok(PublicOplogEntry::NoOp(NoOpParams {
                 timestamp: no_op.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
-            oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParameters {
+            oplog_entry::Entry::Jump(jump) => Ok(PublicOplogEntry::Jump(JumpParams {
                 timestamp: jump.timestamp.ok_or("Missing timestamp field")?.into(),
                 jump: OplogRegion {
                     start: OplogIndex::from_u64(jump.start),
@@ -239,20 +313,18 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 },
             })),
             oplog_entry::Entry::Interrupted(interrupted) => {
-                Ok(PublicOplogEntry::Interrupted(TimestampParameter {
+                Ok(PublicOplogEntry::Interrupted(InterruptedParams {
                     timestamp: interrupted
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
                 }))
             }
-            oplog_entry::Entry::Exited(exited) => {
-                Ok(PublicOplogEntry::Exited(TimestampParameter {
-                    timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
+            oplog_entry::Entry::Exited(exited) => Ok(PublicOplogEntry::Exited(ExitedParams {
+                timestamp: exited.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
             oplog_entry::Entry::ChangeRetryPolicy(change_retry_policy) => Ok(
-                PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
+                PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
                     timestamp: change_retry_policy
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -263,16 +335,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .try_into()?,
                 }),
             ),
-            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => {
-                Ok(PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
+            oplog_entry::Entry::BeginAtomicRegion(begin_atomic_region) => Ok(
+                PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
                     timestamp: begin_atomic_region
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                }))
-            }
+                }),
+            ),
             oplog_entry::Entry::EndAtomicRegion(end_atomic_region) => {
-                Ok(PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
+                Ok(PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
                     timestamp: end_atomic_region
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -281,7 +353,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::BeginRemoteWrite(begin_remote_write) => {
-                Ok(PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
+                Ok(PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
                     timestamp: begin_remote_write
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -289,7 +361,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::EndRemoteWrite(end_remote_write) => {
-                Ok(PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
+                Ok(PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
                     timestamp: end_remote_write
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -298,7 +370,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::PendingWorkerInvocation(pending_worker_invocation) => Ok(
-                PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
+                PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
                     timestamp: pending_worker_invocation
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -310,7 +382,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }),
             ),
             oplog_entry::Entry::PendingUpdate(pending_update) => {
-                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
+                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParams {
                     timestamp: pending_update
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -322,8 +394,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .try_into()?,
                 }))
             }
-            oplog_entry::Entry::SuccessfulUpdate(successful_update) => Ok(
-                PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
+            oplog_entry::Entry::SuccessfulUpdate(successful_update) => {
+                Ok(PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                     timestamp: successful_update
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -337,10 +409,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             .map(|pr| pr.try_into())
                             .collect::<Result<Vec<_>, _>>()?,
                     ),
-                }),
-            ),
+                }))
+            }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
-                Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+                Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                     timestamp: failed_update
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -350,7 +422,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::GrowMemory(grow_memory) => {
-                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParameters {
+                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {
                     timestamp: grow_memory
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -359,7 +431,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
-                Ok(PublicOplogEntry::CreateResource(ResourceParameters {
+                Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
                     timestamp: create_resource
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -370,7 +442,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 }))
             }
             oplog_entry::Entry::DropResource(drop_resource) => {
-                Ok(PublicOplogEntry::DropResource(ResourceParameters {
+                Ok(PublicOplogEntry::DropResource(DropResourceParams {
                     timestamp: drop_resource
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -380,25 +452,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     owner: drop_resource.owner,
                 }))
             }
-            oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParameters {
+            oplog_entry::Entry::Log(log) => Ok(PublicOplogEntry::Log(LogParams {
                 level: log.level().into(),
                 timestamp: log.timestamp.ok_or("Missing timestamp field")?.into(),
                 context: log.context,
                 message: log.message,
             })),
-            oplog_entry::Entry::Restart(restart) => {
-                Ok(PublicOplogEntry::Restart(TimestampParameter {
-                    timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
-                }))
-            }
+            oplog_entry::Entry::Restart(restart) => Ok(PublicOplogEntry::Restart(RestartParams {
+                timestamp: restart.timestamp.ok_or("Missing timestamp field")?.into(),
+            })),
             oplog_entry::Entry::ActivatePlugin(activate) => {
-                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
+                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
                     timestamp: activate.timestamp.ok_or("Missing timestamp field")?.into(),
                     plugin: activate.plugin.ok_or("Missing plugin field")?.try_into()?,
                 }))
             }
-            oplog_entry::Entry::DeactivatePlugin(deactivate) => Ok(
-                PublicOplogEntry::DeactivatePlugin(DeactivatePluginParameters {
+            oplog_entry::Entry::DeactivatePlugin(deactivate) => {
+                Ok(PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
                     timestamp: deactivate
                         .timestamp
                         .ok_or("Missing timestamp field")?
@@ -407,25 +477,25 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .plugin
                         .ok_or("Missing plugin field")?
                         .try_into()?,
-                }),
-            ),
-            oplog_entry::Entry::Revert(revert) => Ok(PublicOplogEntry::Revert(RevertParameters {
+                }))
+            }
+            oplog_entry::Entry::Revert(revert) => Ok(PublicOplogEntry::Revert(RevertParams {
                 timestamp: revert.timestamp.ok_or("Missing timestamp field")?.into(),
                 dropped_region: OplogRegion {
                     start: OplogIndex::from_u64(revert.start),
                     end: OplogIndex::from_u64(revert.end),
                 },
             })),
-            oplog_entry::Entry::CancelInvocation(cancel) => Ok(PublicOplogEntry::CancelInvocation(
-                CancelInvocationParameters {
+            oplog_entry::Entry::CancelInvocation(cancel) => Ok(
+                PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
                     timestamp: cancel.timestamp.ok_or("Missing timestamp field")?.into(),
                     idempotency_key: cancel
                         .idempotency_key
                         .ok_or("Missing idempotency_key field")?
                         .into(),
-                },
-            )),
-            Entry::StartSpan(start) => Ok(PublicOplogEntry::StartSpan(StartSpanParameters {
+                }),
+            ),
+            Entry::StartSpan(start) => Ok(PublicOplogEntry::StartSpan(StartSpanParams {
                 timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
                 span_id: SpanId(
                     NonZeroU64::new(start.span_id).ok_or("Span ID cannot be zero".to_string())?,
@@ -452,14 +522,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .map(|(key, value)| value.try_into().map(|v| PublicAttribute { key, value: v }))
                     .collect::<Result<Vec<PublicAttribute>, String>>()?,
             })),
-            Entry::FinishSpan(finish) => Ok(PublicOplogEntry::FinishSpan(FinishSpanParameters {
+            Entry::FinishSpan(finish) => Ok(PublicOplogEntry::FinishSpan(FinishSpanParams {
                 timestamp: finish.timestamp.ok_or("Missing timestamp field")?.into(),
                 span_id: SpanId(
                     NonZeroU64::new(finish.span_id).ok_or("Span ID cannot be zero".to_string())?,
                 ),
             })),
-            Entry::SetSpanAttribute(set) => Ok(PublicOplogEntry::SetSpanAttribute(
-                SetSpanAttributeParameters {
+            Entry::SetSpanAttribute(set) => {
+                Ok(PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
                     timestamp: set.timestamp.ok_or("Missing timestamp field")?.into(),
                     span_id: SpanId(
                         NonZeroU64::new(set.span_id).ok_or("Span ID cannot be zero".to_string())?,
@@ -469,41 +539,43 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .value
                         .ok_or("Missing attribute value".to_string())?
                         .try_into()?,
-                },
-            )),
+                }))
+            }
             Entry::ChangePersistenceLevel(change) => Ok(PublicOplogEntry::ChangePersistenceLevel(
-                ChangePersistenceLevelParameters {
+                ChangePersistenceLevelParams {
                     timestamp: change.timestamp.ok_or("Missing timestamp field")?.into(),
                     persistence_level: change.persistence_level().into(),
                 },
             )),
             oplog_entry::Entry::BeginRemoteTransaction(value) => Ok(
-                PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParameters {
+                PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     transaction_id: value.transaction_id.into(),
                 }),
             ),
             oplog_entry::Entry::PreCommitRemoteTransaction(value) => Ok(
-                PublicOplogEntry::PreCommitRemoteTransaction(RemoteTransactionParameters {
+                PublicOplogEntry::PreCommitRemoteTransaction(PreCommitRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     begin_index: OplogIndex::from_u64(value.begin_index),
                 }),
             ),
-            oplog_entry::Entry::PreRollbackRemoteTransaction(value) => Ok(
-                PublicOplogEntry::PreRollbackRemoteTransaction(RemoteTransactionParameters {
-                    timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
-                    begin_index: OplogIndex::from_u64(value.begin_index),
-                }),
-            ),
+            oplog_entry::Entry::PreRollbackRemoteTransaction(value) => {
+                Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
+                    PreRollbackRemoteTransactionParams {
+                        timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
+                        begin_index: OplogIndex::from_u64(value.begin_index),
+                    },
+                ))
+            }
             oplog_entry::Entry::CommittedRemoteTransaction(value) => Ok(
-                PublicOplogEntry::CommittedRemoteTransaction(RemoteTransactionParameters {
+                PublicOplogEntry::CommittedRemoteTransaction(CommittedRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     begin_index: OplogIndex::from_u64(value.begin_index),
                 }),
             ),
 
             oplog_entry::Entry::RolledBackRemoteTransaction(value) => Ok(
-                PublicOplogEntry::RolledBackRemoteTransaction(RemoteTransactionParameters {
+                PublicOplogEntry::RolledBackRemoteTransaction(RolledBackRemoteTransactionParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     begin_index: OplogIndex::from_u64(value.begin_index),
                 }),
@@ -819,7 +891,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     },
                 )),
             },
-            PublicOplogEntry::CancelInvocation(cancel) => {
+            PublicOplogEntry::CancelPendingInvocation(cancel) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::CancelInvocation(
                         golem_api_grpc::proto::golem::worker::CancelInvocationParameters {

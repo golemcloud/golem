@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::WorkerError;
@@ -26,7 +26,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use tonic::Status;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerExecutorError {
     InvalidRequest {
         details: String,
@@ -914,8 +915,7 @@ impl Error for GolemSpecificWasmTrap {}
     Hash,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
     FromValue,
 )]

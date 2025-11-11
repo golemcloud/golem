@@ -23,20 +23,24 @@ golem-wasm-derive = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-bincode = { workspace = true }
+bigdecimal = { workspace = true }
+bit-vec = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true }
 console-subscriber = { workspace = true }
 derive_more = { workspace = true }
+desert_rust = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
+ident-mash = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
+mac_address = { workspace = true }
 nonempty-collections = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -71,6 +75,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 wasmparser = { workspace = true }
 wit-parser = { workspace = true }
 wasm-wave = { workspace = true }
@@ -79,6 +84,7 @@ wasm-wave = { workspace = true }
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }
 

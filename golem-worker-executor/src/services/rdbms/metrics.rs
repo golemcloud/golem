@@ -51,8 +51,8 @@ pub fn record_rdbms_metrics<T: RdbmsType, R>(
     rdbms_type: &T,
     name: &'static str,
     start: Instant,
-    result: std::result::Result<R, crate::services::rdbms::Error>,
-) -> std::result::Result<R, crate::services::rdbms::Error> {
+    result: std::result::Result<R, crate::services::rdbms::RdbmsError>,
+) -> std::result::Result<R, crate::services::rdbms::RdbmsError> {
     let end = Instant::now();
     match result {
         Ok(result) => {

@@ -568,7 +568,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@1.1.7".to_string()),
+                                    package: Some("golem:api@1.3.0".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("agent-any-filter".to_string()),
                                 })
@@ -3331,7 +3331,7 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
     check!(worker_error_logs(&result2.clone().err().unwrap())
         .unwrap()

@@ -104,7 +104,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
             .bind(Self::parent_string(path))
@@ -114,7 +114,7 @@ impl BlobStorage for SqliteBlobStorage {
             .with_ro(target_label, op_label)
             .fetch_optional_as::<DBValue, _>(query)
             .await
-            .map(|r| r.map(|op| op.into_bytes()))
+            .map(|r| r.map(|op| op.into_bytes().to_vec()))
             .map_err(|err| err.to_safe_string())
     }
 
@@ -129,7 +129,7 @@ impl BlobStorage for SqliteBlobStorage {
             .get_raw(target_label, op_label, namespace, path)
             .await?;
         Ok(result.map(|bytes| {
-            let stream = tokio_stream::once(Ok(bytes));
+            let stream = tokio_stream::once(Ok(Bytes::from(bytes)));
             let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, String>> + Send>> =
                 Box::pin(stream);
             boxed
@@ -165,8 +165,9 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
+        let size = data.len() as i64;
         let query = sqlx::query(
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
@@ -178,7 +179,7 @@ impl BlobStorage for SqliteBlobStorage {
                     .bind(Self::parent_string(path))
                     .bind(Self::name_string(path))
                     .bind(data)
-                    .bind(data.len() as i64);
+                    .bind(size);
 
         self.pool
             .with_rw(target_label, op_label)
@@ -200,9 +201,9 @@ impl BlobStorage for SqliteBlobStorage {
             .make_stream_erased()
             .await?
             .try_collect::<Vec<_>>()
-            .await?;
-        let data = Bytes::from(data.concat());
-        self.put_raw(target_label, op_label, namespace, path, &data)
+            .await?
+            .concat();
+        self.put_raw(target_label, op_label, namespace, path, data)
             .await
     }
 

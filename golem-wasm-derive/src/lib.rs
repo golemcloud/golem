@@ -20,12 +20,17 @@ use proc_macro2::Ident;
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, LitStr, Type, Variant};
 
+#[allow(clippy::duplicated_attributes)]
 #[proc_macro_derive(IntoValue, attributes(wit_transparent, unit_case, wit_field))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
     into::derive_into_value(input)
 }
 
-#[proc_macro_derive(FromValue)]
+#[allow(clippy::duplicated_attributes)]
+#[proc_macro_derive(
+    FromValue,
+    attributes(wit_transparent, unit_case, wit_field, from_value)
+)]
 pub fn derive_from_value(input: TokenStream) -> TokenStream {
     from::derive_from_value(input)
 }

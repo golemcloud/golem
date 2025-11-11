@@ -39,13 +39,13 @@ async-dropper-simple = { workspace = true, features = ["no-default-bound", "toki
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
-bincode = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
+desert_rust = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
