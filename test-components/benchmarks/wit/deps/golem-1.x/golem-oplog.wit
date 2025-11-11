@@ -47,7 +47,8 @@ interface oplog {
         parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
-        initial-active-plugins: list<plugin-installation-description>
+        initial-active-plugins: list<plugin-installation-description>,
+        config-vars: list<tuple<string, string>>
     }
 
     record imported-function-invoked-parameters {
@@ -97,18 +98,23 @@ interface oplog {
 
     record error-parameters {
         timestamp: datetime,
-        error: string
+        error: string,
+        retry-from: oplog-index
     }
 
-    record jump-parameters {
-        timestamp: datetime,
+    record oplog-region {
         start: oplog-index,
         end: oplog-index
     }
 
+    record jump-parameters {
+        timestamp: datetime,
+        jump: oplog-region
+    }
+
     record change-retry-policy-parameters {
         timestamp: datetime,
-        retry-policy: retry-policy
+        new-policy: retry-policy
     }
 
     record end-atomic-region-parameters {
@@ -124,7 +130,12 @@ interface oplog {
     record exported-function-invocation-parameters {
         idempotency-key: string,
         function-name: string,
-        input: option<list<value-and-type>>
+        input: option<list<value-and-type>>,
+        trace-id: string,
+        trace-states: list<string>,
+        /// The first one is the invocation context stack associated with the exported function invocation,
+        /// and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
+        invocation-context: list<list<span-data>>
     }
 
     variant agent-invocation {
@@ -258,6 +269,10 @@ interface oplog {
         begin-index: oplog-index
     }
 
+    record timestamp {
+        timestamp: datetime
+    }
+
     variant oplog-entry {
         /// The initial agent oplog entry
         create(create-parameters),
@@ -268,12 +283,12 @@ interface oplog {
         /// The agent has completed an invocation
         exported-function-completed(exported-function-completed-parameters),
         /// Agent suspended
-        suspend(datetime),
+        suspend(timestamp),
         /// Agent failed
         error(error-parameters),
         /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
         /// more predictable.
-        no-op(datetime),
+        no-op(timestamp),
         /// The agent needs to recover up to the given target oplog index and continue running from
         /// the source oplog index from there
         /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
@@ -281,14 +296,14 @@ interface oplog {
         jump(jump-parameters),
         /// Indicates that the agent has been interrupted at this point.
         /// Only used to recompute the agent's (cached) status, has no effect on execution.
-        interrupted(datetime),
+        interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
-        exited(datetime),
+        exited(timestamp),
         /// Overrides the agent's retry policy
         change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
-        begin-atomic-region(datetime),
+        begin-atomic-region(timestamp),
         /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
         /// entry are to be considered during recovery, and the begin/end markers can be removed during oplog
         /// compaction.
@@ -296,7 +311,7 @@ interface oplog {
         /// Begins a remote write operation. Only used when idempotence mode is off. In this case each
         /// remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
         /// unfinished remote writes cannot be recovered.
-        begin-remote-write(datetime),
+        begin-remote-write(timestamp),
         /// Marks the end of a remote write operation. Only used when idempotence mode is off.
         end-remote-write(end-remote-write-parameters),
         /// An invocation request arrived while the agent was busy
@@ -316,7 +331,7 @@ interface oplog {
         /// The agent emitted a log message
         log(log-parameters),
         /// The agent's has been restarted, forgetting all its history
-        restart(datetime),
+        restart(timestamp),
         /// Activates a plugin
         activate-plugin(activate-plugin-parameters),
         /// Deactivates a plugin

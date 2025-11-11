@@ -28,7 +28,7 @@ use golem_common::model::{
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
-use golem_wasm::IntoValue;
+use golem_wasm::{FromValue, IntoValue};
 use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
@@ -1783,13 +1783,7 @@ async fn agent_promise_await(
         .worker_service()
         .complete_promise(
             &admin.token,
-            PromiseId {
-                worker_id: WorkerId {
-                    component_id,
-                    worker_name: worker_name.to_string(),
-                },
-                oplog_idx: OplogIndex::from_u64(35),
-            },
+            PromiseId::from_value(promise_id.value).unwrap(),
             b"hello".to_vec(),
         )
         .await

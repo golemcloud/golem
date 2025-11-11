@@ -51,7 +51,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                wasi_config_vars: _,
+                wasi_config_vars,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
@@ -68,6 +68,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 initial_active_plugins: initial_active_plugins
                     .into_iter()
                     .map(|pr| pr.into())
+                    .collect(),
+                config_vars: wasi_config_vars
+                    .0
+                    .into_iter()
+                    .map(|entry| (entry.key, entry.value))
                     .collect(),
             }),
             PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
@@ -118,17 +123,20 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Error(ErrorParams {
                 timestamp,
                 error,
-                retry_from: _,
+                retry_from,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
                 error: error.to_string(),
+                retry_from: retry_from.into(),
             }),
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
                 Self::Jump(oplog::JumpParameters {
                     timestamp: timestamp.into(),
-                    start: jump.start.into(),
-                    end: jump.end.into(),
+                    jump: oplog::OplogRegion {
+                        start: jump.start.into(),
+                        end: jump.end.into(),
+                    },
                 })
             }
             PublicOplogEntry::Interrupted(InterruptedParams { timestamp }) => {
@@ -140,7 +148,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_policy,
             }) => Self::ChangeRetryPolicy(oplog::ChangeRetryPolicyParameters {
                 timestamp: timestamp.into(),
-                retry_policy: new_policy.into(),
+                new_policy: new_policy.into(),
             }),
             PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams { timestamp }) => {
                 Self::BeginAtomicRegion(timestamp.into())
@@ -411,11 +419,19 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                 idempotency_key,
                 full_function_name,
                 function_input,
-                ..
+                trace_id,
+                trace_states,
+                invocation_context,
             }) => Self::ExportedFunction(oplog::ExportedFunctionInvocationParameters {
                 function_name: full_function_name,
                 input: function_input.map(|input| input.into_iter().map(|v| v.into()).collect()),
                 idempotency_key: idempotency_key.value,
+                trace_id: trace_id.to_string(),
+                trace_states,
+                invocation_context: invocation_context
+                    .into_iter()
+                    .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                    .collect(),
             }),
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_version }) => {
                 Self::ManualUpdate(target_version)
@@ -486,6 +502,14 @@ impl From<ProjectId> for oplog::ProjectId {
     fn from(value: ProjectId) -> Self {
         Self {
             uuid: value.0.into(),
+        }
+    }
+}
+
+impl From<Timestamp> for oplog::Timestamp {
+    fn from(value: Timestamp) -> Self {
+        oplog::Timestamp {
+            timestamp: value.into(),
         }
     }
 }

@@ -59,6 +59,72 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 // - raw: fields of the OplogEntry case
 // - public: fields of the PublicOplogEntry case
 oplog_entry! {
+    /// The first entry of every oplog
+    Create {
+        hint: false
+        raw {
+            worker_id: WorkerId,
+            component_version: ComponentVersion,
+            args: Vec<String>,
+            env: Vec<(String, String)>,
+            project_id: ProjectId,
+            created_by: AccountId,
+            parent: Option<WorkerId>,
+            component_size: u64,
+            initial_total_linear_memory_size: u64,
+            initial_active_plugins: HashSet<PluginInstallationId>,
+            wasi_config_vars: BTreeMap<String, String>,
+        }
+        public {
+            worker_id: WorkerId,
+            component_version: ComponentVersion,
+            args: Vec<String>,
+            env: BTreeMap<String, String>,
+            created_by: AccountId,
+            project_id: ProjectId,
+            parent: Option<WorkerId>,
+            component_size: u64,
+            initial_total_linear_memory_size: u64,
+            initial_active_plugins: BTreeSet<PluginInstallationDescription>,
+            wasi_config_vars: WasiConfigVars
+        }
+    },
+    /// The worker invoked a host function
+    ImportedFunctionInvoked {
+        hint: false
+        raw {
+            function_name: HostFunctionName,
+            request: OplogPayload<HostRequest>,
+            response: OplogPayload<HostResponse>,
+            durable_function_type: DurableFunctionType,
+        }
+        public {
+            function_name: String,
+            request: ValueAndType,
+            response: ValueAndType,
+            durable_function_type: PublicDurableFunctionType,
+        }
+    },
+    /// The worker has been invoked
+    ExportedFunctionInvoked {
+        hint: false
+        raw {
+            function_name: String,
+            request: OplogPayload<Vec<Value>>,
+            idempotency_key: IdempotencyKey,
+            trace_id: TraceId,
+            trace_states: Vec<String>,
+            invocation_context: Vec<SpanData>,
+        }
+        public {
+            function_name: String,
+            request: Vec<ValueAndType>,
+            idempotency_key: IdempotencyKey,
+            trace_id: TraceId,
+            trace_states: Vec<String>,
+            invocation_context: Vec<Vec<PublicSpanData>>,
+        }
+    },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         hint: false
@@ -67,7 +133,7 @@ oplog_entry! {
             consumed_fuel: i64,
         }
         public {
-            response: Option<golem_wasm::ValueAndType>,
+            response: Option<ValueAndType>,
             consumed_fuel: i64,
         }
     },
@@ -90,7 +156,6 @@ oplog_entry! {
         }
         public {
             error: String,
-            #[wit_field(skip)]
             retry_from: OplogIndex,
         }
     },
@@ -198,6 +263,20 @@ oplog_entry! {
             description: PublicUpdateDescription,
         }
     },
+    /// An update was successfully applied
+    SuccessfulUpdate {
+        hint: true
+        raw {
+            target_version: ComponentVersion,
+            new_component_size: u64,
+            new_active_plugins: HashSet<PluginInstallationId>,
+        }
+        public {
+            target_version: ComponentVersion,
+            new_component_size: u64,
+            new_active_plugins: BTreeSet<PluginInstallationDescription>,
+        }
+    },
     /// An update failed to be applied
     FailedUpdate {
         hint: true
@@ -266,52 +345,6 @@ oplog_entry! {
         raw {}
         public {}
     },
-    /// The worker invoked a host function
-    ImportedFunctionInvoked {
-        hint: false
-        raw {
-            function_name: HostFunctionName,
-            request: OplogPayload<HostRequest>,
-            response: OplogPayload<HostResponse>,
-            durable_function_type: DurableFunctionType,
-        }
-        public {
-            function_name: String,
-            request: ValueAndType,
-            response: ValueAndType,
-            durable_function_type: PublicDurableFunctionType,
-        }
-    },
-    /// The first entry of every oplog
-    Create {
-        hint: false
-        raw {
-            worker_id: WorkerId,
-            component_version: ComponentVersion,
-            args: Vec<String>,
-            env: Vec<(String, String)>,
-            project_id: ProjectId,
-            created_by: AccountId,
-            parent: Option<WorkerId>,
-            component_size: u64,
-            initial_total_linear_memory_size: u64,
-            initial_active_plugins: HashSet<PluginInstallationId>,
-            wasi_config_vars: BTreeMap<String, String>,
-        }
-        public {
-            worker_id: WorkerId,
-            component_version: ComponentVersion,
-            args: Vec<String>,
-            env: BTreeMap<String, String>,
-            project_id: ProjectId,
-            created_by: AccountId,
-            wasi_config_vars: WasiConfigVars,
-            parent: Option<WorkerId>,
-            component_size: u64,
-            initial_total_linear_memory_size: u64,
-            initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-        }
-    },
     /// Activates a plugin for the worker
     ActivatePlugin {
         hint: true
@@ -332,20 +365,6 @@ oplog_entry! {
             plugin: PluginInstallationDescription
         }
     },
-    /// An update was successfully applied
-    SuccessfulUpdate {
-        hint: true
-        raw {
-            target_version: ComponentVersion,
-            new_component_size: u64,
-            new_active_plugins: HashSet<PluginInstallationId>,
-        }
-        public {
-            target_version: ComponentVersion,
-            new_component_size: u64,
-            new_active_plugins: BTreeSet<PluginInstallationDescription>,
-        }
-    },
     /// Similar to `Jump` but caused by an external revert request.
     Revert {
         hint: true
@@ -364,26 +383,6 @@ oplog_entry! {
         }
         public {
             idempotency_key: IdempotencyKey,
-        }
-    },
-    /// The worker has been invoked
-    ExportedFunctionInvoked {
-        hint: false
-        raw {
-            function_name: String,
-            request: OplogPayload<Vec<Value>>,
-            idempotency_key: IdempotencyKey,
-            trace_id: TraceId,
-            trace_states: Vec<String>,
-            invocation_context: Vec<SpanData>,
-        }
-        public {
-            function_name: String,
-            request: Vec<ValueAndType>,
-            idempotency_key: IdempotencyKey,
-            trace_id: TraceId,
-            trace_states: Vec<String>,
-            invocation_context: Vec<Vec<PublicSpanData>>,
         }
     },
     /// Starts a new span in the invocation context

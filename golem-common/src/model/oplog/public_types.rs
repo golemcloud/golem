@@ -55,7 +55,7 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, poem_openapi::Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue, poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportedFunctionParameters {
@@ -65,27 +65,6 @@ pub struct ExportedFunctionParameters {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub invocation_context: Vec<Vec<PublicSpanData>>,
-}
-
-impl IntoValue for ExportedFunctionParameters {
-    fn into_value(self) -> Value {
-        let wit_values: Option<Vec<WitValue>> = self
-            .function_input
-            .map(|inputs| inputs.into_iter().map(Into::into).collect());
-        Value::Record(vec![
-            self.idempotency_key.into_value(),
-            self.full_function_name.into_value(),
-            wit_values.into_value(),
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("idempotency-key", IdempotencyKey::get_type()),
-            field("function-name", str()),
-            field("input", option(list(WitValue::get_type()))),
-        ])
-    }
 }
 
 #[derive(
