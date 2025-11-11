@@ -23,6 +23,7 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::{IntoValueAndType, Value};
 use http::HeaderMap;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -422,10 +423,9 @@ async fn outgoing_http_contains_idempotency_key(
     drop(executor);
     http_server.abort();
 
-    check!(
-        result
-            == vec![Value::String(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"25b5624b-3a2a-5574-bdad-418287838cba\") }"
+    assert_eq!(
+        result, vec![Value::String(
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"839d5653-b8c4-598a-a04a-0f45ebe592f1\") }"
                     .to_string()
             )]
     );

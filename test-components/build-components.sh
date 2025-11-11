@@ -135,6 +135,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
 
     if [ "$rebuild" = true ]; then
       golem-cli app clean
+      rm -rf node_modules
     fi
 
     golem-cli app build

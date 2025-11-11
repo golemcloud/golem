@@ -264,7 +264,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             ]));
         }
         let val_config = Value::List(config_pairs);
-        let function_name = "golem:api/oplog-processor@1.1.7.{process}".to_string();
+        let function_name = "golem:api/oplog-processor@1.3.0.{process}".to_string();
 
         let val_worker_id = worker_metadata.worker_id.clone().into_value();
         let agent_metadata_for_guests: AgentMetadataForGuests = worker_metadata.into();
