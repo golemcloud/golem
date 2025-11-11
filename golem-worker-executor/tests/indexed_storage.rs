@@ -847,14 +847,7 @@ async fn drop_prefix_no_match(
         .await
         .unwrap();
 
-    check!(
-        result
-            == vec![
-                (10, value1),
-                (11, value2),
-                (12, value3)
-            ]
-    );
+    check!(result == vec![(10, value1), (11, value2), (12, value3)]);
 }
 
 #[test]
