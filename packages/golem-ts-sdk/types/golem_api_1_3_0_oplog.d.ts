@@ -82,6 +82,7 @@ declare module 'golem:api/oplog@1.3.0' {
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: PluginInstallationDescription[];
+    configVars: [string, string][];
   };
   export type ImportedFunctionInvokedParameters = {
     timestamp: Datetime;
@@ -132,15 +133,19 @@ declare module 'golem:api/oplog@1.3.0' {
   export type ErrorParameters = {
     timestamp: Datetime;
     error: string;
+    retryFrom: OplogIndex;
   };
-  export type JumpParameters = {
-    timestamp: Datetime;
+  export type OplogRegion = {
     start: OplogIndex;
     end: OplogIndex;
   };
+  export type JumpParameters = {
+    timestamp: Datetime;
+    jump: OplogRegion;
+  };
   export type ChangeRetryPolicyParameters = {
     timestamp: Datetime;
-    retryPolicy: RetryPolicy;
+    newPolicy: RetryPolicy;
   };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
@@ -154,6 +159,13 @@ declare module 'golem:api/oplog@1.3.0' {
     idempotencyKey: string;
     functionName: string;
     input?: ValueAndType[];
+    traceId: string;
+    traceStates: string[];
+    /**
+     * The first one is the invocation context stack associated with the exported function invocation,
+     * and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
+     */
+    invocationContext: SpanData[][];
   };
   export type AgentInvocation = 
   {
@@ -264,6 +276,9 @@ declare module 'golem:api/oplog@1.3.0' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
+  export type Timestamp = {
+    timestamp: Datetime;
+  };
   export type OplogEntry = 
   /** The initial agent oplog entry */
   {
@@ -288,7 +303,7 @@ declare module 'golem:api/oplog@1.3.0' {
   /** Agent suspended */
   {
     tag: 'suspend'
-    val: Datetime
+    val: Timestamp
   } |
   /** Agent failed */
   {
@@ -301,7 +316,7 @@ declare module 'golem:api/oplog@1.3.0' {
    */
   {
     tag: 'no-op'
-    val: Datetime
+    val: Timestamp
   } |
   /**
    * The agent needs to recover up to the given target oplog index and continue running from
@@ -319,12 +334,12 @@ declare module 'golem:api/oplog@1.3.0' {
    */
   {
     tag: 'interrupted'
-    val: Datetime
+    val: Timestamp
   } |
   /** Indicates that the agent has been exited using WASI's exit function. */
   {
     tag: 'exited'
-    val: Datetime
+    val: Timestamp
   } |
   /** Overrides the agent's retry policy */
   {
@@ -337,7 +352,7 @@ declare module 'golem:api/oplog@1.3.0' {
    */
   {
     tag: 'begin-atomic-region'
-    val: Datetime
+    val: Timestamp
   } |
   /**
    * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
@@ -355,7 +370,7 @@ declare module 'golem:api/oplog@1.3.0' {
    */
   {
     tag: 'begin-remote-write'
-    val: Datetime
+    val: Timestamp
   } |
   /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
   {
@@ -405,7 +420,7 @@ declare module 'golem:api/oplog@1.3.0' {
   /** The agent's has been restarted, forgetting all its history */
   {
     tag: 'restart'
-    val: Datetime
+    val: Timestamp
   } |
   /** Activates a plugin */
   {
