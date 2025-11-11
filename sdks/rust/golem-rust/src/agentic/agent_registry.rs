@@ -21,14 +21,13 @@ use crate::{
 };
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
-use wasi_async_runtime::{block_on, Reactor};
+use wstd::runtime::block_on;
 
 #[derive(Default)]
 pub struct State {
     pub agent_types: RefCell<AgentTypes>,
     pub agent_instance: RefCell<AgentInstance>,
     pub agent_initiators: RefCell<AgentInitiators>,
-    pub async_runtime: RefCell<AsyncRuntime>,
     pub agent_id: RefCell<Option<AgentId>>,
 }
 
@@ -57,11 +56,6 @@ pub struct AgentInstance {
 #[derive(Default)]
 pub struct AgentInitiators {
     pub agent_initiators: HashMap<AgentTypeName, Arc<dyn AgentInitiator>>,
-}
-
-#[derive(Default)]
-pub struct AsyncRuntime {
-    pub reactor: Option<Reactor>,
 }
 
 pub fn get_all_agent_types() -> Vec<AgentType> {
@@ -127,10 +121,7 @@ where
         .clone()
         .unwrap();
 
-    block_on(|reactor| async move {
-        register_reactor(reactor);
-        f(agent_instance).await
-    })
+    block_on(async move { f(agent_instance).await })
 }
 
 pub fn with_agent_instance<F, R>(f: F) -> R
@@ -145,16 +136,6 @@ where
         .unwrap();
 
     f(agent_instance.as_ref())
-}
-
-pub fn get_reactor() -> Reactor {
-    get_state().async_runtime.borrow().reactor.clone().unwrap()
-}
-
-pub fn register_reactor(reactor: Reactor) {
-    let state = get_state();
-
-    state.async_runtime.borrow_mut().reactor = Some(reactor);
 }
 
 pub fn get_agent_id() -> AgentId {
@@ -235,11 +216,7 @@ where
         .cloned()
         .unwrap();
 
-    block_on(|reactor| async move {
-        register_reactor(reactor);
-
-        f(agent_initiator).await
-    })
+    block_on(async move { f(agent_initiator).await })
 }
 
 #[derive(Eq, Hash, PartialEq)]

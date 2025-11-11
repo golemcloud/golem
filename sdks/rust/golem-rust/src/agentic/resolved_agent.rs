@@ -15,22 +15,17 @@
 use std::cell::RefCell;
 
 use crate::{agentic::Agent, golem_agentic::golem::api::host::AgentId};
-use wasi_async_runtime::{block_on, Reactor};
 
 pub struct ResolvedAgent {
     pub agent: RefCell<Box<dyn Agent>>,
     pub agent_id: AgentId,
-    pub reactor: Reactor,
 }
 
 impl ResolvedAgent {
     pub fn new(agent: Box<dyn Agent>, agent_id: AgentId) -> ResolvedAgent {
-        block_on(|reactor| async move {
-            ResolvedAgent {
-                agent: RefCell::new(agent),
-                agent_id,
-                reactor,
-            }
-        })
+        ResolvedAgent {
+            agent: RefCell::new(agent),
+            agent_id,
+        }
     }
 }
