@@ -38,18 +38,19 @@ trait FooAgent {
 
     async fn fun_f64(&mut self, number: f64) -> f64;
 
+    async fn fun_char(&self, char: char) -> char;
+
     async fn fun_boolean(&self, boolean: bool) -> bool;
 
     async fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives;
 
     async fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // async fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool);
-    //
+    async fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool);
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     async fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -170,6 +171,13 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_tuple_simple(tuple).await
     }
 
+    async fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool) {
+        self.client.fun_tuple_complex(tuple).await
+    }
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections {
         self.client.fun_collections(collections).await
     }
@@ -266,12 +274,11 @@ trait BarAgent {
 
     fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool);
-    //
+    fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool);
+
     fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -384,13 +391,12 @@ impl BarAgent for BarAgentImpl {
         tuple
     }
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool) {
-    //     tuple
-    // }
+    fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool) {
+        tuple
+    }
 
     fn fun_collections(&mut self, collections: Collections) -> Collections {
         collections
