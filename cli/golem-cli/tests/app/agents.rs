@@ -183,7 +183,12 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
 
-    run_and_assert(&ctx, "fun-tuple-complex", &[&format!("(\"sample\", 3.14, {all_primitives_arg}, true)")]).await;
+    run_and_assert(
+        &ctx,
+        "fun-tuple-complex",
+        &[&format!("(\"sample\", 3.14, {all_primitives_arg}, true)")],
+    )
+    .await;
 
     let collections_arg = r#"
     {
@@ -306,14 +311,11 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
         .await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    //run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
 
     let result_complex_arg = r#"
     ok({

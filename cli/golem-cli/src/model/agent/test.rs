@@ -16,9 +16,7 @@ use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
-use golem_wasm::analysis::analysed_type::{
-    case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case, variant,
-};
+use golem_wasm::analysis::analysed_type::{case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case, unit_result, variant};
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
     vec![AgentType {
@@ -526,6 +524,41 @@ pub fn char_type() -> Vec<AgentType> {
                     name: "a".to_string(),
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: chr(),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+    }]
+}
+
+pub fn unit_result_type() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent-unit-result".to_string(),
+        description: "An example agent".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: unit_result(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "f1".to_string(),
+            description: "returns a random string".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: unit_result(),
                     }),
                 }],
             }),

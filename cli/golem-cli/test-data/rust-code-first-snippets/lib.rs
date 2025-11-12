@@ -69,8 +69,7 @@ trait FooAgent {
 
     async fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+    async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
 
     async fn fun_result_complex(
         &mut self,
@@ -214,6 +213,10 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_result_unit_err(result).await
     }
 
+    async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
+        self.client.fun_result_unit_both(result).await
+    }
+
     async fn fun_result_complex(
         &mut self,
         result: Result<NestedStruct, ComplexEnum>,
@@ -297,8 +300,7 @@ trait BarAgent {
 
     fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+    fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
 
     fn fun_result_complex(
         &mut self,
@@ -434,10 +436,9 @@ impl BarAgent for BarAgentImpl {
         result
     }
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
-    //     result
-    // }
+    fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
+        result
+    }
 
     fn fun_result_complex(
         &mut self,
