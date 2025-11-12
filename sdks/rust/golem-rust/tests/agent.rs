@@ -15,144 +15,21 @@
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{
-        agent_definition, agent_implementation, agentic::Agent, MultiModalSchema, Schema,
+        agent_definition, agentic::Agent, MultiModalSchema,
     };
+    use golem_rust::agentic::MultiModal;
 
     #[agent_definition]
     trait Echo {
-        fn new(init: UserId) -> Self;
-        fn echo_mut(&mut self, message: String) -> String;
-        fn echo(&self, message: String) -> String;
-        fn get_id(&self) -> String;
-        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()>;
-        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
-        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
-        fn echo_option(&self, option: Option<String>) -> Option<String>;
-    }
-
-    struct EchoImpl {
-        _id: UserId,
-    }
-
-    #[agent_implementation]
-    impl Echo for EchoImpl {
-        fn new(id: UserId) -> Self {
-            EchoImpl { _id: id }
-        }
-        fn echo_mut(&mut self, message: String) -> String {
-            format!("Echo: {}", message)
-        }
-
-        fn echo(&self, message: String) -> String {
-            message.to_string()
-        }
-
-        fn get_id(&self) -> String {
-            self.get_agent_id()
-        }
-
-        fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
-            result
-        }
-
-        fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String> {
-            result
-        }
-
-        fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()> {
-            result
-        }
-
-        fn echo_option(&self, option: Option<String>) -> Option<String> {
-            option
-        }
-    }
-
-    #[agent_definition]
-    trait EchoAsync {
-        async fn new(init: UserId) -> Self;
-        async fn echo_mut(&mut self, message: String) -> String;
-        async fn echo(&self, message: String) -> String;
-        async fn get_id(&self) -> String;
-        async fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()>;
-        async fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
-        async fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
-        async fn echo_option(&self, option: Option<String>) -> Option<String>;
-        async fn rpc_call(&self, string: String) -> String;
-        fn rpc_call_trigger(&self, string: String);
-        fn rpc_call_schedule(&self, string: String);
-    }
-
-    struct EchoAsyncImpl {
-        id: UserId,
-    }
-
-    #[agent_implementation]
-    impl EchoAsync for EchoAsyncImpl {
-        async fn new(id: UserId) -> Self {
-            EchoAsyncImpl { id }
-        }
-        async fn echo_mut(&mut self, message: String) -> String {
-            format!("Echo: {}", message)
-        }
-
-        async fn echo(&self, message: String) -> String {
-            message.to_string()
-        }
-
-        async fn get_id(&self) -> String {
-            self.get_agent_id()
-        }
-
-        async fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
-            result
-        }
-
-        async fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String> {
-            result
-        }
-
-        async fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()> {
-            result
-        }
-
-        async fn echo_option(&self, option: Option<String>) -> Option<String> {
-            option
-        }
-
-        async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone());
-            client.echo(string).await
-        }
-
-        fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
-            client.trigger_echo(string);
-        }
-
-        fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
-            client.schedule_echo(
-                string,
-                Datetime {
-                    seconds: 1,
-                    nanoseconds: 1,
-                },
-            );
-        }
+        fn new(init: String) -> Self;
+        fn process_multimodal_input(&self, input: MultiModal<TextOrImage>);
     }
 
     #[derive(MultiModalSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
-    }
-
-    #[derive(Schema, Clone)]
-    struct UserId {
-        id: String,
     }
 
     #[test] // only to verify that the agent compiles correctly

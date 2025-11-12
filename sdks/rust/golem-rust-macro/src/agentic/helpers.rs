@@ -29,26 +29,29 @@ pub enum FunctionKind {
     Sync,
 }
 
+#[derive(Debug)]
 pub enum ParamType {
     Tuple,
     Multimodal,
 }
 
 pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
-    if sig.inputs.len() == 1 {
-        if let syn::FnArg::Typed(pat_ty) = &sig.inputs[0] {
-            if let syn::Type::Path(type_path) = &*pat_ty.ty {
-                if let Some(seg) = type_path.path.segments.last() {
-                    if seg.ident == "Multimodal" {
-                        // Depends on how exactly multimodal is represented
-                        return InputParamType {
-                            param_type: ParamType::Multimodal,
-                        };
-                    }
+    let typed_params: Vec<_> = skip_self_parameters(sig);
+
+    if typed_params.len() == 1 {
+        let only_param = &typed_params[0];
+
+        if let syn::Type::Path(type_path) = &*only_param.ty {
+            if let Some(seg) = type_path.path.segments.last() {
+                if seg.ident == "MultiModal" {
+                    return InputParamType {
+                        param_type: ParamType::Multimodal,
+                    };
                 }
             }
         }
     }
+
     InputParamType {
         param_type: ParamType::Tuple,
     }
@@ -108,6 +111,18 @@ pub fn get_function_kind(sig: &syn::Signature) -> FunctionKind {
     }
 }
 
+pub fn skip_self_parameters(sig: &syn::Signature) -> Vec<&syn::PatType> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pat_ty) => Some(pat_ty),
+            _ => None,
+        })
+        .collect()
+}
+
+
+
 fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {
@@ -125,11 +140,30 @@ fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
     None
 }
 
+pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "MultiModal" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return Some(inner_ty);
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
+        println!("type: {:#?}", ty);
+
         if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "Multimodal";
+            return seg.ident == "MultiModal";
         }
     }
     false
 }
+

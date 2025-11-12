@@ -229,9 +229,54 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                         }
                      })
                   },
+                (ParamType::Multimodal, ParamType::Tuple) => {
+                    Some(quote! {
+                        pub async fn #method_name(#(#inputs),*) -> #return_type {
+
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed to serialize")),*];
+
+                          let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
+                              #remote_method_name_token,
+                              &wit_values
+                          );
+
+                          let rpc_result: Result<golem_rust::wasm_rpc::WitValue, golem_rust::wasm_rpc::RpcError> = golem_rust::agentic::await_invoke_result(rpc_result_future).await;
+
+                          let rpc_result_ok = rpc_result.expect(format!("rpc call to {} failed", #remote_method_name_token).as_str());
+
+                          let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
+
+                          #process_invoke_result
+                        }
+
+                        pub fn #trigger_method_name(#(#inputs),*) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
+                            #remote_method_name_token,
+                            &wit_values
+                          );
+
+                          rpc_result.expect(format!("rpc call to trigger {} failed", #remote_method_name_token).as_str());
+                        }
+
+                        pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
+                          let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
+                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed")),*];
+
+                          self.wasm_rpc.schedule_invocation(
+                            scheduled_time,
+                            #remote_method_name_token,
+                            &wit_values
+                          );
+                        }
+                    })
+                }
+
                 _ => {
-                    // TODO;
-                    todo!("Remote method generation for multimodal input/output parameter types not implemented yet");
+                    todo!()
                 }
 
             }

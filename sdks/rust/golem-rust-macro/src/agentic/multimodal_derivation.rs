@@ -17,7 +17,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
     let mut get_type_pairs = Vec::new();
     let mut serialize_match_arms = Vec::new();
+    let mut get_name_match_arms = Vec::new();
     let mut deserialize_match_arms = Vec::new();
+    let mut wit_value_match_arms = Vec::new();
 
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
@@ -34,8 +36,18 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 serialize_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner.clone())?)
+                        (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)?)
                     }
+                });
+
+                wit_value_match_arms.push(quote! {
+                    #enum_name::#variant_ident(inner) => {
+                        <#field_type as golem_rust::agentic::Schema>::to_wit_value(inner)
+                    }
+                });
+
+                (get_name_match_arms).push(quote! {
+                    #enum_name::#variant_ident(_) => #variant_name.to_string()
                 });
 
                 deserialize_match_arms.push(quote! {
@@ -69,6 +81,18 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     #(#serialize_match_arms),*
                 };
                 Ok(result)
+            }
+
+            fn get_name(&self) -> String {
+                match self {
+                    #(#get_name_match_arms),*
+                }
+            }
+
+            fn to_wit_value(self) -> Result<golem_rust::wasm_rpc::WitValue, String> {
+                match self {
+                    #(#wit_value_match_arms),*
+                }
             }
 
             fn from_element_value(elem: (String, golem_rust::golem_agentic::golem::agent::common::ElementValue)) -> Result<Self, String> {

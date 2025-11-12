@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::MultimodalSchema;
+use golem_wasm::{Value, WitValue};
+use crate::agentic::{MultimodalSchema};
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema};
 
 /// Represents Multimodal input data for agent functions.
@@ -33,9 +34,7 @@ use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema};
 /// // Create a multimodal dataset with text and image inputs
 /// let multimodal_data = MultiModal::new([
 ///     Input::Text("foo".to_string()),
-///     Input::Image(vec![1, 2, 3]),
-///     Input::Text("bar".to_string()),
-///     Input::Image(vec![4, 5, 6]),
+///     Input::Image(vec![1, 2, 3])
 /// ]);
 ///
 /// // Function that shows how an agent might receive multimodal input
@@ -105,5 +104,29 @@ impl<T: MultimodalSchema> MultiModal<T> {
             }
             _ => Err("Expected Multimodal DataValue".to_string()),
         }
+    }
+
+    pub fn to_wit_value(self) -> Result<WitValue, String> {
+        let schema = Self::get_schema();
+        let mut variants: Vec<Value> = vec![];
+
+
+       for v in self.items {
+           let variant_name = <T as MultimodalSchema>::get_name(&v);
+           let wit_value = <T as MultimodalSchema>::to_wit_value(v)?;
+           let value = Value::from(wit_value);
+           let variant_index = schema.iter().position(|(name, _)| name == &variant_name)
+               .ok_or_else(|| format!("Unknown modality name: {}", variant_name))?;
+
+              variants.push(Value::Variant {
+                  case_idx: variant_index as u32,
+                  case_value: Some(Box::new(value)),
+              });
+
+       }
+
+        let value = Value::List(variants);
+
+        Ok(WitValue::from(value))
     }
 }
