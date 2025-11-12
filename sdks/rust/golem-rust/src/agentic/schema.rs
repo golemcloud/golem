@@ -81,13 +81,13 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
 pub trait MultimodalSchema {
     fn get_multimodal_schema() -> Vec<(String, ElementSchema)>;
 
-    fn serialize_multimodal(input: MultiModal<Self>) -> Result<Vec<(String, ElementValue)>, String>
+    fn to_element_value(self) -> Result<(String, ElementValue), String>
     where
         Self: Sized;
 
-    fn deserialize_multimodal(
-        values: Vec<(String, ElementValue)>,
-    ) -> Result<MultiModal<Self>, String>
+    fn from_element_value(
+        elem: (String, ElementValue),
+    ) -> Result<Self, String>
     where
         Self: Sized;
 }

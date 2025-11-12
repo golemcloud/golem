@@ -34,14 +34,14 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 serialize_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        vec![(#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner.clone())?)]
+                        (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner.clone())?)
                     }
                 });
 
                 deserialize_match_arms.push(quote! {
                     #variant_name => {
                         let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(elem.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
-                        #enum_name::#variant_ident(val)
+                        Ok(#enum_name::#variant_ident(val))
                     }
                 });
             }
@@ -64,27 +64,20 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 ]
             }
 
-            fn serialize_multimodal(input: golem_rust::agentic::MultiModal<Self>) -> Result<Vec<(String, golem_rust::golem_agentic::golem::agent::common::ElementValue)>, String> {
-                let mut items = Vec::new();
-                for instance in input.items {
-                    let mut serialized = match instance {
-                        #(#serialize_match_arms),*
-                    };
-                    items.append(&mut serialized);
-                }
-                Ok(items)
+            fn to_element_value(self) -> Result<(String, golem_rust::golem_agentic::golem::agent::common::ElementValue), String> {
+                let result = match self {
+                    #(#serialize_match_arms),*
+                };
+                Ok(result)
             }
 
-            fn deserialize_multimodal(values: Vec<(String, golem_rust::golem_agentic::golem::agent::common::ElementValue)>) -> Result<golem_rust::agentic::MultiModal<Self>, String> {
-                let mut items = Vec::new();
-                for (name, elem) in values {
-                    let variant = match name.as_str() {
-                        #(#deserialize_match_arms),*,
-                        _ => return Err(format!("Unknown modality: {}", name))
-                    };
-                    items.push(variant);
-                }
-                Ok(golem_rust::agentic::MultiModal::new(items))
+            fn from_element_value(elem: (String, golem_rust::golem_agentic::golem::agent::common::ElementValue)) -> Result<Self, String> {
+                let (name, elem) = elem;
+
+                 match name.as_str() {
+                    #(#deserialize_match_arms),*,
+                    _ => return Err(format!("Unknown modality: {}", name))
+                 }
             }
         }
     };

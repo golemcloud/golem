@@ -43,6 +43,8 @@ use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema};
 /// fn my_agent_method(input: Multimodal<Input>) {
 ///     // handle the multimodal input here
 /// }
+///
+/// my_agent_method(multimodal_data);
 /// ```
 ///
 /// # Notes
@@ -75,7 +77,14 @@ impl<T: MultimodalSchema> MultiModal<T> {
 
     // With Multimodal schema we get name and element schema
     pub fn serialize(self) -> Result<DataValue, String> {
-        let elements = <T as MultimodalSchema>::serialize_multimodal(self)?;
+        let items = self.items;
+
+        let mut elements = Vec::new();
+
+        for item in items {
+            let serialized = <T as MultimodalSchema>::to_element_value(item)?;
+            elements.push(serialized);
+        }
 
         Ok(DataValue::Multimodal(elements))
     }
@@ -83,7 +92,18 @@ impl<T: MultimodalSchema> MultiModal<T> {
     pub fn deserialize(data: DataValue) -> Result<Self, String> {
         match data {
             DataValue::Multimodal(elements) => {
-                <T as MultimodalSchema>::deserialize_multimodal(elements)
+                let mut items = Vec::new();
+
+                for elem in elements {
+                    let item = <T as MultimodalSchema>::from_element_value(elem)?;
+                    items.push(item);
+                }
+
+                Ok(MultiModal {
+                    items,
+                    _marker: std::marker::PhantomData,
+                })
+
             }
             _ => Err("Expected Multimodal DataValue".to_string()),
         }
