@@ -553,6 +553,9 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // A string type
     run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
 
+    // A char type
+    run_and_assert(&ctx, "fun-char", &[r#"'a'"#]).await;
+
     // A boolean type
     run_and_assert(&ctx, "fun-boolean", &["true"]).await;
 

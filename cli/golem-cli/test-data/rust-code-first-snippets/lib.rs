@@ -154,6 +154,10 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_f64(number).await
     }
 
+    async fn fun_char(&self, char: char) -> char {
+        self.client.fun_char(char).await
+    }
+
     async fn fun_boolean(&self, boolean: bool) -> bool {
         self.client.fun_boolean(boolean).await
     }
@@ -253,6 +257,8 @@ trait BarAgent {
     fn fun_f32(&mut self, number: f32) -> f32;
 
     fn fun_f64(&mut self, number: f64) -> f64;
+
+    fn fun_char(&self, char: char) -> char;
 
     fn fun_boolean(&self, boolean: bool) -> bool;
 
@@ -360,6 +366,10 @@ impl BarAgent for BarAgentImpl {
 
     fn fun_f64(&mut self, number: f64) -> f64 {
         number
+    }
+
+    fn fun_char(&self, char: char) -> char {
+        char
     }
 
     fn fun_boolean(&self, boolean: bool) -> bool {
