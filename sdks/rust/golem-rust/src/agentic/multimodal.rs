@@ -21,7 +21,8 @@ use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema};
 /// # Example
 ///
 /// ```
-/// use golem_rust::agentic::{Multimodal, MultiModalInput};
+/// use golem_rust::agentic::{MultiModal};
+/// use golem_rust::MultiModalSchema;
 ///
 /// #[derive(MultiModalSchema)]
 /// enum Input {
@@ -29,18 +30,16 @@ use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema};
 ///     Image(Vec<u8>),
 /// }
 ///
-/// use MyMultimodalInput::*;
-///
 /// // Create a multimodal dataset with text and image inputs
-/// let multimodal_data = Multimodal::new([
-///     Text("my_text".into()),
-///     Image(vec![1, 2, 3]),
-///     Text("another_text".into()),
-///     Image(vec![4, 5, 6]),
+/// let multimodal_data = MultiModal::new([
+///     Input::Text("foo".to_string()),
+///     Input::Image(vec![1, 2, 3]),
+///     Input::Text("bar".to_string()),
+///     Input::Image(vec![4, 5, 6]),
 /// ]);
 ///
 /// // Function that shows how an agent might receive multimodal input
-/// fn my_agent_method(input: Multimodal<Input>) {
+/// fn my_agent_method(input: MultiModal<Input>) {
 ///     // handle the multimodal input here
 /// }
 ///

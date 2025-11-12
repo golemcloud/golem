@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_rust_macro::MultiModalSchema;
-
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
-    use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
+    use golem_rust::{
+        agent_definition, agent_implementation, agentic::Agent, MultiModalSchema, Schema,
+    };
 
     #[agent_definition]
     trait Echo {
@@ -144,6 +144,12 @@ mod tests {
         }
     }
 
+    #[derive(MultiModalSchema)]
+    enum TextOrImage {
+        Text(String),
+        Image(Vec<u8>),
+    }
+
     #[derive(Schema, Clone)]
     struct UserId {
         id: String,
@@ -153,9 +159,4 @@ mod tests {
     fn test_agent_compilation() {
         assert!(true);
     }
-}
-
-#[derive(MultiModalSchema)]
-enum MulInput {
-    Text(String),
 }
