@@ -304,7 +304,7 @@ impl BenchmarkTestDependencies {
                 registry_service_http_port,
                 registry_service_grpc_port,
                 &rdb,
-                (!component_compilation_service_disabled).then(|| &component_compilation_service),
+                (!component_compilation_service_disabled).then_some(&component_compilation_service),
                 verbosity,
                 out_level,
                 Level::ERROR,

@@ -24,7 +24,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel,};
+use golem_common::model::oplog::{
+    AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel,
+};
 use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
