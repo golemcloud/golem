@@ -762,9 +762,7 @@ pub mod shared_args {
     #[derive(Debug, Args, Clone)]
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"]
-
-        )]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"])]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
@@ -773,12 +771,10 @@ pub mod shared_args {
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate agents and HTTP APIs
-        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
-        )]
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
         pub redeploy_all: bool,
         /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"]
-        )]
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
         pub reset: bool,
     }
 
@@ -895,6 +891,12 @@ pub mod app {
         },
         /// Deploy application
         Deploy {
+            #[arg(long, conflicts_with_all = ["version", "revision"])]
+            plan: bool,
+            #[arg(long, conflicts_with_all = ["force_build", "revision"])]
+            version: Option<String>,
+            #[arg(long, conflicts_with_all = ["force_build", "version"])]
+            revision: Option<u64>,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]

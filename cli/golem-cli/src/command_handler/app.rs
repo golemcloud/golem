@@ -34,8 +34,8 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::ApplicationClient;
-use golem_client::model::ApplicationCreation;
+use golem_client::api::{ApplicationClient, EnvironmentClient};
+use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -66,9 +66,15 @@ impl AppCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
+                plan,
+                version,
+                revision,
                 force_build,
                 deploy_args,
-            } => self.cmd_deploy(force_build, deploy_args).await,
+            } => {
+                self.cmd_deploy(plan, version, revision, force_build, deploy_args)
+                    .await
+            }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateAgents {
                 component_name,
@@ -290,10 +296,20 @@ impl AppCommandHandler {
 
     async fn cmd_deploy(
         &self,
+        plan: bool,
+        version: Option<String>,
+        revision: Option<u64>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(force_build, deploy_args).await
+        if let Some(version) = version {
+            self.deploy_by_version(version, deploy_args).await
+        } else if let Some(revision) = revision {
+            self.deploy_by_revision(revision, deploy_args).await
+        } else {
+            self.deploy_from_source(plan, force_build, deploy_args)
+                .await
+        }
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -411,10 +427,29 @@ impl AppCommandHandler {
         .await
     }
 
-    async fn deploy(
+    async fn deploy_by_version(
         &self,
-        _force_build: ForceBuildArg,
-        _deploy_args: DeployArgs,
+        version: String,
+        deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    async fn deploy_by_revision(
+        &self,
+        version: u64,
+        deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    async fn deploy_from_source(
+        &self,
+        plan: bool,
+        force_build: ForceBuildArg,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let _environment = self
             .ctx

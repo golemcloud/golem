@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::app_raw::Environment;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::environment::{
+    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName,
+};
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -121,6 +124,29 @@ pub struct ResolvedEnvironmentIdentity {
     pub application_name: ApplicationName,
     pub environment_id: EnvironmentId,
     pub environment_name: EnvironmentName,
+
+    pub remote_environment: golem_client::model::Environment,
+}
+
+impl ResolvedEnvironmentIdentity {
+    pub fn new(
+        environment_reference: Option<&EnvironmentReference>,
+        application: golem_client::model::Application,
+        environment: golem_client::model::Environment,
+    ) -> Self {
+        Self {
+            source: match environment_reference {
+                Some(env_ref) => ResolvedEnvironmentIdentitySource::Reference(env_ref.clone()),
+                None => ResolvedEnvironmentIdentitySource::DefaultFromManifest,
+            },
+            account_id: application.account_id,
+            application_id: application.id,
+            application_name: application.name,
+            environment_id: environment.id.clone(),
+            environment_name: environment.name.clone(),
+            remote_environment: environment,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -140,4 +166,11 @@ impl EnvironmentResolveMode {
             EnvironmentResolveMode::Any => true,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectedManifestEnvironment {
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub environment: Environment,
 }

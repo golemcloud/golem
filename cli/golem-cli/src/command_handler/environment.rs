@@ -18,7 +18,6 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
-    ResolvedEnvironmentIdentitySource,
 };
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
@@ -72,16 +71,11 @@ impl EnvironmentCommandHandler {
                                         environment_name,
                                     )
                                     .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::Reference(
-                                        environment_reference.clone(),
-                                    ),
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
+                                Ok(ResolvedEnvironmentIdentity::new(
+                                    Some(environment_reference),
+                                    application,
+                                    environment,
+                                ))
                             }
                             None => {
                                 // TODO: atomic: show error about
@@ -113,16 +107,11 @@ impl EnvironmentCommandHandler {
                                         &environment_name.0,
                                     )
                                     .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::Reference(
-                                        environment_reference.clone(),
-                                    ),
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
+                                Ok(ResolvedEnvironmentIdentity::new(
+                                    Some(environment_reference),
+                                    application,
+                                    environment,
+                                ))
                             }
                             None => {
                                 // TODO: atomic: show error about
@@ -142,8 +131,8 @@ impl EnvironmentCommandHandler {
                 }
             }
             None => {
-                match self.ctx.manifest_environment_name() {
-                    Some(environment_name) => {
+                match self.ctx.manifest_environment() {
+                    Some(env) => {
                         let application = self
                             .ctx
                             .app_handler()
@@ -155,17 +144,14 @@ impl EnvironmentCommandHandler {
                                 let environment = self
                                     .get_or_create_remote_environment(
                                         &application.id,
-                                        environment_name,
+                                        &env.environment_name,
                                     )
                                     .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::DefaultFromManifest,
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
+                                Ok(ResolvedEnvironmentIdentity::new(
+                                    None,
+                                    application,
+                                    environment,
+                                ))
                             }
                             None => {
                                 // TODO: atomic: show error about

@@ -17,19 +17,20 @@ use crate::auth::{Auth, Authentication};
 use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
-use crate::config::AuthenticationConfig;
+use crate::config::{AuthenticationConfig, BUILTIN_LOCAL_URL, CLOUD_URL};
 use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::log::{set_log_output, LogOutput, Output};
+use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode, ComponentPresetName};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
-use crate::model::app_raw::Marker;
-use crate::model::environment::EnvironmentReference;
+use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
+use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
-use crate::model::{app_raw, AccountDetails, PluginReference};
+use crate::model::{AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
+use colored::Colorize;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
     ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
@@ -69,7 +70,7 @@ pub struct Context {
     profile: Profile,
     */
     environment_reference: Option<EnvironmentReference>,
-    manifest_environment: Option<(EnvironmentName, app_raw::Environment)>,
+    manifest_environment: Option<SelectedManifestEnvironment>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
@@ -139,71 +140,70 @@ impl Context {
         let app_source_mode = preloaded_app.source_mode;
         let manifest_environments = preloaded_app.environments;
 
-        let manifest_environment: Option<(EnvironmentName, app_raw::Environment)> =
-            match &environment_reference {
-                Some(environment_reference) => {
-                    match environment_reference {
-                        EnvironmentReference::Environment { environment_name } => {
-                            match &manifest_environments {
-                                Some(environments) => match environments.get(environment_name) {
-                                    Some(environment) => {
-                                        Some((environment_name.clone(), environment.clone()))
-                                    }
-                                    None => {
-                                        bail!(ContextInitHintError::EnvironmentNotFound {
-                                            requested_environment_name: environment_name.clone(),
-                                            manifest_environment_names: environments
-                                                .keys()
-                                                .cloned()
-                                                .collect(),
-                                        })
-                                    }
-                                },
+        let manifest_environment: Option<SelectedManifestEnvironment> = match &environment_reference
+        {
+            Some(environment_reference) => {
+                match environment_reference {
+                    EnvironmentReference::Environment { environment_name } => {
+                        match &manifest_environments {
+                            Some(environments) => match environments.get(environment_name) {
+                                Some(environment) => {
+                                    Some(SelectedManifestEnvironment {
+                                        application_name: ApplicationName("TODO".to_string()), // TODO: atomic: load with envs
+                                        environment_name: environment_name.clone(),
+                                        environment: environment.clone(),
+                                    })
+                                }
                                 None => {
-                                    if env_ref_can_be_builtin_server {
-                                        None
-                                    } else {
-                                        bail!(ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
+                                    bail!(ContextInitHintError::EnvironmentNotFound {
+                                        requested_environment_name: environment_name.clone(),
+                                        manifest_environment_names: environments
+                                            .keys()
+                                            .cloned()
+                                            .collect(),
+                                    })
+                                }
+                            },
+                            None => {
+                                if env_ref_can_be_builtin_server {
+                                    None
+                                } else {
+                                    bail!(ContextInitHintError::CannotSelectEnvironmentWithoutManifest {
                                         requested_environment_name: environment_name.clone()
                                     })
-                                    }
                                 }
                             }
                         }
-                        EnvironmentReference::ApplicationEnvironment { .. } => {
-                            // TODO: atomic
-                            todo!()
-                        }
-                        EnvironmentReference::AccountApplicationEnvironment { .. } => {
-                            // TODO: atomic
-                            todo!()
-                        }
+                    }
+                    EnvironmentReference::ApplicationEnvironment { .. } => {
+                        // TODO: atomic
+                        todo!()
+                    }
+                    EnvironmentReference::AccountApplicationEnvironment { .. } => {
+                        // TODO: atomic
+                        todo!()
                     }
                 }
-                None => match &manifest_environments {
-                    Some(environments) => environments
-                        .iter()
-                        .find(|(_, env)| env.default == Some(Marker))
-                        .map(|(name, env)| (name.clone(), env.clone())),
-                    None => None,
-                },
-            };
+            }
+            None => match &manifest_environments {
+                Some(environments) => environments
+                    .iter()
+                    .find(|(_, env)| env.default == Some(Marker))
+                    .map(
+                        |(environment_name, environment)| SelectedManifestEnvironment {
+                            application_name: ApplicationName("TODO".to_string()), // TODO: atomic: load with envs
+                            environment_name: environment_name.clone(),
+                            environment: environment.clone(),
+                        },
+                    ),
+                None => None,
+            },
+        };
 
         let mut yes = global_flags.yes;
         let mut deploy_args = DeployArgs::none();
-        if let Some((_, environment)) = &manifest_environment {
-            // TODO: atomic: use component presets
-            /*
-            if app_context_config.build_profile.is_none() {
-                app_context_config.build_profile = manifest_profile
-                    .build_profile
-                    .as_ref()
-                    .map(|build_profile| build_profile.as_str().into())
-
-            }
-            */
-
-            if let Some(cli) = environment.cli.as_ref() {
+        if let Some(selected_manifest_environment) = &manifest_environment {
+            if let Some(cli) = selected_manifest_environment.environment.cli.as_ref() {
                 if cli.auto_confirm == Some(Marker) {
                     yes = true;
                 }
@@ -230,7 +230,7 @@ impl Context {
             .format
             .or(manifest_environment
                 .as_ref()
-                .and_then(|(_, env)| env.cli.as_ref())
+                .and_then(|env| env.environment.cli.as_ref())
                 .and_then(|cli| cli.format))
             .unwrap_or_default();
 
@@ -250,11 +250,9 @@ impl Context {
         set_log_output(log_output);
 
         let client_config = match &manifest_environment {
-            Some((_, environment)) => match environment.server.as_ref() {
+            Some(env) => match env.environment.server.as_ref() {
                 Some(server) => ClientConfig::from(server),
-                None => {
-                    ClientConfig::from(&app_raw::Server::Builtin(app_raw::BuiltinServer::Local))
-                }
+                None => ClientConfig::from(&Server::Builtin(BuiltinServer::Local)),
             },
             None => {
                 // TODO: atomic: fallback to default profiles or command line args
@@ -268,28 +266,27 @@ impl Context {
             manifest_environment
                 .as_ref()
                 .zip(manifest_environments)
-                .map(
-                    |((selected_environment_name, selected_environment), environments)| {
-                        ApplicationContextConfig::new(
-                            &global_flags,
-                            environments,
-                            ComponentPresetSelector {
-                                environment: selected_environment_name.clone(),
-                                presets: {
-                                    let mut presets = selected_environment
-                                        .component_presets
-                                        .clone()
-                                        .into_vec()
-                                        .into_iter()
-                                        .map(ComponentPresetName)
-                                        .collect::<Vec<_>>();
-                                    presets.extend(global_flags.preset.iter().cloned());
-                                    presets
-                                },
+                .map(|(selected_environment, environments)| {
+                    ApplicationContextConfig::new(
+                        &global_flags,
+                        environments,
+                        ComponentPresetSelector {
+                            environment: selected_environment.environment_name.clone(),
+                            presets: {
+                                let mut presets = selected_environment
+                                    .environment
+                                    .component_presets
+                                    .clone()
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(ComponentPresetName)
+                                    .collect::<Vec<_>>();
+                                presets.extend(global_flags.preset.iter().cloned());
+                                presets
                             },
-                        )
-                    },
-                )
+                        },
+                    )
+                })
         };
 
         let template_sdk_overrides = SdkOverrides {
@@ -390,7 +387,7 @@ impl Context {
     }
 
     pub fn profile_name(&self) -> &ProfileName {
-        self.log_selected_profile_and_environment_once();
+        self.log_context_selection_once();
         // TODO: atomic: &self.profile_name
         todo!()
     }
@@ -406,18 +403,13 @@ impl Context {
     }
 
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
-        self.log_selected_profile_and_environment_once();
+        self.log_context_selection_once();
         self.environment_reference.as_ref()
     }
 
-    pub fn manifest_environment_name(&self) -> Option<&EnvironmentName> {
-        self.log_selected_profile_and_environment_once();
-        self.manifest_environment.as_ref().map(|(name, _)| name)
-    }
-
-    pub fn manifest_environment(&self) -> Option<&app_raw::Environment> {
-        self.log_selected_profile_and_environment_once();
-        self.manifest_environment.as_ref().map(|(_, env)| env)
+    pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
+        self.log_context_selection_once();
+        self.manifest_environment.as_ref()
     }
 
     pub fn http_batch_size(&self) -> u64 {
@@ -427,7 +419,7 @@ impl Context {
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
-                self.log_selected_profile_and_environment_once();
+                self.log_context_selection_once();
 
                 let clients = GolemClients::new(
                     self.client_config.clone(),
@@ -627,28 +619,52 @@ impl Context {
         }
     }
 
-    fn log_selected_profile_and_environment_once(&self) {
+    fn log_context_selection_once(&self) {
         self.selected_profile_and_environment_logging
             .get_or_init(|| {
-                // TODO: atomic
-                /*
-                if !self.help_mode {
-                    log_action(
-                        "Selected",
-                        format!(
-                            "profile: {}{}",
-                            profile.name.0.log_color_highlight(),
-                            environment
-                                .as_ref()
-                                .map(|environment| format!(
-                                    ", environment: {}",
-                                    environment.to_string().log_color_highlight()
-                                ))
-                                .unwrap_or_default()
-                        ),
-                    );
+                if self.help_mode {
+                    return;
                 }
-                */
+
+                let (app, env, server): (String, String, String) = {
+                    if let Some(env) = &self.manifest_environment {
+                        let server = match &env.environment.server {
+                            Some(Server::Builtin(BuiltinServer::Local)) | None => {
+                                format!("local - builtin ({})", BUILTIN_LOCAL_URL.underline())
+                            }
+                            Some(Server::Builtin(BuiltinServer::Cloud)) => {
+                                format!("cloud - builtin ({})", CLOUD_URL.underline())
+                            }
+                            Some(Server::Custom(custom_server)) => {
+                                custom_server.url.as_str().underline().to_string()
+                            }
+                        };
+                        (
+                            env.application_name.0.clone(),
+                            env.environment_name.0.clone(),
+                            server,
+                        )
+                    } else if let Some(_environment_ref) = &self.environment_reference {
+                        // TODO: atomic: server from profile
+                        todo!()
+                    } else {
+                        // TODO: atomic: server from profile
+                        todo!()
+                    }
+                };
+
+                let profile = "TODO"; // TODO: atomic
+
+                log_action(
+                    "Selected",
+                    format!(
+                        "app: {}, environment: {}, server: {}, profile: {}",
+                        app.log_color_highlight(),
+                        env.log_color_highlight(),
+                        server.log_color_highlight(),
+                        profile.log_color_highlight()
+                    ),
+                );
             });
     }
 
@@ -826,7 +842,7 @@ impl GolemClients {
 struct ApplicationContextConfig {
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
-    environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    environments: BTreeMap<EnvironmentName, Environment>,
     component_presets: ComponentPresetSelector,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
@@ -837,7 +853,7 @@ struct ApplicationContextConfig {
 impl ApplicationContextConfig {
     pub fn new(
         global_flags: &GolemCliGlobalFlags,
-        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        environments: BTreeMap<EnvironmentName, Environment>,
         component_presets: ComponentPresetSelector,
     ) -> Self {
         Self {
