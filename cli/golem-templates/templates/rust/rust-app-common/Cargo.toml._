@@ -7,6 +7,7 @@ opt-level = "s"
 lto = true
 
 [workspace.dependencies]
+async-trait = {version = "0.1.89"}
 golem-rust = { GOLEM_RUST_VERSION_OR_PATH, features = ["export_load_snapshot", "export_save_snapshot", "export_golem_agentic"] }
 reqwest = { git = "https://github.com/zivergetech/reqwest", branch = "update-sep-2025", features = ["json"] }
 serde = { version = "1", features = ["derive"] }

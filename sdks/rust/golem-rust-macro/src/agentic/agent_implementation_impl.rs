@@ -14,10 +14,11 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemImpl, ReturnType, Type};
+use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_input_param_type, get_output_param_type, InputParamType, OutputParamType,
+    get_function_kind, get_input_param_type, get_output_param_type, is_constructor_method,
+    FunctionKind, ParamType,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -62,23 +63,38 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let input_param_type = get_input_param_type(&constructor_method.sig);
 
-    let constructor_param_extraction_call_back = quote! {
-        let agent_instance = std::cell::RefCell::new(Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*)));
+    let constructor_kind = get_function_kind(&constructor_method.sig);
 
-        let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
-
-        golem_rust::agentic::register_agent_instance(
-            golem_rust::agentic::ResolvedAgent { agent: agent_instance, agent_id: agent_id }
-        );
-        Ok(())
+    let constructor_param_extraction_call_back = match constructor_kind {
+        FunctionKind::Async => {
+            quote! {
+                let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_params),*).await;
+                let agent_instance = Box::new(agent_instance_raw);
+                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                golem_rust::agentic::register_agent_instance(
+                    golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
+                );
+                Ok(())
+            }
+        }
+        FunctionKind::Sync => {
+            quote! {
+                let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                golem_rust::agentic::register_agent_instance(
+                    golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
+                );
+                Ok(())
+            }
+        }
     };
 
     let constructor_param_extraction = generate_constructor_extraction(
         &ctor_params,
         &trait_name_str_raw,
-        match input_param_type {
-            InputParamType::Tuple => Some(constructor_param_extraction_call_back),
-            InputParamType::Multimodal => None,
+        match input_param_type.param_type {
+            ParamType::Tuple => Some(constructor_param_extraction_call_back),
+            ParamType::Multimodal => None,
         },
     );
 
@@ -142,20 +158,14 @@ fn build_match_arms(
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
-            let returns_self = match &method.sig.output {
-                ReturnType::Type(_, ty) => match &**ty {
-                    Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
-                    _ => false,
-                },
-                _ => false,
-            };
+            let is_constructor_method = is_constructor_method(&method.sig);
 
-            let method_name_str = method.sig.ident.to_string();
-
-            if returns_self {
+            if is_constructor_method {
                 constructor_method = Some(method);
                 continue;
             }
+
+            let method_name_str = method.sig.ident.to_string();
 
             let param_idents = extract_param_idents(method);
 
@@ -165,19 +175,40 @@ fn build_match_arms(
 
             let output_param_type = get_output_param_type(&method.sig);
 
-            let post_method_param_extraction_logic = match output_param_type {
-                OutputParamType::Tuple => Some(quote! {
-                    let result = self.#ident(#(#param_idents),*);
-                    <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
-                        golem_rust::agentic::custom_error(format!(
-                            "Failed serializing return value for method {}: {}",
-                            #method_name, e
-                        ))
-                    }).map(|element_value| {
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
-                    })
-                }),
-                OutputParamType::Multimodal => None,
+            let post_method_param_extraction_logic = match output_param_type.param_type {
+                ParamType::Tuple => match output_param_type.function_kind {
+                    FunctionKind::Async if !output_param_type.is_unit => Some(quote! {
+                        let result = self.#ident(#(#param_idents),*).await;
+                        <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        }).map(|element_value| {
+                            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                        })
+                    }),
+                    FunctionKind::Async => Some(quote! {
+                        let _ = self.#ident(#(#param_idents),*).await;
+                        Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
+                    }),
+                    FunctionKind::Sync if !output_param_type.is_unit => Some(quote! {
+                        let result = self.#ident(#(#param_idents),*);
+                        <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        }).map(|element_value| {
+                            golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                        })
+                    }),
+                    FunctionKind::Sync => Some(quote! {
+                        let _ = self.#ident(#(#param_idents),*);
+                        Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
+                    }),
+                },
+                ParamType::Multimodal => None,
             };
 
             let method_param_extraction = generate_method_param_extraction(
@@ -202,7 +233,7 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    call_back_for_non_multimodal: Option<proc_macro2::TokenStream>,
+    post_method_param_extraction_logic: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
@@ -242,10 +273,10 @@ fn generate_method_param_extraction(
         }
     }).collect();
 
-    match call_back_for_non_multimodal {
-        Some(call_back) => quote! {
+    match post_method_param_extraction_logic {
+        Some(post_method_param_extraction) => quote! {
             #(#extraction)*
-            #call_back
+            #post_method_param_extraction
         },
 
         None => quote! {
@@ -264,12 +295,13 @@ fn generate_base_agent_impl(
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
     quote! {
+        #[async_trait::async_trait(?Send)]
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
-            fn get_id(&self) -> String {
-                golem_rust::agentic::get_agent_id().map(|id| id.agent_id).expect("Internal Error:  Invoke on agentic method without initialisation") // It's guaranteed to have an instance by this time
+            fn get_agent_id(&self) -> String {
+                golem_rust::agentic::get_agent_id().agent_id
             }
 
-            fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
+            async fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> Result<golem_rust::golem_agentic::golem::agent::common::DataValue, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 match method_name.as_str() {
                     #(#match_arms,)*
@@ -347,8 +379,9 @@ fn generate_initiator_impl(
     quote! {
         struct #initiator_ident;
 
+        #[async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
-            fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
+            async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 #constructor_param_extraction
             }
@@ -370,7 +403,7 @@ fn generate_register_initiator_fn(
         fn #register_initiator_fn_name() {
             golem_rust::agentic::register_agent_initiator(
                 #trait_name_str_raw.to_string().as_str(),
-                Box::new(#initiator_ident)
+                std::sync::Arc::new(#initiator_ident)
             );
         }
     }

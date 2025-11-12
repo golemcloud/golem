@@ -14,8 +14,13 @@
 
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue};
 
+#[async_trait::async_trait(?Send)]
 pub trait Agent {
-    fn get_id(&self) -> String;
-    fn invoke(&mut self, method_name: String, input: DataValue) -> Result<DataValue, AgentError>;
+    fn get_agent_id(&self) -> String;
+    async fn invoke(
+        &mut self,
+        method_name: String,
+        input: DataValue,
+    ) -> Result<DataValue, AgentError>;
     fn get_definition(&self) -> AgentType;
 }

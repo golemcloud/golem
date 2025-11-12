@@ -1,5 +1,16 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
@@ -8,54 +19,127 @@ use crate::{
         golem::{agent::common::ElementSchema, api::host::AgentId},
     },
 };
+use std::{cell::RefCell, future::Future};
+use std::{collections::HashMap, sync::Arc};
+use wstd::runtime::block_on;
 
-thread_local! {
-    static AGENT_TYPE_REGISTRY: RefCell<HashMap<AgentTypeName, AgentType>> = RefCell::new(HashMap::new());
+#[derive(Default)]
+pub struct State {
+    pub agent_types: RefCell<AgentTypes>,
+    pub agent_instance: RefCell<AgentInstance>,
+    pub agent_initiators: RefCell<AgentInitiators>,
+    pub agent_id: RefCell<Option<AgentId>>,
 }
 
-thread_local! {
-    static AGENT_INSTANCE: RefCell<Option<ResolvedAgent>> = RefCell::new(None);
+#[derive(Default)]
+pub struct AgentTypes {
+    pub agent_types: HashMap<AgentTypeName, AgentType>,
 }
 
-thread_local! {
-    static AGENT_INITIATOR_REGISTRY: RefCell<HashMap<AgentTypeName, Box<dyn AgentInitiator>>> = RefCell::new(HashMap::new());
+static mut STATE: Option<State> = None;
+
+#[allow(static_mut_refs)]
+pub fn get_state() -> &'static State {
+    unsafe {
+        if STATE.is_none() {
+            STATE = Some(State::default());
+        }
+        STATE.as_ref().unwrap()
+    }
+}
+
+#[derive(Default)]
+pub struct AgentInstance {
+    pub resolved_agent: Option<Arc<ResolvedAgent>>,
+}
+
+#[derive(Default)]
+pub struct AgentInitiators {
+    pub agent_initiators: HashMap<AgentTypeName, Arc<dyn AgentInitiator>>,
 }
 
 pub fn get_all_agent_types() -> Vec<AgentType> {
-    AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
+    let state = get_state();
+
+    state
+        .agent_types
+        .borrow()
+        .agent_types
+        .values()
+        .cloned()
+        .collect()
 }
 
 pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
-    AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().get(&agent_type_name).cloned())
+    let state = get_state();
+
+    state
+        .agent_types
+        .borrow()
+        .agent_types
+        .get(agent_type_name)
+        .cloned()
 }
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: AgentType) {
-    AGENT_TYPE_REGISTRY.with(|registry| {
-        registry.borrow_mut().insert(agent_type_name, agent_type);
-        ()
-    });
+    get_state()
+        .agent_types
+        .borrow_mut()
+        .agent_types
+        .insert(agent_type_name, agent_type);
+}
+
+pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentInitiator>) {
+    let state = get_state();
+    let agent_type_name = AgentTypeName(agent_type_name.to_string());
+
+    state
+        .agent_initiators
+        .borrow_mut()
+        .agent_initiators
+        .insert(agent_type_name, initiator);
 }
 
 pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
-    AGENT_INSTANCE.with(|instance| {
-        *instance.borrow_mut() = Some(resolved_agent);
-    });
+    let state = get_state();
+    let agent_id = resolved_agent.agent_id.clone();
+
+    state.agent_instance.borrow_mut().resolved_agent = Some(Arc::new(resolved_agent));
+    state.agent_id.borrow_mut().replace(agent_id);
 }
 
-pub fn with_agent_instance<F, R>(f: F) -> Option<R>
+// To be used only in agent implementation
+pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
+where
+    F: FnOnce(Arc<ResolvedAgent>) -> Fut,
+    Fut: Future<Output = R>,
+{
+    let agent_instance = get_state()
+        .agent_instance
+        .borrow()
+        .resolved_agent
+        .clone()
+        .unwrap();
+
+    block_on(async move { f(agent_instance).await })
+}
+
+pub fn with_agent_instance<F, R>(f: F) -> R
 where
     F: FnOnce(&ResolvedAgent) -> R,
 {
-    AGENT_INSTANCE.with(|instance| instance.borrow().as_ref().map(|agent| f(agent)))
+    let agent_instance = get_state()
+        .agent_instance
+        .borrow()
+        .resolved_agent
+        .clone()
+        .unwrap();
+
+    f(agent_instance.as_ref())
 }
 
-pub fn get_agent_id() -> Option<AgentId> {
-    AGENT_INSTANCE.with(|instance| {
-        instance
-            .borrow()
-            .as_ref()
-            .map(|resolved_agent| resolved_agent.agent_id.clone())
-    })
+pub fn get_agent_id() -> AgentId {
+    get_state().agent_id.borrow().clone().unwrap()
 }
 
 pub fn get_constructor_parameter_type(
@@ -115,24 +199,24 @@ pub fn get_method_parameter_type(
     }
 }
 
-pub fn register_agent_initiator(agent_type_name: &str, initiator: Box<dyn AgentInitiator>) {
-    let agent_type_name = AgentTypeName(agent_type_name.to_string());
-    AGENT_INITIATOR_REGISTRY.with(|registry| {
-        registry.borrow_mut().insert(agent_type_name, initiator);
-        ()
-    });
-}
-
-pub fn with_agent_initiator<F, R>(type_name: &AgentTypeName, f: F) -> Option<R>
+// A call to agent initiator is only from outside and should never be happening in any other part of the call
+// and hence it is safe to create a reactor and register forever
+pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
 where
-    F: FnOnce(&Box<dyn AgentInitiator>) -> R,
+    F: FnOnce(Arc<dyn AgentInitiator>) -> Fut,
+    Fut: Future<Output = R>,
 {
-    AGENT_INITIATOR_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(type_name)
-            .map(|initiator| f(initiator))
-    })
+    let state = get_state();
+
+    let agent_initiator = state
+        .agent_initiators
+        .borrow()
+        .agent_initiators
+        .get(agent_type_name)
+        .cloned()
+        .unwrap();
+
+    block_on(async move { f(agent_initiator).await })
 }
 
 #[derive(Eq, Hash, PartialEq)]
