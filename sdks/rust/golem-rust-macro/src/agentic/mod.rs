@@ -10,5 +10,5 @@ mod agent_implementation_impl;
 mod client_generation;
 mod compile_errors;
 mod helpers;
-mod schema_derivation;
 mod multimodal_derivation;
+mod schema_derivation;

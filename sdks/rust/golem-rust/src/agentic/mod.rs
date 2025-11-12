@@ -28,7 +28,7 @@ mod agent_initiator;
 mod agent_registry;
 mod async_utils;
 mod errors;
+mod multimodal;
 mod resolved_agent;
 mod schema;
 mod wit_utils;
-mod multimodal;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_rust_macro::{MultiModalSchema};
+use golem_rust_macro::MultiModalSchema;
 
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
@@ -157,5 +157,5 @@ mod tests {
 
 #[derive(MultiModalSchema)]
 enum MulInput {
-    Text(String)
+    Text(String),
 }
