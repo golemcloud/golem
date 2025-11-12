@@ -17,9 +17,8 @@ use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use crate::wasm_rpc::WitValue;
-use golem_wasm::analysis::{AnalysedType, TypeResult};
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::{Value, WitType};
+use crate::agentic::MultiModal;
 
 pub trait Schema {
     fn get_type() -> ElementSchema;
@@ -77,4 +76,17 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
     }
+}
+
+
+pub trait MultimodalSchema {
+    fn get_multimodal_schema() -> Vec<(String, ElementSchema)>;
+
+    fn serialize_multimodal(input: MultiModal<Self>) -> Result<Vec<(String, ElementValue)>, String> where Self: Sized;
+
+    fn deserialize_multimodal(
+        values: Vec<(String, ElementValue)>,
+    ) -> Result<MultiModal<Self>, String>
+    where
+        Self: Sized;
 }

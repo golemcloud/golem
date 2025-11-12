@@ -39,6 +39,11 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     agentic::derive_schema(input)
 }
 
+#[proc_macro_derive(MultiModalSchema)]
+pub fn derive_multimodal(input: TokenStream) -> TokenStream {
+    agentic::derive_multimodal(input)
+}
+
 /// Defines a function as an `Operation` that can be used in transactions
 #[proc_macro_attribute]
 pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
