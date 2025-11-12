@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::error;
+use tracing::{error, span, Instrument, Level};
 
 #[async_trait]
 pub trait ResourceLimits: Send + Sync {
@@ -150,22 +150,25 @@ impl ResourceLimitsGrpc {
         };
         let svc = Arc::new(svc);
         let svc_clone = svc.clone();
-        let background_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(batch_update_interval).await;
-                let updates = svc_clone.take_all_fuel_updates().await;
-                if !updates.is_empty() {
-                    let r = svc_clone.send_batch_updates(updates.clone()).await;
-                    if let Err(err) = r {
-                        error!("Failed to send batched resource usage updates: {}", err);
-                        error!(
-                            "The following fuel consumption records were lost: {:?}",
-                            updates
-                        );
+        let background_handle = tokio::spawn(
+            async move {
+                loop {
+                    tokio::time::sleep(batch_update_interval).await;
+                    let updates = svc_clone.take_all_fuel_updates().await;
+                    if !updates.is_empty() {
+                        let r = svc_clone.send_batch_updates(updates.clone()).await;
+                        if let Err(err) = r {
+                            error!("Failed to send batched resource usage updates: {}", err);
+                            error!(
+                                "The following fuel consumption records were lost: {:?}",
+                                updates
+                            );
+                        }
                     }
                 }
             }
-        });
+            .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
+        );
         *svc.background_handle.lock().unwrap() = Some(background_handle);
         svc
     }

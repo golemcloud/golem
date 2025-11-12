@@ -748,6 +748,10 @@ fn display_for_resource_handle(uri: &str, resource_id: &u64) -> String {
 }
 
 fn try_formatting(input: &str, _indent: usize) -> String {
+    if input.starts_with('\"') && input.ends_with('\"') {
+        return input.to_string();
+    }
+
     let mut result = String::new();
     let mut depth = 0;
     let chars: Vec<char> = input.chars().collect();

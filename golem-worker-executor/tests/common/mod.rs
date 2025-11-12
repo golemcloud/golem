@@ -39,7 +39,7 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, OplogPayload, PersistenceLevel, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
@@ -1183,9 +1183,9 @@ impl Oplog for TestOplog {
         self.oplog.add(entry).await
     }
 
-    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry).await?;
-        self.oplog.add_safe(entry).await
+        self.oplog.fallible_add(entry).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -1222,6 +1222,10 @@ impl Oplog for TestOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.oplog.download_payload(payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.oplog.switch_persistence_level(mode).await;
     }
 }
 

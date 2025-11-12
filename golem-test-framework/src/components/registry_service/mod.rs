@@ -67,31 +67,39 @@ async fn env_vars(
     grpc_port: u16,
     rdb: &Arc<dyn Rdb>,
     rdb_private_connection: bool,
-    component_compilation_service: &Arc<dyn ComponentCompilationService>,
+    component_compilation_service: Option<&Arc<dyn ComponentCompilationService>>,
     verbosity: Level,
     admin_plan_id: &PlanId,
     admin_account_id: &AccountId,
     admin_account_email: &str,
     admin_token: &TokenSecret,
     default_plan_id: &PlanId,
+    otlp: bool,
 ) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
+    let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
         )
-        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
-        // component compilation
-        .with("GOLEM__COMPONENT_COMPILATION__TYPE", "Enabled".to_string())
-        .with(
-            "GOLEM__COMPONENT_COMPILATION__CONFIG__HOST",
-            component_compilation_service.grpc_host(),
-        )
-        .with(
-            "GOLEM__COMPONENT_COMPILATION__CONFIG__PORT",
-            component_compilation_service.grpc_port().to_string(),
-        )
+        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string());
+
+    // component compilation
+    let builder = match component_compilation_service {
+        Some(component_compilation_service) => builder
+            .with("GOLEM__COMPONENT_COMPILATION__TYPE", "Enabled".to_string())
+            .with(
+                "GOLEM__COMPONENT_COMPILATION__CONFIG__HOST",
+                component_compilation_service.grpc_host(),
+            )
+            .with(
+                "GOLEM__COMPONENT_COMPILATION__CONFIG__PORT",
+                component_compilation_service.grpc_port().to_string(),
+            ),
+        _ => builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
+    };
+
+    builder
         // users
         .with("GOLEM__ACCOUNTS__ROOT__ID", admin_account_id.to_string())
         .with(
@@ -153,5 +161,6 @@ async fn env_vars(
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
+        .with_optional_otlp("registry_service", otlp)
         .build()
 }

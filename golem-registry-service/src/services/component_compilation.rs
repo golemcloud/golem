@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]
 pub trait ComponentCompilationService: Debug + Send + Sync {
@@ -57,7 +58,7 @@ pub fn configured(config: &ComponentCompilationConfig) -> Arc<dyn ComponentCompi
 }
 
 pub struct GrpcComponentCompilationService {
-    client: GrpcClient<ComponentCompilationServiceClient<Channel>>,
+    client: GrpcClient<ComponentCompilationServiceClient<OtelGrpcService<Channel>>>,
     own_grpc_port: AtomicU16,
 }
 

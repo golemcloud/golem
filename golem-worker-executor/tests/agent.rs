@@ -118,6 +118,7 @@ async fn agent_env_inheritance(
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "2".to_string()),
         ])
+        .unique()
         .store()
         .await?;
     let unique_id = context.redis_prefix();
@@ -135,6 +136,8 @@ async fn agent_env_inheritance(
             vec![],
         )
         .await?;
+
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(
@@ -264,4 +267,73 @@ async fn agent_env_inheritance(
     );
 
     Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ephemeral_agent_works(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_constructor_parameter_echo",
+        )
+        .ephemeral()
+        .store()
+        .await
+        .unwrap();
+
+    let worker_id1 = executor
+        .start_worker(&component.id, "echo-agent(\"param1\")")
+        .await
+        .unwrap();
+    let worker_id2 = executor
+        .start_worker(&component.id, "echo-agent(\"param2\")")
+        .await
+        .unwrap();
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id1,
+            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id1,
+            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result3 = executor
+        .invoke_and_await(
+            &worker_id2,
+            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let result4 = executor
+        .invoke_and_await(
+            &worker_id2,
+            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // As the agent is ephemeral, no matter how many times we call change-and-get it always starts from scratch (no additional '!' suffix)
+    assert_eq!(result1, Ok(vec![Value::String("param1!".to_string())]));
+    assert_eq!(result2, Ok(vec![Value::String("param1!".to_string())]));
+    assert_eq!(result3, Ok(vec![Value::String("param2!".to_string())]));
+    assert_eq!(result4, Ok(vec![Value::String("param2!".to_string())]));
 }

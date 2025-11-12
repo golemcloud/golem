@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload, PersistenceLevel,};
 use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, span, warn, Instrument, Level, Span};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -570,7 +570,11 @@ impl MultiLayerOplog {
                 multi_layer_oplog_service,
                 rx,
             )
-            .in_current_span(),
+            .instrument(
+                span!(parent: None, Level::INFO, "Oplog background transfer")
+                    .follows_from(Span::current())
+                    .clone(),
+            ),
         ));
 
         result
@@ -805,6 +809,10 @@ impl Oplog for MultiLayerOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.primary.download_payload(payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.primary.switch_persistence_level(mode).await;
     }
 }
 

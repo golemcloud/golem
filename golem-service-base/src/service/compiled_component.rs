@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, info_span};
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
@@ -135,23 +135,29 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             Ok(None) => Ok(None),
             Ok(Some(bytes)) => {
                 let start = Instant::now();
-                let component = unsafe {
-                    Component::deserialize(engine, &bytes).map_err(|err| {
-                        WorkerExecutorError::component_download_failed(
-                            component_id.clone(),
-                            component_version,
-                            format!("Could not deserialize compiled component: {err}"),
-                        )
-                    })?
-                };
-                let end = Instant::now();
+                let component = {
+                    let span = info_span!("Loading precompiled WASM component");
+                    let _enter = span.enter();
 
-                let load_time = end.duration_since(start);
-                debug!(
-                    "Loaded precompiled image for {} in {}ms",
-                    component_id,
-                    load_time.as_millis(),
-                );
+                    let component = unsafe {
+                        Component::deserialize(engine, &bytes).map_err(|err| {
+                            WorkerExecutorError::component_download_failed(
+                                component_id.clone(),
+                                component_version,
+                                format!("Could not deserialize compiled component: {err}"),
+                            )
+                        })?
+                    };
+                    let end = Instant::now();
+
+                    let load_time = end.duration_since(start);
+                    debug!(
+                        "Loaded precompiled image for {} in {}ms",
+                        component_id,
+                        load_time.as_millis(),
+                    );
+                    component
+                };
 
                 Ok(Some(component))
             }

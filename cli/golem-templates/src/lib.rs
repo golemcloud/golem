@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::{
-    ComposableAppGroupName, GuestLanguage, PackageName, TargetExistsResolveDecision,
+    ComposableAppGroupName, GuestLanguage, PackageName, SdkOverrides, TargetExistsResolveDecision,
     TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata, TemplateName,
-    TemplateParameters,
+    TemplateParameters, Transform,
 };
 use anyhow::Context;
 use include_dir::{include_dir, Dir, DirEntry};
@@ -44,7 +44,8 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {""};
+static GOLEM_RUST_VERSION: &str = "1.8.1";
+static GOLEM_TS_VERSION: &str = "0.0.58";
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];
@@ -178,11 +179,13 @@ pub fn add_component_by_template(
     component_template: Option<&Template>,
     target_path: &Path,
     package_name: &PackageName,
+    sdk_overrides: Option<&SdkOverrides>,
 ) -> anyhow::Result<()> {
     let parameters = TemplateParameters {
         component_name: package_name.to_string_with_colon().into(),
         package_name: package_name.clone(),
         target_path: target_path.into(),
+        sdk_overrides: sdk_overrides.cloned().unwrap_or_default(),
     };
 
     if let Some(common_template) = common_template {
@@ -233,7 +236,7 @@ pub fn render_template_instructions(
     transform(
         &template.instructions,
         parameters,
-        TransformMode::PackageAndComponentOnly,
+        &[Transform::PackageAndComponent],
     )
 }
 
@@ -252,7 +255,7 @@ fn instantiate_directory(
         .entries()
     {
         let name = entry.path().file_name().unwrap().to_str().unwrap();
-        if !template.exclude.contains(name) && (name != "metadata.json") {
+        if name != "metadata.json" {
             let name = file_name_transform(name, parameters);
             match entry {
                 DirEntry::Dir(dir) => {
@@ -266,23 +269,15 @@ fn instantiate_directory(
                     )?;
                 }
                 DirEntry::File(file) => {
-                    // TODO: solve this more nicely, for now golem.yaml-s are always transformed,
-                    //       even if transform is set to false
-                    let transform = if file
-                        .path()
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        == "golem.yaml"
-                    {
-                        if template.kind.is_common() {
-                            Some(TransformMode::ManifestHintsOnly)
-                        } else {
-                            Some(TransformMode::All)
+                    let content_transform = match (template.kind.is_common(), name.as_str()) {
+                        (true, "golem.yaml") => vec![Transform::ManifestHints],
+                        (true, "package.json") => vec![Transform::TsSdk],
+                        (true, "Cargo.toml") => vec![Transform::RustSdk],
+                        (true, _) => vec![],
+                        (false, "golem.yaml") => {
+                            vec![Transform::ManifestHints, Transform::PackageAndComponent]
                         }
-                    } else {
-                        (template.transform && !template.transform_exclude.contains(&name))
-                            .then_some(TransformMode::PackageAndComponentOnly)
+                        (false, _) => vec![Transform::PackageAndComponent],
                     };
 
                     instantiate_file(
@@ -290,7 +285,7 @@ fn instantiate_directory(
                         file.path(),
                         &target.join(&name),
                         parameters,
-                        transform,
+                        content_transform,
                         resolve_mode,
                     )?;
                 }
@@ -305,12 +300,14 @@ fn instantiate_file(
     source: &Path,
     target: &Path,
     parameters: &TemplateParameters,
-    transform_contents: Option<TransformMode>,
+    content_transforms: Vec<Transform>,
     resolve_mode: TargetExistsResolveMode,
 ) -> io::Result<()> {
     match get_resolved_contents(catalog, source, target, resolve_mode)? {
         Some(contents) => {
-            if let Some(transform_mode) = transform_contents {
+            if content_transforms.is_empty() {
+                fs::write(target, contents)
+            } else {
                 fs::write(
                     target,
                     transform(
@@ -322,11 +319,9 @@ fn instantiate_file(
                             ))
                         })?,
                         parameters,
-                        transform_mode,
+                        &content_transforms,
                     ),
                 )
-            } else {
-                fs::write(target, contents)
             }
         }
         None => Ok(()),
@@ -372,13 +367,11 @@ fn copy_all(
     Ok(())
 }
 
-enum TransformMode {
-    All,
-    PackageAndComponentOnly,
-    ManifestHintsOnly,
-}
-
-fn transform(str: impl AsRef<str>, parameters: &TemplateParameters, mode: TransformMode) -> String {
+fn transform(
+    str: impl AsRef<str>,
+    parameters: &TemplateParameters,
+    transforms: &[Transform],
+) -> String {
     let transform_pack_and_comp = |str: &str| -> String {
         str.replace(
             "componentnameapi",
@@ -406,28 +399,67 @@ fn transform(str: impl AsRef<str>, parameters: &TemplateParameters, mode: Transf
         .replace("__cn__", "componentName")
     };
 
-    let transform_manifest_hints = |str: &str| -> String {
-        str.replace("# golem-app-manifest-header\n", APP_MANIFEST_HEADER)
-            .replace(
-                "# golem-app-manifest-component-hints\n",
-                &transform(
-                    APP_MANIFEST_COMPONENT_HINTS_TEMPLATE,
-                    parameters,
-                    TransformMode::PackageAndComponentOnly,
-                ),
-            )
+    let transform_manifest_hints =
+        |str: &str| -> String { str.replace("# golem-app-manifest-header\n", APP_MANIFEST_HEADER) };
+
+    let transform_rust_sdk = |str: &str| -> String {
+        let path_or_version = {
+            if let Some(rust_path) = &parameters.sdk_overrides.rust_path {
+                format!(r#"path = "{}""#, rust_path)
+            } else {
+                format!(
+                    r#"version = "{}""#,
+                    parameters
+                        .sdk_overrides
+                        .rust_version
+                        .as_deref()
+                        .unwrap_or(GOLEM_RUST_VERSION)
+                )
+            }
+        };
+
+        str.replace("GOLEM_RUST_VERSION_OR_PATH", &path_or_version)
     };
 
-    match mode {
-        TransformMode::All => transform_manifest_hints(&transform_pack_and_comp(str.as_ref())),
-        TransformMode::PackageAndComponentOnly => transform_pack_and_comp(str.as_ref()),
-        TransformMode::ManifestHintsOnly => transform_manifest_hints(str.as_ref()),
+    let transform_ts_sdk = |str: &str| -> String {
+        let (sdk_version_or_path, typegen_version_or_path) = {
+            if let Some(ts_packages_path) = parameters.sdk_overrides.ts_packages_path.as_ref() {
+                (
+                    format!("{}/golem-ts-sdk", ts_packages_path),
+                    format!("{}/golem-ts-typegen", ts_packages_path),
+                )
+            } else {
+                let version = parameters
+                    .sdk_overrides
+                    .ts_version
+                    .as_deref()
+                    .unwrap_or(GOLEM_TS_VERSION);
+                (version.to_string(), version.to_string())
+            }
+        };
+
+        str.replace("GOLEM_TS_SDK_VERSION_OR_PATH", &sdk_version_or_path)
+            .replace("GOLEM_TS_TYPEGEN_VERSION_OR_PATH", &typegen_version_or_path)
+    };
+
+    let mut transformed = str.as_ref().to_string();
+
+    for transform in transforms {
+        transformed = match transform {
+            Transform::PackageAndComponent => transform_pack_and_comp(&transformed),
+            Transform::ManifestHints => transform_manifest_hints(&transformed),
+            Transform::TsSdk => transform_ts_sdk(&transformed),
+            Transform::RustSdk => transform_rust_sdk(&transformed),
+        };
     }
+
+    transformed
 }
 
 fn file_name_transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
-    transform(str, parameters, TransformMode::PackageAndComponentOnly)
-        .replace("Cargo.toml._", "Cargo.toml") // HACK because cargo package ignores every subdirectory containing a Cargo.toml
+    transform(str, parameters, &[Transform::PackageAndComponent])
+        .replace("Cargo.toml._", "Cargo.toml")
+    // HACK because cargo package ignores every subdirectory containing a Cargo.toml
 }
 
 fn check_target(
@@ -584,14 +616,12 @@ fn parse_template(
         // TODO: this is just a quickfix for hiding "<lang>-app-<component>" prefixes, let's decide later if we want
         //       reorganize the template directories directly
         let segments = name.split("-").collect::<Vec<_>>();
-        if segments.len() > 2 && segments[1] == "app" {
-            if segments.len() > 3 && segments[2] == "component" {
-                segments[3..].join("-").into()
-            } else {
-                segments[2..].join("-").into()
-            }
-        } else {
-            name.into()
+        match segments.iter().position(|&s| s == "app") {
+            Some(idx) => match segments.get(idx + 1) {
+                Some(&"component") => segments[idx + 2..].join("-").into(),
+                _ => name.into(),
+            },
+            None => name.into(),
         }
     };
 
@@ -607,11 +637,14 @@ fn parse_template(
         wit_deps.push(PathBuf::from("golem-1.x"));
         wit_deps.push(PathBuf::from("golem-rpc"));
         wit_deps.push(PathBuf::from("golem-rdbms"));
+        wit_deps.push(PathBuf::from("golem-agent"));
+        wit_deps.push(PathBuf::from("golem-durability"));
     }
     if metadata.requires_wasi.unwrap_or(false) {
         wit_deps.push(PathBuf::from("blobstore"));
         wit_deps.push(PathBuf::from("cli"));
         wit_deps.push(PathBuf::from("clocks"));
+        wit_deps.push(PathBuf::from("config"));
         wit_deps.push(PathBuf::from("filesystem"));
         wit_deps.push(PathBuf::from("http"));
         wit_deps.push(PathBuf::from("io"));
@@ -632,17 +665,6 @@ fn parse_template(
         wit_deps_targets: metadata
             .wit_deps_paths
             .map(|dirs| dirs.iter().map(PathBuf::from).collect()),
-        exclude: metadata
-            .exclude
-            .unwrap_or_default()
-            .iter()
-            .cloned()
-            .collect(),
-        transform_exclude: metadata
-            .transform_exclude
-            .map(|te| te.iter().cloned().collect())
-            .unwrap_or_default(),
-        transform: metadata.transform.unwrap_or(true),
         dev_only: metadata.dev_only.unwrap_or(false),
     }
 }

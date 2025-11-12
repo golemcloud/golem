@@ -19,7 +19,7 @@ golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-wasm = { workspace = true }
-golem-wasm-derive= { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }
@@ -30,8 +30,11 @@ blake3 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 futures-concurrency = { workspace = true }
+headers = { workspace = true }
+indoc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+rlimit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -42,7 +45,7 @@ serde_yaml = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
-wac-graph = {workspace = true}
+wac-graph = { workspace = true }
 
 [lib]
 harness = false

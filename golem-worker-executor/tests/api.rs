@@ -2005,7 +2005,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
-
     // Poll loop is running. Wait until a given poll count
     let begin = Instant::now();
     loop {
@@ -3385,6 +3384,8 @@ async fn cancelling_pending_invocations(
             vec![counter_ref.clone()],
         )
         .await??;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

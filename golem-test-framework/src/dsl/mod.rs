@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod benchmark;
 pub mod debug_render;
 
 use self::debug_render::debug_render_oplog_entry;

@@ -46,8 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
-use tracing::log::info;
-use tracing::{warn, Instrument};
+use tracing::{info, warn, Instrument};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);

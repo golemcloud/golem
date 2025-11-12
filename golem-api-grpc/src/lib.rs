@@ -24,9 +24,10 @@ pub mod proto {
     use bincode::error::{DecodeError, EncodeError};
     use bincode::{Decode, Encode};
     use golem_wasm::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance,
+        analysed_type, AnalysedExport, AnalysedFunction, AnalysedFunctionParameter,
+        AnalysedFunctionResult, AnalysedInstance, AnalysedType,
     };
+    use golem_wasm::{FromValue, IntoValue, Value};
     use std::collections::BTreeMap;
     use uuid::Uuid;
 
@@ -226,6 +227,30 @@ pub mod proto {
                 .into_iter()
                 .map(|e| (e.key, e.value))
                 .collect()
+        }
+    }
+
+    impl IntoValue for UpdateMode {
+        fn into_value(self) -> Value {
+            Value::String(match self {
+                UpdateMode::Automatic => "Automatic".to_string(),
+                UpdateMode::Manual => "Manual".to_string(),
+            })
+        }
+
+        fn get_type() -> AnalysedType {
+            analysed_type::str()
+        }
+    }
+
+    impl FromValue for UpdateMode {
+        fn from_value(value: Value) -> Result<Self, String> {
+            let str = String::from_value(value)?;
+            match str.as_str() {
+                "Automatic" => Ok(Self::Automatic),
+                "Manual" => Ok(Self::Manual),
+                other => Err(format!("Invalid update mode: {other}")),
+            }
         }
     }
 }

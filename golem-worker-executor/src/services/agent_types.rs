@@ -120,13 +120,10 @@ impl AgentTypesService for CachedAgentTypes {
 mod grpc {
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
-
     use golem_common::model::agent::RegisteredAgentType;
     use golem_common::model::environment::EnvironmentId;
-
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
-
     use golem_service_base::clients::registry::RegistryService;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;
     use std::sync::Arc;
 

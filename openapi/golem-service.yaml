@@ -10838,12 +10838,12 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
       required:
       - workerId
-      - componentVersion
+      - componentRevision
     WorkerEnvFilter:
       title: WorkerEnvFilter
       type: object

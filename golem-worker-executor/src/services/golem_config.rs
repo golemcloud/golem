@@ -926,7 +926,7 @@ impl Default for OplogConfig {
     fn default() -> Self {
         Self {
             max_operations_before_commit: 128,
-            max_operations_before_commit_ephemeral: 512,
+            max_operations_before_commit_ephemeral: 1024,
             max_payload_size: 64 * 1024,
             indexed_storage_layers: 2,
             blob_storage_layers: 1,

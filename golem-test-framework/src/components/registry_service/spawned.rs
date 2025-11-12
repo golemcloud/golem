@@ -46,10 +46,11 @@ impl SpawnedRegistryService {
         http_port: u16,
         grpc_port: u16,
         rdb: &Arc<dyn Rdb>,
-        component_compilation_service: &Arc<dyn ComponentCompilationService>,
+        component_compilation_service: Option<&Arc<dyn ComponentCompilationService>>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-registry-service process");
 
@@ -78,6 +79,7 @@ impl SpawnedRegistryService {
                     &admin_account_email,
                     &admin_account_token,
                     &default_plan_id,
+                    otlp,
                 )
                 .await,
             )

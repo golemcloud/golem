@@ -152,7 +152,7 @@ impl Default for EnvBasedTestDependenciesConfig {
 
 #[derive(Clone)]
 pub struct EnvBasedTestDependencies {
-    config: EnvBasedTestDependenciesConfig,
+    config: Arc<EnvBasedTestDependenciesConfig>,
     rdb: Arc<dyn Rdb>,
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
@@ -180,7 +180,9 @@ impl EnvBasedTestDependencies {
                 let sqlite_path = Path::new("../target/golem_test_db");
                 Arc::new(SqliteRdb::new(sqlite_path))
             }
-            DbType::Postgres => Arc::new(DockerPostgresRdb::new(&config.unique_network_id).await),
+            DbType::Postgres => {
+                Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
+            }
         }
     }
 
@@ -213,7 +215,7 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_registry_service(
-        config: &EnvBasedTestDependenciesConfig,
+        config: &Arc<EnvBasedTestDependenciesConfig>,
         rdb: &Arc<dyn Rdb>,
         component_compilation_service: &Arc<dyn ComponentCompilationService>,
     ) -> Arc<dyn RegistryService> {
@@ -224,10 +226,11 @@ impl EnvBasedTestDependencies {
                 8081,
                 9091,
                 rdb,
-                component_compilation_service,
+                Some(component_compilation_service),
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
+                false,
             )
             .await,
         )
@@ -248,6 +251,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
+                false,
             )
             .await,
         )
@@ -265,6 +269,8 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
+                true,
+                false,
             )
             .await,
         )
@@ -289,6 +295,8 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 registry_service,
+                true,
+                false,
             )
             .await,
         )
@@ -315,12 +323,15 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 registry_service,
+                false,
             )
             .await,
         )
     }
 
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
+        let config = Arc::new(config);
+
         let blob_storage_root = "../target/golem_test_blob_storage";
 
         let blob_storage = Arc::new(

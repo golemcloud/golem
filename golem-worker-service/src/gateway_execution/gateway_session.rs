@@ -16,8 +16,7 @@ use async_trait::async_trait;
 use bincode::enc::Encoder;
 use bincode::error::EncodeError;
 use bytes::Bytes;
-use fred::interfaces::RedisResult;
-use golem_common::redis::RedisPool;
+use golem_common::redis::{RedisError, RedisPool};
 use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
 use sqlx::Row;
@@ -173,7 +172,7 @@ impl GatewaySession for RedisGatewaySession {
         let serialised = golem_common::serialization::serialize(&data_value)
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
-        let result: RedisResult<()> = self
+        let result: Result<(), RedisError> = self
             .redis
             .with("gateway_session", "insert")
             .hset(

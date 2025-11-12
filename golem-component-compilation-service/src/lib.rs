@@ -31,6 +31,8 @@ use std::{
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
+use tonic_tracing_opentelemetry::middleware;
+use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{info, Instrument};
 use wasmtime::component::__internal::anyhow;
 use wasmtime::component::__internal::anyhow::anyhow;
@@ -145,6 +147,10 @@ async fn start_grpc_server(
     join_set.spawn(
         async move {
             tonic::transport::Server::builder()
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
                 .add_service(health_service)
                 .add_service(
                     ComponentCompilationServiceServer::new(CompileGrpcService::new(

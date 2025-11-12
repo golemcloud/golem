@@ -460,6 +460,10 @@ impl ComponentService for TestComponentService {
         Ok(Self::test_component())
     }
 
+    async fn get_latest_cached_by_id(&self, _component_id: &ComponentId) -> Option<Component> {
+        None
+    }
+
     async fn get_latest_by_name(
         &self,
         name: &ComponentName,

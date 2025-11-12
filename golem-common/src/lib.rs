@@ -27,6 +27,7 @@ pub mod json_yaml;
 pub mod metrics;
 pub mod model;
 pub mod one_shot;
+pub mod poem;
 pub mod read_only_lock;
 pub mod redis;
 pub mod retriable_error;

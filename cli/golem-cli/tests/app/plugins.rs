@@ -68,7 +68,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
     let plugin_transformer = TestPlugin::new().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;

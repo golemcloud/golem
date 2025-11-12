@@ -29,13 +29,16 @@ clap = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 futures = { workspace = true }
+humantime-serde = { workspace = true }
 itertools = { workspace = true }
 prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_with = { workspace = true }
 serde_yaml = { workspace = true }
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 sqlx = { workspace = true }
 testcontainers = { workspace = true }

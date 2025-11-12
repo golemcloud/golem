@@ -33,7 +33,7 @@ impl ShardManager for ProvidedShardManager {
     fn grpc_host(&self) -> String {
         self.host.clone()
     }
-    fn gprc_port(&self) -> u16 {
+    fn grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

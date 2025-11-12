@@ -48,6 +48,17 @@ pub trait ComponentService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
 
+    /// Gets the latest cached metadata of a given component, if any.
+    ///
+    /// This is guaranteed to not make any remote service calls, but not guaranteed it's returning
+    /// the most up-to-date information about which component version is the latest. If there is
+    /// no cached information about this component at all, it returns None.
+    async fn get_latest_cached_by_id(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Option<ComponentDto>;
+
     async fn get_all_versions(
         &self,
         component_id: &ComponentId,
@@ -84,6 +95,15 @@ impl ComponentService for CachedComponentService {
         self.inner.get_latest_by_id(component_id, auth_ctx).await
     }
 
+    async fn get_latest_cached_by_id(
+        &self,
+        _component_id: &ComponentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Option<ComponentDto> {
+        // TODO: atomic: port or rethink caching for atomic
+        None
+    }
+
     async fn get_all_versions(
         &self,
         component_id: &ComponentId,
@@ -117,6 +137,14 @@ impl ComponentService for RemoteComponentService {
                 RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
                 other => other.into(),
             })
+    }
+
+    async fn get_latest_cached_by_id(
+        &self,
+        _component_id: &ComponentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Option<ComponentDto> {
+        None
     }
 
     async fn get_all_versions(

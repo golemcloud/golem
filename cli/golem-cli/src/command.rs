@@ -152,6 +152,10 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 112)]
     pub dev_mode: bool,
 
+    /// Switch to experimental or development-only template groups
+    #[arg(long, global = true, display_order = 113)]
+    pub template_group: Option<String>,
+
     #[command(flatten)]
     pub verbosity: Verbosity,
 
@@ -162,6 +166,12 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub golem_rust_version: Option<String>,
+
+    #[arg(skip)]
+    pub golem_ts_packages_path: Option<String>,
+
+    #[arg(skip)]
+    pub golem_ts_version: Option<String>,
 
     #[arg(skip)]
     pub wasm_rpc_offline: bool,
@@ -230,14 +240,26 @@ impl GolemCliGlobalFlags {
         }
 
         if self.golem_rust_path.is_none() {
-            if let Ok(wasm_rpc_path) = std::env::var("GOLEM_RUST_PATH") {
-                self.golem_rust_path = Some(PathBuf::from(wasm_rpc_path));
+            if let Ok(golem_rust_path) = std::env::var("GOLEM_RUST_PATH") {
+                self.golem_rust_path = Some(PathBuf::from(golem_rust_path));
             }
         }
 
         if self.golem_rust_version.is_none() {
             if let Ok(version) = std::env::var("GOLEM_RUST_VERSION") {
                 self.golem_rust_version = Some(version);
+            }
+        }
+
+        if self.golem_ts_packages_path.is_none() {
+            if let Ok(golem_ts_packages_path) = std::env::var("GOLEM_TS_PACKAGES_PATH") {
+                self.golem_ts_packages_path = Some(golem_ts_packages_path);
+            }
+        }
+
+        if self.golem_ts_version.is_none() {
+            if let Ok(version) = std::env::var("GOLEM_TS_VERSION") {
+                self.golem_ts_version = Some(version);
             }
         }
 
@@ -741,6 +763,7 @@ pub mod shared_args {
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
         #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"]
+
         )]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents

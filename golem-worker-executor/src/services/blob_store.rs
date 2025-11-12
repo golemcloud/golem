@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -422,7 +422,7 @@ impl BlobStoreService for DefaultBlobStoreService {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
 pub struct ObjectMetadata {
     pub name: String,
     pub container: String,

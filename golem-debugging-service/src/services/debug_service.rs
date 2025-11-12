@@ -691,8 +691,8 @@ impl DebugService for DebugServiceDefault {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use golem_common::model::oplog::OplogIndex;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
+    use golem_common::model::oplog::{OplogIndex, PersistenceLevel};
     use golem_common::model::Timestamp;
     use golem_worker_executor::services::oplog::CommitLevel;
     use std::collections::BTreeMap;
@@ -800,5 +800,7 @@ mod tests {
         async fn download_payload(&self, _payload: &OplogPayload) -> Result<Bytes, String> {
             unimplemented!()
         }
+
+        async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
     }
 }

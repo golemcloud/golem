@@ -70,6 +70,8 @@ async fn env_vars(
     verbosity: Level,
     rdb_private_connection: bool,
     registry_service: &Arc<dyn RegistryService>,
+    enable_fs_cache: bool,
+    otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -89,7 +91,7 @@ async fn env_vars(
         .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.grpc_host())
         .with(
             "GOLEM__ROUTING_TABLE__PORT",
-            shard_manager.gprc_port().to_string(),
+            shard_manager.grpc_port().to_string(),
         )
         .with(
             "GOLEM__CUSTOM_REQUEST_PORT",
@@ -97,7 +99,11 @@ async fn env_vars(
         )
         .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
-        .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
+        .with(
+            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            enable_fs_cache.to_string(),
+        )
         .with_all(rdb.info().env("golem_worker", rdb_private_connection))
+        .with_optional_otlp("worker_service", otlp)
         .build()
 }

@@ -185,6 +185,7 @@ impl EnvVarBuilder {
             .with_rust_log_with_dep_defaults(verbosity)
             .with_rust_back_log()
             .with_tracing_from_env()
+            .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
     }
 
     fn with(mut self, name: &str, value: String) -> Self {
@@ -227,6 +228,26 @@ impl EnvVarBuilder {
             std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
         {
             self.env_vars.insert(name, value);
+        }
+        self
+    }
+
+    fn with_optional_otlp(mut self, service_name: &str, enabled: bool) -> Self {
+        if enabled {
+            self.env_vars.insert(
+                "GOLEM__TRACING__OTLP__ENABLED".to_string(),
+                "true".to_string(),
+            );
+            self.env_vars.insert(
+                "GOLEM__TRACING__OTLP__HOST".to_string(),
+                "localhost".to_string(),
+            );
+            self.env_vars
+                .insert("GOLEM__TRACING__OTLP__PORT".to_string(), "4318".to_string());
+            self.env_vars.insert(
+                "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
+                service_name.to_string(),
+            );
         }
         self
     }

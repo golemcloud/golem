@@ -19,18 +19,21 @@ use anyhow::anyhow;
 use bincode::{Decode, Encode};
 use chrono::{DateTime, Timelike, Utc};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm::{IntoValue, Value};
-use golem_wasm_derive::IntoValue;
+use golem_wasm::{FromValue, IntoValue, Value};
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
+use std::net::IpAddr;
 use std::ops::Add;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
 use wasmtime_wasi::p2::bindings::{filesystem, sockets};
 use wasmtime_wasi::p2::{FsError, SocketError};
 use wasmtime_wasi::StreamError;
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableDateTime {
     pub seconds: u64,
     pub nanoseconds: u32,
@@ -152,6 +155,14 @@ impl IntoValue for SerializableError {
 
     fn get_type() -> AnalysedType {
         analysed_type::str()
+    }
+}
+
+impl FromValue for SerializableError {
+    fn from_value(value: Value) -> Result<Self, String> {
+        // Losing details here
+        let message = String::from_value(value)?;
+        Ok(Self::Generic { message })
     }
 }
 
@@ -523,7 +534,7 @@ impl From<SerializableError> for WorkerProxyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
 pub enum SerializableStreamError {
     Closed,
     LastOperationFailed(SerializableError),
@@ -620,7 +631,36 @@ impl From<SerializableIpAddress> for IpAddress {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+impl IntoValue for SerializableIpAddress {
+    fn into_value(self) -> Value {
+        let addr = match self {
+            SerializableIpAddress::IPv4 { address } => IpAddr::V4(address.into()),
+            SerializableIpAddress::IPv6 { address } => IpAddr::V6(address.into()),
+        };
+        Value::String(addr.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
+
+impl FromValue for SerializableIpAddress {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let str = String::from_value(value)?;
+        let ipaddr = IpAddr::from_str(&str).map_err(|err| err.to_string())?;
+        match ipaddr {
+            IpAddr::V4(addr) => Ok(SerializableIpAddress::IPv4 {
+                address: addr.octets(),
+            }),
+            IpAddr::V6(addr) => Ok(SerializableIpAddress::IPv6 {
+                address: addr.segments(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableIpAddresses(pub Vec<SerializableIpAddress>);
 
 impl From<Vec<IpAddress>> for SerializableIpAddresses {
@@ -635,7 +675,7 @@ impl From<SerializableIpAddresses> for Vec<IpAddress> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
 pub struct SerializableFileTimes {
     pub data_access_timestamp: Option<SerializableDateTime>,
     pub data_modification_timestamp: Option<SerializableDateTime>,

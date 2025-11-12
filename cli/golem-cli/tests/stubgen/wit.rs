@@ -16,11 +16,11 @@
 
 use test_r::test;
 
+use crate::stubgen::test_data_path;
 use fs_extra::dir::CopyOptions;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_cli::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
 use golem_common::model::component::ComponentName;
-use std::path::Path;
 use tempfile::{tempdir, TempDir};
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};
 
@@ -340,7 +340,7 @@ fn is_owned_by_interface(
 
 fn init_source(name: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
-    let source = Path::new("test-data/wit").join(name);
+    let source = test_data_path().join("wit").join(name);
 
     fs_extra::dir::copy(
         source,

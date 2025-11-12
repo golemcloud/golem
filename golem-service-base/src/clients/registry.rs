@@ -46,6 +46,7 @@ use golem_common::model::plugin_registration::PluginRegistrationId;
 use std::collections::HashMap;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -158,13 +159,13 @@ pub trait RegistryService: Send + Sync {
 
 #[derive(Clone)]
 pub struct GrpcRegistryService {
-    client: GrpcClient<RegistryServiceClient<Channel>>,
+    client: GrpcClient<RegistryServiceClient<OtelGrpcService<Channel>>>,
 }
 
 impl GrpcRegistryService {
     pub fn new(config: &RegistryServiceConfig) -> Self {
         let max_message_size = config.max_message_size;
-        let client: GrpcClient<RegistryServiceClient<Channel>> = GrpcClient::new(
+        let client = GrpcClient::new(
             "registry",
             move |channel| {
                 RegistryServiceClient::new(channel)

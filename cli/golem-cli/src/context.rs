@@ -44,7 +44,7 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
 use golem_rib_repl::ReplComponentDependencies;
-use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
+use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -79,6 +79,9 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
+    template_sdk_overrides: SdkOverrides,
+    template_group: ComposableAppGroupName,
+
     file_download_client: reqwest::Client,
 
     // Lazy initialized
@@ -289,6 +292,21 @@ impl Context {
                 )
         };
 
+        let template_sdk_overrides = SdkOverrides {
+            rust_path: global_flags
+                .golem_rust_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            rust_version: global_flags.golem_rust_version.clone(),
+            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
+            ts_version: global_flags.golem_ts_version.clone(),
+        };
+        let template_group = global_flags
+            .template_group
+            .clone()
+            .map(ComposableAppGroupName::from)
+            .unwrap_or_default();
+
         Ok(Self {
             config_dir: global_flags.config_dir(),
             format,
@@ -304,6 +322,8 @@ impl Context {
             show_sensitive: global_flags.show_sensitive,
             server_no_limit_change: global_flags.server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
+            template_sdk_overrides,
+            template_group,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
@@ -549,6 +569,14 @@ impl Context {
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
             .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
+    }
+
+    pub fn template_sdk_overrides(&self) -> &SdkOverrides {
+        &self.template_sdk_overrides
+    }
+
+    pub fn template_group(&self) -> &ComposableAppGroupName {
+        &self.template_group
     }
 
     pub async fn select_account_by_email_or_error(

@@ -34,6 +34,8 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware;
+use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
@@ -58,6 +60,10 @@ pub async fn start_grpc_server(
     join_set.spawn(
         async move {
             Server::builder()
+                .layer(
+                    middleware::server::OtelGrpcLayer::default()
+                        .filter(filters::reject_healthcheck),
+                )
                 .add_service(reflection_service)
                 .add_service(health_service)
                 .add_service(

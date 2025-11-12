@@ -14,12 +14,18 @@
 
 use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
-use std::io::stdout;
+use std::io::{stderr, stdout};
 use std::path::Path;
 use std::sync::Arc;
 
 use figment::providers::Serialized;
 use figment::Figment;
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider;
+use opentelemetry_otlp::{Protocol, WithExportConfig};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracer;
+use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -35,6 +41,7 @@ use crate::SafeDisplay;
 
 pub enum Output {
     Stdout,
+    Stderr,
     File,
     TracingConsole,
 }
@@ -173,18 +180,21 @@ impl SafeDisplay for OutputConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TracingConfig {
     pub stdout: OutputConfig,
+    pub stderr: OutputConfig,
     pub file: OutputConfig,
     pub file_dir: Option<String>,
     pub file_name: Option<String>,
     pub file_truncate: bool,
     pub console: bool,
     pub dtor_friendly: bool,
+    pub otlp: OtlpConfig,
 }
 
 impl TracingConfig {
     pub fn local_dev(name: &str) -> Self {
         Self {
             stdout: OutputConfig::text_ansi(),
+            stderr: OutputConfig::disabled(),
             file: OutputConfig {
                 enabled: false,
                 ..OutputConfig::json_flatten_span()
@@ -194,6 +204,7 @@ impl TracingConfig {
             file_truncate: true,
             console: false,
             dtor_friendly: false,
+            otlp: OtlpConfig::default(),
         }
     }
 
@@ -236,6 +247,22 @@ impl TracingConfig {
             .expect("Failed to load tracing config env overrides")
             .tracing
     }
+
+    pub fn with_otlp(mut self, enabled: bool, host: &str, port: u16, service_name: &str) -> Self {
+        self.otlp = OtlpConfig {
+            enabled,
+            host: host.to_string(),
+            port,
+            service_name: service_name.to_string(),
+        };
+        self
+    }
+
+    pub fn use_stderr(mut self) -> Self {
+        self.stderr = self.stdout.clone();
+        self.stdout.enabled = false;
+        self
+    }
 }
 
 impl SafeDisplay for TracingConfig {
@@ -258,6 +285,10 @@ impl SafeDisplay for TracingConfig {
         if let Some(file) = &self.file_name {
             let _ = writeln!(&mut result, "file name: {file}");
         }
+        if self.otlp.enabled {
+            let _ = writeln!(&mut result, "otlp:");
+            let _ = writeln!(&mut result, "{}", self.otlp.to_safe_string_indented());
+        }
         let _ = writeln!(&mut result, "console: {}", self.console);
         let _ = writeln!(&mut result, "file truncate: {}", self.file_truncate);
         let _ = writeln!(&mut result, "destructor friendly: {}", self.dtor_friendly);
@@ -270,6 +301,7 @@ impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             stdout: OutputConfig::json_flatten_span(),
+            stderr: OutputConfig::disabled(),
             file: OutputConfig {
                 enabled: false,
                 ..OutputConfig::json_flatten_span()
@@ -279,6 +311,40 @@ impl Default for TracingConfig {
             file_truncate: true,
             console: false,
             dtor_friendly: false,
+            otlp: OtlpConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OtlpConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub service_name: String,
+}
+
+impl SafeDisplay for OtlpConfig {
+    fn to_safe_string(&self) -> String {
+        use std::fmt::Write;
+
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "service_name: {}", self.service_name);
+
+        result
+    }
+}
+
+impl Default for OtlpConfig {
+    fn default() -> Self {
+        OtlpConfig {
+            enabled: false,
+            host: "localhost".to_string(),
+            port: 4318,
+            service_name: "golem".to_string(),
         }
     }
 }
@@ -413,17 +479,55 @@ pub mod filter {
     }
 }
 
-pub fn init_tracing<F>(config: &TracingConfig, make_filter: F)
+pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTracer>
 where
     F: Fn(Output) -> filter::Boxed,
 {
     let mut layers = Vec::new();
+    let mut result_tracer = None;
+
+    if config.otlp.enabled {
+        let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpBinary)
+            .with_endpoint(format!(
+                "http://{}:{}/v1/traces",
+                config.otlp.host, config.otlp.port
+            ))
+            .build()
+            .expect("Failed to build OTLP exporter");
+
+        let resource = Resource::builder()
+            .with_service_name(config.otlp.service_name.clone())
+            .build();
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_resource(resource)
+            .with_batch_exporter(otlp_exporter)
+            .build();
+
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
+        let tracer = tracer_provider.tracer(config.otlp.service_name.clone());
+        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
+        result_tracer = Some(tracer);
+
+        layers.push(telemetry.boxed());
+    }
 
     if config.stdout.enabled {
         layers.push(make_layer(
             &config.stdout,
             make_filter(Output::Stdout),
             stdout,
+        ))
+    }
+
+    if config.stderr.enabled {
+        layers.push(make_layer(
+            &config.stdout,
+            make_filter(Output::Stderr),
+            stderr,
         ))
     }
 
@@ -474,10 +578,12 @@ where
             "Tracing initialized"
         );
     }
+
+    result_tracer
 }
 
-pub fn init_tracing_with_default_env_filter(config: &TracingConfig) {
-    init_tracing(config, filter::for_all_outputs::DEFAULT_ENV);
+pub fn init_tracing_with_default_env_filter(config: &TracingConfig) -> Option<SdkTracer> {
+    init_tracing(config, filter::for_all_outputs::DEFAULT_ENV)
 }
 
 pub fn init_tracing_with_default_debug_env_filter(config: &TracingConfig) {

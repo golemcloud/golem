@@ -31,7 +31,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PersistenceLevel};
 use golem_common::model::plugin_registration::OplogProcessorPluginSpec;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
@@ -708,6 +708,10 @@ impl Oplog for ForwardingOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.inner.download_payload(payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.inner.switch_persistence_level(mode).await;
     }
 }
 

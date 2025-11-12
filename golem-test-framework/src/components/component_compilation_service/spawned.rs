@@ -39,6 +39,8 @@ impl SpawnedComponentCompilationService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        enable_fs_cache: bool,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-component-compilation-service process");
 
@@ -48,7 +50,7 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(super::env_vars(http_port, grpc_port, verbosity).await)
+            .envs(super::env_vars(http_port, grpc_port, verbosity, enable_fs_cache, otlp).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

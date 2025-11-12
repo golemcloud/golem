@@ -15,7 +15,7 @@
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PersistenceLevel};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
@@ -137,5 +137,9 @@ impl Oplog for DebugOplog {
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
         self.inner.download_payload(payload).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.inner.switch_persistence_level(mode).await
     }
 }

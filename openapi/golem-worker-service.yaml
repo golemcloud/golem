@@ -4206,11 +4206,11 @@ components:
       title: WorkerCreationResponse
       required:
       - workerId
-      - componentVersion
+      - componentRevision
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        componentVersion:
+        componentRevision:
           type: integer
           format: uint64
     WorkerEnvFilter:

@@ -37,7 +37,7 @@ pub enum ShardManagerError {
     #[error("Persistence serialization error {0}")]
     SerializationError(String),
     #[error("Redis error {0}")]
-    RedisError(#[from] fred::error::RedisError),
+    RedisError(#[from] golem_common::redis::RedisError),
     #[error("IO error {0}")]
     IoError(#[from] std::io::Error),
 }

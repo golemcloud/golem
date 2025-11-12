@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod provided;
-pub mod spawned;
-
-use super::{wait_for_startup_grpc, EnvVarBuilder};
+use crate::components::{wait_for_startup_grpc, EnvVarBuilder};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::Level;
+
+pub mod provided;
+pub mod spawned;
 
 #[async_trait]
 pub trait ComponentCompilationService: Send + Sync {
@@ -39,7 +39,13 @@ async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
     .await
 }
 
-async fn env_vars(http_port: u16, grpc_port: u16, verbosity: Level) -> HashMap<String, String> {
+async fn env_vars(
+    http_port: u16,
+    grpc_port: u16,
+    verbosity: Level,
+    enable_fs_cache: bool,
+    otlp: bool,
+) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -49,7 +55,12 @@ async fn env_vars(http_port: u16, grpc_port: u16, verbosity: Level) -> HashMap<S
         )
         .with_str("GOLEM__REGISTRY_SERVICE__TYPE", "Dynamic")
         .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
+        .with(
+            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            enable_fs_cache.to_string(),
+        )
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_optional_otlp("component_compilation_service", otlp)
         .build()
 }

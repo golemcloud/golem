@@ -43,6 +43,9 @@ lazy_static = { workspace = true }
 nonempty-collections = { workspace = true }
 openapiv3 = { workspace = true }
 openidconnect = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
@@ -63,7 +66,10 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-serde = { workspace = true }
 typed-path = { workspace = true }

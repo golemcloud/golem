@@ -27,7 +27,7 @@ use crate::{
 };
 use bincode::{Decode, Encode};
 use derive_more::Display;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ declare_transparent_newtypes! {
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, Encode, Decode, IntoValue)]
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, Encode, Decode, IntoValue, FromValue)]
     pub struct PluginPriority(pub i32);
 }
 

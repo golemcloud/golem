@@ -35,6 +35,8 @@ pub trait WorkerExecutor: Send + Sync {
     async fn kill(&self);
 
     async fn restart(&self);
+
+    async fn is_running(&self) -> bool;
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
@@ -49,6 +51,7 @@ async fn env_vars(
     redis: &Arc<dyn Redis>,
     registry_service: &Arc<dyn RegistryService>,
     verbosity: Level,
+    otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
@@ -93,7 +96,7 @@ async fn env_vars(
         )
         .with(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT",
-            shard_manager.gprc_port().to_string(),
+            shard_manager.grpc_port().to_string(),
         )
         .with_str(
             "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS",
@@ -114,5 +117,6 @@ async fn env_vars(
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
         .with("GOLEM__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_optional_otlp("worker_executor", otlp)
         .build()
 }

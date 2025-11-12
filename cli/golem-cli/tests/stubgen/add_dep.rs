@@ -16,6 +16,7 @@
 
 use test_r::test;
 
+use crate::stubgen::test_data_path;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
@@ -165,7 +166,7 @@ fn many_ways_to_export_no_collision() {
     assert_has_same_wit_package(
         &PackageName::new("test", "sub", None),
         &dest_wit_root,
-        Path::new("test-data/wit/many-ways-to-export/deps/sub/sub.wit"),
+        &test_data_path().join("wit/many-ways-to-export/deps/sub/sub.wit"),
     );
 }
 
@@ -567,7 +568,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     let canonical_source = source.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
-        Path::new("test-data/wit").join(name),
+        test_data_path().join("wit").join(name),
         &canonical_source,
         &CopyOptions::new().content_only(true),
     )
@@ -616,7 +617,7 @@ fn init_caller(name: &str) -> TempDir {
         .disable_cleanup(true)
         .tempdir()
         .unwrap();
-    let source = Path::new("test-data/wit").join(name);
+    let source = test_data_path().join("wit").join(name);
 
     fs_extra::dir::copy(
         source,

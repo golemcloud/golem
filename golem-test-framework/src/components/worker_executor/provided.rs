@@ -47,4 +47,8 @@ impl WorkerExecutor for ProvidedWorkerExecutor {
     async fn restart(&self) {
         panic!("Cannot restart provided worker-executor");
     }
+
+    async fn is_running(&self) -> bool {
+        true
+    }
 }

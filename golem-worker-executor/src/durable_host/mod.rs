@@ -403,7 +403,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // let current_size = self.update_worker_status();
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                .add_to_oplog(OplogEntry::grow_memory(delta))
                 .await;
 
             self.public_state.worker().increase_memory(delta).await?;
@@ -581,8 +581,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // Must switch to live mode before failing to be able to commit an Error entry
                             self.state.replay_state.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
-                                    "Non-idempotent remote write operation was not completed, cannot retry",
-                                ))
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
@@ -848,7 +848,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -875,7 +875,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -902,7 +902,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::committed_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -929,7 +929,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::rolled_back_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -1685,7 +1685,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if is_live {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::start_span(
+                .add_to_oplog(OplogEntry::start_span(
                     span.start().unwrap_or(Timestamp::now_utc()),
                     span.span_id().clone(),
                     Some(parent.clone()),
@@ -1721,7 +1721,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if self.is_live() {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))
+                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
                 .await;
         } else {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
@@ -1821,8 +1821,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .set_replay_target(new_target);
         }
 
+        let (component_type, is_agent) = {
+            let component = store.as_context().data().component_metadata();
+            (component.component_type, component.metadata.is_agent())
+        };
+
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay();
+            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
+                    (component_type == ComponentType::Durable || // durable components are fully replayed
+                        (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
                 let oplog_entry = store
@@ -2062,7 +2069,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        if store
+        let prepare_result = if store
             .as_context()
             .data()
             .component_metadata()
@@ -2071,26 +2078,34 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         {
             // Ephemeral workers cannot be recovered
 
-            // Moving to the end of the oplog
-            store
-                .as_context_mut()
-                .data_mut()
-                .durable_ctx_mut()
-                .state
-                .replay_state
-                .switch_to_live()
-                .await;
+            // We have to replay the initialize call for agents:
+            let replay_decision = Self::resume_replay(store, instance, false).await;
+            record_resume_worker(start.elapsed());
 
-            // Appending a Restart marker
-            store
-                .as_context_mut()
-                .data_mut()
-                .get_public_state()
-                .oplog()
-                .add(OplogEntry::restart())
-                .await;
+            if replay_decision == Ok(None) {
+                // Moving to the end of the oplog
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .switch_to_live()
+                    .await;
 
-            Ok(None)
+                // Appending a Restart marker
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .get_public_state()
+                    .oplog()
+                    .add(OplogEntry::restart())
+                    .await;
+
+                Ok(None)
+            } else {
+                replay_decision
+            }
         } else {
             let pending_update = store
                 .as_context_mut()
@@ -2102,7 +2117,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .await
                 .clone();
 
-            let prepare_result = match pending_update {
+            match pending_update {
                 Some(timestamped_update) => {
                     match &timestamped_update.description {
                         UpdateDescription::SnapshotBased { .. } => {
@@ -2163,18 +2178,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                     result
                 }
-            };
-            match prepare_result {
-                Ok(None) => {
-                    store.as_context_mut().data_mut().set_suspended();
-                    Ok(None)
-                }
-                Ok(other) => Ok(other),
-                Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                    worker_id.clone(),
-                    error,
-                )),
             }
+        };
+        match prepare_result {
+            Ok(None) => {
+                store.as_context_mut().data_mut().set_suspended();
+                Ok(None)
+            }
+            Ok(other) => Ok(other),
+            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
+                worker_id.clone(),
+                error,
+            )),
         }
     }
 

@@ -48,6 +48,8 @@ impl SpawnedWorkerService {
         out_level: Level,
         err_level: Level,
         registry_service: &Arc<dyn RegistryService>,
+        enable_fs_cache: bool,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -67,6 +69,8 @@ impl SpawnedWorkerService {
                     verbosity,
                     false,
                     registry_service,
+                    enable_fs_cache,
+                    otlp,
                 )
                 .await,
             )

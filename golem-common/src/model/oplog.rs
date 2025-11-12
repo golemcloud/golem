@@ -29,7 +29,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::wasmtime::ResourceTypeId;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -187,6 +187,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for PayloadId {
     Serialize,
     Deserialize,
     IntoValue,
+    FromValue,
     poem_openapi::NewType,
 )]
 pub struct WorkerResourceId(pub u64);
@@ -216,6 +217,7 @@ impl Display for WorkerResourceId {
     Serialize,
     Deserialize,
     IntoValue,
+    FromValue,
     poem_openapi::Enum,
 )]
 #[repr(u8)]
@@ -292,6 +294,7 @@ impl SpanData {
     Serialize,
     Deserialize,
     IntoValue,
+    FromValue,
     poem_openapi::Enum,
 )]
 pub enum PersistenceLevel {

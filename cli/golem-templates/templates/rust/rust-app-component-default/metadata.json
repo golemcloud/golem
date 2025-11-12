@@ -1,5 +1,4 @@
 {
   "description": "The default component template for Rust",
-  "appComponentGroup": "default",
-  "devOnly": true
+  "appComponentGroup": "default"
 }

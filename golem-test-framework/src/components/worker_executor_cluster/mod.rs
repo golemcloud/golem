@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod provided;
-pub mod spawned;
-
 use crate::components::worker_executor::WorkerExecutor;
 use async_trait::async_trait;
 use std::sync::Arc;
+
+pub mod provided;
+pub mod spawned;
 
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {
@@ -32,4 +32,6 @@ pub trait WorkerExecutorCluster: Send + Sync {
 
     async fn stopped_indices(&self) -> Vec<usize>;
     async fn started_indices(&self) -> Vec<usize>;
+
+    async fn is_running(&self) -> bool;
 }

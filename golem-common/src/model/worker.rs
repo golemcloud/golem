@@ -22,7 +22,7 @@ use super::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use crate::model::OplogIndex;
 use crate::{declare_enums, declare_structs, declare_unions};
 use bincode::{Decode, Encode};
-use golem_wasm::IntoValue;
+use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::IntoValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -193,6 +193,13 @@ declare_enums! {
     pub enum WorkerUpdateMode {
         Automatic,
         Manual,
+    }
+}
+
+impl FromValue for WasiConfigVars {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let value = BTreeMap::<String, String>::from_value(value)?;
+        Ok(value.into())
     }
 }
 

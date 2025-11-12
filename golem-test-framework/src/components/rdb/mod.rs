@@ -19,6 +19,7 @@ use sqlx::mysql::MySqlConnectOptions;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
@@ -197,16 +198,20 @@ impl PostgresInfo {
             self.username, self.password, self.private_host, self.private_port, self.database_name
         )
     }
+
+    pub fn to_connect_options(&self) -> PgConnectOptions {
+        PgConnectOptions::new()
+            .username(self.username.as_str())
+            .password(self.password.as_str())
+            .database(self.database_name.as_str())
+            .host(self.public_host.as_str())
+            .port(self.public_port)
+    }
 }
 
 async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Error> {
     use sqlx::Executor;
-    let connection_options = PgConnectOptions::new()
-        .username(info.username.as_str())
-        .password(info.password.as_str())
-        .database(info.database_name.as_str())
-        .host(info.public_host.as_str())
-        .port(info.public_port);
+    let connection_options = info.to_connect_options();
 
     let mut conn = connection_options.connect().await?;
 
@@ -216,6 +221,46 @@ async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Erro
     }
 
     Ok(())
+}
+
+async fn postgres_enable_stats(info: &PostgresInfo) -> Result<(), sqlx::Error> {
+    use sqlx::Executor;
+    let connection_options = info.to_connect_options();
+
+    let mut conn = connection_options.connect().await?;
+
+    let r = conn
+        .execute(sqlx::query("CREATE EXTENSION pg_stat_statements;"))
+        .await;
+    if let Err(e) = r {
+        error!("Postgres connection error: {}", e);
+    }
+
+    Ok(())
+}
+
+async fn postgres_print_stats(info: &PostgresInfo) {
+    let connection_options = info.to_connect_options();
+
+    if let Ok(mut conn) = connection_options.connect().await {
+        let r = sqlx::query("SELECT calls, mean_exec_time, query FROM pg_stat_statements ORDER BY calls DESC LIMIT 10;")
+            .fetch_all(&mut conn)
+            .await;
+        match r {
+            Err(e) => {
+                error!("Postgres connection error: {}", e);
+            }
+            Ok(rows) => {
+                let mut result = String::new();
+                for row in rows {
+                    let _ = writeln!(&mut result, "{row:?}");
+                }
+                info!("Postgres stats:\n{result}");
+            }
+        }
+    } else {
+        error!("Failed to connect to print Postgres stats");
+    }
 }
 
 async fn postgres_wait_for_startup(info: &PostgresInfo, timeout: Duration) {

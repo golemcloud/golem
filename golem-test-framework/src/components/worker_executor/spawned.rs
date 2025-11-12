@@ -40,6 +40,7 @@ pub struct SpawnedWorkerExecutor {
     out_level: Level,
     err_level: Level,
     registry_service: Arc<dyn RegistryService>,
+    otlp: bool,
 }
 
 impl SpawnedWorkerExecutor {
@@ -55,6 +56,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
 
@@ -74,6 +76,7 @@ impl SpawnedWorkerExecutor {
             out_level,
             err_level,
             &registry_service,
+            otlp,
         )
         .await;
 
@@ -91,6 +94,7 @@ impl SpawnedWorkerExecutor {
             out_level,
             err_level,
             registry_service,
+            otlp,
         }
     }
 
@@ -106,6 +110,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         registry_service: &Arc<dyn RegistryService>,
+        otlp: bool,
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -118,6 +123,7 @@ impl SpawnedWorkerExecutor {
                     redis,
                     registry_service,
                     verbosity,
+                    otlp,
                 )
                 .await,
             )
@@ -176,6 +182,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.out_level,
             self.err_level,
             &self.registry_service,
+            self.otlp,
         )
         .await;
 
@@ -187,6 +194,17 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
 
         *child_field = Some(child);
         *logger_field = Some(logger);
+    }
+
+    async fn is_running(&self) -> bool {
+        let mut child_field = self.child.lock().unwrap();
+        if let Some(mut child) = child_field.take() {
+            let result = matches!(child.try_wait(), Ok(None));
+            *child_field = Some(child);
+            result
+        } else {
+            false
+        }
     }
 }
 

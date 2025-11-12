@@ -23,7 +23,9 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 use tracing::{info, Instrument, Level};
 
 pub struct SpawnedWorkerExecutorCluster {
@@ -44,6 +46,7 @@ impl SpawnedWorkerExecutorCluster {
         out_level: Level,
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
+        otlp: bool,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
             SpawnedWorkerExecutor::new(
@@ -58,6 +61,7 @@ impl SpawnedWorkerExecutorCluster {
                 out_level,
                 err_level,
                 registry_service,
+                otlp,
             )
             .await,
         )
@@ -76,6 +80,7 @@ impl SpawnedWorkerExecutorCluster {
         out_level: Level,
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
+        otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors_joins = Vec::new();
@@ -97,6 +102,7 @@ impl SpawnedWorkerExecutorCluster {
                     out_level,
                     err_level,
                     registry_service.clone(),
+                    otlp,
                 )
                 .in_current_span(),
             );
@@ -108,6 +114,25 @@ impl SpawnedWorkerExecutorCluster {
 
         for join in worker_executors_joins {
             worker_executors.push(join.await.expect("Failed to join"));
+        }
+
+        info!("Waiting for shard manager to see all executors");
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(60);
+        loop {
+            let routing_table = shard_manager
+                .get_routing_table()
+                .await
+                .expect("Failed to get routing table while waiting for registration");
+            if routing_table.all().len() == size {
+                break;
+            } else {
+                if start.elapsed() > timeout {
+                    panic!("Failed to wait for all executors to be registered in shard manager");
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
 
         Self {
@@ -164,5 +189,14 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         let all_indices = HashSet::from_iter(0..self.worker_executors.len());
         let stopped_indices = self.stopped_indices.lock().await;
         all_indices.difference(&stopped_indices).copied().collect()
+    }
+
+    async fn is_running(&self) -> bool {
+        for executor in &self.worker_executors {
+            if !executor.is_running().await {
+                return false;
+            }
+        }
+        true
     }
 }

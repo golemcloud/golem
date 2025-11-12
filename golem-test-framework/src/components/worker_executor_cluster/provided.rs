@@ -62,4 +62,8 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
     async fn started_indices(&self) -> Vec<usize> {
         vec![0]
     }
+
+    async fn is_running(&self) -> bool {
+        true
+    }
 }

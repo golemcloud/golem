@@ -199,6 +199,7 @@ impl ComponentCommandHandler {
             Some(component_template),
             &PathBuf::from("."),
             &component_package_name,
+            Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {
                 log_action(

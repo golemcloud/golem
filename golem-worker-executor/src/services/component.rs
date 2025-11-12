@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
-use tracing::{debug, warn};
+use tracing::{debug, info_span, warn};
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
@@ -173,7 +173,9 @@ impl ComponentService for ComponentServiceDefault {
 
                             let start = Instant::now();
                             let component_id_clone2 = component_id_clone.clone();
+                            let span = info_span!("Loading WASM component");
                             let component = spawn_blocking(move || {
+                                let _enter = span.enter();
                                 Component::from_binary(&engine, &bytes).map_err(|e| {
                                     WorkerExecutorError::ComponentParseFailed {
                                         component_id: component_id_clone2,

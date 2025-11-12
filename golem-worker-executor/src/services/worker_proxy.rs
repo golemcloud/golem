@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::debug;
 
 #[async_trait]
@@ -215,7 +216,7 @@ impl From<WorkerExecutorError> for WorkerProxyError {
 }
 
 pub struct RemoteWorkerProxy {
-    worker_service_client: GrpcClient<WorkerServiceClient<Channel>>,
+    worker_service_client: GrpcClient<WorkerServiceClient<OtelGrpcService<Channel>>>,
     registry_service_client: Arc<dyn RegistryService>,
     auth_cache: Cache<AccountId, (), AuthCtx, WorkerProxyError>,
 }

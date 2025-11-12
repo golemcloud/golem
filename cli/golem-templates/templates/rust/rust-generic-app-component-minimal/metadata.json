@@ -1,0 +1,5 @@
+{
+  "description": "Minimal component template for Rust with no dependencies",
+  "appComponentGroup": "generic",
+  "devOnly": true
+}

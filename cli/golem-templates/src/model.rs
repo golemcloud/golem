@@ -15,7 +15,6 @@
 use fancy_regex::{Match, Regex};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase, ToTitleCase};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -392,9 +391,6 @@ pub struct Template {
     pub instructions: String,
     pub wit_deps: Vec<PathBuf>,
     pub wit_deps_targets: Option<Vec<PathBuf>>,
-    pub exclude: HashSet<String>,
-    pub transform_exclude: HashSet<String>,
-    pub transform: bool,
     pub dev_only: bool,
 }
 
@@ -403,9 +399,11 @@ pub struct TemplateParameters {
     pub component_name: ComponentName,
     pub package_name: PackageName,
     pub target_path: PathBuf,
+    pub sdk_overrides: SdkOverrides,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TemplateMetadata {
     pub description: String,
     #[serde(rename = "appCommonGroup")]
@@ -422,11 +420,24 @@ pub(crate) struct TemplateMetadata {
     pub wit_deps_paths: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
     pub instructions: Option<String>,
-    #[serde(rename = "transformExclude")]
-    pub transform_exclude: Option<Vec<String>>,
-    pub transform: Option<bool>,
     #[serde(rename = "devOnly")]
     pub dev_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Transform {
+    PackageAndComponent,
+    ManifestHints,
+    TsSdk,
+    RustSdk,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SdkOverrides {
+    pub rust_path: Option<String>,
+    pub rust_version: Option<String>,
+    pub ts_packages_path: Option<String>,
+    pub ts_version: Option<String>,
 }
 
 #[cfg(test)]

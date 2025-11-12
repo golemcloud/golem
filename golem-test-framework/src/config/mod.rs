@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cli;
-pub mod dsl_impl;
-mod env;
-
 use self::dsl_impl::TestDependenciesTestDsl;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::Rdb;
@@ -26,9 +22,9 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
+pub use benchmark::{BenchmarkCliParameters, BenchmarkTestDependencies, CliTestService};
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
-pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
@@ -40,6 +36,10 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub mod benchmark;
+pub mod dsl_impl;
+mod env;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "kebab-case")]

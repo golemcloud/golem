@@ -36,6 +36,7 @@ pub struct SpawnedShardManager {
     verbosity: Level,
     out_level: Level,
     err_level: Level,
+    otlp: bool,
 }
 
 impl SpawnedShardManager {
@@ -49,6 +50,7 @@ impl SpawnedShardManager {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-shard-manager process");
 
@@ -66,6 +68,7 @@ impl SpawnedShardManager {
             verbosity,
             out_level,
             err_level,
+            otlp,
         )
         .await;
 
@@ -81,6 +84,7 @@ impl SpawnedShardManager {
             verbosity,
             out_level,
             err_level,
+            otlp,
         }
     }
 
@@ -94,6 +98,7 @@ impl SpawnedShardManager {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        otlp: bool,
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -104,6 +109,7 @@ impl SpawnedShardManager {
                     grpc_port,
                     redis,
                     verbosity,
+                    otlp,
                 )
                 .await,
             )
@@ -140,7 +146,7 @@ impl ShardManager for SpawnedShardManager {
         "localhost".to_string()
     }
 
-    fn gprc_port(&self) -> u16 {
+    fn grpc_port(&self) -> u16 {
         self.grpc_port
     }
 
@@ -167,6 +173,7 @@ impl ShardManager for SpawnedShardManager {
             self.verbosity,
             self.out_level,
             self.err_level,
+            self.otlp,
         )
         .await;
 

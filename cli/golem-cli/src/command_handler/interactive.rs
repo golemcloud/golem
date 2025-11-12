@@ -26,7 +26,7 @@ use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::{Account, CreateHttpApiDefinitionRequest};
 use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_templates::model::{ComposableAppGroupName, GuestLanguage, PackageName};
+use golem_templates::model::{GuestLanguage, PackageName};
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
@@ -656,8 +656,13 @@ impl InteractiveHandler {
             .templates(self.ctx.dev_mode())
             .get(&language)
             .unwrap()
-            .get(&ComposableAppGroupName::default())
-            .unwrap()
+            .get(self.ctx.template_group())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Template group not found: {}",
+                    self.ctx.template_group().as_str().log_color_highlight()
+                )
+            })?
             .components
             .iter()
             .map(|(name, template)| TemplateOption {

@@ -162,6 +162,7 @@ async fn completion(_tracing: &Tracing) {
 #[test]
 async fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -261,7 +262,7 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
@@ -343,6 +344,7 @@ async fn custom_app_subcommand_with_builtin_name() {
 #[test]
 async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
@@ -447,7 +449,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
          "},
     )?;
 
-    ctx.start_server();
+    ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert2::assert!(outputs.success());
@@ -473,6 +475,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 #[test]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
+    ctx.use_generic_template_group();
     let app_name = "test-app-name";
 
     // Setup app
