@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::MultiModal;
 use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
@@ -85,9 +84,7 @@ pub trait MultimodalSchema {
     where
         Self: Sized;
 
-    fn from_element_value(
-        elem: (String, ElementValue),
-    ) -> Result<Self, String>
+    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
     where
         Self: Sized;
 }

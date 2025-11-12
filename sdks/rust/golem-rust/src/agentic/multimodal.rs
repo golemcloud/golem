@@ -103,7 +103,6 @@ impl<T: MultimodalSchema> MultiModal<T> {
                     items,
                     _marker: std::marker::PhantomData,
                 })
-
             }
             _ => Err("Expected Multimodal DataValue".to_string()),
         }
