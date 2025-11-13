@@ -412,7 +412,9 @@ impl ToAnalysedType for TypeDef {
                 )
                 .with_optional_name(self.name.clone())
                 .with_optional_owner(get_owner_name(resolve, &self.owner))),
-                (None, None) => Err("result type with no ok or err case".to_string()),
+                (None, None) => Ok(analysed_type::unit_result()
+                    .with_optional_name(self.name.clone())
+                    .with_optional_owner(get_owner_name(resolve, &self.owner))),
             },
             TypeDefKind::List(ty) => Ok(analysed_type::list(
                 ty.to_analysed_type(resolve, resource_map)?,

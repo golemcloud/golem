@@ -1586,4 +1586,24 @@ mod tests {
         let target = NamedTempFile::new().unwrap();
         generate_moonbit_wrapper(ctx, target.path()).unwrap();
     }
+
+    #[test]
+    pub fn char_type() {
+        let component_name = "example:bug".into();
+        let agent_types = test::char_type();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn unit_result_type() {
+        let component_name = "example:bug".into();
+        let agent_types = test::unit_result_type();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
 }

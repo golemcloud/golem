@@ -79,7 +79,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 
     check_component_metadata(
         &ctx.working_dir
-            .join("golem-temp/components/app_rust_debug.wasm"),
+            .join("golem-temp/agents/app_rust_debug.wasm"),
         "app:rust".to_string(),
         None,
     );

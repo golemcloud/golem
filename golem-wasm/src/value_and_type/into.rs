@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::analysis::analysed_type::{
-    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
+    bool, case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case,
+    unit_result, variant,
 };
 use crate::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
@@ -901,7 +902,7 @@ fn build_tree(node: &NamedWitTypeNode, nodes: &[NamedWitTypeNode]) -> AnalysedTy
                 let ok_type = build_tree(&nodes[*ok_type as usize], nodes);
                 result_ok(ok_type).with_optional_name(node.name.clone())
             }
-            (None, None) => panic!("ResultType with no ok_type or err_type"),
+            (None, None) => unit_result().with_optional_name(node.name.clone()),
         },
         WitTypeNode::PrimU8Type => analysed_type::u8(),
         WitTypeNode::PrimU16Type => analysed_type::u16(),

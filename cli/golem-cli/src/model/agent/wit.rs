@@ -1404,6 +1404,66 @@ mod tests {
         )
     }
 
+    #[test]
+    pub fn char_type() {
+        let component_name = "test:agent".into();
+        let agent_types = test::char_type();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// An example agent
+                interface agent-using-char {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+
+                  /// Creates an example agent instance
+                  initialize: func(a: char);
+
+                  get-definition: func() -> agent-type;
+
+                  /// returns a random string
+                  f1: func() -> char;
+                }
+            "#},
+        )
+    }
+
+    #[test]
+    pub fn unit_result_type() {
+        let component_name = "test:agent".into();
+        let agent_types = test::unit_result_type();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// An example agent
+                interface agent-unit-result {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+
+                  /// Creates an example agent instance
+                  initialize: func(a: result);
+
+                  get-definition: func() -> agent-type;
+
+                  /// returns a random string
+                  f1: func() -> result;
+                }
+            "#},
+        )
+    }
+
     fn assert_wit(actual: &str, expected: &str) {
         let line_count = expected.lines().count();
         let actual_prefix = actual
