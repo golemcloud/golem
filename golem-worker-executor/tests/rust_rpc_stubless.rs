@@ -21,7 +21,6 @@ use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::ComponentType;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{worker_error_underlying_error, TestDslUnsafe};
 use golem_wasm::analysis::analysed_type;
@@ -59,7 +58,6 @@ async fn auction_example_1(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                     (
@@ -67,7 +65,6 @@ async fn auction_example_1(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                 ]),
@@ -166,7 +163,6 @@ async fn auction_example_2(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                     (
@@ -174,7 +170,6 @@ async fn auction_example_2(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                 ]),
@@ -275,7 +270,6 @@ async fn counter_resource_test_1(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -283,7 +277,6 @@ async fn counter_resource_test_1(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -297,7 +290,6 @@ async fn counter_resource_test_1(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -364,7 +356,6 @@ async fn counter_resource_test_2(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -372,7 +363,6 @@ async fn counter_resource_test_2(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -386,7 +376,6 @@ async fn counter_resource_test_2(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -454,7 +443,6 @@ async fn counter_resource_test_2_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -462,7 +450,6 @@ async fn counter_resource_test_2_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -476,7 +463,6 @@ async fn counter_resource_test_2_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -552,7 +538,6 @@ async fn counter_resource_test_3(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -560,7 +545,6 @@ async fn counter_resource_test_3(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -574,7 +558,6 @@ async fn counter_resource_test_3(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -642,7 +625,6 @@ async fn counter_resource_test_3_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -650,7 +632,6 @@ async fn counter_resource_test_3_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -664,7 +645,6 @@ async fn counter_resource_test_3_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -740,7 +720,6 @@ async fn context_inheritance(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -748,7 +727,6 @@ async fn context_inheritance(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -762,7 +740,6 @@ async fn context_inheritance(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -879,7 +856,6 @@ async fn counter_resource_test_5(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -887,7 +863,6 @@ async fn counter_resource_test_5(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -901,7 +876,6 @@ async fn counter_resource_test_5(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -972,7 +946,6 @@ async fn counter_resource_test_5_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -980,7 +953,6 @@ async fn counter_resource_test_5_with_restart(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -994,7 +966,6 @@ async fn counter_resource_test_5_with_restart(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -1088,7 +1059,6 @@ async fn wasm_rpc_bug_32_test(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -1096,7 +1066,6 @@ async fn wasm_rpc_bug_32_test(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -1110,7 +1079,6 @@ async fn wasm_rpc_bug_32_test(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -1186,7 +1154,6 @@ async fn error_message_non_existing_target_component(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                     (
@@ -1194,7 +1161,6 @@ async fn error_message_non_existing_target_component(
                         WasmRpcTarget {
                             interface_name: "auction:auction-exports/api".to_string(),
                             component_name: "auction:auction".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                 ]),
@@ -1260,7 +1226,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .into_admin_with_unique_project()
         .await;
 
-    let ephemeral_component_id = executor.component("ephemeral").ephemeral().store().await;
+    // TODO: use an ephemeral agent
+    let ephemeral_component_id = executor.component("ephemeral").store().await;
     let caller_component_id = executor
         .component("caller")
         .with_dynamic_linking(&[
@@ -1273,7 +1240,6 @@ async fn ephemeral_worker_invocation_via_rpc1(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -1281,7 +1247,6 @@ async fn ephemeral_worker_invocation_via_rpc1(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -1295,7 +1260,6 @@ async fn ephemeral_worker_invocation_via_rpc1(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),
@@ -1392,7 +1356,6 @@ async fn golem_bug_1265_test(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                         (
@@ -1400,7 +1363,6 @@ async fn golem_bug_1265_test(
                             WasmRpcTarget {
                                 interface_name: "rpc:counters-exports/api".to_string(),
                                 component_name: "rpc:counters".to_string(),
-                                component_type: ComponentType::Durable,
                             },
                         ),
                     ]),
@@ -1414,7 +1376,6 @@ async fn golem_bug_1265_test(
                         WasmRpcTarget {
                             interface_name: "rpc:ephemeral-exports/api".to_string(),
                             component_name: "rpc:ephemeral".to_string(),
-                            component_type: ComponentType::Ephemeral,
                         },
                     )]),
                 }),

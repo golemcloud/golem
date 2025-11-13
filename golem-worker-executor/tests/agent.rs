@@ -307,9 +307,9 @@ async fn ephemeral_agent_works(
         .into_admin_with_unique_project()
         .await;
 
+    // TODO: use an ephemeral agent
     let component_id = executor
         .component("golem_it_constructor_parameter_echo")
-        .ephemeral()
         .store()
         .await;
 

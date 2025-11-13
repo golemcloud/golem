@@ -49,9 +49,61 @@ use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, V
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-// NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
-// to work with WitValue and WitType directly in the application code. Instead, we are converting them
-// to Value and AnalysedType which are much more ergonomic to work with.
+use std::str::FromStr;
+
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    poem_openapi::Enum,
+)]
+#[repr(i32)]
+pub enum AgentMode {
+    Durable = 0,
+    Ephemeral = 1,
+}
+
+impl TryFrom<i32> for AgentMode {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(AgentMode::Durable),
+            1 => Ok(AgentMode::Ephemeral),
+            _ => Err(format!("Unknown AgentMode: {value}")),
+        }
+    }
+}
+
+impl Display for AgentMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            AgentMode::Durable => "Durable",
+            AgentMode::Ephemeral => "Ephemeral",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl FromStr for AgentMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Durable" => Ok(AgentMode::Durable),
+            "Ephemeral" => Ok(AgentMode::Ephemeral),
+            _ => Err(format!("Unknown AgentMode: {s}")),
+        }
+    }
+}
 
 #[derive(
     Debug,
@@ -176,6 +228,7 @@ pub struct AgentType {
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
+    pub mode: AgentMode,
 }
 
 impl AgentType {

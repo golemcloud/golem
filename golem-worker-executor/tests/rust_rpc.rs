@@ -814,7 +814,8 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .into_admin_with_unique_project()
         .await;
 
-    let ephemeral_component_id = executor.component("ephemeral").ephemeral().store().await;
+    // TODO: use an ephemeral agent
+    let ephemeral_component_id = executor.component("ephemeral").store().await;
     let caller_component_id = executor.component("caller_composed").store().await;
 
     let mut env = HashMap::new();

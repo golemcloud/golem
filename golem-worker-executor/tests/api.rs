@@ -27,8 +27,8 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
-    ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor,
+    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
@@ -377,7 +377,8 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .into_admin_with_unique_project()
         .await;
 
-    let component_id = executor.component("counters").ephemeral().store().await;
+    // TODO: need to use an ephemeral agent
+    let component_id = executor.component("counters").store().await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "test".to_string(),
@@ -3591,7 +3592,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-server-exports/server-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),
@@ -3605,7 +3605,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-client-exports/client-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),

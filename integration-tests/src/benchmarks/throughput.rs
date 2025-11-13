@@ -22,7 +22,7 @@ use golem_client::model::{
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::{ComponentType, RoutingTable, WorkerId};
+use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -501,7 +501,6 @@ impl ThroughputBenchmark {
                             interface_name: "benchmark:direct-rust-rpc-child-exports/benchmark-direct-rust-rpc-child-api"
                                 .to_string(),
                             component_name: "benchmark:direct-rust-rpc-child".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),

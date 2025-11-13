@@ -933,11 +933,8 @@ async fn idempotency_keys_in_ephemeral_workers(
         .into_admin_with_unique_project()
         .await;
 
-    let component_id = executor
-        .component("runtime-service")
-        .ephemeral()
-        .store()
-        .await;
+    // TODO: use an ephemeral agent
+    let component_id = executor.component("runtime-service").store().await;
 
     let target_worker_id = WorkerId {
         component_id,

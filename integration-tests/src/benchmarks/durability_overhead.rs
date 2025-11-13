@@ -112,9 +112,9 @@ impl Benchmark for DurabilityOverhead {
             .await
             .component("benchmark_direct_rust")
             .unique()
-            .ephemeral()
             .store()
             .await;
+        // TODO: need to use an ephemeral agent type
 
         for n in 0..self.config.size {
             let worker_id = WorkerId {

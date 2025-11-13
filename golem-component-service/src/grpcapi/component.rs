@@ -46,8 +46,8 @@ use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
+use golem_common::model::ComponentId;
 use golem_common::model::ProjectId;
-use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_project_id_string;
 use std::collections::HashMap;
@@ -190,7 +190,6 @@ impl ComponentGrpcApi {
             .create_internal(
                 project_id,
                 &name,
-                request.component_type().into(),
                 data,
                 files,
                 dynamic_linking,
@@ -211,13 +210,6 @@ impl ComponentGrpcApi {
     ) -> Result<Component, ComponentError> {
         let auth = auth(metadata)?;
         let id = require_component_id(&request.component_id)?;
-        let component_type = match request.component_type {
-            Some(n) => Some(
-                ComponentType::try_from(n)
-                    .map_err(|_| bad_request_error("Invalid component type"))?,
-            ),
-            None => None,
-        };
         let files = if request.update_files {
             let value = request
                 .files
@@ -253,7 +245,6 @@ impl ComponentGrpcApi {
             .update_internal(
                 &id,
                 data,
-                component_type,
                 files,
                 dynamic_linking,
                 &auth,

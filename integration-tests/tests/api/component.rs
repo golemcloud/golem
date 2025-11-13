@@ -21,9 +21,7 @@ use golem_api_grpc::proto::golem::component::Component;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::{
-    ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
-};
+use golem_common::model::{ComponentFilePermissions, ComponentId, InitialComponentFile};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
@@ -55,7 +53,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                                 WasmRpcTarget {
                                     interface_name: "rpc:counters-exports/api".to_string(),
                                     component_name: "rpc:counters".to_string(),
-                                    component_type: ComponentType::Durable,
                                 },
                             ),
                             (
@@ -63,7 +60,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                                 WasmRpcTarget {
                                     interface_name: "rpc:counters-exports/api".to_string(),
                                     component_name: "rpc:counters".to_string(),
-                                    component_type: ComponentType::Durable,
                                 },
                             ),
                         ]),
@@ -77,14 +73,14 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                             WasmRpcTarget {
                                 interface_name: "rpc:ephemeral-exports/api".to_string(),
                                 component_name: "rpc:ephemeral".to_string(),
-                                component_type: ComponentType::Ephemeral
                             }
                         )]),
                     }),
                 ),
             ])
             .store(),
-        user.component("ephemeral").unique().ephemeral().store()
+        // TODO: use an ephemeral agent
+        user.component("ephemeral").unique().store()
     );
 
     let counter_1_id = common_component_id_to_str(&counter_1_id);
@@ -130,11 +126,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     let caller = components.get(&caller_id).unwrap();
     let ephemeral = components.get(&ephemeral_id).unwrap();
 
-    check!(counter_1.component_type == Some(ComponentType::Durable as i32));
-    check!(counter_2.component_type == Some(ComponentType::Durable as i32));
-    check!(caller.component_type == Some(ComponentType::Durable as i32));
-    check!(ephemeral.component_type == Some(ComponentType::Ephemeral as i32));
-
     check!(counter_1.versioned_component_id.unwrap().version == 0);
     check!(counter_2.versioned_component_id.unwrap().version == 0);
     check!(caller.versioned_component_id.unwrap().version == 0);
@@ -175,7 +166,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                         WasmRpcTarget {
                             interface_name: "rpc:counters-exports/api".to_string(),
                             component_name: "rpc:counters".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                     (
@@ -183,7 +173,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                         WasmRpcTarget {
                             interface_name: "rpc:counters-exports/api".to_string(),
                             component_name: "rpc:counters".to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     ),
                 ]),
@@ -204,7 +193,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                     WasmRpcTarget {
                         interface_name: "rpc:ephemeral-exports/api".to_string(),
                         component_name: "rpc:ephemeral".to_string(),
-                        component_type: ComponentType::Ephemeral,
                     }
                 )]),
             }),
@@ -334,7 +322,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
                 WasmRpcTarget {
                     interface_name: "dummy:dummy/dummy-x".to_string(),
                     component_name: "dummy:dummy".to_string(),
-                    component_type: ComponentType::Durable,
                 },
             )]),
         }),
@@ -344,7 +331,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
-            ComponentType::Durable,
             Some(&files),
             None,
             &HashMap::new(),
@@ -357,7 +343,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
-            ComponentType::Ephemeral,
             None,
             None,
             &HashMap::new(),
@@ -370,7 +355,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             &admin.token,
             &component_id,
             &deps.component_directory().join("counters.wasm"),
-            ComponentType::Durable,
             None,
             Some(&HashMap::from([link.clone()])),
             &HashMap::new(),
@@ -430,21 +414,6 @@ async fn get_component_metadata_all_versions(deps: &EnvBasedTestDependencies) {
             }
             _ => {
                 check!(component.files.is_empty(), "{idx}");
-            }
-        }
-
-        match idx {
-            2 => {
-                check!(
-                    component.component_type == Some(ComponentType::Ephemeral as i32),
-                    "{idx}"
-                );
-            }
-            _ => {
-                check!(
-                    component.component_type == Some(ComponentType::Durable as i32),
-                    "{idx}"
-                );
             }
         }
 
