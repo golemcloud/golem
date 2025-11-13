@@ -161,8 +161,6 @@ pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
 
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
-        println!("type: {:#?}", ty);
-
         if let Some(seg) = type_path.path.segments.last() {
             return seg.ident == "Multimodal";
         }
