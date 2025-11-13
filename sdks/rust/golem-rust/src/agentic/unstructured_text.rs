@@ -17,6 +17,10 @@ use crate::golem_agentic::golem::agent::common::{
     ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType,
 };
 
+/// Represents a text value that can either be inline or a URL reference.
+///
+/// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
+/// which allows all languages.
 pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
     Url(String),
     Text {
@@ -26,6 +30,30 @@ pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
 }
 
 impl<T: AllowedLanguages> UnstructuredText<T> {
+    /// Create an `UnstructuredText` instance from inline text with a specific language code.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    ///
+    /// use golem_rust::agentic::{UnstructuredText};
+    /// use golem_rust::AllowedLanguages;
+    ///
+    /// let text: UnstructuredText<MyLanguage> =
+    ///    UnstructuredText::from_inline("foo".to_string(), MyLanguage::English);
+    ///
+    ///
+    /// #[derive(AllowedLanguages)]
+    /// enum MyLanguage {
+    ///     #[code = "en"]
+    ///     English,
+    ///     Fr,
+    /// }
+    ///
+    /// // Create an UnstructuredText instance with no specific language code
+    /// let any_text: UnstructuredText =
+    ///    UnstructuredText::from_inline_any("bar".to_string());
+    /// ```
     pub fn from_inline(text: String, language_code: T) -> UnstructuredText<T> {
         UnstructuredText::Text {
             text: text.into(),
@@ -35,10 +63,27 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
 }
 
 impl UnstructuredText<AnyLanguage> {
+    /// Create an `UnstructuredText` instance from a URL.
+    ///
+    /// # Example
+    /// ```
+    /// use golem_rust::agentic::UnstructuredText;
+    /// let url_text = UnstructuredText::from_url_any("http://example.com".to_string());
+    ///
+    /// ```
     pub fn from_url_any(url: String) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Url(url.into())
     }
 
+    /// Create an `UnstructuredText` instance from inline text without specifying a language code.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use golem_rust::agentic::UnstructuredText;
+    /// let text = UnstructuredText::from_inline_any("Hello, world!".to_string());
+    /// ```
+    ///
     pub fn from_inline_any(text: String) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Text {
             text: text.into(),
@@ -47,6 +92,11 @@ impl UnstructuredText<AnyLanguage> {
     }
 }
 
+/// Trait for types representing allowed language codes.
+///
+/// Implement this trait for enums representing supported languages. Provides
+/// conversion between enum variants and their string language codes.
+/// Use the `#[derive(AllowedLanguages)]` macro to automatically implement this trait.
 pub trait AllowedLanguages {
     fn all() -> &'static [&'static str];
 
