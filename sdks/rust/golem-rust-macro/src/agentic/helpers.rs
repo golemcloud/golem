@@ -29,7 +29,6 @@ pub enum FunctionKind {
     Sync,
 }
 
-#[derive(Debug)]
 pub enum ParamType {
     Tuple,
     Multimodal,

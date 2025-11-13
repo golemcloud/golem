@@ -133,4 +133,51 @@ impl<T: MultimodalSchema> MultiModal<T> {
 
         Ok(WitValue::from(value))
     }
+
+    // Mainly exists because the rpc invoke result is a wit value and it's a list of variants
+    pub fn from_wit_value(wit_value: WitValue) -> Result<Self, String> {
+        let value = Value::from(wit_value);
+
+        match value {
+            Value::List(variants) => {
+                let mut items = Vec::new();
+                let schema = Self::get_schema();
+
+                for variant in variants {
+                    if let Value::Variant {
+                        case_idx,
+                        case_value,
+                    } = variant
+                    {
+                        let modality_schema = schema
+                            .get(case_idx as usize)
+                            .ok_or_else(|| format!("Invalid modality index: {}", case_idx))?;
+
+                        let modality_name = &modality_schema.0;
+
+                        let case_value = case_value.ok_or_else(|| {
+                            format!("Missing value for modality: {}", modality_name)
+                        })?;
+
+                        let wit_value = WitValue::from(*case_value);
+
+                        let item = <T as MultimodalSchema>::from_element_value((
+                            modality_name.to_string(),
+                            ElementValue::ComponentModel(wit_value.clone()),
+                        ))?;
+
+                        items.push(item);
+                    } else {
+                        return Err("Expected Variant value in Multimodal list".to_string());
+                    }
+                }
+
+                Ok(MultiModal {
+                    items,
+                    _marker: std::marker::PhantomData,
+                })
+            }
+            _ => Err("Expected List value for Multimodal".to_string()),
+        }
+    }
 }

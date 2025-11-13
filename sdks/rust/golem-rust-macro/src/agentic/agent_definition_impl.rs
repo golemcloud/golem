@@ -179,8 +179,11 @@ fn get_agent_type_with_remote_client(
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
+                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
+                                "Expected MultiModal type to have an inner type",
+                            );
                             output_parameters.push(quote! {
-                                <#ty as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema();
+                                <#inner_type as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
                             });
                         }
                     };

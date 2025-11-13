@@ -214,9 +214,26 @@ fn build_match_arms(
                 },
                 // If the output is a multi-modal type, we use multimodal instance
                 // to serialize the result
-                ParamType::Multimodal => {
-                    quote! {}
-                }
+                ParamType::Multimodal => match output_param_info.function_kind {
+                    FunctionKind::Async => quote! {
+                        let result = self.#ident(#(#param_idents),*).await;
+                        result.serialize().map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing Multimodal return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        })
+                    },
+                    FunctionKind::Sync => quote! {
+                        let result = self.#ident(#(#param_idents),*);
+                        result.serialize().map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing Multimodal return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        })
+                    },
+                },
             };
 
             let method_param_extraction = generate_method_param_extraction(
