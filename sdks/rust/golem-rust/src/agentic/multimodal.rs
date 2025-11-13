@@ -55,7 +55,6 @@ use golem_wasm::{Value, WitValue};
 ///
 pub struct Multimodal<T> {
     pub items: Vec<T>,
-    _marker: std::marker::PhantomData<T>,
 }
 
 impl<T: MultimodalSchema> Multimodal<T> {
@@ -65,7 +64,6 @@ impl<T: MultimodalSchema> Multimodal<T> {
     {
         Self {
             items: items.into_iter().collect(),
-            _marker: std::marker::PhantomData,
         }
     }
 
@@ -104,10 +102,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
             items.push(item);
         }
 
-        Ok(Multimodal {
-            items,
-            _marker: std::marker::PhantomData,
-        })
+        Ok(Multimodal { items })
     }
 
     pub fn to_wit_value(self) -> Result<WitValue, String> {
@@ -172,10 +167,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
                     }
                 }
 
-                Ok(Multimodal {
-                    items,
-                    _marker: std::marker::PhantomData,
-                })
+                Ok(Multimodal { items })
             }
             _ => Err("Expected List value for Multimodal".to_string()),
         }

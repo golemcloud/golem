@@ -26,20 +26,22 @@ pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
 }
 
 impl<T: AllowedLanguages> UnstructuredText<T> {
-    pub fn from_url(url: String) -> UnstructuredText<T> {
-        UnstructuredText::Url(url)
-    }
-
     pub fn from_inline(text: String, language_code: T) -> UnstructuredText<T> {
         UnstructuredText::Text {
-            text,
+            text: text.into(),
             language_code: Some(language_code),
         }
     }
+}
 
-    pub fn from_inline_no_language_code(text: String) -> UnstructuredText<AnyLanguage> {
+impl UnstructuredText<AnyLanguage> {
+    pub fn from_url_any(url: String) -> UnstructuredText<AnyLanguage> {
+        UnstructuredText::Url(url.into())
+    }
+
+    pub fn from_inline_any(text: String) -> UnstructuredText<AnyLanguage> {
         UnstructuredText::Text {
-            text,
+            text: text.into(),
             language_code: None,
         }
     }
