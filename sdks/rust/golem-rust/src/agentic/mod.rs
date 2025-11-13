@@ -20,6 +20,7 @@ pub use errors::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
+pub use unstructured_text::*;
 pub use wit_utils::*;
 
 mod agent;
@@ -31,4 +32,5 @@ mod errors;
 mod multimodal;
 mod resolved_agent;
 mod schema;
+mod unstructured_text;
 mod wit_utils;

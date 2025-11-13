@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::ElementSchema;
 use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::golem_agentic::golem::agent::common::{ElementSchema, TextReference};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::Value;
 
 pub trait Schema {
     fn get_type() -> ElementSchema;
@@ -37,9 +38,32 @@ pub trait Schema {
             ElementValue::UnstructuredBinary(_) => {
                 todo!("UnstructuredBinary to WitValue conversion not implemented")
             }
-            ElementValue::UnstructuredText(_) => {
-                todo!("UnstructuredText to WitValue conversion not implemented")
-            }
+            ElementValue::UnstructuredText(text_reference) => match text_reference {
+                TextReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+
+                TextReference::Inline(text_source) => {
+                    let restriction_record = text_source.text_type.map(|text_type| {
+                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
+                    });
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::String(text_source.data),
+                            Value::Option(restriction_record),
+                        ]))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+            },
         }
     }
 }
