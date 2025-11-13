@@ -19,7 +19,7 @@ use syn::{ItemTrait, Type};
 use crate::agentic::helpers::{extract_inner_type_if_multimodal, is_constructor_method};
 use crate::agentic::{
     get_remote_client,
-    helpers::{get_input_param_type, get_output_param_type, ParamType},
+    helpers::{get_input_param_info, get_output_param_info, ParamType},
     multiple_constructor_methods_error, no_constructor_method_error,
 };
 
@@ -92,8 +92,8 @@ fn get_agent_type_with_remote_client(
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            let input_param_type = get_input_param_type(&trait_fn.sig);
-            let output_param_type = get_output_param_type(&trait_fn.sig);
+            let input_param_info = get_input_param_info(&trait_fn.sig);
+            let output_param_info = get_output_param_info(&trait_fn.sig);
 
             if is_constructor_method(&trait_fn.sig) {
                 return None;
@@ -126,7 +126,7 @@ fn get_agent_type_with_remote_client(
             let mut input_parameters = vec![];
             let mut output_parameters = vec![];
 
-            match input_param_type.param_type {
+            match input_param_info.param_type {
                 ParamType::Tuple =>  {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
@@ -160,7 +160,7 @@ fn get_agent_type_with_remote_client(
                 }
             }
 
-            match output_param_type.param_type {
+            match output_param_info.param_type {
                 ParamType::Tuple => {
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
@@ -187,7 +187,7 @@ fn get_agent_type_with_remote_client(
                 }
             }
 
-            let input_schema = match input_param_type.param_type {
+            let input_schema = match input_param_info.param_type {
                 ParamType::Tuple => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#input_parameters),*])
                 },
@@ -199,7 +199,7 @@ fn get_agent_type_with_remote_client(
                 },
             };
 
-            let output_schema = match output_param_type.param_type {
+            let output_schema = match output_param_info.param_type {
                 ParamType::Tuple =>
                     quote! {
                         golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
@@ -247,7 +247,7 @@ fn get_agent_type_with_remote_client(
     }
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
-        constructor_param_type = get_input_param_type(&ctor_fn.sig).param_type;
+        constructor_param_type = get_input_param_info(&ctor_fn.sig).param_type;
 
         match constructor_param_type {
             ParamType::Tuple => {

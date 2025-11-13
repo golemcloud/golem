@@ -14,11 +14,11 @@
 
 use syn::{GenericArgument, PathArguments, ReturnType, Type};
 
-pub struct InputParamType {
+pub struct InputParamInfo {
     pub param_type: ParamType,
 }
 
-pub struct OutputParamType {
+pub struct OutputParamInfo {
     pub param_type: ParamType,
     pub function_kind: FunctionKind,
     pub is_unit: bool,
@@ -35,16 +35,16 @@ pub enum ParamType {
     Multimodal,
 }
 
-pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
+pub fn get_input_param_info(sig: &syn::Signature) -> InputParamInfo {
     let typed_params: Vec<_> = skip_self_parameters(sig);
 
     if typed_params.len() == 1 {
         let only_param = &typed_params[0];
 
-        if let syn::Type::Path(type_path) = &*only_param.ty {
+        if let Type::Path(type_path) = &*only_param.ty {
             if let Some(seg) = type_path.path.segments.last() {
                 if seg.ident == "MultiModal" {
-                    return InputParamType {
+                    return InputParamInfo {
                         param_type: ParamType::Multimodal,
                     };
                 }
@@ -52,25 +52,25 @@ pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
         }
     }
 
-    InputParamType {
+    InputParamInfo {
         param_type: ParamType::Tuple,
     }
 }
 
-pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
+pub fn get_output_param_info(sig: &syn::Signature) -> OutputParamInfo {
     let function_kind = get_function_kind(sig);
 
     if let syn::ReturnType::Type(_, ty) = &sig.output {
         if let Some(inner_type) = extract_inner_type_if_future(ty) {
             if is_multimodal_type(inner_type) {
-                return OutputParamType {
+                return OutputParamInfo {
                     param_type: ParamType::Multimodal,
                     function_kind,
                     is_unit: false,
                 };
             }
         } else if is_multimodal_type(ty) {
-            return OutputParamType {
+            return OutputParamInfo {
                 param_type: ParamType::Multimodal,
                 function_kind,
                 is_unit: false,
@@ -86,7 +86,7 @@ pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
         _ => true,
     };
 
-    OutputParamType {
+    OutputParamInfo {
         param_type: ParamType::Tuple,
         function_kind,
         is_unit,
@@ -121,8 +121,6 @@ pub fn skip_self_parameters(sig: &syn::Signature) -> Vec<&syn::PatType> {
         .collect()
 }
 
-
-
 fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {
@@ -152,7 +150,7 @@ pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
             }
         }
     }
-    
+
     None
 }
 
@@ -166,4 +164,3 @@ fn is_multimodal_type(ty: &Type) -> bool {
     }
     false
 }
-

@@ -15,10 +15,8 @@
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::{
-        agent_definition, agentic::Agent, MultiModalSchema,
-    };
     use golem_rust::agentic::MultiModal;
+    use golem_rust::{agent_definition, agentic::Agent, MultiModalSchema};
 
     #[agent_definition]
     trait Echo {

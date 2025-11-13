@@ -1,4 +1,4 @@
-use crate::agentic::helpers::{get_input_param_type, get_output_param_type, ParamType};
+use crate::agentic::helpers::{get_input_param_info, get_output_param_info, ParamType};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
@@ -133,9 +133,9 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             };
 
             // Depending on the input parameter type and output parameter type generate different implementations
-            let input_parameter_type = get_input_param_type(&method.sig);
+            let input_parameter_type = get_input_param_info(&method.sig);
 
-            let output_parameter_type = get_output_param_type(&method.sig);
+            let output_parameter_type = get_output_param_info(&method.sig);
 
             match (input_parameter_type.param_type, output_parameter_type.param_type) {
                 (ParamType::Tuple, ParamType::Tuple) =>
