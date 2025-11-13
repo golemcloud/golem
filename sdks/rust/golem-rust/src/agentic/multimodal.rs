@@ -74,7 +74,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
     }
 
     // With Multimodal schema we get name and element schema
-    pub fn serialize(self) -> Result<DataValue, String> {
+    pub fn to_data_value(self) -> Result<DataValue, String> {
         let items = self.items;
 
         let mut elements = Vec::new();
@@ -87,14 +87,14 @@ impl<T: MultimodalSchema> Multimodal<T> {
         Ok(DataValue::Multimodal(elements))
     }
 
-    pub fn deserialize(data: DataValue) -> Result<Self, String> {
+    pub fn from_data_value(data: DataValue) -> Result<Self, String> {
         match data {
-            DataValue::Multimodal(elements) => Self::deserialize_from_element_values(elements),
+            DataValue::Multimodal(elements) => Self::from_element_values(elements),
             _ => Err("Expected Multimodal DataValue".to_string()),
         }
     }
 
-    pub fn deserialize_from_element_values(
+    pub fn from_element_values(
         elems: Vec<(String, ElementValue)>,
     ) -> Result<Multimodal<T>, String> {
         let mut items = Vec::new();

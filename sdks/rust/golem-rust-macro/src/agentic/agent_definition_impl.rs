@@ -16,11 +16,12 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{ItemTrait, Type};
 
-use crate::agentic::helpers::{extract_inner_type_if_multimodal, is_constructor_method};
+use crate::agentic::helpers::{
+    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
+};
 use crate::agentic::{
-    get_remote_client,
-    helpers::{get_input_param_info, get_output_param_info, ParamType},
-    multiple_constructor_methods_error, no_constructor_method_error,
+    get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
+    no_constructor_method_error,
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -92,8 +93,8 @@ fn get_agent_type_with_remote_client(
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            let input_param_info = get_input_param_info(&trait_fn.sig);
-            let output_param_info = get_output_param_info(&trait_fn.sig);
+            let fn_input_info = FunctionInputInfo::from_signature(&trait_fn.sig);
+            let fn_output_info = FunctionOutputInfo::from_signature(&trait_fn.sig);
 
             if is_constructor_method(&trait_fn.sig) {
                 return None;
@@ -126,8 +127,8 @@ fn get_agent_type_with_remote_client(
             let mut input_parameters = vec![];
             let mut output_parameters = vec![];
 
-            match input_param_info.param_type {
-                ParamType::Tuple =>  {
+            match fn_input_info.input_shape {
+                DefaultOrMultimodal::Default =>  {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
                             let param_name = match &*pat_type.pat {
@@ -142,7 +143,7 @@ fn get_agent_type_with_remote_client(
                     }
 
                 },
-                ParamType::Multimodal => {
+                DefaultOrMultimodal::Multimodal => {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
                             let ty = &pat_type.ty;
@@ -160,8 +161,8 @@ fn get_agent_type_with_remote_client(
                 }
             }
 
-            match output_param_info.param_type {
-                ParamType::Tuple => {
+            match fn_output_info.output_shape {
+                DefaultOrMultimodal::Default => {
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
@@ -175,7 +176,7 @@ fn get_agent_type_with_remote_client(
                         }
                     };
                 },
-                ParamType::Multimodal => {
+                DefaultOrMultimodal::Multimodal => {
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
@@ -190,11 +191,11 @@ fn get_agent_type_with_remote_client(
                 }
             }
 
-            let input_schema = match input_param_info.param_type {
-                ParamType::Tuple => quote! {
+            let input_schema = match fn_input_info.input_shape {
+                DefaultOrMultimodal::Default => quote! {
                     golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#input_parameters),*])
                 },
-                ParamType::Multimodal => {
+                DefaultOrMultimodal::Multimodal => {
                     let multimodal_param = &input_parameters[0];
                     quote! {
                         golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
@@ -202,12 +203,12 @@ fn get_agent_type_with_remote_client(
                 },
             };
 
-            let output_schema = match output_param_info.param_type {
-                ParamType::Tuple =>
+            let output_schema = match fn_output_info.output_shape {
+                DefaultOrMultimodal::Default =>
                     quote! {
                         golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
                     },
-                ParamType::Multimodal => {
+                DefaultOrMultimodal::Multimodal => {
                     let multimodal_param = &output_parameters[0];
 
                     quote! {
@@ -233,7 +234,7 @@ fn get_agent_type_with_remote_client(
     // It holds the name and type of the constructor parmeters with schema
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    let mut constructor_param_type = ParamType::Tuple;
+    let mut constructor_input_info = DefaultOrMultimodal::Default;
 
     // name and type of the constructor params
     let mut constructor_param_defs = vec![];
@@ -250,10 +251,10 @@ fn get_agent_type_with_remote_client(
     }
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
-        constructor_param_type = get_input_param_info(&ctor_fn.sig).param_type;
+        constructor_input_info = FunctionInputInfo::from_signature(&ctor_fn.sig).input_shape;
 
-        match constructor_param_type {
-            ParamType::Tuple => {
+        match constructor_input_info {
+            DefaultOrMultimodal::Default => {
                 for input in &ctor_fn.sig.inputs {
                     if let syn::FnArg::Typed(pat_type) = input {
                         let param_name = match &*pat_type.pat {
@@ -280,7 +281,7 @@ fn get_agent_type_with_remote_client(
                     }
                 }
             }
-            ParamType::Multimodal => {
+            DefaultOrMultimodal::Multimodal => {
                 todo!("Multimodal constructor parameters are not yet supported")
             }
         }
@@ -288,16 +289,16 @@ fn get_agent_type_with_remote_client(
 
     let remote_client = get_remote_client(
         item_trait,
-        &constructor_param_type,
+        &constructor_input_info,
         constructor_param_defs,
         constructor_param_idents,
     );
 
-    let agent_constructor_input_schema = match constructor_param_type {
-        ParamType::Tuple => quote! {
+    let agent_constructor_input_schema = match constructor_input_info {
+        DefaultOrMultimodal::Default => quote! {
             golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameters_with_schema),*])
         },
-        ParamType::Multimodal => quote! {
+        DefaultOrMultimodal::Multimodal => quote! {
             golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameters_with_schema),*])
         },
     };

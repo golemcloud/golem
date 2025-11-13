@@ -1,5 +1,5 @@
 use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, get_input_param_info, get_output_param_info, ParamType,
+    extract_inner_type_if_multimodal, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo,
 };
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
@@ -7,7 +7,7 @@ use syn::ItemTrait;
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
-    constructor_param_type: &ParamType,
+    constructor_param_type: &DefaultOrMultimodal,
     constructor_param_defs: Vec<proc_macro2::TokenStream>,
     constructor_param_idents: Vec<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
@@ -17,8 +17,8 @@ pub fn get_remote_client(
     let method_impls = get_remote_method_impls(item_trait, type_name.to_string());
 
     match constructor_param_type {
-        ParamType::Tuple => {
-            let remote_client = quote! {
+        DefaultOrMultimodal::Default => {
+            quote! {
                 pub struct #remote_trait_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
                     wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
@@ -49,18 +49,43 @@ pub fn get_remote_client(
                     }
 
                     #method_impls
+                }
+            }
+        }
 
+        DefaultOrMultimodal::Multimodal => {
+            let constructor_param = &constructor_param_idents[0];
 
+            quote! {
+                pub struct #remote_trait_name {
+                    agent_id: golem_rust::wasm_rpc::AgentId,
+                    wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
                 }
 
-            };
+                impl #remote_trait_name {
+                    pub fn get(#(#constructor_param_defs), *) -> #remote_trait_name {
+                        let agent_type =
+                           golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-            remote_client
-        }
-        ParamType::Multimodal => {
-            // TODO; Once multimodal representation is decided,
-            // We can almost copy paste the above tokens expect for picking only 1 constructor parameter, and enumerate and get DataValue::Multimodal
-            quote! {}
+                         let data_value = golem_rust::agentic::Multimodal::to_data_value(#constructor_param).expect("Failed to serialize multimodal constructor parameter to DataValue");
+
+                         let agent_id_string =
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(#type_name, &data_value).expect("Internal Error: Failed to make agent id");
+
+                         let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+
+                         let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+
+                         #remote_trait_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                    }
+
+                    pub fn get_agent_id(&self) -> String {
+                        self.agent_id.agent_id.clone()
+                    }
+
+                    #method_impls
+                }
+            }
         }
     }
 }
@@ -107,10 +132,9 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             })
             .collect();
 
-            // Depending on the input parameter type and output parameter type generate different implementations
-            let input_parameter_type = get_input_param_info(&method.sig);
+            let fn_input_info = FunctionInputInfo::from_signature(&method.sig);
 
-            let output_parameter_type = get_output_param_info(&method.sig);
+            let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
             let return_type = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -119,11 +143,9 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
             let process_invoke_result = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => {
-                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
-
-                    match output_parameter_type.param_type {
-                        ParamType::Tuple => {
-                            if is_unit {
+                    match fn_output_info.output_shape {
+                        DefaultOrMultimodal::Default => {
+                            if fn_output_info.is_unit {
                                 quote! {}
                             } else {
                                 quote! {
@@ -133,7 +155,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                                 }
                             }
                         }
-                        ParamType::Multimodal => {
+                        DefaultOrMultimodal::Multimodal => {
                             let inner_type = extract_inner_type_if_multimodal(ty).expect("Expected multimodal return type to have inner type");
 
                             quote! {
@@ -141,15 +163,14 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                             }
                         }
                     }
-
                 },
                 syn::ReturnType::Default => quote! {
                     ()
                 },
             };
 
-            match input_parameter_type.param_type {
-                ParamType::Tuple =>
+            match fn_input_info.input_shape {
+                DefaultOrMultimodal::Default =>
                     Some(quote!{
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
@@ -192,7 +213,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           );
                         }
                      }),
-                ParamType::Multimodal => {
+                DefaultOrMultimodal::Multimodal => {
                     Some(quote! {
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
 
