@@ -321,13 +321,10 @@ fn generate_method_param_extraction(
                 }?;
             };
 
-            let result = quote! {
+            quote! {
                 #extraction
                 #post_method_param_extraction_logic
-            };
-
-            dbg!(&result.to_string());
-            result
+            }
         }
     }
 }

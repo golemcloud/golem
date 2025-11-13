@@ -112,7 +112,6 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
             let output_parameter_type = get_output_param_info(&method.sig);
 
-
             let return_type = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => quote! { #ty },
                 syn::ReturnType::Default => quote! { () },

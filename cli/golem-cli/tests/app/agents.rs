@@ -358,6 +358,13 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     .await;
 
     run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
+
+    run_and_assert(
+        &ctx,
+        "fun-multi-modal",
+        &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
+    )
+    .await;
 }
 
 #[test]
