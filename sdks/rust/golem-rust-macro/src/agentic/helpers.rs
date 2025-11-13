@@ -14,80 +14,88 @@
 
 use syn::{GenericArgument, PathArguments, ReturnType, Type};
 
-pub struct InputParamType {
-    pub param_type: ParamType,
+pub struct FunctionInputInfo {
+    pub input_shape: DefaultOrMultimodal,
 }
 
-pub struct OutputParamType {
-    pub param_type: ParamType,
-    pub function_kind: FunctionKind,
-    pub is_unit: bool,
-}
+impl FunctionInputInfo {
+    pub fn from_signature(sig: &syn::Signature) -> FunctionInputInfo {
+        let typed_params: Vec<_> = skip_self_parameters(sig);
 
-pub enum FunctionKind {
-    Async,
-    Sync,
-}
+        if typed_params.len() == 1 {
+            let only_param = &typed_params[0];
 
-pub enum ParamType {
-    Tuple,
-    Multimodal,
-}
-
-pub fn get_input_param_type(sig: &syn::Signature) -> InputParamType {
-    if sig.inputs.len() == 1 {
-        if let syn::FnArg::Typed(pat_ty) = &sig.inputs[0] {
-            if let syn::Type::Path(type_path) = &*pat_ty.ty {
+            if let Type::Path(type_path) = &*only_param.ty {
                 if let Some(seg) = type_path.path.segments.last() {
                     if seg.ident == "Multimodal" {
-                        // Depends on how exactly multimodal is represented
-                        return InputParamType {
-                            param_type: ParamType::Multimodal,
+                        return FunctionInputInfo {
+                            input_shape: DefaultOrMultimodal::Multimodal,
                         };
                     }
                 }
             }
         }
-    }
-    InputParamType {
-        param_type: ParamType::Tuple,
+
+        FunctionInputInfo {
+            input_shape: DefaultOrMultimodal::Default,
+        }
     }
 }
 
-pub fn get_output_param_type(sig: &syn::Signature) -> OutputParamType {
-    let function_kind = get_function_kind(sig);
+pub struct FunctionOutputInfo {
+    pub output_shape: DefaultOrMultimodal,
+    pub future_or_immediate: FutureOrImmediate,
+    pub is_unit: bool,
+}
 
-    if let syn::ReturnType::Type(_, ty) = &sig.output {
-        if let Some(inner_type) = extract_inner_type_if_future(ty) {
-            if is_multimodal_type(inner_type) {
-                return OutputParamType {
-                    param_type: ParamType::Multimodal,
-                    function_kind,
+impl FunctionOutputInfo {
+    pub fn from_signature(sig: &syn::Signature) -> FunctionOutputInfo {
+        let function_kind = get_function_kind(sig);
+
+        if let syn::ReturnType::Type(_, ty) = &sig.output {
+            if let Some(inner_type) = extract_inner_type_if_future(ty) {
+                if is_multimodal_type(inner_type) {
+                    return FunctionOutputInfo {
+                        output_shape: DefaultOrMultimodal::Multimodal,
+                        future_or_immediate: function_kind,
+                        is_unit: false,
+                    };
+                }
+            } else if is_multimodal_type(ty) {
+                return FunctionOutputInfo {
+                    output_shape: DefaultOrMultimodal::Multimodal,
+                    future_or_immediate: function_kind,
                     is_unit: false,
                 };
             }
-        } else if is_multimodal_type(ty) {
-            return OutputParamType {
-                param_type: ParamType::Multimodal,
-                function_kind,
-                is_unit: false,
-            };
+        }
+
+        let is_unit = match &sig.output {
+            ReturnType::Type(_, ty) => match &**ty {
+                Type::Tuple(tuple) => tuple.elems.is_empty(),
+                _ => false,
+            },
+            _ => true,
+        };
+
+        FunctionOutputInfo {
+            output_shape: DefaultOrMultimodal::Default,
+            future_or_immediate: function_kind,
+            is_unit,
         }
     }
+}
 
-    let is_unit = match &sig.output {
-        ReturnType::Type(_, ty) => match &**ty {
-            Type::Tuple(tuple) => tuple.elems.is_empty(),
-            _ => false,
-        },
-        _ => true,
-    };
+pub enum FutureOrImmediate {
+    Future,
+    Immediate,
+}
 
-    OutputParamType {
-        param_type: ParamType::Tuple,
-        function_kind,
-        is_unit,
-    }
+// DefaultOrMultimodal refers to the type of input parameters (not each parameter individually) or output parameter type
+// Default refers all types that can be part of DataValue::Tuple
+pub enum DefaultOrMultimodal {
+    Default,
+    Multimodal,
 }
 
 pub fn is_constructor_method(sig: &syn::Signature) -> bool {
@@ -100,12 +108,22 @@ pub fn is_constructor_method(sig: &syn::Signature) -> bool {
     }
 }
 
-pub fn get_function_kind(sig: &syn::Signature) -> FunctionKind {
+pub fn get_function_kind(sig: &syn::Signature) -> FutureOrImmediate {
     if sig.asyncness.is_some() {
-        FunctionKind::Async
+        FutureOrImmediate::Future
     } else {
-        FunctionKind::Sync
+        FutureOrImmediate::Immediate
     }
+}
+
+pub fn skip_self_parameters(sig: &syn::Signature) -> Vec<&syn::PatType> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pat_ty) => Some(pat_ty),
+            _ => None,
+        })
+        .collect()
 }
 
 fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
@@ -122,6 +140,22 @@ fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
             }
         }
     }
+    None
+}
+
+pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Multimodal" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return Some(inner_ty);
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 

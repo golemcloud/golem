@@ -1,6 +1,6 @@
 mod model;
 
-use golem_rust::agentic::Agent;
+use golem_rust::agentic::{Agent, Multimodal};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -84,6 +84,8 @@ trait FooAgent {
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
+
+    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
 }
 
 struct FooAgentImpl {
@@ -239,6 +241,10 @@ impl FooAgent for FooAgentImpl {
         self.client
             .fun_enum_with_only_literals(enum_with_only_literals).await
     }
+
+    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+        self.client.fun_multi_modal(input).await
+    }
 }
 
 #[agent_definition]
@@ -315,6 +321,8 @@ trait BarAgent {
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
+
+    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
 }
 
 struct BarAgentImpl {
@@ -460,5 +468,9 @@ impl BarAgent for BarAgentImpl {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals {
         enum_with_only_literals
+    }
+
+    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+        input
     }
 }

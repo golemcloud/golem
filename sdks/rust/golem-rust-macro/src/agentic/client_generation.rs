@@ -1,11 +1,13 @@
-use crate::agentic::helpers::{get_input_param_type, get_output_param_type, ParamType};
+use crate::agentic::helpers::{
+    extract_inner_type_if_multimodal, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo,
+};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
-    constructor_param_type: &ParamType,
+    constructor_param_type: &DefaultOrMultimodal,
     constructor_param_defs: Vec<proc_macro2::TokenStream>,
     constructor_param_idents: Vec<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
@@ -15,8 +17,8 @@ pub fn get_remote_client(
     let method_impls = get_remote_method_impls(item_trait, type_name.to_string());
 
     match constructor_param_type {
-        ParamType::Tuple => {
-            let remote_client = quote! {
+        DefaultOrMultimodal::Default => {
+            quote! {
                 pub struct #remote_trait_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
                     wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
@@ -47,18 +49,43 @@ pub fn get_remote_client(
                     }
 
                     #method_impls
+                }
+            }
+        }
 
+        DefaultOrMultimodal::Multimodal => {
+            let constructor_param = &constructor_param_idents[0];
 
+            quote! {
+                pub struct #remote_trait_name {
+                    agent_id: golem_rust::wasm_rpc::AgentId,
+                    wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
                 }
 
-            };
+                impl #remote_trait_name {
+                    pub fn get(#(#constructor_param_defs), *) -> #remote_trait_name {
+                        let agent_type =
+                           golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-            remote_client
-        }
-        ParamType::Multimodal => {
-            // TODO; Once multimodal representation is decided,
-            // We can almost copy paste the above tokens expect for picking only 1 constructor parameter, and enumerate and get DataValue::Multimodal
-            quote! {}
+                         let data_value = golem_rust::agentic::Multimodal::to_data_value(#constructor_param).expect("Failed to serialize multimodal constructor parameter to DataValue");
+
+                         let agent_id_string =
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(#type_name, &data_value).expect("Internal Error: Failed to make agent id");
+
+                         let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+
+                         let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+
+                         #remote_trait_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                    }
+
+                    pub fn get_agent_id(&self) -> String {
+                        self.agent_id.agent_id.clone()
+                    }
+
+                    #method_impls
+                }
+            }
         }
     }
 }
@@ -105,6 +132,9 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
             })
             .collect();
 
+            let fn_input_info = FunctionInputInfo::from_signature(&method.sig);
+
+            let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
 
             let return_type = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -113,17 +143,24 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
             let process_invoke_result = match &method.sig.output {
                 syn::ReturnType::Type(_, ty) => {
-                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
-
-                    if !is_unit {
-                        quote! {
-                            let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
-                            let element_schema = <#ty as golem_rust::agentic::Schema>::get_type();
-                            <#ty as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
+                    match fn_output_info.output_shape {
+                        DefaultOrMultimodal::Default => {
+                            if fn_output_info.is_unit {
+                                quote! {}
+                            } else {
+                                quote! {
+                                    let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
+                                    let element_schema = <#ty as golem_rust::agentic::Schema>::get_type();
+                                    <#ty as golem_rust::agentic::Schema>::from_element_value(element_value, element_schema).expect("Failed to deserialize rpc result to return type")
+                                }
+                            }
                         }
-                    } else {
-                        quote! {
-                            ()
+                        DefaultOrMultimodal::Multimodal => {
+                            let inner_type = extract_inner_type_if_multimodal(ty).expect("Expected multimodal return type to have inner type");
+
+                            quote! {
+                                golem_rust::agentic::Multimodal::<#inner_type>::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
+                            }
                         }
                     }
                 },
@@ -132,13 +169,8 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                 },
             };
 
-            // Depending on the input parameter type and output parameter type generate different implementations
-            let input_parameter_type = get_input_param_type(&method.sig);
-
-            let output_parameter_type = get_output_param_type(&method.sig);
-
-            match (input_parameter_type.param_type, output_parameter_type.param_type) {
-                (ParamType::Tuple, ParamType::Tuple) =>
+            match fn_input_info.input_shape {
+                DefaultOrMultimodal::Default =>
                     Some(quote!{
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
@@ -181,12 +213,12 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                           );
                         }
                      }),
-                  (ParamType::Tuple, ParamType::Multimodal) => {
-                    Some(quote!{
+                DefaultOrMultimodal::Multimodal => {
+                    Some(quote! {
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
 
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed to serialize")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed to serialize")),*];
 
                           let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                               #remote_method_name_token,
@@ -199,15 +231,12 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                           let wit_value = golem_rust::agentic::unwrap_wit_tuple(rpc_result_ok);
 
-                          // TODO;
-                          // If its multimodal, we cannot use Schema instance directly, we need to enumerate the values from multimodal
-                          // and apply them separately.
-                          todo!("Multimodal output parameter handling not implemented yet");
+                          #process_invoke_result
                         }
 
                         pub fn #trigger_method_name(#(#inputs),*) {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed")),*];
 
                           let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
@@ -219,7 +248,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                         pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::Schema::to_wit_value(#input_idents).expect("Failed")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed")),*];
 
                           self.wasm_rpc.schedule_invocation(
                             scheduled_time,
@@ -227,13 +256,8 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                             &wit_values
                           );
                         }
-                     })
-                  },
-                _ => {
-                    // TODO;
-                    todo!("Remote method generation for multimodal input/output parameter types not implemented yet");
+                    })
                 }
-
             }
         } else {
             None
