@@ -44,7 +44,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     agentic::derive_schema(input)
 }
 
-#[proc_macro_derive(AllowedLanguages)]
+#[proc_macro_derive(AllowedLanguages, attributes(code))]
 pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
     agentic::derive_allowed_languages(input)
 }
