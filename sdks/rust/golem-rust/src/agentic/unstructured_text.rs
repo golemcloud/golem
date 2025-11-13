@@ -125,15 +125,20 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             ElementValue::UnstructuredText(text_reference) => match text_reference {
                 TextReference::Url(url) => Ok(UnstructuredText::Url(url)),
                 TextReference::Inline(text_source) => {
+                    let allowed = T::all()
+                        .iter()
+                        .map(|s| s.to_string()).collect::<Vec<_>>();
+
                     let language_code = match text_source.text_type {
-                        Some(text_type) => match T::from_language_code(&text_type.language_code) {
-                            Some(code) => Some(code),
-                            None => {
+                        Some(text_type) => {
+                            if !allowed.is_empty() && !allowed.contains(&text_type.language_code) {
                                 return Err(format!(
-                                    "Language code '{}' is not allowed",
-                                    text_type.language_code
+                                    "Language code '{}' is not allowed. Allowed codes: {:?}",
+                                    text_type.language_code, allowed
                                 ));
                             }
+
+                            T::from_language_code(&text_type.language_code)
                         },
                         None => None,
                     };
