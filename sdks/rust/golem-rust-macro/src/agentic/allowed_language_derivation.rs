@@ -15,7 +15,6 @@ pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
         .into();
     };
 
-    // Collect all variant names and their lowercase language codes
     let variants: Vec<_> = data_enum.variants.iter().map(|v| &v.ident).collect();
     let codes: Vec<String> = variants
         .iter()
