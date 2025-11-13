@@ -124,6 +124,9 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "rust:agent/foo-agent.{fun-string}", &["\"sample\""]).await;
 
+    // A char type
+    run_and_assert(&ctx, "fun-char", &[r#"'a'"#]).await;
+
     // Testing trigger invocation
     run_and_assert(
         &ctx,
@@ -556,9 +559,6 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
 
     // A string type
     run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
-
-    // A char type
-    run_and_assert(&ctx, "fun-char", &[r#"'a'"#]).await;
 
     // A boolean type
     run_and_assert(&ctx, "fun-boolean", &["true"]).await;
