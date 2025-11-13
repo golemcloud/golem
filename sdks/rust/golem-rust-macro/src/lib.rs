@@ -39,7 +39,7 @@ pub fn derive_schema(input: TokenStream) -> TokenStream {
     agentic::derive_schema(input)
 }
 
-#[proc_macro_derive(MultiModalSchema)]
+#[proc_macro_derive(MultimodalSchema)]
 pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     agentic::derive_multimodal(input)
 }

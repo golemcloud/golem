@@ -22,23 +22,23 @@ use golem_wasm::{Value, WitValue};
 /// # Example
 ///
 /// ```
-/// use golem_rust::agentic::{MultiModal};
-/// use golem_rust::MultiModalSchema;
+/// use golem_rust::agentic::{Multimodal};
+/// use golem_rust::MultimodalSchema;
 ///
 /// // Create a multimodal dataset with text and image inputs
-/// let multimodal_data = MultiModal::new([
+/// let multimodal_data = Multimodal::new([
 ///     Input::Text("foo".to_string()),
 ///     Input::Image(vec![1, 2, 3])
 /// ]);
 ///
-/// #[derive(MultiModalSchema)]
+/// #[derive(MultimodalSchema)]
 /// enum Input {
 ///     Text(String),
 ///     Image(Vec<u8>),
 /// }
 ///
 /// // Function that shows how an agent might receive multimodal input
-/// fn my_agent_method(input: MultiModal<Input>) {
+/// fn my_agent_method(input: Multimodal<Input>) {
 ///     // handle the multimodal input here
 /// }
 ///
@@ -53,12 +53,12 @@ use golem_wasm::{Value, WitValue};
 /// - Unlike a plain `Vec<MultimodalInput>`, this type carries additional semantic and schema-level information
 ///   that indicates the data represents a *multimodal input* — not just a generic list.
 ///
-pub struct MultiModal<T> {
+pub struct Multimodal<T> {
     pub items: Vec<T>,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T: MultimodalSchema> MultiModal<T> {
+impl<T: MultimodalSchema> Multimodal<T> {
     pub fn new<I>(items: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -96,7 +96,7 @@ impl<T: MultimodalSchema> MultiModal<T> {
 
     pub fn deserialize_from_element_values(
         elems: Vec<(String, ElementValue)>,
-    ) -> Result<MultiModal<T>, String> {
+    ) -> Result<Multimodal<T>, String> {
         let mut items = Vec::new();
 
         for elem in elems {
@@ -104,7 +104,7 @@ impl<T: MultimodalSchema> MultiModal<T> {
             items.push(item);
         }
 
-        Ok(MultiModal {
+        Ok(Multimodal {
             items,
             _marker: std::marker::PhantomData,
         })
@@ -172,7 +172,7 @@ impl<T: MultimodalSchema> MultiModal<T> {
                     }
                 }
 
-                Ok(MultiModal {
+                Ok(Multimodal {
                     items,
                     _marker: std::marker::PhantomData,
                 })

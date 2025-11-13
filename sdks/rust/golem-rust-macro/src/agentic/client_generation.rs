@@ -138,7 +138,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                             let inner_type = extract_inner_type_if_multimodal(ty).expect("Expected multimodal return type to have inner type");
 
                             quote! {
-                                golem_rust::agentic::MultiModal::<#inner_type>::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
+                                golem_rust::agentic::Multimodal::<#inner_type>::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
                             }
                         }
                     }
@@ -198,7 +198,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                         pub async fn #method_name(#(#inputs),*) -> #return_type {
 
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed to serialize")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed to serialize")),*];
 
                           let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
                               #remote_method_name_token,
@@ -216,7 +216,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                         pub fn #trigger_method_name(#(#inputs),*) {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed")),*];
 
                           let rpc_result: Result<(), golem_rust::wasm_rpc::RpcError> = self.wasm_rpc.invoke(
                             #remote_method_name_token,
@@ -228,7 +228,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
 
                         pub fn #schedule_method_name(#(#inputs),*, scheduled_time: golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime) {
                           let wit_values: Vec<golem_rust::wasm_rpc::WitValue> =
-                            vec![#(golem_rust::agentic::MultiModal::to_wit_value(#input_idents).expect("Failed")),*];
+                            vec![#(golem_rust::agentic::Multimodal::to_wit_value(#input_idents).expect("Failed")),*];
 
                           self.wasm_rpc.schedule_invocation(
                             scheduled_time,

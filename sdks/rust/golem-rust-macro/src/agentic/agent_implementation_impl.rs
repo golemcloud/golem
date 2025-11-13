@@ -313,7 +313,7 @@ fn generate_method_param_extraction(
                 // the `input` here is the name of the parameter in `Agent`
                 let #ident = match input {
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
-                        golem_rust::agentic::MultiModal::deserialize_from_element_values(elements).map_err(|e| {
+                        golem_rust::agentic::Multimodal::deserialize_from_element_values(elements).map_err(|e| {
                             golem_rust::agentic::invalid_input_error(format!("Failed parsing Multimodal input for method {}: {}", #method_name, e))
                         })
                     },

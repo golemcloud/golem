@@ -42,7 +42,7 @@ pub fn get_input_param_info(sig: &syn::Signature) -> InputParamInfo {
 
         if let Type::Path(type_path) = &*only_param.ty {
             if let Some(seg) = type_path.path.segments.last() {
-                if seg.ident == "MultiModal" {
+                if seg.ident == "Multimodal" {
                     return InputParamInfo {
                         param_type: ParamType::Multimodal,
                     };
@@ -140,7 +140,7 @@ fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
 pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "MultiModal" {
+            if segment.ident == "Multimodal" {
                 if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                     if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
                         return Some(inner_ty);
@@ -158,7 +158,7 @@ fn is_multimodal_type(ty: &Type) -> bool {
         println!("type: {:#?}", ty);
 
         if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "MultiModal";
+            return seg.ident == "Multimodal";
         }
     }
     false
