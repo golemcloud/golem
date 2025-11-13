@@ -17,15 +17,13 @@ use crate::golem_agentic::golem::agent::common::{
     ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType,
 };
 
-pub enum UnstructuredText<LC> {
+pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
     Url(String),
     Text {
         text: String,
         language_code: Option<LC>,
     },
 }
-
-pub struct AnyLanguage;
 
 impl<T: AllowedLanguages> UnstructuredText<T> {
     pub fn from_url(url: String) -> UnstructuredText<T> {
@@ -50,13 +48,14 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
 pub trait AllowedLanguages {
     fn all() -> &'static [&'static str];
 
-    // needed to implement Schema (which is not shown here)
     fn from_language_code(code: &str) -> Option<Self>
     where
         Self: Sized;
 
     fn to_language_code(&self) -> &'static str;
 }
+
+pub struct AnyLanguage;
 
 impl AllowedLanguages for AnyLanguage {
     fn all() -> &'static [&'static str] {
@@ -125,9 +124,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             ElementValue::UnstructuredText(text_reference) => match text_reference {
                 TextReference::Url(url) => Ok(UnstructuredText::Url(url)),
                 TextReference::Inline(text_source) => {
-                    let allowed = T::all()
-                        .iter()
-                        .map(|s| s.to_string()).collect::<Vec<_>>();
+                    let allowed = T::all().iter().map(|s| s.to_string()).collect::<Vec<_>>();
 
                     let language_code = match text_source.text_type {
                         Some(text_type) => {
@@ -139,7 +136,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                             }
 
                             T::from_language_code(&text_type.language_code)
-                        },
+                        }
                         None => None,
                     };
 
