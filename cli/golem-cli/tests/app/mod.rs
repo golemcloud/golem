@@ -465,7 +465,7 @@ impl TestContext {
                     security_token: Security::Empty,
                 },
             };
-            let timeout = Duration::from_secs(2);
+            let timeout = Duration::from_secs(10);
             let sleep_interval = Duration::from_millis(100);
             loop {
                 match client.healthcheck().await {

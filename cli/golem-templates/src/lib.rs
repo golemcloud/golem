@@ -44,8 +44,8 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static GOLEM_RUST_VERSION: &str = "1.8.1";
-static GOLEM_TS_VERSION: &str = "0.0.58";
+static GOLEM_RUST_VERSION: &str = "1.9.0";
+static GOLEM_TS_VERSION: &str = "0.0.59";
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];
