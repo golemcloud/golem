@@ -15,8 +15,8 @@
 // Guest binding version of `golem_wasm` crate's `IntoValueAndType` trait, to be upstreamed
 // eventually.
 
-pub mod type_builder;
 pub mod tuples;
+pub mod type_builder;
 
 use crate::value_and_type::type_builder::WitTypeBuilderExtensions;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
@@ -335,7 +335,7 @@ impl<S: FromValueAndType, E: FromValueAndType> FromValueAndType for Result<S, E>
 impl<E: IntoValue> IntoValue for Result<(), E> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
-            Ok(_) => builder.result_ok().finish().finish(),
+            Ok(_) => builder.result_ok_unit(),
             Err(err) => err.add_to_builder(builder.result_err()).finish(),
         }
     }
@@ -366,7 +366,7 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
             Ok(ok) => ok.add_to_builder(builder.result_ok()).finish(),
-            Err(_) => builder.result_err().finish().finish(),
+            Err(_) => builder.result_err_unit(),
         }
     }
 
@@ -395,8 +395,8 @@ impl FromValueAndType for Result<(), ()> {
 impl IntoValue for Result<(), ()> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
-            Ok(_) => builder.result_ok().finish().finish(),
-            Err(_) => builder.result_err().finish().finish(),
+            Ok(_) => builder.result_ok_unit(),
+            Err(_) => builder.result_err_unit(),
         }
     }
 
@@ -415,8 +415,8 @@ impl<S: FromValueAndType> FromValueAndType for Result<S, ()> {
         match extractor.result() {
             Some(Ok(Some(ok))) => S::from_extractor(&ok).map(Ok),
             Some(Ok(None)) => Err("No value in Ok case".to_string()),
-            Some(Err(Some(_))) => Ok(Err(())),
-            Some(Err(None)) => Err("Expected unit Err case".to_string()),
+            Some(Err(Some(_))) => Err("Expected unit Err case".to_string()),
+            Some(Err(None)) => Ok(Err(())),
             None => Err("Expected Result".to_string()),
         }
     }
@@ -525,8 +525,6 @@ impl<T: FromValueAndType> FromValueAndType for Vec<T> {
             .and_then(|list| list.into_iter().collect())
     }
 }
-
-
 
 impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {

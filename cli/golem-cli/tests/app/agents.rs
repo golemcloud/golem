@@ -88,19 +88,19 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 template: rust
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         ctx.test_data_path_join("rust-code-first-snippets/lib.rs"),
         &component_source_code_lib_file,
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         ctx.test_data_path_join("rust-code-first-snippets/model.rs"),
         &component_source_code_model_file,
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
@@ -130,7 +130,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-string-fire-and-forget}",
         &["\"sample\""],
     )
-        .await;
+    .await;
 
     // Testing scheduled invocation
     run_and_assert(
@@ -138,7 +138,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-string-later}",
         &["\"sample\""],
     )
-        .await;
+    .await;
 
     run_and_assert(&ctx, "fun-u8", &["42"]).await;
 
@@ -303,13 +303,13 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-result}",
         &["ok(\"success\")"],
     )
-        .await;
+    .await;
     run_and_assert(
         &ctx,
         "rust:agent/foo-agent.{fun-result}",
         &["err(\"failed\")"],
     )
-        .await;
+    .await;
 
     run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
 
@@ -338,7 +338,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-option}",
         &["some(\"optional value\")"],
     )
-        .await;
+    .await;
 
     let option_complex_arg = r#"
     some({
@@ -359,7 +359,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-option-complex}",
         &[option_complex_arg],
     )
-        .await;
+    .await;
 
     run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
 }
@@ -447,19 +447,19 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
                 template: ts
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         ctx.test_data_path_join("ts-code-first-snippets/main.ts"),
         &component_source_code_main_file,
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         ctx.test_data_path_join("ts-code-first-snippets/model.ts"),
         &component_source_code_model_file,
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
@@ -499,7 +499,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
             "some(case3(\"foo\"))",
         ],
     )
-        .await;
+    .await;
 
     // function with a simple object
     run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
@@ -520,7 +520,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         "fun-union-complex-type",
         &[r#"union-complex-type1("foo")"#],
     )
-        .await;
+    .await;
 
     // Union that includes literals and boolean (string literal input)
     run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
@@ -531,7 +531,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         "fun-union-with-literals",
         &[r#"union-with-literals1(true)"#],
     )
-        .await;
+    .await;
 
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
@@ -582,7 +582,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         "fun-tuple-complex-type",
         &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
     )
-        .await;
+    .await;
 
     // A list complex type
     run_and_assert(
@@ -606,7 +606,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         "fun-either-optional",
         &[r#"{ok: some("foo"), err: none}"#],
     )
-        .await;
+    .await;
 
     // Functions using the builtin result type
     run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
@@ -742,7 +742,7 @@ async fn test_common_dep_plugs_errors() {
                 template: ts
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::write_str(
         &component_source_code,
@@ -764,7 +764,7 @@ async fn test_common_dep_plugs_errors() {
             }
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     ctx.start_server().await;
 
@@ -820,7 +820,7 @@ async fn test_component_env_var_substitution() {
                   COMPOSED: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}'
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     ctx.start_server().await;
 
@@ -915,7 +915,7 @@ async fn test_http_api_merging() {
                   - def-a
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::write_str(
         &component2_manifest_path,
@@ -944,7 +944,7 @@ async fn test_http_api_merging() {
                   - def-b
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     // Check that the merged manifest is loadable
     let outputs = ctx.cli([cmd::APP]).await;
@@ -990,7 +990,7 @@ async fn test_http_api_merging() {
                   - def-a
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
@@ -1026,7 +1026,7 @@ async fn test_http_api_merging() {
                   - def-b
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     ctx.start_server().await;
 
@@ -1087,7 +1087,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             }
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     ctx.start_server().await;
 
@@ -1152,7 +1152,7 @@ async fn test_naming_extremes() {
         ctx.test_data_path_join("ts-code-first-snippets/naming_extremes.ts"),
         &component_source_code,
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx
         .cli([
