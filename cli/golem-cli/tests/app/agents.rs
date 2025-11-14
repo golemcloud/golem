@@ -406,7 +406,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-unstructured-binary}",
         &[r#"url("foo")"#],
     )
-        .await;
+    .await;
 }
 
 #[test]
