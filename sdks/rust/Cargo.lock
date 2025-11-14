@@ -377,6 +377,7 @@ dependencies = [
  "golem-wasm",
  "serde",
  "serde_json",
+ "url",
  "uuid",
  "wasi",
  "wit-bindgen",
