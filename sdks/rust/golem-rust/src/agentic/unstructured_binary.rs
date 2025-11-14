@@ -35,15 +35,15 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
     /// ```rust
     ///
     /// use golem_rust::agentic::{UnstructuredBinary};
-    /// use golem_rust::Allowed;
+    /// use golem_rust::AllowedMimeTypes;
     ///
-    /// let text: UnstructuredBinary<MyLanguage> =
-    ///    UnstructuredBinary::from_inline("foo".to_string(), MimeTypes::ApplicationJson);
+    /// let text: UnstructuredBinary<MimeTypes> =
+    ///    UnstructuredBinary::from_inline(vec![1, 2], MimeTypes::ApplicationJson);
     ///
     ///
-    /// #[derive(AllowedMimeType)]
+    /// #[derive(AllowedMimeTypes)]
     /// enum MimeTypes {
-    ///     #[code = "application/json"]
+    ///     #[mime_type("application/json")]
     ///     ApplicationJson,
     ///     Fr,
     /// }
