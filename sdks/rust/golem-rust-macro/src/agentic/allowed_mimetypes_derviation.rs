@@ -25,51 +25,51 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
             &ast.ident,
             "AllowedMimeTypes can only be derived for enums",
         )
-            .to_compile_error()
-            .into();
+        .to_compile_error()
+        .into();
     };
 
     let mut variant_idents = Vec::new();
-    let mut lang_codes = Vec::new();
+    let mut mime_types = Vec::new();
 
     for variant in &data_enum.variants {
         let v_ident = &variant.ident;
         variant_idents.push(v_ident);
 
         // Default: lowercase variant name
-        let mut code = v_ident.to_string().to_lowercase();
+        let mut mime_type = v_ident.to_string().to_lowercase();
 
         for attr in &variant.attrs {
-            if let Some(override_code) = parse_lang_attr(attr) {
-                code = override_code;
+            if let Some(override_mime) = parse_mime_type_attr(attr) {
+                mime_type = override_mime;
                 break;
             }
         }
 
-        lang_codes.push(code);
+        mime_types.push(mime_type);
     }
 
-    let code_strs: Vec<_> = lang_codes.iter().map(|s| s.as_str()).collect();
+    let mime_strs: Vec<_> = mime_types.iter().map(|s| s.as_str()).collect();
 
     let expanded = quote! {
-        impl golem_rust::agentic::AllowedLanguages for #name {
+        impl golem_rust::agentic::AllowedMimeTypes for #name {
             fn all() -> &'static [&'static str] {
-                &[#(#code_strs),*]
+                &[#(#mime_strs),*]
             }
 
-            fn from_language_code(code: &str) -> Option<Self> {
-                match code {
+            fn from_mime_type(mime_type: &str) -> Option<Self> {
+                match mime_type {
                     #(
-                        #code_strs => Some(Self::#variant_idents),
+                        #mime_strs => Some(Self::#variant_idents),
                     )*
                     _ => None,
                 }
             }
 
-            fn to_language_code(&self) -> &'static str {
+            fn to_string(&self) -> &'static str {
                 match self {
                     #(
-                        Self::#variant_idents => #code_strs,
+                        Self::#variant_idents => #mime_strs,
                     )*
                 }
             }
@@ -78,8 +78,8 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
 
     expanded.into()
 }
-fn parse_lang_attr(attr: &Attribute) -> Option<String> {
-    if attr.path().is_ident("code") {
+fn parse_mime_type_attr(attr: &Attribute) -> Option<String> {
+    if attr.path().is_ident("mime_type") {
         if let Ok(Lit::Str(lit_str)) = attr.parse_args::<Lit>() {
             return Some(lit_str.value());
         }

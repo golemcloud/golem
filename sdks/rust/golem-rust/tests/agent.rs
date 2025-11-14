@@ -15,10 +15,10 @@
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::{Multimodal, UnstructuredText};
+    use golem_rust::agentic::{Multimodal, UnstructuredBinary, UnstructuredText};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
-    use golem_rust_macro::{AllowedLanguages, MultimodalSchema};
+    use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
 
     #[agent_definition]
     trait Echo {
@@ -36,6 +36,11 @@ mod tests {
             &self,
             input: UnstructuredText<MyLang>,
         ) -> UnstructuredText<MyLang>;
+
+        fn echo_unstructured_binary(
+            &self,
+            input: UnstructuredBinary<MyMimeType>,
+        ) -> UnstructuredBinary<MyMimeType>;
     }
 
     struct EchoImpl {
@@ -47,6 +52,14 @@ mod tests {
         #[code("de")]
         German,
         En,
+    }
+
+    #[derive(AllowedMimeTypes)]
+    enum MyMimeType {
+        #[mime_type("text/plain")]
+        PlainText,
+        #[mime_type("image/png")]
+        PngImage,
     }
 
     #[agent_implementation]
@@ -93,6 +106,13 @@ mod tests {
             &self,
             input: UnstructuredText<MyLang>,
         ) -> UnstructuredText<MyLang> {
+            input
+        }
+
+        fn echo_unstructured_binary(
+            &self,
+            input: UnstructuredBinary<MyMimeType>,
+        ) -> UnstructuredBinary<MyMimeType> {
             input
         }
     }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::golem_agentic::golem::agent::common::{BinaryReference, ElementValue};
 use crate::golem_agentic::golem::agent::common::{ElementSchema, TextReference};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
@@ -35,9 +35,30 @@ pub trait Schema {
 
         match element_value {
             ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(_) => {
-                todo!("UnstructuredBinary to WitValue conversion not implemented")
-            }
+            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
+                BinaryReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+                BinaryReference::Inline(binary_source) => {
+                    let restriction_record =
+                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
+                            restriction_record,
+                        ]))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+            },
             ElementValue::UnstructuredText(text_reference) => match text_reference {
                 TextReference::Url(url) => {
                     let value = Value::Variant {
