@@ -15,7 +15,7 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
-import { BarAgentClassName, FooAgentClassName } from './testUtils';
+import { BarAgentClassName, FooAgentClassName, EphemeralAgentClassName } from './testUtils';
 import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 
@@ -725,6 +725,15 @@ describe('Agent decorator should register the agent class and its methods into A
         expect(agent.methods.find((m) => m.name === name)).toBeUndefined();
       });
     });
+  });
+
+  it('should set durability mode to ephemeral in the registered AgentType when set in decorator options', () => {
+    const ephemeralAgent = Option.getOrThrowWith(
+      AgentTypeRegistry.get(EphemeralAgentClassName),
+      () => new Error('EphemeralAgent not found in AgentTypeRegistry'),
+    );
+
+    expect(ephemeralAgent.mode).toEqual('ephemeral');
   });
 });
 

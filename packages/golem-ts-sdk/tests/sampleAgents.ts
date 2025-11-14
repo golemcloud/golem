@@ -275,7 +275,7 @@ export interface CustomData {
   value: number;
 }
 
-@agent('my-complex-agent')
+@agent({ name: 'my-complex-agent' })
 class BarAgent extends BaseAgent {
   constructor(
     readonly testInterfaceType: Types.TestInterfaceType,
@@ -437,6 +437,18 @@ class BarAgent extends BaseAgent {
 
 export type Text = string;
 export type Image = Uint8Array;
+
+@agent({ durabilityMode: 'ephemeral' })
+class EphemeralAgent extends BaseAgent {
+  constructor(readonly input: string) {
+    super();
+    this.input = input;
+  }
+
+  async greet(name: string): Promise<string> {
+    return Promise.resolve(`Hello, ${name}!`);
+  }
+}
 
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.

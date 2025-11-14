@@ -4,6 +4,7 @@ declare module 'golem:agent/common' {
   export type WitType = golemRpc022Types.WitType;
   export type WitValue = golemRpc022Types.WitValue;
   export type Url = string;
+  export type AgentMode = "durable" | "ephemeral";
   export type TextType = {
     languageCode: string;
   };
@@ -78,6 +79,7 @@ declare module 'golem:agent/common' {
     constructor: AgentConstructor;
     methods: AgentMethod[];
     dependencies: AgentDependency[];
+    mode: AgentMode;
   };
   export type BinarySource = {
     data: Uint8Array;

@@ -64,6 +64,7 @@ describe('AgentType look up', () => {
       },
       methods: [],
       dependencies: [],
+      mode: 'durable',
     };
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
@@ -93,5 +94,26 @@ describe('AgentType look up', () => {
 
     expect(prompt).toEqual('sample prompt');
     expect(description).toEqual('sample desc');
+  });
+
+  it('AgentType should have ephemeral durability mode when set in options', () => {
+    const agentClassName = new AgentClassName('EphemeralAgent');
+
+    const agentType = AgentTypeRegistry.get(agentClassName);
+
+    expect(Option.isSome(agentType)).toBe(true);
+    if (Option.isSome(agentType)) {
+      expect(agentType.val.mode).toEqual('ephemeral');
+    }
+  });
+
+  it('AgentType should have durable durability mode by default', () => {
+    const agentClassName = new AgentClassName('FooAgent');
+    const agentType = AgentTypeRegistry.get(agentClassName);
+
+    expect(Option.isSome(agentType)).toBe(true);
+    if (Option.isSome(agentType)) {
+      expect(agentType.val.mode).toEqual('durable');
+    }
   });
 });
