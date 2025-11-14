@@ -378,28 +378,28 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-unstructured-text}",
         &[r#"url("foo")"#],
     )
-        .await;
+    .await;
 
     run_and_assert(
         &ctx,
         "rust:agent/foo-agent.{fun-unstructured-text}",
         &[r#"inline({data: "foo", text-type: none})"#],
     )
-        .await;
+    .await;
 
     run_and_assert(
         &ctx,
         "rust:agent/foo-agent.{fun-unstructured-text-lc}",
         &[r#"url("foo")"#],
     )
-        .await;
+    .await;
 
     run_and_assert(
         &ctx,
         "rust:agent/foo-agent.{fun-unstructured-text-lc}",
         &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
     )
-        .await;
+    .await;
 }
 
 #[test]

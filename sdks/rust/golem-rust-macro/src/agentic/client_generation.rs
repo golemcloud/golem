@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{extract_inner_type_if_multimodal, is_unstructured_text, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo};
+use crate::agentic::helpers::{
+    extract_inner_type_if_multimodal, is_unstructured_text, DefaultOrMultimodal, FunctionInputInfo,
+    FunctionOutputInfo,
+};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
