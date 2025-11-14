@@ -40,7 +40,7 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -164,6 +164,8 @@ pub trait WorkerCtx:
 
     /// Get the agent-id resolved from the worker name
     fn agent_id(&self) -> Option<AgentId>;
+
+    fn agent_mode(&self) -> AgentMode;
 
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;

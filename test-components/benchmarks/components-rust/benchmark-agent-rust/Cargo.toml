@@ -1,0 +1,17 @@
+[package]
+name = "benchmark_agent_rust"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+required-features = []
+
+[dependencies]
+wit-bindgen-rt = { workspace = true }
+
+async-trait = "0.1.89"
+common-lib = { path = "../../common-rust/common-lib" }
+ctor = "0.6.1"
+golem-rust = { workspace = true }

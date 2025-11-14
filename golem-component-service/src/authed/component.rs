@@ -31,7 +31,7 @@ use golem_common::model::plugin::{
     PluginInstallation, PluginInstallationAction, PluginInstallationCreation,
     PluginInstallationUpdate,
 };
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
+use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use golem_common::model::{InitialComponentFile, ProjectId};
 use golem_service_base::clients::auth::AuthService;
 use golem_service_base::clients::project::ProjectService;
@@ -64,7 +64,6 @@ impl AuthedComponentService {
         &self,
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -87,7 +86,6 @@ impl AuthedComponentService {
             .create(
                 &component_id,
                 component_name,
-                component_type,
                 data.clone(),
                 files,
                 vec![],
@@ -105,7 +103,6 @@ impl AuthedComponentService {
         &self,
         project_id: Option<ProjectId>,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -128,7 +125,6 @@ impl AuthedComponentService {
             .create_internal(
                 &component_id,
                 component_name,
-                component_type,
                 data.clone(),
                 files,
                 vec![],
@@ -145,7 +141,6 @@ impl AuthedComponentService {
     pub async fn update(
         &self,
         component_id: &ComponentId,
-        component_type: Option<ComponentType>,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -167,7 +162,6 @@ impl AuthedComponentService {
             .update(
                 component_id,
                 data.clone(),
-                component_type,
                 files,
                 dynamic_linking,
                 &owner,
@@ -183,7 +177,6 @@ impl AuthedComponentService {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
@@ -204,7 +197,6 @@ impl AuthedComponentService {
             .update_internal(
                 component_id,
                 data.clone(),
-                component_type,
                 files,
                 dynamic_linking,
                 &owner,

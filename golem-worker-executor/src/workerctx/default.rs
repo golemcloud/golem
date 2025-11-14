@@ -48,7 +48,7 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::base_model::{OplogIndex, ProjectId};
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -691,6 +691,10 @@ impl WorkerCtx for Context {
 
     fn agent_id(&self) -> Option<AgentId> {
         self.durable_ctx.agent_id()
+    }
+
+    fn agent_mode(&self) -> AgentMode {
+        self.durable_ctx.agent_mode()
     }
 
     fn created_by(&self) -> &AccountId {

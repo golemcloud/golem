@@ -20,7 +20,7 @@ use golem_common::model::plugin::{
     ComponentPluginScope, ComponentTransformerDefinition, OplogProcessorDefinition,
     PluginDefinition, PluginTypeSpecificDefinition,
 };
-use golem_common::model::{AccountId, ComponentId, ComponentType, Empty, PluginId, ProjectId};
+use golem_common::model::{AccountId, ComponentId, Empty, PluginId, ProjectId};
 use golem_common::repo::{PluginOwnerRow, PluginScopeRow};
 use golem_component_service::model::{Component, ComponentByNameAndVersion, VersionType};
 use golem_component_service::repo::component::{ComponentRecord, ComponentRepo};
@@ -75,7 +75,6 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo>) {
     let component1 = Component::new(
         ComponentId::new_v4(),
         component_name1,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -121,7 +120,6 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
     let component1 = Component::new(
         ComponentId::new_v4(),
         component_name1.clone(),
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -134,7 +132,6 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
     let component2 = Component::new(
         ComponentId::new_v4(),
         component_name1,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -185,7 +182,6 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
     let component1 = Component::new(
         ComponentId::new_v4(),
         component_name1,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -207,7 +203,6 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
     let component2 = Component::new(
         ComponentId::new_v4(),
         component_name2,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -437,7 +432,6 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo>) {
     let component1 = Component::new(
         ComponentId::new_v4(),
         component_name1,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -497,7 +491,6 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo>)
     let component1 = Component::new(
         ComponentId::new_v4(),
         component_name1,
-        ComponentType::Durable,
         &data,
         vec![],
         vec![],
@@ -594,7 +587,6 @@ async fn test_default_plugin_repo(
     let component1 = Component::new(
         component_id.clone(),
         ComponentName("default-plugin-repo-component1".to_string()),
-        ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
         vec![],
         vec![],
@@ -607,7 +599,6 @@ async fn test_default_plugin_repo(
     let component2 = Component::new(
         component_id2.clone(),
         ComponentName("default-plugin-repo-component2".to_string()),
-        ComponentType::Durable,
         &get_component_data("shopping-cart"),
         vec![],
         vec![],

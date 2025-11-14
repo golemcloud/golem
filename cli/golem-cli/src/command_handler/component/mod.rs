@@ -55,7 +55,7 @@ use golem_client::model::DynamicLinking as DynamicLinkingOss;
 use golem_client::model::{AgentTypes, ComponentEnv as ComponentEnvCloud};
 use golem_common::model::agent::AgentType;
 use golem_common::model::component_metadata::WasmRpcTarget;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::ComponentId;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
 use itertools::Itertools;
@@ -795,7 +795,6 @@ impl ComponentCommandHandler {
                         .component
                         .update_component(
                             &component_id,
-                            Some(&deploy_properties.component_type),
                             linked_wasm,
                             ifs_properties,
                             ifs_archive,
@@ -836,7 +835,6 @@ impl ComponentCommandHandler {
                                 component_name: component_name.to_string(),
                             },
                             linked_wasm,
-                            Some(&deploy_properties.component_type),
                             ifs_properties,
                             ifs_archive,
                             deploy_properties.dynamic_linking.as_ref(),
@@ -1457,7 +1455,6 @@ impl ComponentCommandHandler {
             self.ctx.show_sensitive(),
             component_name,
             component_hash,
-            properties.component_type,
             files,
             properties.dynamic_linking.as_ref(),
             properties.env.as_ref(),
@@ -1648,7 +1645,6 @@ impl ComponentCommandHandler {
 }
 
 struct ComponentDeployProperties {
-    component_type: ComponentType,
     linked_wasm_path: PathBuf,
     files: Vec<InitialComponentFile>,
     dynamic_linking: Option<DynamicLinkingOss>,
@@ -1666,10 +1662,9 @@ fn component_deploy_properties(
     let component_properties = app_ctx
         .application
         .component_properties(component_name, build_profile);
-    let component_type = component_properties
-        .component_type()
-        .as_deployable_component_type()
-        .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
+    if !component_properties.component_type().is_deployable() {
+        return Err(anyhow!("Component {component_name} is not deployable"));
+    }
     let files = component_properties.files.clone();
     let env = (!component_properties.env.is_empty())
         .then(|| resolve_env_vars(component_name, &component_properties.env))
@@ -1677,7 +1672,6 @@ fn component_deploy_properties(
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
-        component_type,
         linked_wasm_path,
         files,
         dynamic_linking,
@@ -1724,11 +1718,6 @@ fn app_component_dynamic_linking(
                                                 .component_name
                                                 .as_str()
                                                 .to_string(),
-                                            component_type: if stub_interfaces.is_ephemeral {
-                                                ComponentType::Ephemeral
-                                            } else {
-                                                ComponentType::Durable
-                                            },
                                         },
                                     )
                                 }),

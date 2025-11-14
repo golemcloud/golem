@@ -337,6 +337,7 @@ impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
+    use test_r::test;
 
     use crate::{fallible_transaction, infallible_transaction, operation};
 

@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package golem.component;
-
-enum ComponentType {
-  DURABLE = 0;
-  EPHEMERAL = 1;
-}

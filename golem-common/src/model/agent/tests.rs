@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::model::agent::{
-    AgentConstructor, AgentId, AgentType, AgentTypeResolver, BinaryDescriptor, BinaryReference,
-    BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
-    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
-    NamedElementValues, TextDescriptor, TextReference, TextSource, TextType, Url,
+    AgentConstructor, AgentId, AgentMode, AgentType, AgentTypeResolver, BinaryDescriptor,
+    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, TextDescriptor, TextReference, TextSource, TextType,
+    Url,
 };
 use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, u32};
@@ -291,6 +292,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-2".to_string(),
@@ -310,6 +312,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-3".to_string(),
@@ -341,6 +344,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-4".to_string(),
@@ -368,6 +372,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-5".to_string(),
@@ -395,6 +400,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-6".to_string(),
@@ -428,6 +434,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent-7".to_string(),
@@ -447,6 +454,7 @@ fn test_agent_types() -> HashMap<String, AgentType> {
             },
             methods: vec![],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
     ];
 

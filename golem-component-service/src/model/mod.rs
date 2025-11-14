@@ -22,7 +22,7 @@ use desert_rust::BinaryCodec;
 use golem_common::base_model::ComponentVersion;
 use golem_common::model::agent::AgentTypes;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
-use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType, ProjectId};
+use golem_common::model::{ComponentFilePathWithPermissionsList, ProjectId};
 use golem_service_base::model::ComponentName;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::types::multipart::{JsonField, Upload};
@@ -33,7 +33,6 @@ use std::collections::HashMap;
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdatePayload {
-    pub component_type: Option<ComponentType>,
     pub component: Upload,
     pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
     pub files: Option<TempFileUpload>,

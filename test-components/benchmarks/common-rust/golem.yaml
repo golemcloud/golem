@@ -11,40 +11,91 @@ templates:
     profiles:
       debug:
         build:
-        - command: cargo component build
-          sources:
-          - src
-          - wit-generated
-          - ../../common-rust
-          - Cargo.toml
-          targets:
-          - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          - command: cargo component build
+            sources:
+              - src
+              - wit-generated
+              - ../../common-rust
+              - Cargo.toml
+            targets:
+              - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
         componentWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_debug.wasm
         clean:
-        - src/bindings.rs
+          - src/bindings.rs
       release:
         build:
-        - command: cargo component build --release
-          sources:
-          - src
-          - wit-generated
-          - ../../common-rust
-          - Cargo.toml
-          targets:
-          - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          - command: cargo component build --release
+            sources:
+              - src
+              - wit-generated
+              - ../../common-rust
+              - Cargo.toml
+            targets:
+              - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         sourceWit: wit
         generatedWit: wit-generated
         componentWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
         linkedWasm: ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm
         clean:
-        - src/bindings.rs
+          - src/bindings.rs
     defaultProfile: release
     customCommands:
       copy:
         - command: cp ../../golem-temp/components/{{ component_name | to_snake_case }}_release.wasm ../../../{{ component_name | to_snake_case }}.wasm
+
+  rust-agent:
+    profiles:
+      debug:
+        build:
+          - command: cargo component build
+            sources:
+              - src
+              - ../../common-rust
+              - Cargo.toml
+            targets:
+              - ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+            basedOnCompiledWasm: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+          - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+            withAgent: ../../target/wasm32-wasip1/debug/{{ component_name | to_snake_case }}.wasm
+            to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
+        sourceWit: .wit/wit
+        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.static.wasm
+        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
+        clean:
+          - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
+      release:
+        build:
+          - command: cargo component build --release
+            sources:
+              - src
+              - ../../common-rust
+              - Cargo.toml
+            targets:
+              - ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+            basedOnCompiledWasm: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+          - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
+            withAgent: ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm
+            to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        sourceWit: .wit/wit
+        generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
+        clean:
+          - src/bindings.rs
+        customCommands:
+          copy:
+            - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm ../../..
+    defaultProfile: debug
+
 customCommands:
   cargo-clean:
-  - command: cargo clean
+    - command: cargo clean

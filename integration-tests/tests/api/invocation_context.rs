@@ -25,7 +25,6 @@ use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
-use golem_common::model::ComponentType;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use reqwest::header::HeaderValue;
@@ -101,7 +100,6 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
                     WasmRpcTarget {
                         interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
                         component_name: "golem:ictest".to_string(),
-                        component_type: ComponentType::Durable,
                     },
                 )]),
             }),

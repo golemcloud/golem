@@ -16,6 +16,9 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+#[cfg(test)]
+test_r::enable!();
+
 pub mod bindings {
     use wit_bindgen::generate;
 

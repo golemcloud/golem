@@ -40,7 +40,6 @@ pub struct StubConfig {
     pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
     pub component_name: AppComponentName,
-    pub is_ephemeral: bool,
 }
 
 #[derive(Debug, Clone, Default)]

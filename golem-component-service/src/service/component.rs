@@ -49,7 +49,7 @@ use golem_common::model::plugin::{
 use golem_common::model::InitialComponentFile;
 use golem_common::model::ProjectId;
 use golem_common::model::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, PluginInstallationId};
+use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::widen_infallible;
 use golem_service_base::clients::limit::LimitService;
@@ -83,7 +83,6 @@ pub trait ComponentService: Debug + Send + Sync {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
@@ -98,7 +97,6 @@ pub trait ComponentService: Debug + Send + Sync {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
@@ -112,7 +110,6 @@ pub trait ComponentService: Debug + Send + Sync {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
@@ -125,7 +122,6 @@ pub trait ComponentService: Debug + Send + Sync {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -284,7 +280,6 @@ impl ComponentService for LazyComponentService {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
@@ -299,7 +294,6 @@ impl ComponentService for LazyComponentService {
             .create(
                 component_id,
                 component_name,
-                component_type,
                 data,
                 files,
                 installed_plugins,
@@ -316,7 +310,6 @@ impl ComponentService for LazyComponentService {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
@@ -331,7 +324,6 @@ impl ComponentService for LazyComponentService {
             .create_internal(
                 component_id,
                 component_name,
-                component_type,
                 data,
                 files,
                 installed_plugins,
@@ -347,7 +339,6 @@ impl ComponentService for LazyComponentService {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
@@ -360,7 +351,6 @@ impl ComponentService for LazyComponentService {
             .update(
                 component_id,
                 data,
-                component_type,
                 files,
                 dynamic_linking,
                 owner,
@@ -375,7 +365,6 @@ impl ComponentService for LazyComponentService {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
@@ -389,7 +378,6 @@ impl ComponentService for LazyComponentService {
             .update_internal(
                 component_id,
                 data,
-                component_type,
                 files,
                 dynamic_linking,
                 owner,
@@ -852,7 +840,6 @@ impl ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         uploaded_files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
@@ -871,7 +858,6 @@ impl ComponentServiceDefault {
         let component = Component::new(
             component_id.clone(),
             component_name.clone(),
-            component_type,
             &data,
             uploaded_files,
             installed_plugins,
@@ -931,7 +917,6 @@ impl ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
@@ -983,7 +968,6 @@ impl ComponentServiceDefault {
         component.files = files.unwrap_or(component.files);
         component.metadata = metadata;
         component.env = env;
-        component.component_type = component_type.unwrap_or(component.component_type);
 
         // reset transformations so that plugins see original data of the component
         component.reset_transformations();
@@ -1249,7 +1233,6 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         installed_plugins: Vec<PluginInstallation>,
@@ -1275,7 +1258,6 @@ impl ComponentService for ComponentServiceDefault {
         self.create_unchecked(
             component_id,
             component_name,
-            component_type,
             data,
             uploaded_files,
             installed_plugins,
@@ -1291,7 +1273,6 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
-        component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
         installed_plugins: Vec<PluginInstallation>,
@@ -1328,7 +1309,6 @@ impl ComponentService for ComponentServiceDefault {
         self.create_unchecked(
             component_id,
             component_name,
-            component_type,
             data,
             files,
             installed_plugins,
@@ -1344,7 +1324,6 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
@@ -1364,7 +1343,6 @@ impl ComponentService for ComponentServiceDefault {
         self.update_unchecked(
             component_id,
             data,
-            component_type,
             uploaded_files,
             dynamic_linking,
             owner,
@@ -1378,7 +1356,6 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
-        component_type: Option<ComponentType>,
         files: Option<Vec<InitialComponentFile>>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         owner: &ComponentOwner,
@@ -1409,7 +1386,6 @@ impl ComponentService for ComponentServiceDefault {
         self.update_unchecked(
             component_id,
             data,
-            component_type,
             files,
             dynamic_linking,
             owner,

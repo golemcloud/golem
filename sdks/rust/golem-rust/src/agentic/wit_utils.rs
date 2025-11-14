@@ -76,6 +76,7 @@ fn rebase_indices(nodes: &mut [WitNode], base_index: usize) {
 mod tests {
     use crate::agentic::unwrap_wit_tuple;
     use golem_wasm::{Value, WitValue};
+    use test_r::test;
 
     #[test]
     fn test_unwrap_wit_tuple() {

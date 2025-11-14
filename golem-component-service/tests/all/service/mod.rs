@@ -24,7 +24,7 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
-    ComponentType, Empty,
+    Empty,
 };
 use golem_common::{widen_infallible, SafeDisplay};
 use golem_component_service::error::ComponentError;
@@ -205,7 +205,6 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
         .create(
             &ComponentId::new_v4(),
             &component_name1,
-            ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
             vec![],
@@ -221,7 +220,6 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
         .create(
             &ComponentId::new_v4(),
             &component_name2,
-            ComponentType::Durable,
             get_component_data("rust-echo"),
             None,
             vec![],
@@ -305,7 +303,6 @@ async fn test_services(component_service: &Arc<dyn ComponentService>) {
         .update(
             &component1.versioned_component_id.component_id,
             get_component_data("shopping-cart"),
-            None,
             None,
             HashMap::new(),
             &test_component_owner(),
@@ -560,7 +557,6 @@ async fn test_initial_component_file_upload(component_service: &Arc<dyn Componen
         .create(
             &component_id,
             &component_name,
-            ComponentType::Durable,
             data,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: named_temp_file,
@@ -617,7 +613,6 @@ async fn test_initial_component_file_data_sharing(component_service: &Arc<dyn Co
         .create(
             &component_id,
             &component_name,
-            ComponentType::Durable,
             data.clone(),
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: named_temp_file1,
@@ -639,7 +634,6 @@ async fn test_initial_component_file_data_sharing(component_service: &Arc<dyn Co
         .update(
             &component_id,
             data,
-            None,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: named_temp_file2,
                 files: vec![ComponentFilePathWithPermissions {
@@ -684,7 +678,6 @@ async fn test_component_constraint_incompatible_updates(
         .create(
             &ComponentId::new_v4(),
             &component_name,
-            ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
             vec![],
@@ -721,7 +714,6 @@ async fn test_component_constraint_incompatible_updates(
         .update(
             &component_id,
             get_component_data("shopping-cart"),
-            None,
             None,
             HashMap::new(),
             &test_component_owner(),
@@ -782,7 +774,6 @@ async fn test_component_oplog_process_plugin_creation(
         .create(
             &ComponentId::new_v4(),
             &plugin_component_name,
-            ComponentType::Durable,
             get_component_data("oplog-processor"),
             None,
             vec![],
@@ -823,7 +814,6 @@ async fn test_component_oplog_process_plugin_creation(
         .create(
             &ComponentId::new_v4(),
             &component_name,
-            ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
             vec![],
@@ -881,7 +871,6 @@ async fn test_component_oplog_process_plugin_creation_invalid_plugin(
         .create(
             &ComponentId::new_v4(),
             &plugin_component_name,
-            ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
             vec![],
@@ -936,7 +925,6 @@ async fn test_failing_component_transformer_plugin(
         .create(
             &ComponentId::new_v4(),
             &plugin_component_name,
-            ComponentType::Durable,
             get_component_data("shopping-cart"),
             None,
             vec![],
@@ -1007,7 +995,6 @@ async fn test_library_plugin_creation(
         .create(
             &ComponentId::new_v4(),
             &plugin_component_name,
-            ComponentType::Durable,
             get_component_data("app_and_library_app"),
             None,
             vec![],
@@ -1095,7 +1082,6 @@ async fn test_app_plugin_creation(
         .create(
             &ComponentId::new_v4(),
             &plugin_component_name,
-            ComponentType::Durable,
             get_component_data("app_and_library_library"),
             None,
             vec![],

@@ -16,8 +16,7 @@ use crate::model::ComponentName;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{
-    plugin as common_plugin_model, AccountId, ComponentType, InitialComponentFile,
-    PluginInstallationId, ProjectId,
+    plugin as common_plugin_model, AccountId, InitialComponentFile, PluginInstallationId, ProjectId,
 };
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
@@ -64,7 +63,6 @@ pub struct Component {
     pub account_id: AccountId,
     pub project_id: ProjectId,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,

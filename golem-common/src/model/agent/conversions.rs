@@ -14,14 +14,32 @@
 
 use crate::model::agent::bindings::golem::agent::host;
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentType, BinaryDescriptor,
-    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
-    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
-    NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference,
-    TextSource, TextType, Url,
+    AgentConstructor, AgentDependency, AgentError, AgentMethod, AgentMode, AgentType,
+    BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema,
+    DataSchema, DataValue, ElementSchema, ElementValue, ElementValues, NamedElementSchema,
+    NamedElementSchemas, NamedElementValue, NamedElementValues, RegisteredAgentType,
+    TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
+
+impl From<super::bindings::golem::agent::common::AgentMode> for AgentMode {
+    fn from(value: super::bindings::golem::agent::common::AgentMode) -> Self {
+        match value {
+            super::bindings::golem::agent::common::AgentMode::Durable => Self::Durable,
+            super::bindings::golem::agent::common::AgentMode::Ephemeral => Self::Ephemeral,
+        }
+    }
+}
+
+impl From<AgentMode> for super::bindings::golem::agent::common::AgentMode {
+    fn from(value: AgentMode) -> Self {
+        match value {
+            AgentMode::Durable => super::bindings::golem::agent::common::AgentMode::Durable,
+            AgentMode::Ephemeral => super::bindings::golem::agent::common::AgentMode::Ephemeral,
+        }
+    }
+}
 
 impl From<super::bindings::golem::agent::common::AgentConstructor> for AgentConstructor {
     fn from(value: crate::model::agent::bindings::golem::agent::common::AgentConstructor) -> Self {
@@ -147,6 +165,7 @@ impl From<super::bindings::golem::agent::common::AgentType> for AgentType {
                 .into_iter()
                 .map(AgentDependency::from)
                 .collect(),
+            mode: value.mode.into(),
         }
     }
 }
@@ -163,6 +182,7 @@ impl From<AgentType> for super::bindings::golem::agent::common::AgentType {
                 .into_iter()
                 .map(AgentDependency::into)
                 .collect(),
+            mode: value.mode.into(),
         }
     }
 }

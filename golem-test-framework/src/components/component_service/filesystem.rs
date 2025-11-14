@@ -24,7 +24,7 @@ use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::{
     component_metadata::{LinearMemory, RawComponentMetadata},
-    ComponentId, ComponentType, ComponentVersion, InitialComponentFile,
+    ComponentId, ComponentVersion, InitialComponentFile,
 };
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -77,7 +77,6 @@ impl FileSystemComponentService {
         component_name: &str,
         component_id: &ComponentId,
         component_version: ComponentVersion,
-        component_type: ComponentType,
         files: &[InitialComponentFile],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
@@ -150,7 +149,6 @@ impl FileSystemComponentService {
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
-            component_type,
             files: files.to_owned(),
             size,
             memories: memories.clone(),
@@ -193,7 +191,6 @@ impl FileSystemComponentService {
             account_id: Some(self.account_id.clone().into()),
             project_id: Some(project_id.into()),
             created_at: Some(SystemTime::now().into()),
-            component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
             installed_plugins: vec![],
             env: env.clone(),
@@ -257,7 +254,6 @@ impl ComponentService for FileSystemComponentService {
         token: &Uuid,
         local_path: &Path,
         name: &str,
-        component_type: ComponentType,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
@@ -268,7 +264,6 @@ impl ComponentService for FileSystemComponentService {
             token,
             local_path,
             name,
-            component_type,
             files,
             dynamic_linking,
             unverified,
@@ -284,7 +279,6 @@ impl ComponentService for FileSystemComponentService {
         _token: &Uuid,
         local_path: &Path,
         name: &str,
-        component_type: ComponentType,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
@@ -296,7 +290,6 @@ impl ComponentService for FileSystemComponentService {
             name,
             &ComponentId(Uuid::new_v4()),
             0,
-            component_type,
             &files
                 .iter()
                 .map(|(_source, file)| file.clone())
@@ -314,7 +307,6 @@ impl ComponentService for FileSystemComponentService {
         local_path: &Path,
         component_id: &ComponentId,
         component_name: &str,
-        component_type: ComponentType,
         project_id: Option<ProjectId>,
     ) -> Result<(), AddComponentError> {
         self.write_component_to_filesystem(
@@ -322,7 +314,6 @@ impl ComponentService for FileSystemComponentService {
             component_name,
             component_id,
             0,
-            component_type,
             &[],
             false,
             &HashMap::new(),
@@ -338,7 +329,6 @@ impl ComponentService for FileSystemComponentService {
         token: &Uuid,
         component_id: &ComponentId,
         local_path: &Path,
-        component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
         env: &HashMap<String, String>,
@@ -375,7 +365,6 @@ impl ComponentService for FileSystemComponentService {
             &old_metadata.component_name,
             component_id,
             new_version,
-            component_type,
             files.as_ref().unwrap_or(&old_metadata.files),
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),

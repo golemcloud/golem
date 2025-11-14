@@ -15,15 +15,13 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{
-    AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
-};
+use golem_common::model::{AccountId, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -140,21 +138,21 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
     Loading {
-        component_type: ComponentType,
+        agent_mode: AgentMode,
         timestamp: Timestamp,
     },
     Running {
-        component_type: ComponentType,
+        agent_mode: AgentMode,
         timestamp: Timestamp,
     },
     Suspended {
-        component_type: ComponentType,
+        agent_mode: AgentMode,
         timestamp: Timestamp,
     },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
-        component_type: ComponentType,
+        agent_mode: AgentMode,
         timestamp: Timestamp,
     },
 }
@@ -173,25 +171,45 @@ impl ExecutionStatus {
         }
     }
 
-    pub fn component_type(&self) -> ComponentType {
+    pub fn agent_mode(&self) -> AgentMode {
         match self {
-            ExecutionStatus::Loading { component_type, .. } => *component_type,
-            ExecutionStatus::Running { component_type, .. } => *component_type,
-            ExecutionStatus::Suspended { component_type, .. } => *component_type,
-            ExecutionStatus::Interrupting { component_type, .. } => *component_type,
+            ExecutionStatus::Loading {
+                agent_mode: component_type,
+                ..
+            } => *component_type,
+            ExecutionStatus::Running {
+                agent_mode: component_type,
+                ..
+            } => *component_type,
+            ExecutionStatus::Suspended {
+                agent_mode: component_type,
+                ..
+            } => *component_type,
+            ExecutionStatus::Interrupting {
+                agent_mode: component_type,
+                ..
+            } => *component_type,
         }
     }
 
-    pub fn set_component_type(&mut self, new_component_type: ComponentType) {
+    pub fn set_agent_mode(&mut self, new_agent_mode: AgentMode) {
         match self {
-            ExecutionStatus::Loading { component_type, .. } => *component_type = new_component_type,
-            ExecutionStatus::Running { component_type, .. } => *component_type = new_component_type,
-            ExecutionStatus::Suspended { component_type, .. } => {
-                *component_type = new_component_type
-            }
-            ExecutionStatus::Interrupting { component_type, .. } => {
-                *component_type = new_component_type
-            }
+            ExecutionStatus::Loading {
+                agent_mode: component_type,
+                ..
+            } => *component_type = new_agent_mode,
+            ExecutionStatus::Running {
+                agent_mode: component_type,
+                ..
+            } => *component_type = new_agent_mode,
+            ExecutionStatus::Suspended {
+                agent_mode: component_type,
+                ..
+            } => *component_type = new_agent_mode,
+            ExecutionStatus::Interrupting {
+                agent_mode: component_type,
+                ..
+            } => *component_type = new_agent_mode,
         }
     }
 }

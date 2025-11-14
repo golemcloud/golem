@@ -18,7 +18,7 @@ use crate::model::deploy_diff::DiffSerialize;
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::ComponentName;
 use golem_client::model::{DynamicLinkedInstance, DynamicLinking};
-use golem_common::model::{ComponentFilePermissions, ComponentType};
+use golem_common::model::ComponentFilePermissions;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -34,7 +34,6 @@ pub struct DiffableComponentFile {
 pub struct DiffableComponent {
     pub component_name: ComponentName,
     pub component_hash: String,
-    pub component_type: ComponentType,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub files: BTreeMap<String, DiffableComponentFile>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -53,7 +52,6 @@ impl DiffableComponent {
         Ok(Self {
             component_name: component.component_name.clone(),
             component_hash,
-            component_type: component.component_type,
             files,
             dynamic_linking: component
                 .metadata
@@ -82,7 +80,6 @@ impl DiffableComponent {
         show_sensitive: bool,
         component_name: &AppComponentName,
         component_hash: String,
-        component_type: ComponentType,
         files: BTreeMap<String, DiffableComponentFile>,
         dynamic_linking: Option<&DynamicLinking>,
         env: Option<&HashMap<String, String>>,
@@ -90,7 +87,6 @@ impl DiffableComponent {
         Ok(DiffableComponent {
             component_name: component_name.as_str().into(),
             component_hash,
-            component_type,
             files,
             dynamic_linking: dynamic_linking
                 .iter()

@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package golem.component;
 
-import "golem/component/component_type.proto";
-
 message DynamicLinkedInstance {
   oneof dynamic_linked_instance {
     DynamicLinkedWasmRpc wasm_rpc = 1;
@@ -17,5 +15,4 @@ message DynamicLinkedWasmRpc {
 message WasmRpcTarget {
   string interface_name = 1;
   string component_name = 2;
-  ComponentType component_type = 3;
 }

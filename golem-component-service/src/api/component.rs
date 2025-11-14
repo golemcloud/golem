@@ -26,10 +26,10 @@ use golem_common::model::auth::AuthCtx;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
+use golem_common::model::ComponentId;
 use golem_common::model::{
     ComponentFilePathWithPermissionsList, Empty, PluginInstallationId, ProjectId,
 };
-use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -49,7 +49,6 @@ use tracing::Instrument;
 pub struct UploadPayload {
     query: JsonField<ComponentQuery>,
     component: Upload,
-    component_type: Option<ComponentType>,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,
     files: Option<TempFileUpload>,
     dynamic_linking: Option<JsonField<DynamicLinking>>,
@@ -129,9 +128,6 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
-        /// Type of the new version of the component - if not specified, the type of the previous version
-        /// is used.
-        component_type: Query<Option<ComponentType>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<dto::Component>> {
         let auth = AuthCtx::new(token.secret());
@@ -140,7 +136,7 @@ impl ComponentApi {
             component_id = component_id.0.to_string()
         );
         let response = self
-            .upload_component_internal(component_id.0, wasm.0, component_type.0, auth)
+            .upload_component_internal(component_id.0, wasm.0, auth)
             .instrument(record.span.clone())
             .await;
         record.result(response)
@@ -150,7 +146,6 @@ impl ComponentApi {
         &self,
         component_id: ComponentId,
         wasm: Body,
-        component_type: Option<ComponentType>,
         auth: AuthCtx,
     ) -> Result<Json<dto::Component>> {
         let data = wasm.into_vec().await?;
@@ -158,7 +153,6 @@ impl ComponentApi {
             .component_service
             .update(
                 &component_id,
-                component_type,
                 data,
                 None,
                 HashMap::new(),
@@ -219,7 +213,6 @@ impl ComponentApi {
             .component_service
             .update(
                 &component_id,
-                payload.component_type,
                 data,
                 files,
                 payload
@@ -290,7 +283,6 @@ impl ComponentApi {
             .create(
                 project_id,
                 &component_name,
-                payload.component_type.unwrap_or(ComponentType::Durable),
                 data,
                 files,
                 payload

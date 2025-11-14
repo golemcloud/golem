@@ -22,7 +22,7 @@ use golem_common::model::component_constraint::{FunctionConstraints, FunctionSig
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::ComponentPluginInstallationTarget;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, InitialComponentFile,
     InitialComponentFileKey,
 };
 use golem_common::repo::ComponentOwnerRow;
@@ -87,8 +87,8 @@ impl ComponentRecord {
             size: value.component_size as i32,
             version: value.versioned_component_id.version as i64,
             metadata: metadata.into(),
+            component_type: 0,
             created_at: value.created_at,
-            component_type: value.component_type as i32,
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
             files: value
@@ -165,7 +165,6 @@ impl TryFrom<ComponentRecord> for Component {
             metadata,
             versioned_component_id,
             created_at: value.created_at,
-            component_type: ComponentType::try_from(value.component_type)?,
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
             files,

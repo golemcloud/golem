@@ -16,9 +16,9 @@ use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
-    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    ComponentFileSystemNodeDetails, FilterComparator, IdempotencyKey, InitialComponentFile,
+    InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
+    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
     WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
     WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
@@ -568,32 +568,6 @@ impl TryFrom<WorkerEvent> for golem_api_grpc::proto::golem::worker::LogEvent {
                     },
                 )),
             }),
-        }
-    }
-}
-
-impl From<golem_api_grpc::proto::golem::component::ComponentType> for ComponentType {
-    fn from(value: golem_api_grpc::proto::golem::component::ComponentType) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::component::ComponentType::Durable => {
-                ComponentType::Durable
-            }
-            golem_api_grpc::proto::golem::component::ComponentType::Ephemeral => {
-                ComponentType::Ephemeral
-            }
-        }
-    }
-}
-
-impl From<ComponentType> for golem_api_grpc::proto::golem::component::ComponentType {
-    fn from(value: ComponentType) -> Self {
-        match value {
-            ComponentType::Durable => {
-                golem_api_grpc::proto::golem::component::ComponentType::Durable
-            }
-            ComponentType::Ephemeral => {
-                golem_api_grpc::proto::golem::component::ComponentType::Ephemeral
-            }
         }
     }
 }

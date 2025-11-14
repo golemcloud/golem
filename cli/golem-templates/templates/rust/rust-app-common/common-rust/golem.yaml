@@ -39,7 +39,7 @@ templates:
           to: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
         sourceWit: .wit/wit
         generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
-        componentWasm: ./../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
+        componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.static.wasm
         linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
         clean:
         - src/bindings.rs

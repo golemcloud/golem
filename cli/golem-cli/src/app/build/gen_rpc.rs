@@ -368,12 +368,7 @@ async fn build_client(
     ctx: &mut ApplicationContext,
     component: &DependentAppComponent,
 ) -> anyhow::Result<bool> {
-    let stub_def = ctx.component_stub_def(
-        &component.name,
-        ctx.application
-            .component_properties(&component.name, ctx.build_profile())
-            .is_ephemeral(),
-    )?;
+    let stub_def = ctx.component_stub_def(&component.name)?;
     let client_wit_root = stub_def.client_wit_root();
 
     let client_dep_package_ids = stub_def.stub_dep_package_ids();
@@ -447,12 +442,7 @@ async fn build_client(
 
                         let offline = ctx.config.offline;
                         commands::generate::build(
-                            ctx.component_stub_def(
-                                &component.name,
-                                ctx.application
-                                    .component_properties(&component.name, ctx.build_profile())
-                                    .is_ephemeral(),
-                            )?,
+                            ctx.component_stub_def(&component.name)?,
                             &client_wasm,
                             &client_wit,
                             offline,
@@ -486,12 +476,7 @@ async fn build_client(
                         );
                         fs::create_dir_all(&client_wit_root)?;
 
-                        let stub_def = ctx.component_stub_def(
-                            &component.name,
-                            ctx.application
-                                .component_properties(&component.name, ctx.build_profile())
-                                .is_ephemeral(),
-                        )?;
+                        let stub_def = ctx.component_stub_def(&component.name)?;
                         commands::generate::generate_and_copy_client_wit(stub_def, &client_wit)
                     }
                     DependencyType::Wasm => {
