@@ -377,18 +377,20 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .into_admin_with_unique_project()
         .await;
 
-    // TODO: need to use an ephemeral agent
-    let component_id = executor.component("counters").store().await;
+    let component_id = executor
+        .component("it_agent_counters_release")
+        .store()
+        .await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "test".to_string(),
+        worker_name: "ephemeral-counter(\"test\")".to_string(),
     };
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{inc-global-by}",
-            vec![2u64.into_value_and_type()],
+            "it:agent-counters/ephemeral-counter.{increment}",
+            vec![],
         )
         .await
         .unwrap();
@@ -396,7 +398,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{get-global-value}",
+            "it:agent-counters/ephemeral-counter.{increment}",
             vec![],
         )
         .await
@@ -404,7 +406,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
     drop(executor);
 
-    check!(result == vec![Value::U64(0)]);
+    assert_eq!(result, vec![Value::U32(1)]);
 }
 
 #[test]

@@ -542,6 +542,7 @@ pub fn char_type() -> Vec<AgentType> {
             }),
         }],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
 
@@ -577,5 +578,6 @@ pub fn unit_result_type() -> Vec<AgentType> {
             }),
         }],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
