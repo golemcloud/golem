@@ -34,14 +34,19 @@ pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
     value::derive_from_value_and_type(&ast)
 }
 
+#[proc_macro_derive(MultimodalSchema)]
+pub fn derive_multimodal(input: TokenStream) -> TokenStream {
+    agentic::derive_multimodal(input)
+}
+
 #[proc_macro_derive(Schema)]
 pub fn derive_schema(input: TokenStream) -> TokenStream {
     agentic::derive_schema(input)
 }
 
-#[proc_macro_derive(MultimodalSchema)]
-pub fn derive_multimodal(input: TokenStream) -> TokenStream {
-    agentic::derive_multimodal(input)
+#[proc_macro_derive(AllowedLanguages, attributes(code))]
+pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
+    agentic::derive_allowed_languages(input)
 }
 
 /// Defines a function as an `Operation` that can be used in transactions
