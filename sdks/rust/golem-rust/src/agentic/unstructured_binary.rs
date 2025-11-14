@@ -28,7 +28,7 @@ pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
 }
 
 impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
-    /// Create an `UnstructuredBinary` instance from inline text with a specific language code.
+    /// Create an `UnstructuredBinary` instance from inline data and a mime type.
     ///
     /// # Example
     ///
