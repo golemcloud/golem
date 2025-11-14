@@ -182,8 +182,9 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                         Some(text_type) => {
                             if !allowed.is_empty() && !allowed.contains(&text_type.language_code) {
                                 return Err(format!(
-                                    "Language code '{}' is not allowed. Allowed codes: {:?}",
-                                    text_type.language_code, allowed
+                                    "Language code '{}' is not allowed. Allowed codes: {}",
+                                    text_type.language_code,
+                                    allowed.join(", ")
                                 ));
                             }
 
