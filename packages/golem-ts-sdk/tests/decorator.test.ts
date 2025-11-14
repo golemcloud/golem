@@ -15,7 +15,11 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
-import { BarAgentClassName, FooAgentClassName, EphemeralAgentClassName } from './testUtils';
+import {
+  BarAgentClassName,
+  FooAgentClassName,
+  EphemeralAgentClassName,
+} from './testUtils';
 import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 

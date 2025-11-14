@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentError, AgentMode } from 'golem:agent/common';
+import {
+  AgentType,
+  DataValue,
+  AgentError,
+  AgentMode,
+} from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
