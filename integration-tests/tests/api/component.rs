@@ -38,7 +38,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     let user = deps.user().await;
 
     // Create some components
-    let (counter_1_id, counter_2_id, caller_id, ephemeral_id) = join!(
+    let (counter_1_id, counter_2_id, caller_id) = join!(
         user.component("counters").unique().store(),
         user.component("counters").unique().store(),
         user.component("caller")
@@ -79,14 +79,11 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 ),
             ])
             .store(),
-        // TODO: use an ephemeral agent
-        user.component("ephemeral").unique().store()
     );
 
     let counter_1_id = common_component_id_to_str(&counter_1_id);
     let counter_2_id = common_component_id_to_str(&counter_2_id);
     let caller_id = common_component_id_to_str(&caller_id);
-    let ephemeral_id = common_component_id_to_str(&ephemeral_id);
 
     // Get components
     let components = deps
@@ -124,27 +121,22 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
     let counter_1 = components.get(&counter_1_id).unwrap();
     let counter_2 = components.get(&counter_2_id).unwrap();
     let caller = components.get(&caller_id).unwrap();
-    let ephemeral = components.get(&ephemeral_id).unwrap();
 
     check!(counter_1.versioned_component_id.unwrap().version == 0);
     check!(counter_2.versioned_component_id.unwrap().version == 0);
     check!(caller.versioned_component_id.unwrap().version == 0);
-    check!(ephemeral.versioned_component_id.unwrap().version == 0);
 
     check!(counter_1.component_size > 0);
     check!(counter_1.component_size == counter_2.component_size);
     check!(caller.component_size > 0);
-    check!(ephemeral.component_size > 0);
 
     let counter_1_meta = &counter_1.metadata.as_ref().unwrap();
     let counter_2_meta = &counter_2.metadata.as_ref().unwrap();
     let caller_meta = &caller.metadata.as_ref().unwrap();
-    let ephemeral_meta = &ephemeral.metadata.as_ref().unwrap();
 
     check!(counter_1_meta.exports.len() > 0);
     check!(counter_2_meta.exports.len() == counter_2_meta.exports.len());
     check!(caller_meta.exports.len() > 0);
-    check!(ephemeral_meta.exports.len() > 0);
 
     check!(counter_1_meta.dynamic_linking.len() == 0);
     check!(counter_2_meta.dynamic_linking.len() == 0);
@@ -197,7 +189,6 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
                 )]),
             }),
     );
-    check!(ephemeral_meta.dynamic_linking.len() == 0);
 }
 
 #[test]

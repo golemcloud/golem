@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
 #[agent_definition]
 trait Counter {
@@ -55,5 +55,28 @@ impl EphemeralCounter for EphemeralCounterImpl {
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
+    }
+}
+
+#[agent_definition(ephemeral)]
+trait HostFunctionTests {
+    fn new(id: String) -> Self;
+    fn generate_idempotency_keys(&mut self) -> (String, String);
+}
+
+struct HostFunctionTestsImpl {
+    _id: String,
+}
+
+#[agent_implementation]
+impl HostFunctionTests for HostFunctionTestsImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id }
+    }
+
+    fn generate_idempotency_keys(&mut self) -> (String, String) {
+        let key1 = generate_idempotency_key();
+        let key2 = generate_idempotency_key();
+        (key1.to_string(), key2.to_string())
     }
 }
