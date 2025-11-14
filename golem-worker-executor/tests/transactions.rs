@@ -933,7 +933,10 @@ async fn idempotency_keys_in_ephemeral_workers(
         .into_admin_with_unique_project()
         .await;
 
-    let component_id = executor.component("it_agent_counters_release").store().await;
+    let component_id = executor
+        .component("it_agent_counters_release")
+        .store()
+        .await;
 
     let worker_id = WorkerId {
         component_id,

@@ -398,7 +398,7 @@ impl From<WorkerIdPair> for WorkerIdOrPair {
 
 pub struct IterationContext {
     direct_rust_worker_ids: Vec<WorkerId>,
-    agent_rust_worker_ids: Vec<WorkerId>,
+    rust_agent_worker_ids: Vec<WorkerId>,
     ts_agent_worker_ids: Vec<WorkerId>,
     ts_agent_worker_ids_for_rib: Vec<WorkerId>,
     length: usize,
@@ -710,7 +710,7 @@ impl ThroughputBenchmark {
 
         IterationContext {
             direct_rust_worker_ids,
-            agent_rust_worker_ids,
+            rust_agent_worker_ids,
             ts_agent_worker_ids,
             ts_agent_worker_ids_for_rib,
             length: config.length,
@@ -756,7 +756,7 @@ impl ThroughputBenchmark {
         warmup_workers(
             &self.deps,
             iteration.length,
-            &iteration.agent_rust_worker_ids,
+            &iteration.rust_agent_worker_ids,
             &self.rust_agent_function_name,
             &self.function_params,
         )
@@ -900,7 +900,7 @@ impl ThroughputBenchmark {
             iteration.length,
             self.call_count,
             &iteration
-                .agent_rust_worker_ids
+                .rust_agent_worker_ids
                 .iter()
                 .cloned()
                 .map(|id| id.into())
@@ -1031,7 +1031,7 @@ impl ThroughputBenchmark {
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
         delete_workers(&self.deps, &iteration.direct_rust_worker_ids).await;
-        delete_workers(&self.deps, &iteration.agent_rust_worker_ids).await;
+        delete_workers(&self.deps, &iteration.rust_agent_worker_ids).await;
         delete_workers(&self.deps, &iteration.ts_agent_worker_ids).await;
         delete_workers(&self.deps, &iteration.ts_agent_worker_ids_for_rib).await;
         delete_workers(
