@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo,
-};
+use crate::agentic::helpers::{extract_inner_type_if_multimodal, is_unstructured_text, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
@@ -161,7 +159,12 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                         DefaultOrMultimodal::Default => {
                             if fn_output_info.is_unit {
                                 quote! {}
-                            } else {
+                            } else if is_unstructured_text(ty) {
+                                quote! {
+                                    golem_rust::agentic::UnstructuredText::from_wit_value(wit_value).expect("Failed to deserialize rpc result to UnstructuredText return type")
+                                }
+                            }
+                            else {
                                 quote! {
                                     let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
                                     let element_schema = <#ty as golem_rust::agentic::Schema>::get_type();

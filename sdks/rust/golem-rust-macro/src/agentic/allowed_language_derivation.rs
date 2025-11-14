@@ -36,13 +36,12 @@ pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
         let v_ident = &variant.ident;
         variant_idents.push(v_ident);
 
-        // Default: lowercase variant name
         let mut code = v_ident.to_string().to_lowercase();
 
         for attr in &variant.attrs {
             if let Some(override_code) = parse_lang_attr(attr) {
                 code = override_code;
-                break; // only first lang attribute is considered
+                break;
             }
         }
 

@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm::Value;
 use crate::agentic::Schema;
-use crate::golem_agentic::golem::agent::common::{
-    ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType,
-};
+use crate::golem_agentic::golem::agent::common::{ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType, WitValue};
 
 /// Represents a text value that can either be inline or a URL reference.
 ///
@@ -58,6 +57,82 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
         UnstructuredText::Text {
             text: text.into(),
             language_code: Some(language_code),
+        }
+    }
+
+    // Exists since the RPC invoke result returns a wit-value than an element value
+    pub fn from_wit_value(value: WitValue) -> Result<UnstructuredText<T>, String> {
+        let value = Value::from(value);
+
+        match value {
+            Value::Variant {
+                case_value,
+                case_idx
+            } => {
+                match case_idx {
+                    0 => {
+                        if let Some(boxed_url) = case_value {
+                            if let Value::String(url) = *boxed_url {
+                                Ok(UnstructuredText::Url(url))
+                            } else {
+                                Err("Expected String for URL variant".to_string())
+                            }
+                        } else {
+                            Err("Expected value for URL variant".to_string())
+                        }
+                    }
+                    1 => {
+                        if let Some(boxed_record) = case_value {
+                            if let Value::Record(mut fields) = *boxed_record {
+                                if fields.len() != 2 {
+                                    return Err("Expected 2 fields in Inline variant".to_string());
+                                }
+
+                                let text_value = fields.remove(0);
+                                let lang_option_value = fields.remove(0);
+
+                                let text = if let Value::String(t) = text_value {
+                                    t
+                                } else {
+                                    return Err("Expected String for text field".to_string());
+                                };
+
+                                let language_code = match lang_option_value {
+                                    Value::Option(Some(boxed_lang_record)) => {
+                                        if let Value::Record(lang_fields) = *boxed_lang_record {
+                                            if lang_fields.len() != 1 {
+                                                return Err("Expected 1 field in language code record".to_string());
+                                            }
+
+                                            if let Value::String(code) = &lang_fields[0] {
+                                                T::from_language_code(code)
+                                            } else {
+                                                return Err("Expected String for language code".to_string());
+                                            }
+                                        } else {
+                                            return Err("Expected Record for language code".to_string());
+                                        }
+                                    }
+                                    _ => None,
+                                };
+
+                                Ok(UnstructuredText::Text {
+                                    text,
+                                    language_code,
+                                })
+                            } else {
+                                Err("Expected Record for Inline variant".to_string())
+                            }
+                        } else {
+                            Err("Expected value for Inline variant".to_string())
+                        }
+                    }
+                    _ => Err("Unknown variant index for UnstructuredText".to_string()),
+                }
+            }
+            _ => {
+                Err("Expected Variant value for UnstructuredText".to_string())
+            }
         }
     }
 }

@@ -159,6 +159,26 @@ pub fn extract_inner_type_if_multimodal(ty: &Type) -> Option<&Type> {
     None
 }
 
+
+pub fn is_unstructured_text(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "UnstructuredText";
+        }
+    }
+    false
+}
+
+
+pub fn is_unstructured_binary(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty {
+        if let Some(seg) = type_path.path.segments.last() {
+            return seg.ident == "UnstructuredBinary";
+        }
+    }
+    false
+}
+
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {
@@ -167,3 +187,5 @@ fn is_multimodal_type(ty: &Type) -> bool {
     }
     false
 }
+
+

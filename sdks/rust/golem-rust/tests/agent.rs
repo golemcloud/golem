@@ -15,10 +15,10 @@
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::Multimodal;
+    use golem_rust::agentic::{Multimodal, UnstructuredText};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
-    use golem_rust_macro::MultimodalSchema;
+    use golem_rust_macro::{AllowedLanguages, MultimodalSchema};
 
     #[agent_definition]
     trait Echo {
@@ -31,10 +31,22 @@ mod tests {
         fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         fn echo_option(&self, option: Option<String>) -> Option<String>;
         fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage>;
+        fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+        fn echo_unstructured_text_lc(
+            &self,
+            input: UnstructuredText<MyLang>,
+        ) -> UnstructuredText<MyLang>;
     }
 
     struct EchoImpl {
         _id: UserId,
+    }
+
+    #[derive(AllowedLanguages)]
+    enum MyLang {
+        #[code("de")]
+        German,
+        En,
     }
 
     #[agent_implementation]
@@ -73,6 +85,16 @@ mod tests {
         fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage> {
             input
         }
+
+        fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+            input
+        }
+        fn echo_unstructured_text_lc(
+            &self,
+            input: UnstructuredText<MyLang>,
+        ) -> UnstructuredText<MyLang> {
+            input
+        }
     }
 
     #[agent_definition]
@@ -86,7 +108,11 @@ mod tests {
         async fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         async fn echo_option(&self, option: Option<String>) -> Option<String>;
         async fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage>;
-
+        async fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+        async fn echo_unstructured_text_lc(
+            &self,
+            input: UnstructuredText<MyLang>,
+        ) -> UnstructuredText<MyLang>;
         async fn rpc_call(&self, string: String) -> String;
         fn rpc_call_trigger(&self, string: String);
         fn rpc_call_schedule(&self, string: String);
@@ -130,6 +156,17 @@ mod tests {
         }
 
         async fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage> {
+            input
+        }
+
+        async fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+            input
+        }
+
+        async fn echo_unstructured_text_lc(
+            &self,
+            input: UnstructuredText<MyLang>,
+        ) -> UnstructuredText<MyLang> {
             input
         }
 
