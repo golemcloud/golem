@@ -48,7 +48,7 @@ import {
 /**
  *
  * The `@agent()` decorator: Marks a class as an Agent, and registers itself internally for discovery by other agents.
- * The agent-anem is derived from the class name in kebab-case by default, but can be overridden by passing a custom name to the decorator.
+ * The agent-name is the class name by default, but can be overridden by passing a custom name to the decorator.
  *
  * It also adds a static `get()` method to the class, which can be used to create a remote client for the agent.
  *
@@ -56,7 +56,7 @@ import {
  *
  * ### Naming of agents
  * By default, the agent name is the class name. When using the agent through
- * Golem's CLI, these names are converted to kebab-case.
+ * Golem's CLI, these names must be provided in kebab-case.
  *
  * Example:
  * ```ts
@@ -75,7 +75,7 @@ import {
  *
  * ### Options
  * The decorator accepts an optional configuration object with the following fields:
- * - `name`: Custom agent name (default: class name converted to kebab-case)
+ * - `name`: Custom agent name (default: class name)
  * - `durabilityMode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
  *
  * Example:
