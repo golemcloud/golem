@@ -20,8 +20,8 @@ use axum::{Json, Router};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
+use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -107,7 +107,7 @@ async fn get_oplog_1(
             .iter()
             .filter(
                 |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-        ExportedFunctionInvokedParameters { function_name, .. }
+        ExportedFunctionInvokedParams { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
             .count(),
@@ -270,7 +270,10 @@ async fn get_oplog_with_api_changing_updates(
         .collect::<Vec<_>>();
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 17);
+
+    let _ = executor.check_oplog_is_queryable(&worker_id).await;
+
+    assert_eq!(oplog.len(), 11);
 }
 
 #[test]

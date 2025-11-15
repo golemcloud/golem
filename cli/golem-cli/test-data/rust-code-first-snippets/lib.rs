@@ -1,6 +1,6 @@
 mod model;
 
-use golem_rust::agentic::Agent;
+use golem_rust::agentic::{Agent, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -38,18 +38,19 @@ trait FooAgent {
 
     async fn fun_f64(&mut self, number: f64) -> f64;
 
+    async fn fun_char(&self, char: char) -> char;
+
     async fn fun_boolean(&self, boolean: bool) -> bool;
 
     async fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives;
 
     async fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // async fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool);
-    //
+    async fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool);
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     async fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -68,8 +69,7 @@ trait FooAgent {
 
     async fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+    async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
 
     async fn fun_result_complex(
         &mut self,
@@ -84,6 +84,11 @@ trait FooAgent {
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
+
+    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+    async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+    async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
 struct FooAgentImpl {
@@ -154,6 +159,10 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_f64(number).await
     }
 
+    async fn fun_char(&self, char: char) -> char {
+        self.client.fun_char(char).await
+    }
+
     async fn fun_boolean(&self, boolean: bool) -> bool {
         self.client.fun_boolean(boolean).await
     }
@@ -164,6 +173,13 @@ impl FooAgent for FooAgentImpl {
 
     async fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool) {
         self.client.fun_tuple_simple(tuple).await
+    }
+
+    async fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool) {
+        self.client.fun_tuple_complex(tuple).await
     }
 
     async fn fun_collections(&mut self, collections: Collections) -> Collections {
@@ -202,6 +218,10 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_result_unit_err(result).await
     }
 
+    async fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
+        self.client.fun_result_unit_both(result).await
+    }
+
     async fn fun_result_complex(
         &mut self,
         result: Result<NestedStruct, ComplexEnum>,
@@ -223,6 +243,22 @@ impl FooAgent for FooAgentImpl {
     ) -> EnumWithOnlyLiterals {
         self.client
             .fun_enum_with_only_literals(enum_with_only_literals).await
+    }
+
+    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+        self.client.fun_multi_modal(input).await
+    }
+
+    async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+        self.client.fun_unstructured_text(input).await
+    }
+
+    async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+        self.client.fun_unstructured_text_lc(input).await
+    }
+
+    async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+        self.client.fun_unstructured_binary(input).await
     }
 }
 
@@ -254,18 +290,19 @@ trait BarAgent {
 
     fn fun_f64(&mut self, number: f64) -> f64;
 
+    fn fun_char(&self, char: char) -> char;
+
     fn fun_boolean(&self, boolean: bool) -> bool;
 
     fn fun_all_primitives(&mut self, all_primitives: AllPrimitives) -> AllPrimitives;
 
     fn fun_tuple_simple(&mut self, tuple: (String, f64, bool)) -> (String, f64, bool);
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool);
-    //
+    fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool);
+
     fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -284,8 +321,7 @@ trait BarAgent {
 
     fn fun_result_unit_err(&mut self, result: Result<String, ()>) -> Result<String, ()>;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
+    fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()>;
 
     fn fun_result_complex(
         &mut self,
@@ -300,6 +336,14 @@ trait BarAgent {
         &mut self,
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
+
+    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+
+    fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+
+    fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+
+    fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
 struct BarAgentImpl {
@@ -362,6 +406,10 @@ impl BarAgent for BarAgentImpl {
         number
     }
 
+    fn fun_char(&self, char: char) -> char {
+        char
+    }
+
     fn fun_boolean(&self, boolean: bool) -> bool {
         boolean
     }
@@ -374,13 +422,12 @@ impl BarAgent for BarAgentImpl {
         tuple
     }
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2276
-    // fn fun_tuple_complex(
-    //     &mut self,
-    //     tuple: (String, f64, AllPrimitives, bool),
-    // ) -> (String, f64, AllPrimitives, bool) {
-    //     tuple
-    // }
+    fn fun_tuple_complex(
+        &mut self,
+        tuple: (String, f64, AllPrimitives, bool),
+    ) -> (String, f64, AllPrimitives, bool) {
+        tuple
+    }
 
     fn fun_collections(&mut self, collections: Collections) -> Collections {
         collections
@@ -418,10 +465,9 @@ impl BarAgent for BarAgentImpl {
         result
     }
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
-    //     result
-    // }
+    fn fun_result_unit_both(&mut self, result: Result<(), ()>) -> Result<(), ()> {
+        result
+    }
 
     fn fun_result_complex(
         &mut self,
@@ -444,4 +490,21 @@ impl BarAgent for BarAgentImpl {
     ) -> EnumWithOnlyLiterals {
         enum_with_only_literals
     }
+
+    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+        input
+    }
+
+    fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+        input
+    }
+
+    fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+        input
+    }
+
+    fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+        input
+    }
+
 }

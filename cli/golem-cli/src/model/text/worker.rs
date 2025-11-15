@@ -26,7 +26,7 @@ use cli_table::{format::Justify, Table};
 use colored::Colorize;
 use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
-use golem_common::model::public_oplog::{
+use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
@@ -701,7 +701,7 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.dropped_region.start.previous()),
                 ));
             }
-            PublicOplogEntry::CancelInvocation(params) => {
+            PublicOplogEntry::CancelPendingInvocation(params) => {
                 logln(format_message_highlight("CANCEL INVOCATION"));
                 logln(format!(
                     "{pad}at:                {}",

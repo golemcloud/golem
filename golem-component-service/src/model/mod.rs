@@ -18,7 +18,7 @@ pub mod plugin;
 
 pub use self::component::*;
 pub use self::conflict::*;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_common::base_model::ComponentVersion;
 use golem_common::model::agent::AgentTypes;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -42,7 +42,8 @@ pub struct UpdatePayload {
     pub agent_types: Option<JsonField<AgentTypes>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -50,7 +51,8 @@ pub struct ComponentEnv {
     pub key_values: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Object)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]

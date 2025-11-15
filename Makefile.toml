@@ -71,7 +71,6 @@ run_task = [
         "wit-golem-common",
         "wit-golem-cli",
         "wit-test-components",
-        "wit-debugging-service-test-components",
         "wit-golem-templates",
         "wit-sdks",
     ] },
@@ -142,6 +141,7 @@ private = true
 script_runner = "@duckscript"
 script = """
 components = array
+array_push ${components} benchmarks
 array_push ${components} blob-store-service
 array_push ${components} component-resolve
 array_push ${components} component-transformer-example1/adapter
@@ -176,21 +176,6 @@ for component in ${components}
     rm -r test-components/${component}/wit/deps
     mkdir test-components/${component}/wit/deps
     glob_cp wit/deps/**/* test-components/${component}/wit/deps
-end
-"""
-
-[tasks.wit-debugging-service-test-components]
-private = true
-script_runner = "@duckscript"
-script = """
-components = array
-array_push ${components} shopping-cart
-
-for component in ${components}
-    echo "Updating wit directory for test component ${component}"
-    rm -r golem-debugging-service/test-components/${component}/wit/deps
-    mkdir golem-debugging-service/test-components/${component}/wit/deps
-    glob_cp wit/deps/**/* golem-debugging-service/test-components/${component}/wit/deps
 end
 """
 

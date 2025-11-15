@@ -17,8 +17,8 @@ pub mod redis;
 pub mod sqlite;
 
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::ProjectId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
@@ -277,7 +277,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         }
     }
 
-    pub async fn set<V: Encode>(
+    pub async fn set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -315,7 +315,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn set_if_not_exists<V: Encode>(
+    pub async fn set_if_not_exists<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -334,7 +334,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn set_many<V: Encode>(
+    pub async fn set_many<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &V)],
@@ -374,7 +374,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get<V: Decode<()>>(
+    pub async fn get<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -385,7 +385,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         }
     }
 
-    pub async fn get_attempt_deserialize<V: Decode<()>>(
+    pub async fn get_attempt_deserialize<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -424,7 +424,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get_many<V: Decode<()>>(
+    pub async fn get_many<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         keys: Vec<String>,
@@ -467,7 +467,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn add_to_set<V: Encode>(
+    pub async fn add_to_set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -486,7 +486,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn remove_from_set<V: Encode>(
+    pub async fn remove_from_set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -505,7 +505,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn members_of_set<V: Decode<()>>(
+    pub async fn members_of_set<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -528,7 +528,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         Ok(values)
     }
 
-    pub async fn add_to_sorted_set<V: Encode>(
+    pub async fn add_to_sorted_set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -549,7 +549,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn remove_from_sorted_set<V: Encode>(
+    pub async fn remove_from_sorted_set<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -568,7 +568,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await
     }
 
-    pub async fn get_sorted_set<V: Decode<()>>(
+    pub async fn get_sorted_set<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
@@ -591,7 +591,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         Ok(values)
     }
 
-    pub async fn query_sorted_set<V: Decode<()>>(
+    pub async fn query_sorted_set<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,

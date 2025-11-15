@@ -2,11 +2,11 @@
 mod bindings;
 
 use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::*;
+use std::{cell::RefCell, time::Duration};
+use wstd::runtime::block_on;
+
 // Import for using common lib (also see Cargo.toml for adding the dependency):
 // use common_lib::example_common_function;
-use std::{cell::RefCell, time::Duration};
-use wasi::clocks::monotonic_clock::subscribe_duration;
-use wasi_async_runtime::{block_on, Reactor};
 
 /// This is one of any number of data types that our application
 /// uses. Golem will take care to persist all application state,
@@ -22,7 +22,6 @@ pub struct State {
 
 #[derive(Default)]
 pub struct InnerState {
-    reactor: Option<Reactor>,
     total: u64,
 }
 
@@ -44,16 +43,14 @@ struct Component;
 impl Guest for Component {
     /// Updates the component's state by adding the given value to the total.
     fn add(value: u64) {
-        block_on(|reactor| async move {
-            get_state().inner.borrow_mut().reactor = Some(reactor);
+        block_on(async move {
             async_add(value).await
         })
     }
 
     /// Returns the current total.
     fn get() -> u64 {
-        block_on(|reactor| async move {
-            get_state().inner.borrow_mut().reactor = Some(reactor);
+        block_on(async move {
             async_get().await
         })
     }
@@ -71,14 +68,6 @@ async fn async_get() -> u64 {
     // println!("{}", example_common_function());
 
     state.total
-}
-
-/// An async sleep function
-pub async fn sleep(duration: Duration) {
-    let reactor = get_state().inner.borrow().reactor.clone().unwrap();
-
-    let pollable = subscribe_duration(duration.as_nanos() as u64);
-    reactor.wait_for(pollable).await;
 }
 
 bindings::export!(Component with_types_in bindings);

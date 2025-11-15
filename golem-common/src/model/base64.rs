@@ -14,10 +14,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
+use desert_rust::BinaryCodec;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::ToJSON;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};
@@ -28,7 +25,8 @@ use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 
 /// Represents a binary data encoded with base64.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default, BinaryCodec)]
+#[desert(transparent)]
 pub struct Base64(pub Vec<u8>);
 
 impl Deref for Base64 {
@@ -120,27 +118,5 @@ impl<'de> Deserialize<'de> for Base64 {
                 .decode(b64)
                 .map_err(|err| Error::custom(err.to_string()))?,
         ))
-    }
-}
-
-impl Encode for Base64 {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.0.encode(encoder)
-    }
-}
-
-impl<Context> Decode<Context> for Base64 {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let vec: Vec<u8> = Vec::decode(decoder)?;
-        Ok(Base64(vec))
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for Base64 {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let vec: Vec<u8> = Vec::borrow_decode(decoder)?;
-        Ok(Base64(vec))
     }
 }

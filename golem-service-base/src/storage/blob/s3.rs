@@ -311,7 +311,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -341,7 +341,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(response) => {
                 let body = response.body;
                 let aggregated_bytes = body.collect().await.map_err(|err| err.to_string())?;
-                let bytes = aggregated_bytes.into_bytes();
+                let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }
@@ -410,7 +410,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -441,7 +441,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(response) => {
                 let body = response.body;
                 let aggregated_bytes = body.collect().await.map_err(|err| err.to_string())?;
-                let bytes = aggregated_bytes.into_bytes();
+                let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }
@@ -552,7 +552,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::{AccountId, ProjectId};
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::fmt;
@@ -133,7 +133,8 @@ impl IntoIterator for AuthCtx {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Encode, Decode, Deserialize)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, BinaryCodec, Deserialize)]
+#[desert(evolution())]
 pub struct Namespace {
     pub project_id: ProjectId,
     // project owner account

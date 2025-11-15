@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Guest binding version of `golem_wasm_rpc` crate's `IntoValueAndType` trait, to be upstreamed
+// Guest binding version of `golem_wasm` crate's `IntoValueAndType` trait, to be upstreamed
 // eventually.
 
+pub mod tuples;
 pub mod type_builder;
 
 use crate::value_and_type::type_builder::WitTypeBuilderExtensions;
@@ -334,7 +335,7 @@ impl<S: FromValueAndType, E: FromValueAndType> FromValueAndType for Result<S, E>
 impl<E: IntoValue> IntoValue for Result<(), E> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
-            Ok(_) => builder.result_ok().finish().finish(),
+            Ok(_) => builder.result_ok_unit(),
             Err(err) => err.add_to_builder(builder.result_err()).finish(),
         }
     }
@@ -365,7 +366,7 @@ impl<S: IntoValue> IntoValue for Result<S, ()> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
             Ok(ok) => ok.add_to_builder(builder.result_ok()).finish(),
-            Err(_) => builder.result_err().finish().finish(),
+            Err(_) => builder.result_err_unit(),
         }
     }
 
@@ -394,8 +395,8 @@ impl FromValueAndType for Result<(), ()> {
 impl IntoValue for Result<(), ()> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         match self {
-            Ok(_) => builder.result_ok().finish().finish(),
-            Err(_) => builder.result_err().finish().finish(),
+            Ok(_) => builder.result_ok_unit(),
+            Err(_) => builder.result_err_unit(),
         }
     }
 
@@ -414,8 +415,8 @@ impl<S: FromValueAndType> FromValueAndType for Result<S, ()> {
         match extractor.result() {
             Some(Ok(Some(ok))) => S::from_extractor(&ok).map(Ok),
             Some(Ok(None)) => Err("No value in Ok case".to_string()),
-            Some(Err(Some(_))) => Ok(Err(())),
-            Some(Err(None)) => Err("Expected unit Err case".to_string()),
+            Some(Err(Some(_))) => Err("Expected unit Err case".to_string()),
+            Some(Err(None)) => Ok(Err(())),
             None => Err("Expected Result".to_string()),
         }
     }
@@ -522,81 +523,6 @@ impl<T: FromValueAndType> FromValueAndType for Vec<T> {
             .list_elements(|elem| T::from_extractor(&elem))
             .ok_or_else(|| "Expected list".to_string())
             .and_then(|list| list.into_iter().collect())
-    }
-}
-
-impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        let mut builder = builder.tuple();
-        builder = self.0.add_to_builder(builder.item());
-        builder = self.1.add_to_builder(builder.item());
-        builder.finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.tuple(None, None);
-        builder = A::add_to_type_builder(builder.item());
-        builder = B::add_to_type_builder(builder.item());
-        builder.finish()
-    }
-}
-
-impl<A: FromValueAndType, B: FromValueAndType> FromValueAndType for (A, B) {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        let a = A::from_extractor(
-            &extractor
-                .tuple_element(0)
-                .ok_or_else(|| "Expected 2-tuple".to_string())?,
-        )?;
-        let b = B::from_extractor(
-            &extractor
-                .tuple_element(1)
-                .ok_or_else(|| "Expected 2-tuple".to_string())?,
-        )?;
-        Ok((a, b))
-    }
-}
-
-impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        let mut builder = builder.tuple();
-        builder = self.0.add_to_builder(builder.item());
-        builder = self.1.add_to_builder(builder.item());
-        builder = self.2.add_to_builder(builder.item());
-        builder.finish()
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        let mut builder = builder.tuple(None, None);
-        builder = A::add_to_type_builder(builder.item());
-        builder = B::add_to_type_builder(builder.item());
-        builder = C::add_to_type_builder(builder.item());
-        builder.finish()
-    }
-}
-
-impl<A: FromValueAndType, B: FromValueAndType, C: FromValueAndType> FromValueAndType for (A, B, C) {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        let a = A::from_extractor(
-            &extractor
-                .tuple_element(0)
-                .ok_or_else(|| "Expected 3-tuple".to_string())?,
-        )?;
-        let b = B::from_extractor(
-            &extractor
-                .tuple_element(1)
-                .ok_or_else(|| "Expected 3-tuple".to_string())?,
-        )?;
-        let c = C::from_extractor(
-            &extractor
-                .tuple_element(2)
-                .ok_or_else(|| "Expected 3-tuple".to_string())?,
-        )?;
-        Ok((a, b, c))
     }
 }
 

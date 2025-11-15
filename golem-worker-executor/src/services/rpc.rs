@@ -37,12 +37,11 @@ use crate::services::{
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{ValueAndType, WitValue};
-use golem_wasm_derive::{FromValue, IntoValue};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use tokio::runtime::Handle;
 use tracing::debug;
@@ -89,12 +88,38 @@ pub trait Rpc: Send + Sync {
     ) -> Result<(), RpcError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RpcError {
     ProtocolError { details: String },
     Denied { details: String },
     NotFound { details: String },
     RemoteInternalError { details: String },
+}
+
+impl From<SerializableRpcError> for RpcError {
+    fn from(value: SerializableRpcError) -> Self {
+        match value {
+            SerializableRpcError::ProtocolError { details } => Self::ProtocolError { details },
+            SerializableRpcError::Denied { details } => Self::Denied { details },
+            SerializableRpcError::NotFound { details } => Self::NotFound { details },
+            SerializableRpcError::RemoteInternalError { details } => {
+                Self::RemoteInternalError { details }
+            }
+        }
+    }
+}
+
+impl From<RpcError> for SerializableRpcError {
+    fn from(value: RpcError) -> Self {
+        match value {
+            RpcError::ProtocolError { details } => SerializableRpcError::ProtocolError { details },
+            RpcError::Denied { details } => SerializableRpcError::Denied { details },
+            RpcError::NotFound { details } => SerializableRpcError::NotFound { details },
+            RpcError::RemoteInternalError { details } => {
+                SerializableRpcError::RemoteInternalError { details }
+            }
+        }
+    }
 }
 
 impl Display for RpcError {

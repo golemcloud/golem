@@ -14,6 +14,6 @@ path = "src/lib.rs"
 async-trait = { workspace = true }
 ctor = { workspace = true }
 golem-rust = { workspace = true }
-reqwest = { workspace = true }
+golem-wasi-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

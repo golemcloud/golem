@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
-use golem_common::model::public_oplog::{
+use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
@@ -297,7 +297,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 &params.dropped_region.start.previous(),
             );
         }
-        PublicOplogEntry::CancelInvocation(params) => {
+        PublicOplogEntry::CancelPendingInvocation(params) => {
             let _ = writeln!(result, "CANCEL INVOCATION");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(

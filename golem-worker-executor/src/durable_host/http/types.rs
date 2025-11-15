@@ -12,19 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
-};
 use crate::durable_host::http::{continue_http_request, end_http_request};
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
+use desert_rust::BinaryCodec;
+use golem_common::model::oplog::host_functions::{
+    HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
+};
+use golem_common::model::oplog::types::{SerializableHttpResponse, SerializableResponseHeaders};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
+    HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
+};
+use golem_common::model::ScheduleId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -435,17 +441,12 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<Result<Result<Option<Resource<Trailers>>, ErrorCode>, ()>>> {
         // Trailers might be associated with an incoming http request or an http response.
         // Only in the second case do we need to add durability. We can distinguish these
-        // two cases by checking for presence of an associated open http request.
+        // two cases by checking for the presence of an associated open http request.
         if let Some(request_state) = self.state.open_http_requests.get(&self_.rep()) {
             let request = request_state.request.clone();
 
-            let durability = Durability::<
-                Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
-                SerializableError,
-            >::new(
+            let durability = Durability::<HttpTypesFutureTrailersGet>::new(
                 self,
-                "golem http::types::future_trailers",
-                "get",
                 DurableFunctionType::WriteRemoteBatched(Some(request_state.begin_index)),
             )
             .await?;
@@ -469,16 +470,22 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     ),
                     Ok(Some(Err(_))) => (Ok(Some(Err(()))), Err("Unknown error".to_string())),
                     Ok(None) => (Ok(None), Ok(())),
-                    Err(err) => (Err(SerializableError::from(err)), Err(err.to_string())),
+                    Err(err) => (Err(err.to_string()), Err(err.to_string())),
                 };
                 durability.try_trigger_retry(self, &for_retry).await?;
                 let _ = durability
-                    .persist_serializable(self, request, to_serialize)
-                    .await;
+                    .persist(
+                        self,
+                        request,
+                        HostResponseHttpFutureTrailersGet {
+                            result: to_serialize,
+                        },
+                    )
+                    .await?;
                 result
             } else {
-                let serialized = durability.replay(self).await;
-                match serialized {
+                let serialized: HostResponseHttpFutureTrailersGet = durability.replay(self).await?;
+                match serialized.result {
                     Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
                     Ok(Some(Ok(Ok(Some(serialized_trailers))))) => {
                         let mut fields = FieldMap::new();
@@ -494,7 +501,7 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                     Ok(Some(Ok(Err(error_code)))) => Ok(Some(Ok(Err(error_code.into())))),
                     Ok(Some(Err(_))) => Ok(Some(Err(()))),
                     Ok(None) => Ok(None),
-                    Err(error) => Err(error),
+                    Err(error) => Err(anyhow!(error)),
                 }
             }
         } else {
@@ -612,26 +619,26 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
             let (serializable_response, for_retry) = match &response {
-                Ok(None) => (SerializableResponse::Pending, Ok(())),
+                Ok(None) => (SerializableHttpResponse::Pending, Ok(())),
                 Ok(Some(Ok(Ok(resource)))) => {
                     let incoming_response = self.table().get(resource)?;
                     (
-                        SerializableResponse::HeadersReceived(
+                        SerializableHttpResponse::HeadersReceived(
                             SerializableResponseHeaders::try_from(incoming_response)?,
                         ),
                         Ok(()),
                     )
                 }
                 Ok(Some(Err(_))) => (
-                    SerializableResponse::InternalError(None),
+                    SerializableHttpResponse::InternalError(None),
                     Err("Unknown error".to_string()),
                 ),
                 Ok(Some(Ok(Err(error_code)))) => (
-                    SerializableResponse::HttpError(error_code.clone().into()),
+                    SerializableHttpResponse::HttpError(error_code.clone().into()),
                     Err(error_code.to_string()),
                 ),
                 Err(err) => (
-                    SerializableResponse::InternalError(Some(err.into())),
+                    SerializableHttpResponse::InternalError(Some(err.to_string())),
                     Err(err.to_string()),
                 ),
             };
@@ -641,13 +648,16 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 self.try_trigger_retry(anyhow!(err)).await?;
             }
 
+            let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
             if self.state.snapshotting_mode.is_none() {
                 self.state
                     .oplog
                     .add_imported_function_invoked(
-                        "http::types::future_incoming_response::get".to_string(),
-                        &request,
-                        &serializable_response,
+                        HttpTypesFutureIncomingResponseGet::HOST_FUNCTION_NAME,
+                        &HostRequest::HttpRequest(request),
+                        &HostResponse::HttpResponse(HostResponseHttpResponse {
+                            response: serializable_response,
+                        }),
                         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
                     )
                     .await
@@ -658,7 +668,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .await;
             }
 
-            if !matches!(serializable_response, SerializableResponse::Pending) {
+            if !is_pending {
                 if let Ok(Some(Ok(Ok(resource)))) = &response {
                     let incoming_response_handle = resource.rep();
                     continue_http_request(
@@ -679,19 +689,27 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         } else {
             let (_, oplog_entry) = get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked).map_err(|golem_err| anyhow!("failed to get http::types::future_incoming_response::get oplog entry: {golem_err}"))?;
 
-            let serialized_response = self
-                .state
-                .oplog
-                .get_payload_of_entry::<SerializableResponse>(&oplog_entry)
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to deserialize function response: {oplog_entry:?}: {err}")
-                })
-                .unwrap();
+            let serialized_response = match oplog_entry {
+                OplogEntry::ImportedFunctionInvoked { response, .. } => {
+                    let response = self
+                        .state
+                        .oplog
+                        .download_payload(response)
+                        .await
+                        .unwrap_or_else(|err| {
+                            panic!("failed to deserialize function response: {err}")
+                        });
+                    match response {
+                        HostResponse::HttpResponse(response) => response.response,
+                        other => panic!("unexpected oplog payload: {other:?}"),
+                    }
+                }
+                other => panic!("unexpected oplog entry: {other:?}"),
+            };
 
             match serialized_response {
-                SerializableResponse::Pending => Ok(None),
-                SerializableResponse::HeadersReceived(serializable_response_headers) => {
+                SerializableHttpResponse::Pending => Ok(None),
+                SerializableHttpResponse::HeadersReceived(serializable_response_headers) => {
                     let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
                         serializable_response_headers.try_into()?;
 
@@ -707,11 +725,13 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
 
                     Ok(Some(Ok(Ok(rep))))
                 }
-                SerializableResponse::InternalError(None) => Ok(Some(Err(()))),
-                SerializableResponse::InternalError(Some(serializable_error)) => {
-                    Err(serializable_error.into())
+                SerializableHttpResponse::InternalError(None) => Ok(Some(Err(()))),
+                SerializableHttpResponse::InternalError(Some(serializable_error)) => {
+                    Err(anyhow!(serializable_error))
                 }
-                SerializableResponse::HttpError(error_code) => Ok(Some(Ok(Err(error_code.into())))),
+                SerializableHttpResponse::HttpError(error_code) => {
+                    Ok(Some(Ok(Err(error_code.into()))))
+                }
             }
         }
     }
@@ -739,5 +759,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     fn convert_error_code(&mut self, err: HttpError) -> wasmtime::Result<ErrorCode> {
         self.observe_function_call("http::types", "convert_error_code");
         Host::convert_error_code(&mut self.as_wasi_http_view(), err)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+#[wit_transparent]
+pub struct SerializableScheduleId {
+    pub data: Vec<u8>,
+}
+
+impl SerializableScheduleId {
+    pub fn from_domain(schedule_id: &ScheduleId) -> Self {
+        let data = golem_common::serialization::serialize(schedule_id)
+            .unwrap()
+            .to_vec();
+        Self { data }
+    }
+
+    pub fn as_domain(&self) -> Result<ScheduleId, String> {
+        golem_common::serialization::deserialize(&self.data)
     }
 }

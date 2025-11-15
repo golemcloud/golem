@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 #[derive(
-    Hash, Eq, Debug, Clone, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Hash, Eq, Debug, Clone, PartialEq, Ord, PartialOrd, Serialize, Deserialize, BinaryCodec,
 )]
+#[desert(evolution())]
 pub enum VariableId {
     Global(String),
     Local(String, Option<Id>),
@@ -137,22 +138,25 @@ impl VariableId {
 }
 
 #[derive(
-    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, Ord, PartialOrd,
 )]
+#[desert(evolution())]
 pub struct ListComprehensionIdentifier {
     pub name: String,
 }
 
 #[derive(
-    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, Ord, PartialOrd,
 )]
+#[desert(evolution())]
 pub struct ListAggregationIdentifier {
     pub name: String,
 }
 
 #[derive(
-    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, Ord, PartialOrd,
 )]
+#[desert(evolution())]
 pub struct MatchIdentifier {
     pub name: String,
     pub match_arm_index: usize, // Every match arm across the program is identified by a non-sharing index value. Within a match arm the identifier names cannot be reused
@@ -179,8 +183,9 @@ impl Display for VariableId {
     }
 }
 #[derive(
-    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Ord, PartialOrd,
+    Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, Ord, PartialOrd,
 )]
+#[desert(transparent)]
 pub struct Id(pub(crate) u32);
 
 mod protobuf {
