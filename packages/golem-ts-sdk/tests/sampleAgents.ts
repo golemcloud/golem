@@ -438,7 +438,7 @@ class BarAgent extends BaseAgent {
 export type Text = string;
 export type Image = Uint8Array;
 
-@agent({ durabilityMode: 'ephemeral' })
+@agent({ mode: 'ephemeral' })
 class EphemeralAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();

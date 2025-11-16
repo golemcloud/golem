@@ -68,7 +68,7 @@ import {
  * ### Durability mode
  * By default, agents are durable. You can specify the durability mode using the optional parameter:
  * ```ts
- * @agent({ durabilityMode: "ephemeral" })
+ * @agent({ mode: "ephemeral" })
  * class EphemeralAgent extends BaseAgent { ... }
  * ```
  * Valid modes are "durable" (default) and "ephemeral".
@@ -76,11 +76,11 @@ import {
  * ### Options
  * The decorator accepts an optional configuration object with the following fields:
  * - `name`: Custom agent name (default: class name)
- * - `durabilityMode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
+ * - `mode`: Agent durability mode, either "durable" or "ephemeral" (default: "durable")
  *
  * Example:
  * ```ts
- * @agent({ name: "weather-api", durabilityMode: "durable" })
+ * @agent({ name: "weather-api", mode: "durable" })
  * class WeatherAgent extends BaseAgent { ... }
  * ```
  *
@@ -143,7 +143,7 @@ import {
  */
 interface AgentDecoratorOptions {
   name?: string;
-  durabilityMode?: AgentMode;
+  mode?: AgentMode;
 }
 
 export function agent(options?: AgentDecoratorOptions) {
@@ -230,7 +230,7 @@ export function agent(options?: AgentDecoratorOptions) {
       },
       methods,
       dependencies: [],
-      mode: options?.durabilityMode ?? 'durable',
+      mode: options?.mode ?? 'durable',
     };
 
     AgentTypeRegistry.register(agentClassName, agentType);
