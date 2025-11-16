@@ -23,7 +23,7 @@ class EchoAgent extends BaseAgent {
     }
 }
 
-@agent({ durabilityMode: 'ephemeral' })
+@agent({ mode: 'ephemeral' })
 class EphemeralEchoAgent extends BaseAgent {
   private name: string;
 
