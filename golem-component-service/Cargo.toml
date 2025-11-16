@@ -90,7 +90,3 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tryhard = { workspace = true }
-
-
-[package.metadata.golem_mcp]
-commands = ["component"]
