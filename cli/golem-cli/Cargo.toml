@@ -37,6 +37,9 @@ golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
+rust-mcp-sdk = "0.7.2"
+once_cell = "1.19"
+
 
 # External deps
 anyhow = { workspace = true }

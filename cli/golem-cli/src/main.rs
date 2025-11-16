@@ -20,7 +20,11 @@ use std::sync::Arc;
 use golem_cli::command_handler::{ CommandHandler, CommandHandlerHooks };
 
 #[cfg(feature = "server-commands")]
-mod serve; // MCP HTTP server lives in src/serve.rs
+//mod serve; // MCP HTTP server lives in src/serve.rs
+mod handler;
+mod tools;
+mod resources;
+
 
 #[cfg(feature = "server-commands")]
 static SERVE_ARGS: std::sync::OnceLock<ServeArgs> = std::sync::OnceLock::new();
@@ -36,6 +40,21 @@ mod hooks {
     use clap_verbosity_flag::Verbosity;
     use std::sync::Arc;
 
+    // Bring in the MCP types **inside** the module
+    use crate::handler::MyServerHandler; // sibling module
+    use rust_mcp_sdk::event_store::InMemoryEventStore;
+    use rust_mcp_sdk::mcp_server::{ hyper_server_core, HyperServerOptions };
+    use rust_mcp_sdk::schema::{
+        Implementation,
+        InitializeResult,
+        ServerCapabilities,
+        ServerCapabilitiesTools,
+        ServerCapabilitiesResources,
+        LATEST_PROTOCOL_VERSION,
+    };
+
+    // Enable `.with(...)` by importing the tracing prelude
+    use tracing_subscriber::prelude::*;
     pub struct NoHooks;
 
     impl CommandHandlerHooks for NoHooks {
@@ -49,14 +68,64 @@ mod hooks {
 
         fn run_server() -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
             async move {
-                use crate::serve;
+                //use crate::serve;
                 // Pull the args parsed in main(); fall back to the same defaults the parser used.
                 let args = crate::SERVE_ARGS.get().cloned().unwrap_or_default();
 
                 // Mirror the original cwd fallback from main()
                 let cwd = args.cwd.unwrap_or_else(|| std::env::current_dir().expect("current_dir"));
 
-                serve::serve_http_mcp(args.port, cwd).await?;
+                //serve::serve_http_mcp(args.port, cwd).await?;
+                // initialize tracing
+                /*tracing_subscriber
+                    ::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter
+                            ::try_from_default_env()
+                            .unwrap_or_else(|_| "info".into())
+                    )
+                    .with(tracing_subscriber::fmt::layer())
+                    .init();*/
+                // STEP 1: Define server details and capabilities
+                let server_details = InitializeResult {
+                    // server name and version
+                    server_info: Implementation {
+                        name: "Golem MCP Server Streamable HTTP + SSE".to_string(),
+                        version: "0.1.0".to_string(),
+                        title: Some("Golem MCP Server Streamable HTTP + SSE".to_string()),
+                    },
+                    capabilities: ServerCapabilities {
+                        // indicates that server support mcp tools
+                        tools: Some(ServerCapabilitiesTools { list_changed: None }),
+                        resources: Some(ServerCapabilitiesResources { list_changed: None,subscribe: None }),
+                        ..Default::default() // Using default values for other fields
+                    },
+                    meta: None,
+                    instructions: Some("server instructions...".to_string()),
+                    protocol_version: LATEST_PROTOCOL_VERSION.to_string(),
+                };
+
+                // STEP 2: instantiate our custom handler for handling MCP messages
+                let handler = MyServerHandler {};
+
+                // STEP 3: create a MCP server
+                let server = hyper_server_core::create_server(
+                    server_details,
+                    handler,
+                    HyperServerOptions {
+                        port: args.port,
+                        sse_support: true,
+                        event_store: Some(Arc::new(InMemoryEventStore::default())), // enable resumability
+                        ..Default::default()
+                    }
+                );
+
+                // STEP 4: Start the server
+                // after
+                if let Err(e) = server.start().await {
+                    // keep the error context, but avoid requiring Sync
+                    return Err(anyhow::anyhow!("MCP server failed to start: {e:?}"));
+                }
                 Ok(())
             }
         }
