@@ -4,7 +4,7 @@ fn main() -> miette::Result<()> {
     config.type_attribute(".", "#[cfg(feature = \"host\")]");
     config.type_attribute(
         ".",
-        "#[cfg_attr(feature=\"host\", derive(bincode::Encode, bincode::Decode))]",
+        "#[cfg_attr(feature=\"host\", derive(desert_rust::BinaryCodec))]",
     );
 
     let file_descriptors = protox::compile(

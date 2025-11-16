@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::http::serialized::{SerializableHttpMethod, SerializableHttpRequest};
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::model::invocation_context::AttributeValue;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::types::SerializableHttpMethod;
+use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
 use golem_common::model::IdempotencyKey;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
@@ -116,7 +116,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
                 // For that we need to store begin_index and associate it with the response handle.
 
-                let request = SerializableHttpRequest {
+                let request = HostRequestHttpRequest {
                     uri,
                     method,
                     headers,

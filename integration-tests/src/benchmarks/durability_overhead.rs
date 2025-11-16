@@ -36,6 +36,7 @@ pub struct DurabilityOverheadIterationContext {
     durable_persistent_worker_ids: Vec<WorkerId>,
     durable_nonpersistent_worker_ids: Vec<WorkerId>,
     ephemeral_worker_ids: Vec<WorkerId>,
+    durable_persistent_commit_worker_ids: Vec<WorkerId>,
 }
 
 #[async_trait]
@@ -50,8 +51,9 @@ impl Benchmark for DurabilityOverhead {
     fn description() -> &'static str {
         indoc! {
             "Invokes oplog-heavy functions in parallel on `size` number of workers,
-            using ephemeral components, and durable components with persistence on and off.
-            The invoked function gets the `length` parameter to control the length of its inner loop.
+            using ephemeral components, and durable components with persistence on and off. There's
+            also a variant of persistent run where after each operation we force oplog
+            commit. The invoked function gets the `length` parameter to control the length of its inner loop.
             The benchmark can be used to compare the overhead caused by of persistence (using a low
             `size`) and also the effect of heavy persistence load caused by parallel running workers
             (using high `size`).
@@ -93,6 +95,7 @@ impl Benchmark for DurabilityOverhead {
         let mut durable_persistent_worker_ids = vec![];
         let mut durable_nonpersistent_worker_ids = vec![];
         let mut ephemeral_worker_ids = vec![];
+        let mut durable_persistent_commit_worker_ids = vec![];
 
         info!("Registering component");
         let durable_component_id = benchmark_context
@@ -122,7 +125,7 @@ impl Benchmark for DurabilityOverhead {
 
             let worker_id = WorkerId {
                 component_id: durable_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}-persistent\")"),
+                worker_name: format!("benchmark-agent(\"test-{n}-nonpersistent\")"),
             };
             durable_nonpersistent_worker_ids.push(worker_id);
 
@@ -131,12 +134,19 @@ impl Benchmark for DurabilityOverhead {
                 worker_name: format!("benchmark-agent(\"test-{n}-ephemeral\")"),
             };
             ephemeral_worker_ids.push(worker_id);
+
+            let worker_id = WorkerId {
+                component_id: durable_component_id.clone(),
+                worker_name: format!("benchmark-agent(\"test-{n}-persistent-commit\")"),
+            };
+            durable_persistent_commit_worker_ids.push(worker_id);
         }
 
         DurabilityOverheadIterationContext {
             durable_nonpersistent_worker_ids,
             durable_persistent_worker_ids,
             ephemeral_worker_ids,
+            durable_persistent_commit_worker_ids,
         }
     }
 
@@ -155,7 +165,7 @@ impl Benchmark for DurabilityOverhead {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {
-                    let deps_clone = deps.clone().into_admin().await;
+                    let deps_clone = deps.clone();
                     invoke_and_await(
                         &deps_clone,
                         worker_id,
@@ -197,13 +207,17 @@ impl Benchmark for DurabilityOverhead {
             .durable_persistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
-                    vec![length.into_value_and_type(), true.into_value_and_type()],
+                    vec![
+                        length.into_value_and_type(),
+                        true.into_value_and_type(),
+                        false.into_value_and_type(),
+                    ],
                 )
                 .await
             })
@@ -217,13 +231,17 @@ impl Benchmark for DurabilityOverhead {
             .durable_nonpersistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
-                    vec![length.into_value_and_type(), false.into_value_and_type()],
+                    vec![
+                        length.into_value_and_type(),
+                        false.into_value_and_type(),
+                        false.into_value_and_type(),
+                    ],
                 )
                 .await
             })
@@ -241,13 +259,17 @@ impl Benchmark for DurabilityOverhead {
             .ephemeral_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone().into_admin().await;
+                let deps_clone = benchmark_context.deps.clone();
 
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
-                    vec![length.into_value_and_type(), false.into_value_and_type()],
+                    vec![
+                        length.into_value_and_type(),
+                        false.into_value_and_type(),
+                        false.into_value_and_type(),
+                    ],
                 )
                 .await
             })
@@ -255,6 +277,34 @@ impl Benchmark for DurabilityOverhead {
         let results3 = result_futures3.join().await;
         for (idx, result) in results3.iter().enumerate() {
             result.record(&recorder, "ephemeral-", idx.to_string().as_str());
+        }
+
+        let result_futures4 = context
+            .durable_persistent_commit_worker_ids
+            .iter()
+            .map(move |worker_id| async move {
+                let deps_clone = benchmark_context.deps.clone();
+
+                invoke_and_await(
+                    &deps_clone,
+                    worker_id,
+                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
+                    vec![
+                        length.into_value_and_type(),
+                        true.into_value_and_type(),
+                        true.into_value_and_type(),
+                    ],
+                )
+                .await
+            })
+            .collect::<Vec<_>>();
+        let results4 = result_futures4.join().await;
+        for (idx, result) in results4.iter().enumerate() {
+            result.record(
+                &recorder,
+                "durable-persistent-commit-",
+                idx.to_string().as_str(),
+            );
         }
     }
 
@@ -274,5 +324,10 @@ impl Benchmark for DurabilityOverhead {
         )
         .await;
         delete_workers(&benchmark_context.deps, &context.ephemeral_worker_ids).await;
+        delete_workers(
+            &benchmark_context.deps,
+            &context.durable_persistent_commit_worker_ids,
+        )
+        .await;
     }
 }

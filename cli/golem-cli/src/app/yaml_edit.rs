@@ -62,7 +62,7 @@ impl<'a> AppYamlEditor<'a> {
                 anyhow!(
                     "expected mapping for dependency {} - {}, in {}",
                     component_name.as_str(),
-                    target_component_source.to_string(),
+                    target_component_source,
                     path.display()
                 )
             })?;
@@ -72,7 +72,7 @@ impl<'a> AppYamlEditor<'a> {
                     anyhow!(
                         "expected target field for dependency {} - {},  in {}",
                         component_name.as_str(),
-                        target_component_source.to_string(),
+                        target_component_source,
                         path.display()
                     )
                 })?;
@@ -84,7 +84,7 @@ impl<'a> AppYamlEditor<'a> {
                                     anyhow!(
                                         "expected type field for dependency {} - {},  in {}",
                                         component_name.as_str(),
-                                        target_component_source.to_string(),
+                                        target_component_source,
                                         path.display()
                                     )
                                 })?
@@ -100,7 +100,7 @@ impl<'a> AppYamlEditor<'a> {
                         anyhow!(
                             "expected path field for dependency {} - {},  in {}",
                             component_name.as_str(),
-                            target_component_source.to_string(),
+                            target_component_source,
                             path.display()
                         )
                     })?;
@@ -114,7 +114,7 @@ impl<'a> AppYamlEditor<'a> {
                                     anyhow!(
                                         "expected type field for dependency {} - {},  in {}",
                                         component_name.as_str(),
-                                        target_component_source.to_string(),
+                                        target_component_source,
                                         path.display()
                                     )
                                 })?
@@ -128,7 +128,7 @@ impl<'a> AppYamlEditor<'a> {
                     anyhow!(
                         "expected url field for dependency {} - {},  in {}",
                         component_name.as_str(),
-                        target_component_source.to_string(),
+                        target_component_source,
                         path.display()
                     )
                 })?;
@@ -140,7 +140,7 @@ impl<'a> AppYamlEditor<'a> {
                                     anyhow!(
                                         "expected type field for dependency {} - {},  in {}",
                                         component_name.as_str(),
-                                        target_component_source.to_string(),
+                                        target_component_source,
                                         path.display()
                                     )
                                 })?
@@ -153,7 +153,7 @@ impl<'a> AppYamlEditor<'a> {
                 Err(anyhow!(
                     "expected target, path or url field for dependency {} - {},  in {}",
                     component_name.as_str(),
-                    target_component_source.to_string(),
+                    target_component_source,
                     path.display()
                 ))?;
             }

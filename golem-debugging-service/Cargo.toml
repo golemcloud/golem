@@ -25,8 +25,8 @@ async-trait = { workspace = true }
 async-dropper = { workspace = true }
 async-dropper-simple = { workspace = true }
 axum-jrpc = { workspace = true }
-bincode = { workspace = true }
 bytes = { workspace = true }
+desert_rust = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
 humansize = { workspace = true }
@@ -42,6 +42,7 @@ tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 tonic = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }

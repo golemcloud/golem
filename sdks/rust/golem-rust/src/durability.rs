@@ -14,12 +14,12 @@
 
 use crate::bindings::golem::durability::durability::{
     begin_durable_function, current_durable_execution_state, end_durable_function,
-    observe_function_call, persist_typed_durable_function_invocation,
-    read_persisted_typed_durable_function_invocation, DurableExecutionState, DurableFunctionType,
-    OplogEntryVersion, OplogIndex, PersistedTypedDurableFunctionInvocation, PersistenceLevel,
+    observe_function_call, persist_durable_function_invocation,
+    read_persisted_durable_function_invocation, DurableExecutionState, DurableFunctionType,
+    OplogEntryVersion, OplogIndex, PersistedDurableFunctionInvocation, PersistenceLevel,
 };
 use crate::value_and_type::{FromValueAndType, IntoValueAndType};
-use golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType;
+use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 
@@ -111,7 +111,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
             self.durable_execution_state.persistence_level,
             PersistenceLevel::PersistNothing
         ) {
-            persist_typed_durable_function_invocation(
+            persist_durable_function_invocation(
                 &function_name,
                 &input.into_value_and_type(),
                 &result.into_value_and_type(),
@@ -122,7 +122,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     }
 
     pub fn replay_raw(&self) -> (ValueAndType, OplogEntryVersion) {
-        let oplog_entry = read_persisted_typed_durable_function_invocation();
+        let oplog_entry = read_persisted_durable_function_invocation();
 
         let function_name = self.function_name();
         Self::validate_oplog_entry(&oplog_entry, &function_name);
@@ -181,7 +181,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     }
 
     fn validate_oplog_entry(
-        oplog_entry: &PersistedTypedDurableFunctionInvocation,
+        oplog_entry: &PersistedDurableFunctionInvocation,
         expected_function_name: &str,
     ) {
         if oplog_entry.function_name != expected_function_name {
@@ -198,7 +198,7 @@ mod tests {
     use crate::bindings::golem::durability::durability::DurableFunctionType;
     use crate::value_and_type::type_builder::TypeNodeBuilder;
     use crate::value_and_type::{FromValueAndType, IntoValue};
-    use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
+    use golem_wasm::{NodeBuilder, WitValueExtractor};
     use std::io::Error;
 
     // This is not an actual runnable test - with no host implementation - but verifies through

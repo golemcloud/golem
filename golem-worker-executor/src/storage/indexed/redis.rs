@@ -15,7 +15,8 @@
 use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
-use fred::types::{RedisKey, RedisValue, XCapKind};
+use fred::prelude::{Key, Value};
+use fred::types::streams::XCapKind;
 use golem_common::metrics::redis::{record_redis_deserialized_size, record_redis_serialized_size};
 use golem_common::redis::RedisPool;
 use std::collections::HashMap;
@@ -66,7 +67,7 @@ impl RedisIndexedStorage {
         svc_name: &'static str,
         entity_name: &'static str,
         items: Vec<HashMap<String, HashMap<String, Bytes>>>,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let mut result = Vec::new();
         for item in items {
             for (id, value) in item {
@@ -74,7 +75,7 @@ impl RedisIndexedStorage {
                 for (key, value) in value {
                     if key == Self::KEY {
                         record_redis_deserialized_size(svc_name, entity_name, value.len());
-                        result.push((id, value));
+                        result.push((id, value.to_vec()));
                     }
                 }
             }
@@ -160,7 +161,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
@@ -172,13 +173,43 @@ impl IndexedStorage for RedisIndexedStorage {
                 false,
                 None,
                 id.to_string(),
-                (
-                    RedisKey::from(Self::KEY),
-                    RedisValue::Bytes(Bytes::copy_from_slice(value)),
-                ),
+                (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
             )
             .await
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), String> {
+        if !pairs.is_empty() {
+            let mut redis_pairs = Vec::with_capacity(pairs.len());
+            for (id, value) in pairs {
+                record_redis_serialized_size(svc_name, entity_name, value.len());
+                redis_pairs.push((
+                    id.to_string(),
+                    (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
+                ));
+            }
+
+            self.redis
+                .with(svc_name, api_name)
+                .xadd_pipeline(
+                    Self::composite_key(namespace, key),
+                    false,
+                    None,
+                    redis_pairs,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -219,7 +250,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -238,7 +269,7 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -257,7 +288,7 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
@@ -277,7 +308,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)

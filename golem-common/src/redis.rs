@@ -17,22 +17,22 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{atomic, Arc};
 use std::time::Instant;
 
-use bincode::{Decode, Encode};
-use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use fred::clients::Transaction;
 use fred::cmd;
-use fred::prelude::{RedisPool as FredRedisPool, *};
-use fred::types::{
-    InfoKind, Limit, MultipleKeys, MultipleOrderedPairs, MultipleValues, MultipleZaddValues,
-    Ordering, RedisKey, RedisMap, XCap, ZRange, ZSort, XID,
-};
+use fred::prelude::{Pool as FredRedisPool, *};
+use fred::types::{InfoKind, Limit, Map, MultipleKeys, MultipleValues};
 use tracing::{debug, Level};
 
 use crate::metrics::redis::{record_redis_failure, record_redis_success};
 use crate::serialization::{deserialize, serialize};
 
 // Re-export fred Error
-pub use fred::prelude::RedisError;
+pub use fred::prelude::Error as RedisError;
+use fred::types::sorted_sets::{MultipleZaddValues, Ordering, ZRange, ZSort};
+use fred::types::streams::{MultipleOrderedPairs, XCap, XID};
+
+type RedisResult<T> = Result<T, RedisError>;
 
 #[derive(Clone, Debug)]
 pub struct RedisPool {
@@ -51,7 +51,7 @@ impl RedisPool {
     }
 
     pub async fn configured(config: &crate::config::RedisConfig) -> Result<RedisPool, RedisError> {
-        let mut redis_config = RedisConfig::from_url(config.url().as_str())?;
+        let mut redis_config = Config::from_url(config.url().as_str())?;
         redis_config.tracing = TracingConfig::new(config.tracing);
         redis_config.tracing.default_tracing_level = Level::DEBUG;
         redis_config.username.clone_from(&config.username);
@@ -87,11 +87,11 @@ impl RedisPool {
         }
     }
 
-    pub fn serialize<T: Encode>(&self, value: &T) -> Result<Bytes, String> {
+    pub fn serialize<T: BinarySerializer>(&self, value: &T) -> Result<Vec<u8>, String> {
         serialize(value)
     }
 
-    pub fn deserialize<T: Decode<()>>(&self, bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize<T: BinaryDeserializer>(&self, bytes: &[u8]) -> Result<T, String> {
         deserialize(bytes)
     }
 }
@@ -119,21 +119,35 @@ impl RedisLabelledApi<'_> {
         cmd_name: &'static str,
         result: RedisResult<R>,
     ) -> RedisResult<R> {
-        let end = Instant::now();
-        match result {
-            Ok(result) => {
-                record_redis_success(
-                    self.svc_name,
-                    self.api_name,
-                    cmd_name,
-                    end.duration_since(start),
-                );
-                Ok(result)
+        self.record_many(start, cmd_name, result, 1)
+    }
+
+    fn record_many<R>(
+        &self,
+        start: Instant,
+        cmd_name: &'static str,
+        result: RedisResult<R>,
+        count: usize,
+    ) -> RedisResult<R> {
+        if count > 0 {
+            let end = Instant::now();
+            match result {
+                Ok(result) => {
+                    record_redis_success(
+                        self.svc_name,
+                        self.api_name,
+                        cmd_name,
+                        end.duration_since(start).div_f32(count as f32),
+                    );
+                    Ok(result)
+                }
+                Err(err) => {
+                    record_redis_failure(self.svc_name, self.api_name, cmd_name);
+                    Err(err)
+                }
             }
-            Err(err) => {
-                record_redis_failure(self.svc_name, self.api_name, cmd_name);
-                Err(err)
-            }
+        } else {
+            result
         }
     }
 
@@ -146,7 +160,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn del<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -156,7 +170,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn del_many<R, K>(&self, key: Vec<K>) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -172,7 +186,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn get<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -182,7 +196,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn exists<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -196,21 +210,23 @@ impl RedisLabelledApi<'_> {
 
     pub async fn expire<R, K>(&self, key: K, seconds: i64) -> RedisResult<R>
     where
-        R: FromRedis,
-        K: Into<RedisKey> + Send + AsRef<str>,
+        R: FromValue,
+        K: Into<Key> + Send + AsRef<str>,
     {
         self.ensure_connected().await?;
         let start = Instant::now();
         self.record(
             start,
             "EXPIRE",
-            self.pool.expire(self.prefixed_key(key), seconds).await,
+            self.pool
+                .expire(self.prefixed_key(key), seconds, None)
+                .await,
         )
     }
 
     pub async fn mget<R, K>(&self, keys: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: Into<MultipleKeys> + Send,
     {
         self.ensure_connected().await?;
@@ -232,7 +248,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hdel<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         F: Into<MultipleKeys> + Send,
     {
@@ -247,9 +263,9 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hexists<R, K, F>(&self, key: K, field: F) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        F: Into<RedisKey> + Send,
+        F: Into<Key> + Send,
     {
         self.ensure_connected().await?;
         let start = Instant::now();
@@ -262,9 +278,9 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hget<R, K, F>(&self, key: K, field: F) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        F: Into<RedisKey> + Send,
+        F: Into<Key> + Send,
     {
         self.ensure_connected().await?;
         let start = Instant::now();
@@ -277,7 +293,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hkeys<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -291,7 +307,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hmget<R, K, F>(&self, key: K, fields: F) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         F: Into<MultipleKeys> + Send,
     {
@@ -307,8 +323,7 @@ impl RedisLabelledApi<'_> {
     pub async fn mset<K, V>(&self, key_values: HashMap<K, V>) -> RedisResult<()>
     where
         K: AsRef<str>,
-        V: TryInto<RedisValue> + Send,
-        V::Error: Into<RedisError> + Send,
+        V: Into<Value>,
     {
         self.ensure_connected().await?;
         let start = Instant::now();
@@ -320,7 +335,7 @@ impl RedisLabelledApi<'_> {
                     key_values
                         .into_iter()
                         .map(|(k, v)| (self.prefixed_key(k), v))
-                        .collect::<Vec<_>>(),
+                        .collect::<Map>(),
                 )
                 .await,
         )
@@ -328,9 +343,9 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hmset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        V: TryInto<RedisMap> + Send,
+        V: TryInto<Map> + Send,
         V::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -344,9 +359,9 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        V: TryInto<RedisMap> + Send,
+        V: TryInto<Map> + Send,
         V::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -360,10 +375,10 @@ impl RedisLabelledApi<'_> {
 
     pub async fn hsetnx<R, K, F, V>(&self, key: K, field: F, value: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        F: Into<RedisKey> + Send,
-        V: TryInto<RedisValue> + Send,
+        F: Into<Key> + Send,
+        V: TryInto<Value> + Send,
         V::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -377,7 +392,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn sadd<R, K, V>(&self, key: K, members: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         V: TryInto<MultipleValues> + Send,
         V::Error: Into<RedisError> + Send,
@@ -400,9 +415,9 @@ impl RedisLabelledApi<'_> {
         get: bool,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        V: TryInto<RedisValue> + Send,
+        V: TryInto<Value> + Send,
         V::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -418,7 +433,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn smembers<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -432,7 +447,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn srem<R, K, V>(&self, key: K, members: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         V: TryInto<MultipleValues> + Send,
         V::Error: Into<RedisError> + Send,
@@ -448,7 +463,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn scard<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -469,7 +484,7 @@ impl RedisLabelledApi<'_> {
         fields: F,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         I: Into<XID> + Send,
         F: TryInto<MultipleOrderedPairs> + Send,
@@ -488,9 +503,37 @@ impl RedisLabelledApi<'_> {
         )
     }
 
+    pub async fn xadd_pipeline<K, C, I, F>(
+        &self,
+        key: K,
+        nomkstream: bool,
+        cap: C,
+        id_field_pairs: Vec<(I, F)>,
+    ) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+        I: Into<XID> + Send,
+        F: Send + Sync,
+        F: TryInto<MultipleOrderedPairs> + Send,
+        F::Error: Into<RedisError> + Send,
+        C: TryInto<XCap> + Copy + Send,
+        C::Error: Into<RedisError> + Send,
+    {
+        self.ensure_connected().await?;
+        let pipeline = self.pool.next().pipeline();
+        let count = id_field_pairs.len();
+        let key = self.prefixed_key(key);
+        for (id, fields) in id_field_pairs {
+            let _: String = pipeline.xadd(&key, nomkstream, cap, id, fields).await?;
+        }
+        let start = Instant::now();
+        let _: () = self.record_many(start, "XADD", pipeline.all().await, count)?;
+        Ok(())
+    }
+
     pub async fn xlen<R, K>(&self, key: K) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
     {
         self.ensure_connected().await?;
@@ -506,11 +549,11 @@ impl RedisLabelledApi<'_> {
         count: Option<u64>,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        S: TryInto<RedisValue> + Send,
+        S: TryInto<Value> + Send,
         S::Error: Into<RedisError> + Send,
-        E: TryInto<RedisValue> + Send,
+        E: TryInto<Value> + Send,
         E::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -532,11 +575,11 @@ impl RedisLabelledApi<'_> {
         count: Option<u64>,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
-        S: TryInto<RedisValue> + Send,
+        S: TryInto<Value> + Send,
         S::Error: Into<RedisError> + Send,
-        E: TryInto<RedisValue> + Send,
+        E: TryInto<Value> + Send,
         E::Error: Into<RedisError> + Send,
     {
         self.ensure_connected().await?;
@@ -552,7 +595,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn xtrim<R, K, C>(&self, key: K, cap: C) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         C: TryInto<XCap> + Send,
         C::Error: Into<RedisError> + Send,
@@ -576,7 +619,7 @@ impl RedisLabelledApi<'_> {
         values: V,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         V: TryInto<MultipleZaddValues> + Send,
         V::Error: Into<RedisError> + Send,
@@ -610,7 +653,7 @@ impl RedisLabelledApi<'_> {
         withscores: bool,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         M: TryInto<ZRange> + Send,
         M::Error: Into<RedisError> + Send,
@@ -645,7 +688,7 @@ impl RedisLabelledApi<'_> {
         limit: Option<Limit>,
     ) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         M: TryInto<ZRange> + Send,
         M::Error: Into<RedisError> + Send,
@@ -665,7 +708,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn zrem<R, K, V>(&self, key: K, members: V) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         K: AsRef<str>,
         V: TryInto<MultipleValues> + Send,
         V::Error: Into<RedisError> + Send,
@@ -681,7 +724,7 @@ impl RedisLabelledApi<'_> {
 
     pub async fn transaction<R, F, Fu>(&self, func: F) -> RedisResult<R>
     where
-        R: FromRedis,
+        R: FromValue,
         F: FnOnce(RedisTransaction) -> Fu,
         Fu: std::future::Future<Output = RedisResult<RedisTransaction>>,
     {
@@ -774,7 +817,7 @@ impl RedisLabelledApi<'_> {
                 .custom_raw(cmd!("KEYS"), args)
                 .await
                 .and_then(|f| f.try_into())
-                .and_then(|v: RedisValue| v.convert::<Vec<String>>())
+                .and_then(|v: Value| v.convert::<Vec<String>>())
                 .map(|keys| {
                     keys.into_iter()
                         .map(|key| key[self.key_prefix.len()..].to_string())
@@ -790,7 +833,7 @@ impl RedisLabelledApi<'_> {
                 let cursor: u64 = data[0]
                     .clone()
                     .try_into()
-                    .and_then(|value: RedisValue| value.convert())?;
+                    .and_then(|value: Value| value.convert())?;
 
                 if let Some(Resp3Frame::Array { data, .. }) = data.pop() {
                     let mut keys = Vec::with_capacity(data.len());
@@ -798,9 +841,8 @@ impl RedisLabelledApi<'_> {
                     let key_prefix_len = self.key_prefix.len();
 
                     for frame in data.into_iter() {
-                        let key: String = frame
-                            .try_into()
-                            .and_then(|value: RedisValue| value.convert())?;
+                        let key: String =
+                            frame.try_into().and_then(|value: Value| value.convert())?;
 
                         if key_prefix_len > 0 {
                             keys.push(key[key_prefix_len..].to_string());
@@ -812,19 +854,19 @@ impl RedisLabelledApi<'_> {
                     Ok((cursor, keys))
                 } else {
                     Err(RedisError::new(
-                        RedisErrorKind::Protocol,
+                        ErrorKind::Protocol,
                         "Expected second SCAN result element to be an array.",
                     ))
                 }
             } else {
                 Err(RedisError::new(
-                    RedisErrorKind::Protocol,
+                    ErrorKind::Protocol,
                     "Expected two-element bulk string array from SCAN.",
                 ))
             }
         } else {
             Err(RedisError::new(
-                RedisErrorKind::Protocol,
+                ErrorKind::Protocol,
                 "Expected bulk string array from SCAN.",
             ))
         }
@@ -865,7 +907,7 @@ impl RedisTransaction {
     ) -> RedisResult<()>
     where
         K: AsRef<str>,
-        V: TryInto<RedisValue> + Send,
+        V: TryInto<Value> + Send,
         V::Error: Into<RedisError> + Send,
     {
         self.trx

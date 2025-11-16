@@ -31,6 +31,7 @@ use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[async_trait]
 pub trait ProjectService: Send + Sync {
@@ -45,26 +46,25 @@ pub trait ProjectService: Send + Sync {
 
 #[derive(Clone)]
 pub struct ProjectServiceDefault {
-    project_service_client: GrpcClient<CloudProjectServiceClient<Channel>>,
+    project_service_client: GrpcClient<CloudProjectServiceClient<OtelGrpcService<Channel>>>,
     retry_config: RetryConfig,
 }
 
 impl ProjectServiceDefault {
     pub fn new(config: &RemoteServiceConfig) -> Self {
-        let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
-            GrpcClient::new(
-                "project",
-                |channel| {
-                    CloudProjectServiceClient::new(channel)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                },
-                config.uri(),
-                GrpcClientConfig {
-                    retries_on_unavailable: config.retries.clone(),
-                    ..Default::default() // TODO
-                },
-            );
+        let project_service_client = GrpcClient::new(
+            "project",
+            |channel| {
+                CloudProjectServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
+            config.uri(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default() // TODO
+            },
+        );
 
         Self {
             project_service_client,

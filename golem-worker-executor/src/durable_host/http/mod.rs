@@ -19,10 +19,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
 
 pub mod outgoing_http;
-
-/// Serializable response data structures to be stored in the oplog
-pub mod serialized;
-
 pub mod types;
 
 pub(crate) async fn end_http_request<Ctx: WorkerCtx>(

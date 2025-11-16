@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use bincode::enc::Encoder;
-use bincode::error::EncodeError;
 use bytes::Bytes;
-use fred::interfaces::RedisResult;
-use golem_common::redis::RedisPool;
+use desert_rust::BinaryCodec;
+use golem_common::redis::{RedisError, RedisPool};
 use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
 use sqlx::Row;
@@ -95,28 +93,9 @@ impl DataKey {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, BinaryCodec)]
+#[desert(transparent)]
 pub struct DataValue(pub serde_json::Value);
-
-impl bincode::Encode for DataValue {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        let serialized = serde_json::to_vec(&self.0)
-            .map_err(|_| EncodeError::OtherString("Failed to serialize JSON".into()))?;
-        serialized.encode(encoder)
-    }
-}
-
-impl<Context> bincode::Decode<Context> for DataValue {
-    fn decode<D: bincode::de::Decoder<Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        let serialized: Vec<u8> = bincode::Decode::decode(decoder)?;
-        let value = serde_json::from_slice(&serialized).map_err(|_| {
-            bincode::error::DecodeError::OtherString("Failed to deserialize JSON".into())
-        })?;
-        Ok(DataValue(value))
-    }
-}
 
 impl DataValue {
     pub fn as_string(&self) -> Option<String> {
@@ -173,7 +152,7 @@ impl GatewaySession for RedisGatewaySession {
         let serialised = golem_common::serialization::serialize(&data_value)
             .map_err(|e| GatewaySessionError::InternalError(e.to_string()))?;
 
-        let result: RedisResult<()> = self
+        let result: Result<(), RedisError> = self
             .redis
             .with("gateway_session", "insert")
             .hset(

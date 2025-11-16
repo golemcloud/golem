@@ -33,16 +33,17 @@ use std::fmt::Display;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[derive(Clone)]
 pub struct AuthService {
-    auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
+    auth_service_client: GrpcClient<CloudAuthServiceClient<OtelGrpcService<Channel>>>,
     retry_config: RetryConfig,
 }
 
 impl AuthService {
     pub fn new(config: &RemoteServiceConfig) -> Self {
-        let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
+        let auth_service_client = GrpcClient::new(
             "auth",
             |channel| {
                 CloudAuthServiceClient::new(channel)

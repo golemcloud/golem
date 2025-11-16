@@ -13,19 +13,21 @@
 // limitations under the License.
 
 use crate::{
-    agentic::agent_type_name::AgentTypeName,
+    agentic::{
+        with_agent_initiator, with_agent_instance, with_agent_instance_async, AgentTypeName,
+    },
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
 use crate::agentic::agent_registry;
-
-use golem_wasm_ast::analysis::analysed_type::str;
+use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
+use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 
 pub struct Component;
 
 impl Guest for Component {
     fn initialize(agent_type: String, input: DataValue) -> Result<(), AgentError> {
-        let agent_types = agent_registry::get_all_agent_definitions();
+        let agent_types = agent_registry::get_all_agent_types();
 
         let agent_type = agent_types
             .iter()
@@ -45,54 +47,46 @@ impl Guest for Component {
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
-        let agent_initiator = agent_registry::get_agent_initiator(&agent_type_name);
-
-        if let Some(agent) = agent_initiator {
-            agent.initiate(input);
-            Ok(())
-        } else {
-            Err(AgentError::CustomError(
-                golem_wasm_rpc::ValueAndType::new(
-                    golem_wasm_rpc::Value::String(format!(
-                        "No agent implementation found for agent definition: {}",
-                        agent_type.type_name
-                    )),
-                    str(),
-                )
-                .into(),
-            ))
-        }
+        with_agent_initiator(
+            |initiator| async move { initiator.initiate(input).await.map(|_| ()) },
+            &agent_type_name,
+        )
     }
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
-        let resolved_agent = agent_registry::get_agent_instance();
-
-        if let Some(agent) = resolved_agent {
-            Ok(agent.agent.invoke(method_name, input))
-        } else {
-            Err(AgentError::CustomError(
-                golem_wasm_rpc::ValueAndType::new(
-                    golem_wasm_rpc::Value::String("No agent instance found".to_string()),
-                    str(),
-                )
-                .into(),
-            ))
-        }
+        with_agent_instance_async(|resolved_agent| async move {
+            resolved_agent
+                .agent
+                .borrow_mut()
+                .as_mut()
+                .invoke(method_name, input)
+                .await
+        })
     }
 
     fn get_definition() -> AgentType {
-        let resolved_agent = agent_registry::get_agent_instance();
-
-        if let Some(agent) = resolved_agent {
-            agent.agent.get_definition()
-        } else {
-            panic!("No agent instance found");
-        }
+        with_agent_instance(|resolved_agent| {
+            resolved_agent.agent.borrow().as_ref().get_definition()
+        })
     }
 
     fn discover_agent_types() -> Result<Vec<AgentType>, AgentError> {
-        Ok(agent_registry::get_all_agent_definitions())
+        Ok(agent_registry::get_all_agent_types())
+    }
+}
+
+impl LoadSnapshotGuest for Component {
+    fn load(_bytes: Vec<u8>) -> Result<(), String> {
+        Err("Load snapshot not implemented".to_string())
+    }
+}
+
+impl SaveSnapshotGuest for Component {
+    fn save() -> Vec<u8> {
+        vec![]
     }
 }
 
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
+crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
+crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);

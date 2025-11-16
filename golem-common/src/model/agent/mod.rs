@@ -42,11 +42,11 @@ use crate::model::component_metadata::ComponentMetadata;
 use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
@@ -60,11 +60,12 @@ use std::fmt::{Display, Formatter};
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConstructor {
@@ -81,11 +82,12 @@ pub struct AgentConstructor {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDependency {
@@ -95,7 +97,7 @@ pub struct AgentDependency {
     pub methods: Vec<AgentMethod>,
 }
 
-#[derive(Debug, Clone, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, BinaryCodec, IntoValue)]
 pub enum AgentError {
     InvalidInput(String),
     InvalidMethod(String),
@@ -137,11 +139,12 @@ impl Display for AgentError {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
@@ -159,11 +162,12 @@ pub struct AgentMethod {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
@@ -187,11 +191,12 @@ impl AgentType {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryDescriptor {
@@ -199,10 +204,19 @@ pub struct BinaryDescriptor {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum BinaryReference {
     Url(Url),
     Inline(BinarySource),
@@ -218,8 +232,17 @@ impl Display for BinaryReference {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinarySource {
@@ -245,11 +268,12 @@ impl Display for BinarySource {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryType {
@@ -263,11 +287,12 @@ pub struct BinaryType {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchema {
@@ -282,11 +307,12 @@ pub struct NamedElementSchema {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchemas {
@@ -308,13 +334,14 @@ impl NamedElementSchemas {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum DataSchema {
     Tuple(NamedElementSchemas),
     Multimodal(NamedElementSchemas),
@@ -329,9 +356,10 @@ impl DataSchema {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum DataValue {
     Tuple(ElementValues),
     Multimodal(NamedElementValues),
@@ -474,8 +502,9 @@ impl IntoValue for DataValue {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ElementValues {
@@ -497,8 +526,9 @@ impl Display for ElementValues {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValues {
@@ -519,7 +549,8 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValue {
@@ -544,10 +575,11 @@ impl IntoValue for NamedElementValue {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+    Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum ElementValue {
     ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
     UnstructuredText(TextReference),
@@ -654,13 +686,14 @@ impl Display for ElementValue {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum ElementSchema {
     ComponentModel(ComponentModelElementSchema),
     UnstructuredText(TextDescriptor),
@@ -674,11 +707,12 @@ pub enum ElementSchema {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentModelElementSchema {
@@ -692,11 +726,12 @@ pub struct ComponentModelElementSchema {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextDescriptor {
@@ -704,10 +739,19 @@ pub struct TextDescriptor {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Union,
 )]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum TextReference {
     Url(Url),
     Inline(TextSource),
@@ -723,8 +767,17 @@ impl Display for TextReference {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Url {
@@ -738,8 +791,17 @@ impl Display for Url {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextSource {
@@ -763,11 +825,12 @@ impl Display for TextSource {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextType {
@@ -781,18 +844,30 @@ pub struct TextType {
     Eq,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
-#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    FromValue,
+    poem_openapi::Object,
+)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {

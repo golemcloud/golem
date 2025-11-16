@@ -17,12 +17,10 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-
+use golem_common::model::oplog::types::ObjectMetadata;
 use golem_common::model::ProjectId;
 
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
-use golem_wasm_derive::IntoValue;
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
@@ -410,19 +408,11 @@ impl BlobStoreService for DefaultBlobStoreService {
                 "write_data",
                 BlobStorageNamespace::CustomStorage { project_id },
                 &Path::new(&container_name).join(&object_name),
-                &data,
+                data,
             )
             .await
             .map_err(|err| anyhow!(err))
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
-pub struct ObjectMetadata {
-    pub name: String,
-    pub container: String,
-    pub created_at: u64,
-    pub size: u64,
 }
 
 #[cfg(test)]

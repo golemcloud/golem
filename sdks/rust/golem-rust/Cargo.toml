@@ -13,30 +13,25 @@ path = "src/lib.rs"
 
 [dependencies]
 golem-rust-macro = {path = "../golem-rust-macro", version = "0.0.0", optional = true}
+golem-wasm = {version = "1.3.2-dev.2", default-features = false, features = ["stub"]}
 
-# TODO; This needs to be updated to golem-wasm
-golem-wasm-rpc = {version = "1.3.0-rc9pre", default-features = false, features = [
-  "stub",
-  "typeinfo",
-]}
-
-# TODO; This needs to be updated to golem-wasm
-golem-wasm-ast = {version = "1.3.0-rc9pre", optional = true, default-features = false, features = [
-  "analysis",
-  "json",
-]}
-
+async-trait = {version = "0.1.89"}
 serde = {version = "1", optional = true}
 serde_json = {version = "1", optional = true}
 uuid = {version = "1", features = ["v4"]}
+wasi = {version = "=0.14.1+wasi-0.2.3"}
+wstd = {version = "=0.5.4"}
 wit-bindgen = {version = "=0.40.0"}
 
 [features]
 default = ["durability", "json", "macro"]
 durability = []
-export_golem_agentic = ["dep:golem-wasm-ast", "golem-wasm-rpc/typeinfo"]
+export_golem_agentic = []
 export_load_snapshot = []
 export_oplog_processor = []
 export_save_snapshot = []
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
+
+[dev-dependencies]
+ctor = "0.4.3"

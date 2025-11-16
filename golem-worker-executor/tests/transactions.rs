@@ -286,7 +286,7 @@ async fn set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
     let result2_err = result2.err().unwrap();
     assert_eq!(
         worker_error_message(&result2_err),
@@ -295,7 +295,7 @@ async fn set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -566,7 +566,7 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
     let result2_err = result2.err().unwrap();
     assert_eq!(
         worker_error_message(&result2_err),
@@ -575,7 +575,7 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]

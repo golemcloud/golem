@@ -459,10 +459,6 @@ mod filesystem {
                 .metadata
                 .values()
                 .map(|local_metadata| {
-                    warn!(
-                        "all_cached_metadata returning: {} ({})",
-                        local_metadata.component_id, local_metadata.component_name
-                    );
                     golem_service_base::model::Component::from(local_metadata.clone())
                 })
                 .collect()
@@ -521,7 +517,8 @@ mod grpc {
     use tokio::task::spawn_blocking;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
-    use tracing::{debug, warn};
+    use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+    use tracing::{debug, info_span, warn};
     use uuid::Uuid;
     use wasmtime::component::Component;
     use wasmtime::Engine;
@@ -535,7 +532,7 @@ mod grpc {
         access_token: Uuid,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService>,
-        component_client: GrpcClient<ComponentServiceClient<Channel>>,
+        component_client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
         plugin_observations: Arc<dyn PluginsObservations>,
         project_service: Arc<dyn ProjectService>,
     }
@@ -720,7 +717,9 @@ mod grpc {
 
                                 let start = Instant::now();
                                 let component_id_clone2 = component_id_clone.clone();
+                                let span = info_span!("Loading WASM component");
                                 let component = spawn_blocking(move || {
+                                    let _enter = span.enter();
                                     Component::from_binary(&engine, &bytes).map_err(|e| {
                                         WorkerExecutorError::ComponentParseFailed {
                                             component_id: component_id_clone2,
@@ -890,7 +889,7 @@ mod grpc {
     }
 
     async fn download_via_grpc(
-        client: &GrpcClient<ComponentServiceClient<Channel>>,
+        client: &GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
         access_token: &Uuid,
         retry_config: &RetryConfig,
         component_id: &ComponentId,
@@ -950,7 +949,7 @@ mod grpc {
     }
 
     async fn get_metadata_via_grpc(
-        client: &GrpcClient<ComponentServiceClient<Channel>>,
+        client: &GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
         access_token: &Uuid,
         retry_config: &RetryConfig,
         component_id: &ComponentId,

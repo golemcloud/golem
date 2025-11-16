@@ -24,9 +24,9 @@ test_r::enable!();
 
 pub mod analysis;
 
-/// Implements bincode encoders and decoders for WitValue instances
+/// Implements desert encoders and decoders for WitValue instances
 #[cfg(feature = "host")]
-pub mod bincode;
+pub mod desert;
 
 /// A builder interface for WitValue instances
 #[cfg(any(feature = "host", feature = "stub"))]
@@ -76,6 +76,11 @@ pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 
 #[cfg(any(feature = "host", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
+
+#[cfg(feature = "derive")]
+pub mod derive {
+    pub use golem_wasm_derive::{FromValue, IntoValue};
+}
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -211,7 +216,7 @@ impl PartialEq for Uri {
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "host", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub enum Value {
     Bool(bool),
     U8(u8),

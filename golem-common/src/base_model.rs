@@ -15,7 +15,8 @@
 use crate::model::agent::{AgentId, AgentTypeResolver};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::newtype_uuid;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -48,12 +49,12 @@ newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ShardId {
@@ -124,12 +125,14 @@ static WORKER_ID_MAX_LENGTH: usize = 512;
     Eq,
     PartialEq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
     poem_openapi::Object,
+    IntoValue,
+    FromValue,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerId {
@@ -239,36 +242,20 @@ impl AsRef<WorkerId> for &WorkerId {
     }
 }
 
-impl golem_wasm::IntoValue for WorkerId {
-    fn into_value(self) -> golem_wasm::Value {
-        golem_wasm::Value::Record(vec![
-            self.component_id.into_value(),
-            self.worker_name.into_value(),
-        ])
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type::{field, record};
-        record(vec![
-            field("component_id", ComponentId::get_type()),
-            field("worker_name", String::get_type()),
-        ])
-    }
-}
-
 #[derive(
     Clone,
     Debug,
     Eq,
     PartialEq,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     serde::Serialize,
     serde::Deserialize,
-    golem_wasm_derive::IntoValue,
+    IntoValue,
+    FromValue,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseId {
@@ -297,14 +284,15 @@ impl Display for PromiseId {
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Default,
     poem_openapi::NewType,
     serde::Serialize,
     serde::Deserialize,
     golem_wasm_derive::IntoValue,
+    golem_wasm_derive::FromValue,
 )]
+#[desert(transparent)]
 pub struct OplogIndex(pub(crate) u64);
 
 impl OplogIndex {
@@ -362,14 +350,15 @@ impl From<OplogIndex> for u64 {
     PartialOrd,
     Ord,
     Hash,
-    Encode,
-    Decode,
+    BinaryCodec,
     Default,
     poem_openapi::NewType,
     serde::Serialize,
     serde::Deserialize,
-    golem_wasm_derive::IntoValue,
+    IntoValue,
+    FromValue,
 )]
+#[desert(transparent)]
 pub struct TransactionId(pub(crate) String);
 
 impl TransactionId {

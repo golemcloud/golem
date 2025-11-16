@@ -16651,13 +16651,11 @@ pub mod golem {
                 Boolean(bool),
                 Tinyint(i8),
                 Smallint(i16),
-                /// s24
                 Mediumint(i32),
                 Int(i32),
                 Bigint(i64),
                 TinyintUnsigned(u8),
                 SmallintUnsigned(u16),
-                /// u24
                 MediumintUnsigned(u32),
                 IntUnsigned(u32),
                 BigintUnsigned(u64),

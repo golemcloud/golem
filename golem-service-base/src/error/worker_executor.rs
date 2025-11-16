@@ -12,21 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use tonic::Status;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerExecutorError {
     InvalidRequest {
         details: String,
@@ -906,7 +907,17 @@ impl Display for GolemSpecificWasmTrap {
 impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
-    Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,
+    Debug,
+    Clone,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
 )]
 pub enum InterruptKind {
     Interrupt,

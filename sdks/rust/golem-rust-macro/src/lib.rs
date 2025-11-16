@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
+use syn::DeriveInput;
 
-use crate::{
-    agentic::{agent_definition_impl, agent_implementation_impl},
-    transaction::golem_operation_impl,
-};
+use crate::transaction::golem_operation_impl;
 
 mod agentic;
 mod transaction;
@@ -25,17 +23,35 @@ mod value;
 
 #[proc_macro_derive(IntoValue, attributes(flatten_value, unit_case))]
 pub fn derive_into_value(input: TokenStream) -> TokenStream {
-    value::derive_into_value(input)
+    let ast: DeriveInput = syn::parse(input).expect("derive input");
+
+    value::derive_into_value(&ast)
 }
 
 #[proc_macro_derive(FromValueAndType, attributes(flatten_value, unit_case))]
 pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
-    value::derive_from_value_and_type(input)
+    let ast: DeriveInput = syn::parse(input).expect("derive input");
+    value::derive_from_value_and_type(&ast)
 }
 
-#[proc_macro_derive(AgentArg)]
-pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
-    agentic::derive_agent_arg(input)
+#[proc_macro_derive(MultimodalSchema)]
+pub fn derive_multimodal(input: TokenStream) -> TokenStream {
+    agentic::derive_multimodal(input)
+}
+
+#[proc_macro_derive(Schema)]
+pub fn derive_schema(input: TokenStream) -> TokenStream {
+    agentic::derive_schema(input)
+}
+
+#[proc_macro_derive(AllowedLanguages, attributes(code))]
+pub fn derive_allowed_languages(input: TokenStream) -> TokenStream {
+    agentic::derive_allowed_languages(input)
+}
+
+#[proc_macro_derive(AllowedMimeTypes, attributes(mime_type))]
+pub fn derive_allowed_mimetypes(input: TokenStream) -> TokenStream {
+    agentic::derive_allowed_mime_types(input)
 }
 
 /// Defines a function as an `Operation` that can be used in transactions
@@ -46,10 +62,10 @@ pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn agent_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
-    agent_definition_impl(attr, item)
+    agentic::agent_definition_impl(attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
-    agent_implementation_impl(attr, item)
+    agentic::agent_implementation_impl(attr, item)
 }

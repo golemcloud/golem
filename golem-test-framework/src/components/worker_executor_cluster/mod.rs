@@ -32,4 +32,6 @@ pub trait WorkerExecutorCluster: Send + Sync {
 
     async fn stopped_indices(&self) -> Vec<usize>;
     async fn started_indices(&self) -> Vec<usize>;
+
+    async fn is_running(&self) -> bool;
 }

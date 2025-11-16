@@ -14,22 +14,24 @@
 
 use crate::model::ExecutionStatus;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 pub use blob::BlobOplogArchiveService;
-use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
+use desert_rust::BinaryCodec;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
+    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
+    PayloadId, PersistenceLevel, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
-use golem_common::serialization::{serialize, try_deserialize};
+use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_wasm::{Value, ValueAndType};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
@@ -139,18 +141,19 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError>;
 
     /// Uploads a big oplog payload and returns a reference to it
-    async fn upload_payload(
+    async fn upload_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String>;
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String>;
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload(
+    async fn download_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String>;
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String>;
 }
 
 /// Level of commit guarantees
@@ -168,7 +171,8 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
     async fn add(&self, entry: OplogEntry) -> OplogIndex;
 
-    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+    /// A variant of add that can inject failures in tests. TO BE REMOVED
+    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.add(entry).await;
         Ok(())
     }
@@ -204,16 +208,23 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        self.add(entry).await;
+        let index = self.add(entry).await;
         self.commit(CommitLevel::Always).await;
-        self.current_oplog_index().await
+        index
     }
 
     /// Uploads a big oplog payload and returns a reference to it
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String>;
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String>;
 
     /// Downloads a big oplog payload by its reference
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String>;
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String>;
+
+    /// Switched to a different persistence level. This can be used as an optimization hint in the implementations.
+    async fn switch_persistence_level(&self, mode: PersistenceLevel);
 }
 
 pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {
@@ -228,34 +239,44 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    async fn add_imported_function_invoked<I: Encode + Sync, O: Encode + Sync>(
+    /// Uploads a big oplog payload and returns a reference to it
+    async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
         &self,
-        function_name: String,
-        request: &I,
-        response: &O,
-        function_type: DurableFunctionType,
-    ) -> Result<OplogEntry, String> {
-        let serialized_request = serialize(request)?.to_vec();
-        let serialized_response = serialize(response)?.to_vec();
-
-        self.add_raw_imported_function_invoked(
-            function_name,
-            &serialized_request,
-            &serialized_response,
-            function_type,
-        )
-        .await
+        data: &T,
+    ) -> Result<OplogPayload<T>, String> {
+        let bytes = serialize(&data)?;
+        let raw_payload = self.upload_raw_payload(bytes).await?;
+        let payload = raw_payload.into_payload()?;
+        Ok(payload)
     }
 
-    async fn add_raw_imported_function_invoked(
+    /// Downloads a big oplog payload by its reference
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
         &self,
-        function_name: String,
-        serialized_request: &[u8],
-        serialized_response: &[u8],
+        payload: OplogPayload<T>,
+    ) -> Result<T, String> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(*value),
+            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => {
+                let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
+                deserialize(&bytes)
+            }
+        }
+    }
+
+    async fn add_imported_function_invoked(
+        &self,
+        function_name: HostFunctionName,
+        request: &HostRequest,
+        response: &HostResponse,
         function_type: DurableFunctionType,
     ) -> Result<OplogEntry, String> {
-        let request_payload: OplogPayload = self.upload_payload(serialized_request).await?;
-        let response_payload = self.upload_payload(serialized_response).await?;
+        let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
+        let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
         let entry = OplogEntry::ImportedFunctionInvoked {
             timestamp: Timestamp::now_utc(),
             function_name,
@@ -267,16 +288,14 @@ pub trait OplogOps: Oplog {
         Ok(entry)
     }
 
-    async fn add_exported_function_invoked<R: Encode + Sync>(
+    async fn add_exported_function_invoked(
         &self,
         function_name: String,
-        request: &R,
+        request: &Vec<Value>,
         idempotency_key: IdempotencyKey,
         invocation_context: InvocationContextStack,
     ) -> Result<OplogEntry, String> {
-        let serialized_request = serialize(request)?.to_vec();
-
-        let payload = self.upload_payload(&serialized_request).await?;
+        let payload = self.upload_payload(request).await?;
         let entry = OplogEntry::ExportedFunctionInvoked {
             timestamp: Timestamp::now_utc(),
             function_name,
@@ -291,14 +310,12 @@ pub trait OplogOps: Oplog {
         Ok(entry)
     }
 
-    async fn add_exported_function_completed<R: Encode + Sync>(
+    async fn add_exported_function_completed(
         &self,
-        response: &R,
+        response: &Option<ValueAndType>,
         consumed_fuel: i64,
     ) -> Result<OplogEntry, String> {
-        let serialized_response = serialize(response)?.to_vec();
-
-        let payload = self.upload_payload(&serialized_response).await?;
+        let payload = self.upload_payload(response).await?;
         let entry = OplogEntry::ExportedFunctionCompleted {
             timestamp: Timestamp::now_utc(),
             response: payload,
@@ -311,47 +328,22 @@ pub trait OplogOps: Oplog {
     async fn create_snapshot_based_update_description(
         &self,
         target_version: ComponentVersion,
-        payload: &[u8],
+        payload: Vec<u8>,
     ) -> Result<UpdateDescription, String> {
-        let payload = self.upload_payload(payload).await?;
+        let payload = self.upload_payload(&payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_version,
             payload,
         })
     }
 
-    async fn get_raw_payload_of_entry(&self, entry: &OplogEntry) -> Result<Option<Bytes>, String> {
-        match entry {
-            OplogEntry::ImportedFunctionInvoked { response, .. } => {
-                Ok(Some(self.download_payload(response).await?))
-            }
-            OplogEntry::ExportedFunctionInvoked { request, .. } => {
-                Ok(Some(self.download_payload(request).await?))
-            }
-            OplogEntry::ExportedFunctionCompleted { response, .. } => {
-                Ok(Some(self.download_payload(response).await?))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn get_payload_of_entry<T: Decode<()>>(
-        &self,
-        entry: &OplogEntry,
-    ) -> Result<Option<T>, String> {
-        match self.get_raw_payload_of_entry(entry).await? {
-            Some(response_bytes) => try_deserialize(&response_bytes),
-            None => Ok(None),
-        }
-    }
-
     async fn get_upload_description_payload(
         &self,
-        description: &UpdateDescription,
-    ) -> Result<Option<Bytes>, String> {
+        description: UpdateDescription,
+    ) -> Result<Option<Vec<u8>>, String> {
         match description {
             UpdateDescription::SnapshotBased { payload, .. } => {
-                let bytes: Bytes = self.download_payload(payload).await?;
+                let bytes = self.download_payload(payload).await?;
                 Ok(Some(bytes))
             }
             UpdateDescription::Automatic { .. } => Ok(None),
@@ -361,6 +353,45 @@ pub trait OplogOps: Oplog {
 
 #[async_trait]
 impl<O: Oplog + ?Sized> OplogOps for O {}
+
+#[async_trait]
+pub trait OplogServiceOps: OplogService {
+    /// Uploads a big oplog payload and returns a reference to it
+    async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &T,
+    ) -> Result<OplogPayload<T>, String> {
+        let bytes = serialize(&data)?;
+        let raw_payload = self.upload_raw_payload(owned_worker_id, bytes).await?;
+        let payload = raw_payload.into_payload()?;
+        Ok(payload)
+    }
+
+    /// Downloads a big oplog payload by its reference
+    async fn download_payload<T: BinaryCodec + Debug + Clone + PartialEq + Send>(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: OplogPayload<T>,
+    ) -> Result<T, String> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(*value),
+            OplogPayload::SerializedInline(data) => deserialize(&data),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => {
+                let bytes = self
+                    .download_raw_payload(owned_worker_id, payload_id, md5_hash)
+                    .await?;
+                deserialize(&bytes)
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl<O: OplogService + ?Sized> OplogServiceOps for O {}
 
 #[derive(Clone)]
 struct OpenOplogEntry {

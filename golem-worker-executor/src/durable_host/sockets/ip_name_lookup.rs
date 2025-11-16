@@ -15,10 +15,13 @@
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 
-use crate::durable_host::serialized::{SerializableError, SerializableIpAddresses};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
+use golem_common::model::oplog::types::{SerializableIpAddresses, SerializableSocketError};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestSocketsResolveName, HostResponseSocketsResolveName,
+};
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::{
     Host, HostResolveAddressStream, IpAddress, Network, ResolveAddressStream,
 };
@@ -62,27 +65,44 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let durability = Durability::<SerializableIpAddresses, SerializableError>::new(
+        let durability = Durability::<SocketsIpNameLookupResolveAddresses>::new(
             self,
-            "sockets::ip_name_lookup",
-            "resolve_addresses",
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        let addresses = if durability.is_live() {
+        let result = if durability.is_live() {
             let result = resolve_and_drain_addresses(self, network, name.clone()).await;
             durability
                 .try_trigger_retry(self, &result)
                 .await
                 .map_err(SocketError::trap)?;
-            durability.persist(self, name, result).await
+
+            let serializable_result = match result {
+                Ok(addresses) => Ok(SerializableIpAddresses::from(addresses)),
+                Err(error) => Err(SerializableSocketError::from(error)),
+            };
+            durability
+                .persist(
+                    self,
+                    HostRequestSocketsResolveName { name },
+                    HostResponseSocketsResolveName {
+                        result: serializable_result,
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        let stream = ResolveAddressStream::Done(Ok(addresses?.into_iter()));
-        Ok(self.table().push(stream)?)
+        match result.result {
+            Ok(addresses) => {
+                let addresses: Vec<IpAddress> = addresses.0.into_iter().map(|a| a.into()).collect();
+                let stream = ResolveAddressStream::Done(Ok(addresses.into_iter()));
+                Ok(self.table().push(stream)?)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

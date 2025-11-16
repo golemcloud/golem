@@ -14,8 +14,8 @@
 
 use crate::replayable_stream::ErasedReplayableStream;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
 use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
@@ -35,7 +35,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String>;
+    ) -> Result<Option<Vec<u8>>, String>;
 
     async fn get_stream(
         &self,
@@ -53,11 +53,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let data = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
-        Ok(data.map(|data| data.slice((start as usize)..(end as usize))))
+        Ok(data.map(|data| data[(start as usize)..(end as usize)].to_vec()))
     }
 
     async fn get_metadata(
@@ -74,7 +74,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String>;
 
     async fn put_stream(
@@ -154,7 +154,7 @@ pub trait BlobStorage: Debug + Send + Sync {
             .await?
         {
             Some(data) => {
-                self.put_raw(target_label, op_label, namespace, to, &data)
+                self.put_raw(target_label, op_label, namespace, to, data)
                     .await
             }
             None => Err(format!("Entry not found: {from:?}")),
@@ -208,7 +208,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         self.storage
             .get_raw(self.svc_name, self.api_name, namespace, path)
             .await
@@ -220,7 +220,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         self.storage
             .get_raw_slice(self.svc_name, self.api_name, namespace, path, start, end)
             .await
@@ -240,7 +240,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
         self.storage
             .put_raw(self.svc_name, self.api_name, namespace, path, data)
@@ -325,7 +325,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
-    pub async fn get<T: Decode<()>>(
+    pub async fn get<T: BinaryDeserializer>(
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
@@ -336,13 +336,13 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         }
     }
 
-    pub async fn put<T: Encode>(
+    pub async fn put<T: BinarySerializer>(
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
         data: &T,
     ) -> Result<(), String> {
-        self.put_raw(namespace, path, &serialize(data)?).await
+        self.put_raw(namespace, path, serialize(data)?).await
     }
 }
 

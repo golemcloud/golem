@@ -14,7 +14,6 @@
 
 use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
-use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 use std::time::Duration;
@@ -129,7 +128,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self
@@ -181,14 +180,14 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
             .read_async(&composite_key, |_, entry| {
                 let mut result = Vec::new();
                 for (id, value) in entry.range((Included(start_id), Included(end_id))) {
-                    result.push((*id, Bytes::from(value.clone())));
+                    result.push((*id, value.clone()));
                 }
                 result
             })
@@ -203,13 +202,13 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
             .read_async(&composite_key, |_, entry| {
                 let first = entry.first_key_value();
-                first.map(|(id, value)| (*id, Bytes::from(value.clone())))
+                first.map(|(id, value)| (*id, value.clone()))
             })
             .await
             .flatten())
@@ -222,13 +221,13 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
             .read_async(&composite_key, |_, entry| {
                 let last = entry.last_key_value();
-                last.map(|(id, value)| (*id, Bytes::from(value.clone())))
+                last.map(|(id, value)| (*id, value.clone()))
             })
             .await
             .flatten())
@@ -242,7 +241,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -250,7 +249,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
                 entry
                     .keys()
                     .find(|k| **k >= id)
-                    .map(|key| (*key, Bytes::from(entry[key].clone())))
+                    .map(|key| (*key, entry[key].clone()))
             })
             .await
             .flatten())

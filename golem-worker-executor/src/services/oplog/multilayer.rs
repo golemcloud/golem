@@ -21,8 +21,9 @@ use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
 use async_trait::async_trait;
-use bytes::Bytes;
-use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{
+    AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
+};
 use golem_common::model::{
     ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
     WorkerStatusRecord,
@@ -38,7 +39,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, span, warn, Instrument, Level, Span};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
@@ -483,21 +484,22 @@ impl OplogService for MultiLayerOplogService {
         }
     }
 
-    async fn upload_payload(
+    async fn upload_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String> {
-        self.primary.upload_payload(owned_worker_id, data).await
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
+        self.primary.upload_raw_payload(owned_worker_id, data).await
     }
 
-    async fn download_payload(
+    async fn download_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String> {
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
         self.primary
-            .download_payload(owned_worker_id, payload)
+            .download_raw_payload(owned_worker_id, payload_id, md5_hash)
             .await
     }
 }
@@ -571,7 +573,11 @@ impl MultiLayerOplog {
                 multi_layer_oplog_service,
                 rx,
             )
-            .in_current_span(),
+            .instrument(
+                span!(parent: None, Level::INFO, "Oplog background transfer")
+                    .follows_from(Span::current())
+                    .clone(),
+            ),
         ));
 
         result
@@ -800,12 +806,22 @@ impl Oplog for MultiLayerOplog {
         total_length
     }
 
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
-        self.primary.upload_payload(data).await
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.primary.upload_raw_payload(data).await
     }
 
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
-        self.primary.download_payload(payload).await
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.primary
+            .download_raw_payload(payload_id, md5_hash)
+            .await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.primary.switch_persistence_level(mode).await;
     }
 }
 

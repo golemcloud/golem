@@ -126,8 +126,6 @@ axum = { version = "0.7.9", features = ["multipart"] }
 axum-jrpc = "0.7.1"
 base64 = "0.22.1"
 bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
-bincode = { version = "2.0.1", features = ["serde"] }
-bincode_derive = { version = "2.0.1" }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = "1.5.5"
@@ -155,6 +153,7 @@ criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
+desert_rust = { version = "0.1.4", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address"] }
 dir-diff = "0.3.3"
 dirs = "4.0.0"
 drop-stream = "0.3.2"
@@ -163,7 +162,7 @@ fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 flate2 = "1.1.0"
-fred = { version = "=9.4.0", features = ["metrics", "serde-json", "partial-tracing", ] } # pinned to 9.x to avoid conflicting cookie-factory dependencies
+fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", ] }
 fs-set-times = "0.20.3"
 fs_extra = "1.3.0"
 futures = "0.3.31"
@@ -183,6 +182,7 @@ http-body-util = "0.1.3"
 humansize = "2.1.3"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
+ident-mash = "0.1.0"
 include_dir = "0.7.4"
 indexmap = "2.10.0"
 indoc = "2.0.5"
@@ -217,22 +217,22 @@ num-traits = "0.2.19"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
-opentelemetry = "0.28.0"
-opentelemetry-otlp = "0.28.0"
-opentelemetry-prometheus = "0.28.0"
-opentelemetry_sdk = "0.28.0"
+opentelemetry = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0" }
+opentelemetry-prometheus-text-exporter = "=0.2.0"
+opentelemetry_sdk = "0.30.0"
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
-poem = { version = "=3.1.10", features = ["cookie", "multipart", "opentelemetry", "prometheus", "test", ] }
-poem-derive = { version = "=3.1.10" }
-poem-openapi = { version = "=5.1.14", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
-poem-openapi-derive = "=5.1.14"
+poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
+poem-derive = { version = "=3.1.12" }
+poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
+poem-openapi-derive = "=5.1.16"
 postgres = "0.19.10"
 pretty_assertions = "1.4.1"
 pretty_env_logger = "0.5.0"
 prettyplease = "0.2.25"
 proc-macro2 = "1.0.92"
-prometheus = { version = "0.13.4", features = ["process"] }
+prometheus = { version = "0.14.0", features = ["process"] }
 proptest = "=1.5.0"
 proptest-arbitrary-interop = "0.1.0"
 prost = "0.14.1"
@@ -298,17 +298,19 @@ tokio-tungstenite = { version = "0.25.0", features = ["native-tls"] }
 tokio-util = "0.7.13"
 toml = "0.9.5"
 toml_edit = "0.23.3"
-tonic = { version = "0.14.1", features = ["gzip"] }
-tonic-health = "0.14.1"
-tonic-prost = "0.14.1"
-tonic-prost-build = "0.14.1"
-tonic-reflection = "0.14.1"
+tonic = { version = "0.14.2", features = ["gzip"] }
+tonic-health = "0.14.2"
+tonic-prost = "0.14.2"
+tonic-prost-build = "0.14.2"
+tonic-reflection = "0.14.2"
+tonic-tracing-opentelemetry = "0.30.0"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-futures = "0.2.5"
-tracing-opentelemetry = "0.29.0"
+tracing-opentelemetry = "0.31.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
+tower = "0.5.2"
 try_match = "0.4.2"
 tryhard = "0.5.1"
 typed-path = "0.10.0"

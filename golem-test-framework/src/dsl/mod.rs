@@ -42,12 +42,13 @@ use golem_client::model::Account;
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, RawComponentMetadata,
 };
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
 use golem_common::model::plugin::PluginWasmFileKey;
-use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
+use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{
     AccountId, ComponentFilePermissions, PluginInstallationId, ProjectId,
     WorkerResourceDescription, WorkerStatus,
@@ -58,7 +59,7 @@ use golem_common::model::{
     SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::widen_infallible;
-use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
+use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
