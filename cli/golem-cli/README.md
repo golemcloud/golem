@@ -1,118 +1,44 @@
-# Basic MCP server
+# Need MCP server?
 
-Basic options:
+Golem CLI comes with http streamable mcp server, enables you to interact with all golem commands using any agent such as Claude Caude or Openai Codex.
 
-- [x] **HTTP transport**: You can `curl` `http://127.0.0.1:1232/mcp` with JSON-RPC requests (not stdio).
-- [x] **MCP methods implemented**: `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`.
-- [x] **Incremental output**: `tools/call` returns a `logs` array with interleaved `stdout`/`stderr` lines.
-- [x] **Safety**: Disallowed top-level subcommands are blocked with a clear error.
-- [x] **Resources**: `resources/list` shows manifest files from the **current dir, ancestors, and immediate children**; `resources/read` returns file contents.
-- [x] **No runtime panics** under normal use; you can run `version`, `profile list`, etc.
+# What are available tools?
+All relevant Golem CLI commands are available as tools, refer to this to see them in action: https://youtu.be/t5dnCSYQg_0
+
+# What are available resources?
+Golem MCP server will provide all existing manifests (yaml or yml) in the current working directory (where the mcp launches) as resources, you can then read such manifest from such llm agent using just single prompt like: what's inside @suchmanifest (drop down menu will appear, just when type @), refer to this video: https://youtu.be/95BXexeZjj4  
+
 
 ---
 
-# 🔬 MCP Server Test Plan for golem-cli
+# Start the MCP server
 
-Make sure the server is running:
+Try to build the package with features enabled
+```bash
+cargo build -p golem-cli --release --features "server-commands"
+```
+then start the binary
 
 ```bash
 ./target/release/golem-cli --serve --serve-port 1232
 ```
 
-# 0) Health check (server up?)
-```bash
-curl -sS -o /dev/null -w "%{http_code}
-" http://127.0.0.1:1232/mcp
-```
-> Expected: 405
+# Need MCP client?
+Golem also comes with basic http streamable mcp client, enables you to interact with the Golem MCP server if you want standlaone client or depends of such use case.
 
-# 1) initialize
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | jq
-```
-> Expected: { "jsonrpc": "2.0", "id": 1, "result": { "protocolVersion": "...", "serverInfo": {...}, "capabilities": {...} } }
+# Start the MCP server
 
-# 2) tools/list
+Try to make the ports identical (edit tests/mcp-client/src/main.rs to match the server port), then build the package
 ```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | jq
+cargo build -p golem-mcp-client --release
 ```
-> Expected: one tool: "golem.run" with args + cwd schema
+then start the binary
 
-# 3) tools/call — happy path
 ```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
-        "jsonrpc":"2.0",
-        "id":"v1",
-        "method":"tools/call",
-        "params":{
-          "name":"golem.run",
-          "arguments":{"args":["version"]}
-        }
-      }' | jq
+./target/release/golem-mcp-client
 ```
-> Expected: { "ok": true, "command": {"binary":"golem","args":["version"]}, "logs":[...], "result":{"exitCode":0} }
+There is a video for the e2e mcp server/client testing: https://youtu.be/ONUJ6BOyHDI
 
-# 4) tools/call — disallowed subcommand
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
-        "jsonrpc":"2.0",
-        "id":"bad",
-        "method":"tools/call",
-        "params":{
-          "name":"golem.run",
-          "arguments":{"args":["system","exec","rm","-rf","/"]}
-        }
-      }' | jq
-```
-> Expected: error with "Disallowed subcommand 'system'"
 
-# 5) tools/call — with cwd
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{
-        "jsonrpc":"2.0",
-        "id":"cwd",
-        "method":"tools/call",
-        "params":{
-          "name":"golem.run",
-          "arguments":{"args":["profile","list"], "cwd":"/tmp"}
-        }
-      }' | jq
-```
-> Expected: same shape as happy path but in /tmp
 
-# 6) resources/list
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"rlist","method":"resources/list","params":{}}' | jq
-```
-> Expected: list of files (e.g. manifest.yaml)
 
-# 7) resources/read
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d "{
-        \"jsonrpc\":\"2.0\",
-        \"id\":\"rread\",
-        \"method\":\"resources/read\",
-        \"params\":{
-          \"uri\":\"file:///abs/path/to/manifest.yaml\"
-        }
-      }" | jq
-```
-> Expected: { "contents": [ { "uri": "...", "mimeType":"application/yaml", "text": "..." } ] }
-
-# 8a) Error case: Unknown method
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"x","method":"nonsense","params":{}}' | jq
-```
-> Expected: error { "code": -32601, "message": "Method not found" }
-
-# 8b) Error case: Wrong tool name
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"badtool","method":"tools/call","params":{"name":"not-a-tool","arguments":{}}}' | jq
-```
-> Expected: error { "code": -32602, "message": "Unknown tool name" }
-
-# 8c) Error case: Bad URI
-```bash
-curl -sS http://127.0.0.1:1232/mcp   -H 'content-type: application/json'   -d '{"jsonrpc":"2.0","id":"baduri","method":"resources/read","params":{"uri":"notfile:///tmp/foo"}}' | jq
-```
-> Expected: error { "code": -32602, "message": "Only file:// URIs are supported" }

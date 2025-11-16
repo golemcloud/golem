@@ -29,7 +29,7 @@ struct Cmd {
 
 use crate::inquiry_utils::InquiryUtils;
 
-const MCP_SERVER_URL: &str = "http://127.0.0.1:3001/sse";
+const MCP_SERVER_URL: &str = "http://127.0.0.1:3001/mcp";
 
 #[tokio::main]
 async fn main() -> SdkResult<()> {
@@ -100,8 +100,8 @@ async fn main() -> SdkResult<()> {
             tool: "server",
             args: vec!["run".into()],
             cwd: None,
-        }
-        /*Cmd {
+        },
+        Cmd {
             tool: "app",
             args: vec!["new".into(), "mytestapp".into(), "typescript".into()],
             cwd: None,
@@ -195,7 +195,7 @@ async fn main() -> SdkResult<()> {
             tool: "component",
             args: vec!["plugin".into(), "get".into(), "pack:mycomponent".into()],
             cwd: Some("mytestapp".into()),
-        }*/
+        }
     ];
 
     // call commands
@@ -215,7 +215,7 @@ async fn main() -> SdkResult<()> {
             if let Some(first_id) = ids.first() {
                 // installation_id = first_id.clone();
 
-                /*     // Enqueue the update now that we have the installation id
+                // Enqueue the update now that we have the installation id
                 commands.push(Cmd {
                     tool: "component",
                     args: vec![
@@ -241,7 +241,7 @@ async fn main() -> SdkResult<()> {
                         "pack:mycomponent".into()
                     ],
                     cwd: Some("mytestapp".into()),
-                });*/
+                });
             }
         }
 
@@ -253,8 +253,8 @@ async fn main() -> SdkResult<()> {
             tool: "component",
             args: vec!["diagnose".into(), "pack:mycomponent".into()],
             cwd: Some("mytestapp".into()),
-        }
-        /*Cmd {
+        },
+        Cmd {
             tool: "agent",
             args: vec!["new".into(), r#"mycomponent/counter-agent("clean-agent")"#.into()],
             cwd: Some("mytestapp".into()),
@@ -333,7 +333,7 @@ async fn main() -> SdkResult<()> {
             tool: "api",
             args: vec!["definition".into(), "list".into()],
             cwd: Some("mytestapp".into()),
-        }*/
+        }
     ];
 
     let mut i = 0;
@@ -347,7 +347,7 @@ async fn main() -> SdkResult<()> {
         let output = utils.call_call_tool(tool, args.clone(), cwd.clone()).await?;
         if tool == "api" && args.as_slice() == ["definition", "list"] {
             if let Some((api_id, version)) = extract_api_id_and_version(&output) {
-                /*     commands.push(Cmd {
+                commands.push(Cmd {
                     tool: "api",
                     args: vec![
                         "definition".into(),
@@ -370,8 +370,8 @@ async fn main() -> SdkResult<()> {
                         version.clone()
                     ],
                     cwd: Some("mytestapp".into()),
-                });*/
-                /*commands.push(Cmd {
+                });
+                commands.push(Cmd {
                     tool: "api",
                     args: vec![
                         "definition".into(),
@@ -382,7 +382,7 @@ async fn main() -> SdkResult<()> {
                         version.clone()
                     ],
                     cwd: Some("mytestapp".into()),
-                });*/
+                });
             }
         }
 
@@ -390,7 +390,7 @@ async fn main() -> SdkResult<()> {
     }
 
     /* In some API calls, you may need to create new token in console.golem.cloud, then add Static auth in ./golem/config-v2.json, also create "the test project" or change it to your existing project */
-   /* commands = vec![
+    commands = vec![
         Cmd {
             tool: "api",
             args: vec!["deployment".into(), "deploy".into()],
@@ -496,18 +496,18 @@ async fn main() -> SdkResult<()> {
         if tool == "cloud" && args.as_slice() == ["account", "new", "Steve", "steve@local"] {
             if let Some(account_id) = extract_account_id(&output) {
                 // Push the follow-up command using the extracted account ID
-                /*commands.push(Cmd {
+                commands.push(Cmd {
                     tool: "cloud",
                     args: vec!["account".into(), "get".into(), "--account-id".into(), account_id.clone()],
                     cwd: None,
-                });*/
+                });
                 // Push the follow-up command using the extracted account ID
                 commands.push(Cmd {
                     tool: "cloud",
                     args: vec!["account".into(), "update".into(), "--account-id".into(), account_id.clone(), "Samuel".into(), "samuel@local".into()],
                     cwd: None,
                 });
-                /*// Push the follow-up command using the extracted account ID
+                // Push the follow-up command using the extracted account ID
                 commands.push(Cmd {
                     tool: "cloud",
                     args: vec!["account".into(), "grant".into(), "get".into(), "--account-id".into(), account_id.clone()],
@@ -524,7 +524,7 @@ async fn main() -> SdkResult<()> {
                     tool: "cloud",
                     args: vec!["account".into(), "grant".into(), "delete".into(), "--account-id".into(), account_id.clone(), "Admin".into()],
                     cwd: None,
-                });*/
+                });
             } else {
                 eprintln!("Failed to extract Account ID from output:\n{output}");
             }
@@ -585,7 +585,7 @@ async fn main() -> SdkResult<()> {
         }
 
         i += 1;
-    }*/
+    }
 
 
     commands = vec![
@@ -612,7 +612,7 @@ async fn main() -> SdkResult<()> {
     ];
 
 
-     let mut i = 0;
+    let mut i = 0;
     while i < commands.len() {
         // Borrow the current command, then clone only the fields we need to own
         let (tool, args, cwd) = {
@@ -637,14 +637,7 @@ async fn main() -> SdkResult<()> {
 
         i += 1;
     }
-    // Set the log level
-    /*match utils.client.set_logging_level(LoggingLevel::Debug).await {
-        Ok(_) => println!("Log level is set to \"Debug\""),
-        Err(err) => eprintln!("Error setting the Log level : {err}"),
-    }
 
-    // Send 3 pings to the server, with a 2-second interval between each ping.
-    utils.ping_n_times(3).await;*/
     client.shut_down().await?;
 
     Ok(())
