@@ -286,12 +286,20 @@ mod local {
             &self,
             owner_project: &ProjectId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
-            Ok(self
+            let result = self
                 .component_service
                 .all_cached_metadata()
                 .await
                 .iter()
-                .filter(|component| &component.owner.project_id == owner_project)
+                .filter(|component| {
+                    tracing::warn!(
+                        "FILTERING COMPONENT {} BY PROJECT: {} == {}",
+                        component.component_name,
+                        component.owner.project_id,
+                        owner_project
+                    );
+                    &component.owner.project_id == owner_project
+                })
                 .flat_map(|component| {
                     component
                         .metadata
@@ -303,7 +311,9 @@ mod local {
                         })
                         .collect::<Vec<_>>()
                 })
-                .collect())
+                .collect();
+            tracing::warn!("GET_ALL RETURNING AGENT TYPES: {result:#?}");
+            Ok(result)
         }
 
         async fn get(
@@ -311,6 +321,7 @@ mod local {
             owner_project: &ProjectId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
+            tracing::warn!("LOOKING FOR AGENT TYPE {name}");
             Ok(self
                 .get_all(owner_project)
                 .await?

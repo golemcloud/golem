@@ -421,6 +421,7 @@ pub trait ComponentService: Send + Sync {
             };
 
             if let Some(latest_component) = latest_component {
+                tracing::warn!("RETURNING ALREADY EXISTING COMPONENT {latest_component:?}");
                 return latest_component;
             }
 

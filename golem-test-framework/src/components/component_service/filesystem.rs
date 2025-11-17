@@ -166,6 +166,8 @@ impl FileSystemComponentService {
         )
         .await?;
 
+        tracing::warn!("WRITTEN COMPONENT TO PROJECT {project_id}");
+
         Ok(Component {
             versioned_component_id: Some(VersionedComponentId {
                 component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {

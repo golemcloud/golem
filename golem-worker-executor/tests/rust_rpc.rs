@@ -817,6 +817,7 @@ async fn ephemeral_worker_invocation_via_rpc1(
 
     let component_id = executor
         .component("it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await;
     let worker_id = WorkerId {
@@ -842,5 +843,5 @@ async fn ephemeral_worker_invocation_via_rpc1(
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
-    assert_eq!(result, Ok(vec![Value::U64(1)]));
+    assert_eq!(result, Ok(vec![Value::U32(1)]));
 }

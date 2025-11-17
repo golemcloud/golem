@@ -412,6 +412,8 @@ mod filesystem {
                 )))?
             };
 
+            tracing::warn!("GETTING FS COMPONENT PROJECT {}", metadata.project_id);
+
             let wasm_path = self.root.join(metadata.wasm_filename.clone());
 
             let component = self
@@ -459,6 +461,10 @@ mod filesystem {
                 .metadata
                 .values()
                 .map(|local_metadata| {
+                    tracing::warn!(
+                        "ALL_CACHED_METADATA USING {:?}",
+                        local_metadata.wasm_filename
+                    );
                     golem_service_base::model::Component::from(local_metadata.clone())
                 })
                 .collect()

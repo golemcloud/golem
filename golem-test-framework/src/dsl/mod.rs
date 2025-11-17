@@ -522,6 +522,8 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         // here makes it possible to force a different default in tests (for example, one per test case)
         let project_id = Some(project_id.unwrap_or_else(|| self.default_project_id.clone()));
 
+        tracing::warn!("ADDING COMPONENT TO PROJECT {project_id:?}");
+
         let component = {
             if unique {
                 self.deps
