@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::ElementSchema;
-use crate::golem_agentic::golem::agent::common::ElementValue;
+use crate::golem_agentic::golem::agent::common::{BinaryReference, ElementValue};
+use crate::golem_agentic::golem::agent::common::{ElementSchema, TextReference};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use crate::wasm_rpc::WitValue;
-use golem_wasm::analysis::{AnalysedType, TypeResult};
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::{Value, WitType};
+use golem_wasm::Value;
 
 pub trait Schema {
     fn get_type() -> ElementSchema;
@@ -36,12 +35,56 @@ pub trait Schema {
 
         match element_value {
             ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(_) => {
-                todo!("UnstructuredBinary to WitValue conversion not implemented")
-            }
-            ElementValue::UnstructuredText(_) => {
-                todo!("UnstructuredText to WitValue conversion not implemented")
-            }
+            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
+                BinaryReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+                BinaryReference::Inline(binary_source) => {
+                    let restriction_record =
+                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
+                            restriction_record,
+                        ]))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+            },
+            ElementValue::UnstructuredText(text_reference) => match text_reference {
+                TextReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+
+                TextReference::Inline(text_source) => {
+                    let restriction_record = text_source.text_type.map(|text_type| {
+                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
+                    });
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::String(text_source.data),
+                            Value::Option(restriction_record),
+                        ]))),
+                    };
+
+                    Ok(WitValue::from(value))
+                }
+            },
         }
     }
 }
@@ -77,4 +120,22 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
     }
+}
+
+pub trait MultimodalSchema {
+    fn get_multimodal_schema() -> Vec<(String, ElementSchema)>;
+
+    fn get_name(&self) -> String;
+
+    fn to_element_value(self) -> Result<(String, ElementValue), String>
+    where
+        Self: Sized;
+
+    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
+    where
+        Self: Sized;
+
+    fn to_wit_value(self) -> Result<WitValue, String>
+    where
+        Self: Sized;
 }

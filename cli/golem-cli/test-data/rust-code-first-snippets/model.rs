@@ -1,6 +1,6 @@
 use std::collections::Bound;
 
-use golem_rust::Schema;
+use golem_rust::{MultimodalSchema, Schema, AllowedLanguages, AllowedMimeTypes};
 
 #[derive(Schema)]
 pub struct AllPrimitives {
@@ -121,4 +121,33 @@ pub struct ComplexStruct {
     pub enum_simple: SimpleEnum,
     pub enum_collections: EnumWithCollections,
     pub enum_complex: ComplexEnum,
+}
+
+#[derive(MultimodalSchema)]
+pub enum TextImageData {
+    Text(String),
+    Image(Vec<u8>),
+    Data(Data),
+}
+
+
+#[derive(Schema)]
+pub struct Data {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(AllowedLanguages)]
+pub enum MyLang {
+    #[code("en")]
+    En,
+    De
+}
+
+#[derive(AllowedMimeTypes)]
+pub enum MyMimeType {
+    #[mime_type("text/plain")]
+    PlainText,
+    #[mime_type("image/png")]
+    PngImage,
 }

@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, get_input_param_type, get_output_param_type, is_constructor_method,
-    FunctionKind, ParamType,
+    get_function_kind, is_constructor_method, DefaultOrMultimodal, FunctionInputInfo,
+    FunctionOutputInfo, FutureOrImmediate,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -61,12 +61,12 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         where_clause,
     );
 
-    let input_param_type = get_input_param_type(&constructor_method.sig);
+    let constructor_input_info = FunctionInputInfo::from_signature(&constructor_method.sig);
 
     let constructor_kind = get_function_kind(&constructor_method.sig);
 
     let constructor_param_extraction_call_back = match constructor_kind {
-        FunctionKind::Async => {
+        FutureOrImmediate::Future => {
             quote! {
                 let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_params),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
@@ -77,7 +77,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 Ok(())
             }
         }
-        FunctionKind::Sync => {
+        FutureOrImmediate::Immediate => {
             quote! {
                 let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
                 let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
@@ -92,9 +92,9 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let constructor_param_extraction = generate_constructor_extraction(
         &ctor_params,
         &trait_name_str_raw,
-        match input_param_type.param_type {
-            ParamType::Tuple => Some(constructor_param_extraction_call_back),
-            ParamType::Multimodal => None,
+        match constructor_input_info.input_shape {
+            DefaultOrMultimodal::Default => Some(constructor_param_extraction_call_back),
+            DefaultOrMultimodal::Multimodal => None,
         },
     );
 
@@ -173,11 +173,15 @@ fn build_match_arms(
 
             let ident = &method.sig.ident;
 
-            let output_param_type = get_output_param_type(&method.sig);
+            let fn_input_info = FunctionInputInfo::from_signature(&method.sig);
 
-            let post_method_param_extraction_logic = match output_param_type.param_type {
-                ParamType::Tuple => match output_param_type.function_kind {
-                    FunctionKind::Async if !output_param_type.is_unit => Some(quote! {
+            let fn_output_info = FunctionOutputInfo::from_signature(&method.sig);
+
+            let post_method_param_extraction_logic = match fn_output_info.output_shape {
+                // If the output is a non multimodal type, we use Schema instance to serialize the result
+                // and that depends on whether it is async-unit, async, sync-unit or sync.
+                DefaultOrMultimodal::Default => match fn_output_info.future_or_immediate {
+                    FutureOrImmediate::Future if !fn_output_info.is_unit => quote! {
                         let result = self.#ident(#(#param_idents),*).await;
                         <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
                             golem_rust::agentic::custom_error(format!(
@@ -187,12 +191,12 @@ fn build_match_arms(
                         }).map(|element_value| {
                             golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                         })
-                    }),
-                    FunctionKind::Async => Some(quote! {
+                    },
+                    FutureOrImmediate::Future => quote! {
                         let _ = self.#ident(#(#param_idents),*).await;
                         Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
-                    }),
-                    FunctionKind::Sync if !output_param_type.is_unit => Some(quote! {
+                    },
+                    FutureOrImmediate::Immediate if !fn_output_info.is_unit => quote! {
                         let result = self.#ident(#(#param_idents),*);
                         <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
                             golem_rust::agentic::custom_error(format!(
@@ -202,13 +206,34 @@ fn build_match_arms(
                         }).map(|element_value| {
                             golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                         })
-                    }),
-                    FunctionKind::Sync => Some(quote! {
+                    },
+                    FutureOrImmediate::Immediate => quote! {
                         let _ = self.#ident(#(#param_idents),*);
                         Ok(golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![]))
-                    }),
+                    },
                 },
-                ParamType::Multimodal => None,
+                // If the output is a multi-modal type, we use multimodal instance
+                // to serialize the result
+                DefaultOrMultimodal::Multimodal => match fn_output_info.future_or_immediate {
+                    FutureOrImmediate::Future => quote! {
+                        let result = self.#ident(#(#param_idents),*).await;
+                        result.to_data_value().map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing Multimodal return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        })
+                    },
+                    FutureOrImmediate::Immediate => quote! {
+                        let result = self.#ident(#(#param_idents),*);
+                        result.to_data_value().map_err(|e| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Failed serializing Multimodal return value for method {}: {}",
+                                #method_name, e
+                            ))
+                        })
+                    },
+                },
             };
 
             let method_param_extraction = generate_method_param_extraction(
@@ -216,6 +241,7 @@ fn build_match_arms(
                 &agent_type_name,
                 method_name_str.as_str(),
                 post_method_param_extraction_logic,
+                fn_input_info,
             );
 
             match_arms.push(quote! {
@@ -233,55 +259,73 @@ fn generate_method_param_extraction(
     param_idents: &[syn::Ident],
     agent_type_name: &str,
     method_name: &str,
-    post_method_param_extraction_logic: Option<proc_macro2::TokenStream>,
+    post_method_param_extraction_logic: proc_macro2::TokenStream,
+    input_param_type: FunctionInputInfo,
 ) -> proc_macro2::TokenStream {
-    let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
-        let ident_result = format_ident!("{}_result", ident);
-        quote! {
-            let #ident_result = match &input {
-                golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                    let value = values.get(#i);
+    match input_param_type.input_shape {
+        DefaultOrMultimodal::Default => {
+            let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
+                let ident_result = format_ident!("{}_result", ident);
+                quote! {
+                    let #ident_result = match &input {
+                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                          let value = values.get(#i);
 
-                    let element_value_result =  match value {
-                        Some(v) => Ok(v.clone()),
-                        None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
-                    };
+                          let element_value_result =  match value {
+                            Some(v) => Ok(v.clone()),
+                            None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
+                          };
 
-                    let element_value = element_value_result?;
+                          let element_value = element_value_result?;
 
-                    let element_schema = golem_rust::agentic::get_method_parameter_type(
-                        &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
-                        #method_name,
-                        #i,
-                    ).ok_or_else(|| {
-                        golem_rust::agentic::custom_error(format!(
-                            "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
-                            #agent_type_name, #method_name, #i
-                        ))
-                    })?;
-                    let deserialized_value = golem_rust::agentic::Schema::from_element_value(element_value, element_schema).map_err(|e| {
-                        golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
-                    })?;
-                    Ok(deserialized_value)
-                },
-                golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) => {
-                    // TODO; support multimodal and add call back logic here
-                    Err(golem_rust::agentic::internal_error("Multimodal input not supported currently"))
+                          let element_schema = golem_rust::agentic::get_method_parameter_type(
+                            &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                            #method_name,
+                            #i,
+                          ).ok_or_else(|| {
+                            golem_rust::agentic::custom_error(format!(
+                                "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
+                                #agent_type_name, #method_name, #i
+                            ))
+                          })?;
+                          let deserialized_value = golem_rust::agentic::Schema::from_element_value(element_value, element_schema).map_err(|e| {
+                            golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
+                          })?;
+                          Ok(deserialized_value)
+                       },
+                       golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(_) =>
+                         Err(golem_rust::agentic::internal_error("Expected Tuple input, found Multimodal"))
+                   };
+                   let #ident = #ident_result?;
                 }
-            };
-            let #ident = #ident_result?;
+            }).collect();
+
+            quote! {
+                #(#extraction)*
+                #post_method_param_extraction_logic
+            }
         }
-    }).collect();
 
-    match post_method_param_extraction_logic {
-        Some(post_method_param_extraction) => quote! {
-            #(#extraction)*
-            #post_method_param_extraction
-        },
+        DefaultOrMultimodal::Multimodal => {
+            let ident = &param_idents[0];
 
-        None => quote! {
-           extraction[0] // When it comes to multimodal, there is only 1 set of tokens and that represents all parameters
-        },
+            let extraction = quote! {
+                // the `input` here is the name of the parameter in `Agent`
+                let #ident = match input {
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
+                        golem_rust::agentic::Multimodal::from_element_values(elements).map_err(|e| {
+                            golem_rust::agentic::invalid_input_error(format!("Failed parsing Multimodal input for method {}: {}", #method_name, e))
+                        })
+                    },
+                    _ => Err(golem_rust::agentic::internal_error("Expected Multimodal input")),
+                }?;
+            };
+
+            quote! {
+                #extraction
+                #post_method_param_extraction_logic
+            }
+        }
     }
 }
 

@@ -186,13 +186,21 @@ impl Display for WorkerResourceId {
 )]
 #[repr(u8)]
 pub enum LogLevel {
+    #[desert(transparent)]
     Stdout,
+    #[desert(transparent)]
     Stderr,
+    #[desert(transparent)]
     Trace,
+    #[desert(transparent)]
     Debug,
+    #[desert(transparent)]
     Info,
+    #[desert(transparent)]
     Warn,
+    #[desert(transparent)]
     Error,
+    #[desert(transparent)]
     Critical,
 }
 
@@ -305,12 +313,16 @@ pub struct TimestampedUpdateDescription {
 pub enum DurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
+    #[desert(transparent)]
     ReadLocal,
     /// The side-effect writes to the worker's local state (for example local file system)
+    #[desert(transparent)]
     WriteLocal,
     /// The side-effect reads from external state (for example a key-value store)
+    #[desert(transparent)]
     ReadRemote,
     /// The side-effect manipulates external state (for example an RPC call)
+    #[desert(transparent)]
     WriteRemote,
     /// The side-effect manipulates external state through multiple invoked functions (for example
     /// a HTTP request where reading the response involves multiple host function calls)
@@ -319,8 +331,10 @@ pub enum DurableFunctionType {
     /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+    #[desert(transparent)]
     WriteRemoteBatched(Option<OplogIndex>),
 
+    #[desert(transparent)]
     WriteRemoteTransaction(Option<OplogIndex>),
 }
 

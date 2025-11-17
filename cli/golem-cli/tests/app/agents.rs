@@ -124,6 +124,9 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "rust:agent/foo-agent.{fun-string}", &["\"sample\""]).await;
 
+    // A char type
+    run_and_assert(&ctx, "fun-char", &[r#"'a'"#]).await;
+
     // Testing trigger invocation
     run_and_assert(
         &ctx,
@@ -182,6 +185,13 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "fun-all-primitives", &[all_primitives_arg]).await;
 
     run_and_assert(&ctx, "fun-tuple-simple", &[r#"("sample", 3.14, true)"#]).await;
+
+    run_and_assert(
+        &ctx,
+        "fun-tuple-complex",
+        &[&format!("(\"sample\", 3.14, {all_primitives_arg}, true)")],
+    )
+    .await;
 
     let collections_arg = r#"
     {
@@ -304,14 +314,11 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
     .await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-ok}", &["ok"]).await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    //run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-err}", &["err"]).await;
 
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2279
-    // run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
+    run_and_assert(&ctx, "rust:agent/foo-agent.{fun-result-unit-both}", &["ok"]).await;
 
     let result_complex_arg = r#"
     ok({
@@ -358,6 +365,48 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     .await;
 
     run_and_assert(&ctx, "fun-enum-with-only-literals", &["a"]).await;
+
+    run_and_assert(
+        &ctx,
+        "fun-multi-modal",
+        &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-unstructured-text}",
+        &[r#"url("foo")"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-unstructured-text}",
+        &[r#"inline({data: "foo", text-type: none})"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-unstructured-text-lc}",
+        &[r#"url("foo")"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-unstructured-text-lc}",
+        &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "rust:agent/foo-agent.{fun-unstructured-binary}",
+        &[r#"url("foo")"#],
+    )
+    .await;
 }
 
 #[test]

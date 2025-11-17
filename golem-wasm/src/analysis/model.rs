@@ -605,6 +605,15 @@ pub mod analysed_type {
         })
     }
 
+    pub fn unit_result() -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            name: None,
+            owner: None,
+            ok: None,
+            err: None,
+        })
+    }
+
     pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
         AnalysedType::Record(TypeRecord {
             name: None,
