@@ -5,6 +5,11 @@ import "wasm/rpc/value_and_type.proto";
 
 package golem.component;
 
+enum AgentMode {
+  DURABLE = 0;
+  EPHEMERAL = 1;
+}
+
 message AgentConstructor {
   optional string name = 1;
   string description = 2;
@@ -33,6 +38,7 @@ message AgentType {
   AgentConstructor constructor = 3;
   repeated AgentMethod methods = 4;
   repeated AgentDependency dependencies = 5;
+  AgentMode mode = 6;
 }
 
 message BinaryDescriptor {

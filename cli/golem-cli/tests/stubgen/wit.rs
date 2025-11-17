@@ -40,7 +40,6 @@ fn all_wit_types() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;
@@ -145,7 +144,6 @@ fn many_ways_to_export() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;

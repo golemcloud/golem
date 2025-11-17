@@ -52,7 +52,7 @@ use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
-    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentType, ComponentVersion,
+    AccountId, ComponentFilePathWithPermissions, ComponentId, ComponentVersion,
     InitialComponentFile, PluginId, PluginInstallationId, ProjectId,
 };
 use golem_service_base::clients::authorised_request;
@@ -178,7 +178,6 @@ pub trait ComponentService: Send + Sync {
             project_id: Some(ProjectId(component.project_id).into()),
             account_id: Some(account_id.clone().into()),
             created_at: Some(SystemTime::from(component.created_at).into()),
-            component_type: Some(component.component_type as i32),
             files: component
                 .files
                 .into_iter()
@@ -351,7 +350,6 @@ pub trait ComponentService: Send + Sync {
         token: &Uuid,
         local_path: &Path,
         name: &str,
-        component_type: ComponentType,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
@@ -431,7 +429,6 @@ pub trait ComponentService: Send + Sync {
                     token,
                     local_path,
                     name,
-                    component_type,
                     files,
                     dynamic_linking,
                     unverified,
@@ -465,7 +462,6 @@ pub trait ComponentService: Send + Sync {
         _local_path: &Path,
         _component_id: &ComponentId,
         _component_name: &str,
-        _component_type: ComponentType,
         _project_id: Option<ProjectId>,
     ) -> Result<(), AddComponentError> {
         panic!(
@@ -478,7 +474,6 @@ pub trait ComponentService: Send + Sync {
         token: &Uuid,
         local_path: &Path,
         name: &str,
-        component_type: ComponentType,
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         _unverified: bool,
@@ -498,10 +493,6 @@ pub trait ComponentService: Send + Sync {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.component_grpc_client().await;
-
-                let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-                    component_type.into();
-
                 let files = files.iter().map(|(_, f)| f.clone().into()).collect();
 
                 let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
@@ -509,7 +500,6 @@ pub trait ComponentService: Send + Sync {
                         CreateComponentRequestHeader {
                             project_id: project_id.map(|pid| pid.into()),
                             component_name: name.to_string(),
-                            component_type: Some(component_type as i32),
                             files,
                             dynamic_linking: HashMap::from_iter(
                                 dynamic_linking
@@ -596,7 +586,6 @@ pub trait ComponentService: Send + Sync {
                             component_name: name.to_string(),
                         },
                         file,
-                        Some(&component_type),
                         to_http_file_permissions(files).as_ref(),
                         archive_file,
                         to_http_dynamic_linking(Some(dynamic_linking)).as_ref(),
@@ -633,7 +622,6 @@ pub trait ComponentService: Send + Sync {
         token: &Uuid,
         component_id: &ComponentId,
         local_path: &Path,
-        component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
         env: &HashMap<String, String>,
@@ -645,10 +633,6 @@ pub trait ComponentService: Send + Sync {
         match self.client_protocol() {
             GolemClientProtocol::Grpc => {
                 let mut client = self.component_grpc_client().await;
-
-                let component_type: golem_api_grpc::proto::golem::component::ComponentType =
-                    component_type.into();
-
                 let update_files = files.is_some();
 
                 let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> =
@@ -662,7 +646,6 @@ pub trait ComponentService: Send + Sync {
                     data: Some(update_component_request::Data::Header(
                         UpdateComponentRequestHeader {
                             component_id: Some(component_id.clone().into()),
-                            component_type: Some(component_type as i32),
                             update_files,
                             files,
                             dynamic_linking: HashMap::from_iter(
@@ -746,7 +729,6 @@ pub trait ComponentService: Send + Sync {
                 match client
                     .update_component(
                         &component_id.0,
-                        Some(&component_type),
                         file,
                         files
                             .as_ref()

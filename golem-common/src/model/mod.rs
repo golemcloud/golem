@@ -1645,49 +1645,6 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(
-    Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize, poem_openapi::Enum,
-)]
-#[repr(i32)]
-pub enum ComponentType {
-    Durable = 0,
-    Ephemeral = 1,
-}
-
-impl TryFrom<i32> for ComponentType {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ComponentType::Durable),
-            1 => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {value}")),
-        }
-    }
-}
-
-impl Display for ComponentType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ComponentType::Durable => "Durable",
-            ComponentType::Ephemeral => "Ephemeral",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for ComponentType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Durable" => Ok(ComponentType::Durable),
-            "Ephemeral" => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {s}")),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
