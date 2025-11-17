@@ -18,7 +18,7 @@ use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
-    AgentAnyFilter, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
+    AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
@@ -31,10 +31,7 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use desert_rust::{
-    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
-    SerializationContext,
-};
+use golem_common::model::agent::AgentId;
 use golem_common::model::oplog::host_functions::{
     GolemApiCompletePromise, GolemApiCreatePromise, GolemApiFork, GolemApiForkWorker,
     GolemApiGenerateIdempotencyKey, GolemApiGetAgentMetadata, GolemApiGetPromiseResult,
@@ -44,7 +41,7 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
-    HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiFork,
+    HostRequestGolemApiComponentSlugAndAgentName,
     HostRequestGolemApiForkAgent, HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent,
     HostRequestGolemApiUpdateAgent, HostRequestNoInput, HostResponseGolemApiAgentId,
     HostResponseGolemApiAgentMetadata, HostResponseGolemApiComponentId, HostResponseGolemApiFork,
@@ -787,11 +784,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| anyhow!(err))
     }
 
-    async fn fork(&mut self, new_name: String) -> anyhow::Result<ForkResult> {
+    async fn fork(&mut self) -> anyhow::Result<ForkResult> {
         let durability =
             Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
+            let forked_phantom_id = Uuid::new_v4();
+
+            let new_name = if let Some(agent_id) = self.agent_id() {
+                AgentId::new(
+                    agent_id.agent_type.clone(),
+                    agent_id.parameters.clone(),
+                    Some(forked_phantom_id),
+                )
+                .to_string()
+            } else {
+                format!("{}-{}", self.worker_id().worker_name, forked_phantom_id)
+            };
+
             let target_agent_id = WorkerId {
                 component_id: self.owned_worker_id.component_id(),
                 worker_name: new_name.clone(),
@@ -811,6 +821,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     &self.owned_worker_id,
                     &target_agent_id,
                     oplog_index_cut_off,
+                    forked_phantom_id.clone()
                 )
                 .await
                 .map(|_| golem_common::model::ForkResult::Original)
@@ -820,8 +831,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(durability
                 .persist(
                     self,
-                    HostRequestGolemApiFork { name: new_name },
+                    HostRequestNoInput {},
                     HostResponseGolemApiFork {
+                        forked_phantom_id,
                         result: fork_result,
                     },
                 )
@@ -831,10 +843,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         }?;
 
         match result.result {
-            Ok(result) => Ok(match result {
-                golem_common::model::ForkResult::Original => ForkResult::Original,
-                golem_common::model::ForkResult::Forked => ForkResult::Forked,
-            }),
+            Ok(fork_result) => {
+                let details = ForkDetails {
+                    forked_phantom_id: result.forked_phantom_id.into(),
+                };
+                Ok(match fork_result {
+                    golem_common::model::ForkResult::Original => ForkResult::Original(details),
+                    golem_common::model::ForkResult::Forked => ForkResult::Forked(details),
+                })
+            }
             Err(err) => Err(anyhow!(err)),
         }
     }
@@ -1433,31 +1450,6 @@ impl GetAgentsEntry {
     }
 }
 
-impl BinarySerializer for ForkResult {
-    fn serialize<Output: BinaryOutput>(
-        &self,
-        context: &mut SerializationContext<Output>,
-    ) -> Result<(), desert_rust::Error> {
-        match self {
-            ForkResult::Original => <u8 as BinarySerializer>::serialize(&0u8, context),
-            ForkResult::Forked => <u8 as BinarySerializer>::serialize(&1u8, context),
-        }
-    }
-}
-
-impl BinaryDeserializer for ForkResult {
-    fn deserialize(context: &mut DeserializationContext<'_>) -> Result<Self, desert_rust::Error> {
-        let value = <u8 as BinaryDeserializer>::deserialize(context)?;
-        match value {
-            0 => Ok(ForkResult::Original),
-            1 => Ok(ForkResult::Forked),
-            other => Err(desert_rust::Error::InvalidConstructorId {
-                constructor_id: other as u32,
-                type_name: "ForkResult".to_string(),
-            }),
-        }
-    }
-}
 #[derive(Clone)]
 pub struct GetPromiseResultEntry {
     promise_id: PromiseId,
