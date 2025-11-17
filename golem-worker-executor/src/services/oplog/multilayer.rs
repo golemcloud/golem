@@ -21,6 +21,7 @@ use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -39,7 +40,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot::Sender;
 use tracing::{debug, error, info, span, warn, Instrument, Level, Span};
-use golem_common::model::agent::AgentMode;
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
