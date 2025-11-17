@@ -1,5 +1,7 @@
 use std::collections::Bound;
 
+use std::collections::HashMap;
+
 use golem_rust::{MultimodalSchema, Schema, AllowedLanguages, AllowedMimeTypes};
 
 #[derive(Schema)]
@@ -42,9 +44,8 @@ pub struct Tuples {
 pub struct Collections {
     pub list_u8: Vec<u8>,
     pub list_str: Vec<String>,
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
-    // pub map_num: HashMap<String, f64>,
-    // pub map_text: HashMap<i32, String>,
+    pub map_num: HashMap<String, f64>,
+    pub map_text: HashMap<i32, String>,
 }
 
 #[derive(Schema)]
@@ -60,8 +61,7 @@ pub struct NestedStruct {
     pub id: String,
     pub simple: SimpleStruct,
     pub list: Vec<SimpleStruct>,
-    // TODO; https://github.com/golemcloud/golem/issues/2273
-    // pub map: HashMap<String, f64>,
+    pub map: HashMap<String, f64>,
     pub option: Option<String>,
     pub result: Result<String, String>,
 }
@@ -90,7 +90,7 @@ pub enum EnumWithOnlyLiterals {
 pub enum EnumWithCollections {
     Vec(Vec<u8>),
     // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
-    // Map(HashMap<String, f64>),
+    Map(HashMap<String, f64>),
     Tuple((String, f64)),
     Bound(Bound<u8>),
 }
@@ -102,8 +102,7 @@ pub enum ComplexEnum {
     ListOfStructs(Vec<SimpleStruct>),
     Option(Option<String>),
     Result(Result<String, String>),
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
-    //Map(HashMap<String, f64>),
+    Map(HashMap<String, f64>),
     Bound(Bound<String>),
     Tuple((String, f64, bool)),
     UnitA,
