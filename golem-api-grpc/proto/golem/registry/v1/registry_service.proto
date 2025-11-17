@@ -13,7 +13,6 @@ import "golem/component/agent.proto";
 import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
-import "golem/component/component_type.proto";
 import "golem/component/dynamic_linked_instance.proto";
 import "golem/component/plugin_installation.proto";
 import "golem/component/plugin_registration.proto";

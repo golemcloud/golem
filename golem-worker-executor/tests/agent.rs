@@ -284,24 +284,23 @@ async fn ephemeral_agent_works(
             &context.default_environment_id,
             "golem_it_constructor_parameter_echo",
         )
-        .ephemeral()
         .store()
         .await
         .unwrap();
 
     let worker_id1 = executor
-        .start_worker(&component.id, "echo-agent(\"param1\")")
+        .start_worker(&component.id, "ephemeral-echo-agent(\"param1\")")
         .await
         .unwrap();
     let worker_id2 = executor
-        .start_worker(&component.id, "echo-agent(\"param2\")")
+        .start_worker(&component.id, "ephemeral-echo-agent(\"param2\")")
         .await
         .unwrap();
 
     let result1 = executor
         .invoke_and_await(
             &worker_id1,
-            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
         .await
@@ -309,7 +308,7 @@ async fn ephemeral_agent_works(
     let result2 = executor
         .invoke_and_await(
             &worker_id1,
-            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
         .await
@@ -317,7 +316,7 @@ async fn ephemeral_agent_works(
     let result3 = executor
         .invoke_and_await(
             &worker_id2,
-            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
         .await
@@ -325,7 +324,7 @@ async fn ephemeral_agent_works(
     let result4 = executor
         .invoke_and_await(
             &worker_id2,
-            "golem-it:constructor-parameter-echo/echo-agent.{change-and-get}",
+            "golem-it:constructor-parameter-echo/ephemeral-echo-agent.{change-and-get}",
             vec![],
         )
         .await

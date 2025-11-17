@@ -19,7 +19,7 @@ use anyhow::anyhow;
 use assert2::{check, let_assert};
 use axum::routing::get;
 use axum::Router;
-use golem_common::model::component::{ComponentId, ComponentRevision, ComponentType};
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -365,34 +365,33 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "counters")
-        .ephemeral()
+        .component(&context.default_environment_id, "it_agent_counters_release")
         .store()
         .await?;
     let worker_id = WorkerId {
         component_id: component.id.clone(),
-        worker_name: "test".to_string(),
+        worker_name: "ephemeral-counter(\"test\")".to_string(),
     };
 
     executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{inc-global-by}",
-            vec![2u64.into_value_and_type()],
+            "it:agent-counters/ephemeral-counter.{increment}",
+            vec![],
         )
         .await??;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{get-global-value}",
+            "it:agent-counters/ephemeral-counter.{increment}",
             vec![],
         )
         .await??;
 
     drop(executor);
 
-    check!(result == vec![Value::U64(0)]);
+    assert_eq!(result, vec![Value::U32(1)]);
     Ok(())
 }
 
@@ -3494,7 +3493,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-server-exports/server-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),
@@ -3508,7 +3506,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-client-exports/client-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),

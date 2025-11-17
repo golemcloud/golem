@@ -20,12 +20,12 @@ use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
     InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
 };
-use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
@@ -289,7 +289,6 @@ pub struct ComponentRevisionRecord {
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
-    pub component_type: i32,
     pub size: i32,
     pub metadata: SqlComponentMetadata,
     pub original_env: Json<BTreeMap<String, String>>,
@@ -331,7 +330,6 @@ impl ComponentRevisionRecord {
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            component_type: 0,
             size: 0,
             metadata: ComponentMetadata::default().into(),
             env: Default::default(),
@@ -349,8 +347,6 @@ impl ComponentRevisionRecord {
         diff::Component {
             metadata: diff::ComponentMetadata {
                 version: Some(self.version.clone()),
-                component_type: ComponentType::from_repr(self.component_type)
-                    .expect("expected valid component type"),
                 env: self
                     .env
                     .iter()
@@ -371,7 +367,6 @@ impl ComponentRevisionRecord {
                                         diff::ComponentWasmRpcTarget {
                                             interface_name: target.interface_name.clone(),
                                             component_name: target.component_name.clone(),
-                                            component_type: target.component_type,
                                         },
                                     )
                                 })
@@ -447,7 +442,6 @@ impl ComponentRevisionRecord {
                 .root_package_version()
                 .clone()
                 .unwrap_or_default(),
-            component_type: value.component_type as i32,
             size: value.component_size as i32,
             metadata: value.metadata.into(),
             hash: SqlBlake3Hash::empty(),
@@ -486,8 +480,6 @@ impl ComponentExtRevisionRecord {
             component_size: self.revision.size as u64,
             metadata: self.revision.metadata.into(),
             created_at: self.revision.audit.created_at.into(),
-            component_type: ComponentType::from_repr(self.revision.component_type)
-                .ok_or(anyhow!("Failed converting component type"))?,
             files: self
                 .revision
                 .files

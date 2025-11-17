@@ -6859,6 +6859,11 @@ components:
           $ref: '#/components/schemas/DataSchema'
         outputSchema:
           $ref: '#/components/schemas/DataSchema'
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
     AgentType:
       type: object
       title: AgentType
@@ -6868,6 +6873,7 @@ components:
       - constructor
       - methods
       - dependencies
+      - mode
       properties:
         typeName:
           type: string
@@ -6883,6 +6889,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentDependency'
+        mode:
+          $ref: '#/components/schemas/AgentMode'
     AnalysedExport:
       type: object
       oneOf:
@@ -7423,8 +7431,6 @@ components:
       properties:
         componentName:
           type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         fileOptions:
           type: object
           default: {}
@@ -7463,7 +7469,6 @@ components:
       - componentSize
       - metadata
       - createdAt
-      - componentType
       - files
       - installedPlugins
       - env
@@ -7495,8 +7500,6 @@ components:
         createdAt:
           type: string
           format: date-time
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         files:
           type: array
           items:
@@ -7608,11 +7611,6 @@ components:
           type: string
         transformUrl:
           type: string
-    ComponentType:
-      type: string
-      enum:
-      - durable
-      - ephemeral
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -7622,8 +7620,6 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         removedFiles:
           type: array
           default: []
@@ -9158,14 +9154,11 @@ components:
       required:
       - interfaceName
       - componentName
-      - componentType
       properties:
         interfaceName:
           type: string
         componentName:
           type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
   securitySchemes:
     Cookie:
       type: apiKey

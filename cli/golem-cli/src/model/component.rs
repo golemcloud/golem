@@ -23,7 +23,7 @@ use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
+use golem_common::model::component::{ComponentName, InitialComponentFile};
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
@@ -101,7 +101,6 @@ pub struct Component {
     pub revision: ComponentRevision,
     pub component_name: ComponentName,
     pub component_size: u64,
-    pub component_type: ComponentType,
     pub metadata: ComponentMetadata,
     pub environment_id: Option<EnvironmentId>,
     pub created_at: Option<DateTime<Utc>>,
@@ -119,7 +118,6 @@ impl From<golem_client::model::ComponentDto> for Component {
             metadata: value.metadata,
             environment_id: Some(value.environment_id),
             created_at: Some(value.created_at),
-            component_type: value.component_type,
             files: value.files,
             env: value.env.into_iter().collect(),
         }
@@ -132,37 +130,23 @@ impl From<golem_client::model::ComponentDto> for Component {
 pub enum AppComponentType {
     /// Durable Golem component
     #[default]
-    Durable,
-    /// Ephemeral Golem component
-    Ephemeral,
+    Agent,
     /// Library component, to be used in composition (not deployable)
     Library,
 }
 
 impl AppComponentType {
-    pub fn as_deployable_component_type(&self) -> Option<ComponentType> {
+    pub fn is_deployable(&self) -> bool {
         match self {
-            AppComponentType::Durable => Some(ComponentType::Durable),
-            AppComponentType::Ephemeral => Some(ComponentType::Ephemeral),
-            AppComponentType::Library => None,
+            AppComponentType::Agent => true,
+            AppComponentType::Library => false,
         }
     }
 }
-
-impl From<ComponentType> for AppComponentType {
-    fn from(value: ComponentType) -> Self {
-        match value {
-            ComponentType::Durable => AppComponentType::Durable,
-            ComponentType::Ephemeral => AppComponentType::Ephemeral,
-        }
-    }
-}
-
 impl Display for AppComponentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AppComponentType::Durable => write!(f, "Durable"),
-            AppComponentType::Ephemeral => write!(f, "Ephemeral"),
+            AppComponentType::Agent => write!(f, "Agent"),
             AppComponentType::Library => write!(f, "Library"),
         }
     }
@@ -194,7 +178,6 @@ pub struct ComponentView {
 
     pub component_name: ComponentName,
     pub component_id: ComponentId,
-    pub component_type: ComponentType,
     pub component_version: Option<String>,
     pub component_revision: u64,
     pub component_size: u64,
@@ -253,7 +236,6 @@ impl ComponentView {
             show_exports_for_rib,
             component_name: value.component_name,
             component_id: value.component_id,
-            component_type: value.component_type,
             component_version: value.metadata.root_package_version().clone(),
             component_revision: value.revision.0,
             component_size: value.component_size,

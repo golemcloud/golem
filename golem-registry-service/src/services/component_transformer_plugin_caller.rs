@@ -19,7 +19,7 @@ use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, InitialComponentFile,
 };
 use golem_common::retries::with_retries;
 use http::StatusCode;
@@ -197,7 +197,6 @@ impl ComponentTransformerPluginCaller for ComponentTransformerPluginCallerDefaul
 struct SerializableComponent {
     pub component_id: ComponentId,
     pub component_name: ComponentName,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
 }
@@ -207,7 +206,6 @@ impl From<NewComponentRevision> for SerializableComponent {
         Self {
             component_id: value.component_id,
             component_name: value.component_name,
-            component_type: value.component_type,
             files: value.files,
             env: value.env,
         }

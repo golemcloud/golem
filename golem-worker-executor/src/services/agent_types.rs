@@ -190,7 +190,7 @@ mod local {
             &self,
             owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
-            Ok(self
+            let result = self
                 .component_service
                 .all_cached_metadata()
                 .await
@@ -207,7 +207,8 @@ mod local {
                         })
                         .collect::<Vec<_>>()
                 })
-                .collect())
+                .collect();
+            Ok(result)
         }
 
         async fn get(

@@ -85,7 +85,6 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
         extract_source_exports_package: true,
         seal_cargo_workspace: true,
         component_name: ComponentName("test:component".to_string()),
-        is_ephemeral: false,
     })
     .unwrap();
     let wasm_path = generate_and_build_client(&def, false).await.unwrap();

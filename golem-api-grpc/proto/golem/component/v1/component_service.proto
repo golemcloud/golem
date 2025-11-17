@@ -6,7 +6,6 @@ import "golem/common/environment.proto";
 import "golem/common/empty.proto";
 import "golem/component/agent.proto";
 import "golem/component/component.proto";
-import "golem/component/component_type.proto";
 import "golem/component/dynamic_linked_instance.proto";
 import "golem/component/v1/component_error.proto";
 import "golem/component/component_id.proto";

@@ -54,10 +54,9 @@ use golem_common::grpc::{
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{
-    ComponentFilePath, ComponentId, ComponentType, PluginPriority,
-};
+use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
@@ -1045,10 +1044,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Some(metadata.last_known_status.component_revision),
             )
             .await?;
-        if component_metadata.component_type == ComponentType::Ephemeral {
-            return Err(WorkerExecutorError::invalid_request(
-                "Ephemeral workers cannot be updated",
-            ));
+
+        if let Ok(agent_id) = AgentId::parse(
+            &owned_worker_id.worker_id.worker_name,
+            &component_metadata.metadata,
+        ) {
+            if let Ok(Some(agent_type)) = component_metadata
+                .metadata
+                .find_agent_type_by_name(&agent_id.agent_type)
+            {
+                if agent_type.mode == AgentMode::Ephemeral {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "Ephemeral workers cannot be updated",
+                    ));
+                }
+            }
         }
 
         match request.mode() {

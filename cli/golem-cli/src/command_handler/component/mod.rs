@@ -35,7 +35,7 @@ use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use golem_common::model::component::ComponentId;
-use golem_common::model::component::{ComponentName, ComponentType};
+use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -1195,7 +1195,6 @@ impl ComponentCommandHandler {
             self.ctx.show_sensitive(),
             component_name,
             component_hash,
-            properties.component_type,
             files,
             properties.dynamic_linking.as_ref(),
             properties.env.as_ref(),
@@ -1389,7 +1388,6 @@ impl ComponentCommandHandler {
 // TODO: atomic
 #[allow(unused)]
 struct ComponentDeployProperties {
-    component_type: ComponentType,
     linked_wasm_path: PathBuf,
     files: Vec<InitialComponentFile>,
     dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
@@ -1404,16 +1402,14 @@ fn component_deploy_properties(
 ) -> anyhow::Result<ComponentDeployProperties> {
     let component = app_ctx.application.component(component_name);
     let linked_wasm_path = component.final_linked_wasm();
-    let component_type = component
-        .component_type()
-        .as_deployable_component_type()
-        .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
+    if !component.component_type().is_deployable() {
+        bail!("Component {component_name} is not deployable");
+    }
     let files = component.files().clone();
     let env = resolve_env_vars(component_name, component.env())?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
-        component_type,
         linked_wasm_path,
         files,
         dynamic_linking,
@@ -1462,11 +1458,6 @@ fn app_component_dynamic_linking(
                                                 .component_name
                                                 .as_str()
                                                 .to_string(),
-                                            component_type: if stub_interfaces.is_ephemeral {
-                                                ComponentType::Ephemeral
-                                            } else {
-                                                ComponentType::Durable
-                                            },
                                         },
                                     )
                                 }),

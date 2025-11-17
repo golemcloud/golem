@@ -79,9 +79,9 @@ use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -342,6 +342,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn agent_id(&self) -> Option<AgentId> {
         self.state.agent_id.clone()
+    }
+
+    pub fn agent_mode(&self) -> AgentMode {
+        self.execution_status.read().unwrap().agent_mode()
     }
 
     pub fn component_metadata(&self) -> &golem_common::model::component::ComponentDto {
@@ -1291,25 +1295,27 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { .. } => {
+            ExecutionStatus::Running { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
-                await_interruption, ..
+                agent_mode,
+                await_interruption,
+                ..
             } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
                 await_interruption.send(()).ok();
             }
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1321,16 +1327,16 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let current_execution_status = execution_status.clone();
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended { .. } => {
+            ExecutionStatus::Suspended { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1816,14 +1822,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .set_replay_target(new_target);
         }
 
-        let (component_type, is_agent) = {
+        let (agent_mode, is_agent) = {
             let component = store.as_context().data().component_metadata();
-            (component.component_type, component.metadata.is_agent())
+            (
+                store.as_context().data().agent_mode(),
+                component.metadata.is_agent(),
+            )
         };
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                    (component_type == ComponentType::Durable || // durable components are fully replayed
+                    (agent_mode == AgentMode::Durable || // durable components are fully replayed
                         (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
@@ -2064,13 +2073,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        let prepare_result = if store
-            .as_context()
-            .data()
-            .component_metadata()
-            .component_type
-            == ComponentType::Ephemeral
-        {
+        let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
             // We have to replay the initialize call for agents:

@@ -65,7 +65,6 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &component_1.id,
             component_1.revision,
             Some("update-test-v2"),
-            None,
             vec![],
             vec![],
             None,
@@ -137,7 +136,6 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                component_type: None,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
@@ -166,7 +164,6 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component_v2.revision,
-                component_type: None,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
@@ -235,7 +232,6 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                component_type: None,
                 removed_files: Vec::new(),
                 new_file_options: BTreeMap::new(),
                 dynamic_linking: None,
@@ -377,7 +373,6 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("ifs-test".to_string()),
-                component_type: None,
                 file_options: BTreeMap::from_iter(vec![(
                     ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
                     ComponentFileOptions {

@@ -188,7 +188,6 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::model::component::ComponentType;
     use crate::model::diff::component::{Component, ComponentFile};
     use crate::model::diff::deployment::Deployment;
     use crate::model::diff::hash::Hashable;
@@ -212,7 +211,6 @@ mod test {
             Component {
                 metadata: ComponentMetadata {
                     version: Some("1.0.0".to_string()),
-                    component_type: ComponentType::Durable,
                     env: BTreeMap::from([
                         ("LOL".to_string(), "LOL".to_string()),
                         ("X".to_string(), "Y".to_string()),

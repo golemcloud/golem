@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentFilePermissions, ComponentType};
+use crate::model::component::ComponentFilePermissions;
 use crate::model::diff::hash::{hash_from_serialized_value, Hash, HashOf, Hashable};
 use crate::model::diff::plugin::PluginInstallation;
 use crate::model::diff::ser::serialize_with_mode;
@@ -63,14 +63,12 @@ impl Diffable for ComponentFile {
 pub struct ComponentWasmRpcTarget {
     pub interface_name: String,
     pub component_name: String,
-    pub component_type: ComponentType,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
     pub version: Option<String>,
-    pub component_type: ComponentType,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]

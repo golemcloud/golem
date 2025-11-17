@@ -28,10 +28,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountId, PlanId};
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::AccountRole;
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentType};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -159,7 +159,6 @@ impl TestWorkerExecutor {
                 &source_path,
                 component_id,
                 name,
-                ComponentType::Durable,
                 environment_id.clone(),
                 self.context.application_id.clone(),
                 self.context.account_id.clone(),
@@ -687,6 +686,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn agent_id(&self) -> Option<AgentId> {
         self.durable_ctx.agent_id()
+    }
+
+    fn agent_mode(&self) -> AgentMode {
+        self.durable_ctx.agent_mode()
     }
 
     fn created_by(&self) -> &AccountId {

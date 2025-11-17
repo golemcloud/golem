@@ -17,7 +17,6 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_common::model::component::ComponentType;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -91,7 +90,6 @@ async fn get_oplog_1(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await?;
 
-    tracing::warn!("oplog: {oplog:?}");
     assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
@@ -372,7 +370,6 @@ async fn invocation_context_test(
                     WasmRpcTarget {
                         interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
                         component_name: "golem_ictest".to_string(),
-                        component_type: ComponentType::Durable,
                     },
                 )]),
             }),

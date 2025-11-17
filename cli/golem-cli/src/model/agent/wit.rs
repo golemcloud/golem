@@ -763,8 +763,9 @@ mod tests {
     };
 
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
-        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+        NamedElementSchemas, TextDescriptor,
     };
     use golem_common::model::component::ComponentName;
     use golem_wasm::analysis::analysed_type::{
@@ -943,6 +944,7 @@ mod tests {
                 },
             ],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -1407,7 +1409,7 @@ mod tests {
 
     #[test]
     pub fn char_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::char_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
@@ -1437,7 +1439,7 @@ mod tests {
 
     #[test]
     pub fn unit_result_type() {
-        let component_name = "test:agent".into();
+        let component_name = "test:agent".try_into().unwrap();
         let agent_types = test::unit_result_type();
 
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)

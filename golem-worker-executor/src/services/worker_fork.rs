@@ -481,7 +481,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 ))),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
-                        component_type: source_worker_instance.component_type(),
+                        agent_mode: source_worker_instance.agent_mode(),
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),

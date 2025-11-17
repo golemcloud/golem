@@ -15,6 +15,7 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_common::model::WorkerId;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -821,70 +822,35 @@ async fn ephemeral_worker_invocation_via_rpc1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let ephemeral_component = executor
-        .component(&context.default_environment_id, "ephemeral")
-        .ephemeral()
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
         .store()
         .await?;
-    let caller_component = executor
-        .component(&context.default_environment_id, "caller_composed")
-        .store()
-        .await?;
+    let worker_id = WorkerId {
+        component_id: component.id,
+        worker_name: "counter(\"ephemeral_worker_invocation_via_rpc1\")".to_string(),
+    };
 
-    let mut env = HashMap::new();
-    env.insert(
-        "EPHEMERAL_COMPONENT_ID".to_string(),
-        ephemeral_component.id.to_string(),
-    );
-    let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-ephemeral-1", vec![], env, vec![])
-        .await?;
-
-    let result = executor
+    let _ = executor
         .invoke_and_await(
-            &caller_worker_id,
-            "rpc:caller-exports/caller-inline-functions.{ephemeral-test1}",
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
             vec![],
         )
-        .await??;
+        .await?;
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
+            vec![],
+        )
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
 
-    match result.into_iter().next() {
-        Some(Value::List(items)) => {
-            let pairs = items
-                .into_iter()
-                .filter_map(|item| match item {
-                    Value::Tuple(values) if values.len() == 2 => {
-                        let mut iter = values.into_iter();
-                        let key = iter.next();
-                        let value = iter.next();
-                        match (key, value) {
-                            (Some(Value::String(key)), Some(Value::String(value))) => {
-                                Some((key, value))
-                            }
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<(String, String)>>();
-
-            check!(pairs.len() == 3);
-            let name1 = &pairs[0].0;
-            let value1 = &pairs[0].1;
-            let name2 = &pairs[1].0;
-            let value2 = &pairs[1].1;
-            let name3 = &pairs[2].0;
-            let value3 = &pairs[2].1;
-
-            check!(name1 == name2);
-            check!(name2 != name3);
-            check!(value1 != value2);
-            check!(value2 != value3);
-        }
-        _ => panic!("Unexpected result value"),
-    }
+    assert_eq!(result, Ok(vec![Value::U32(1)]));
 
     Ok(())
 }

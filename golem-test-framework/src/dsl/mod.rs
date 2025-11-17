@@ -35,7 +35,7 @@ use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    ComponentType, PluginInstallation,
+    PluginInstallation,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::deployment::DeploymentCreation;
@@ -83,7 +83,6 @@ pub trait TestDsl {
         wasm_name: &str,
         environment_id: EnvironmentId,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
@@ -107,7 +106,6 @@ pub trait TestDsl {
             component_id,
             latest_version.revision,
             Some(name),
-            None,
             Vec::new(),
             Vec::new(),
             None,
@@ -127,7 +125,6 @@ pub trait TestDsl {
             component_id,
             latest_version.revision,
             Some(name),
-            None,
             files,
             latest_version.files.into_iter().map(|f| f.path).collect(),
             None,
@@ -147,7 +144,6 @@ pub trait TestDsl {
             component_id,
             latest_version.revision,
             Some(name),
-            None,
             Vec::new(),
             Vec::new(),
             None,
@@ -161,7 +157,6 @@ pub trait TestDsl {
         component_id: &ComponentId,
         previous_version: ComponentRevision,
         wasm_name: Option<&str>,
-        component_type: Option<ComponentType>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
@@ -616,7 +611,6 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     environment_id: EnvironmentId,
     name: String,
     wasm_name: String,
-    component_type: ComponentType,
     unique: bool,
     unverified: bool,
     files: Vec<IFSEntry>,
@@ -632,7 +626,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             environment_id,
             wasm_name: name.clone(),
             name,
-            component_type: ComponentType::Durable,
             unique: false,
             unverified: false,
             files: Vec::new(),
@@ -645,18 +638,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     /// Set the name of the component.
     pub fn name(mut self, name: &str) -> Self {
         self.name = name.to_string();
-        self
-    }
-
-    /// Set the component type to ephemeral.
-    pub fn ephemeral(mut self) -> Self {
-        self.component_type = ComponentType::Ephemeral;
-        self
-    }
-
-    /// Set the component type to durable.
-    pub fn durable(mut self) -> Self {
-        self.component_type = ComponentType::Durable;
         self
     }
 
@@ -771,7 +752,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 &self.wasm_name,
                 self.environment_id,
                 &self.name,
-                self.component_type,
                 self.unique,
                 self.unverified,
                 self.files,
