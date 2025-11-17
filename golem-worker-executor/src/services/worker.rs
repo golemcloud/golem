@@ -130,7 +130,7 @@ impl WorkerService for DefaultWorkerService {
                 _,
                 OplogEntry::Create {
                     worker_id,
-                    component_version,
+                    component_revision,
                     args,
                     env,
                     environment_id,
@@ -153,8 +153,8 @@ impl WorkerService for DefaultWorkerService {
                     created_at: timestamp,
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version,
-                        component_version_for_replay: component_version,
+                        component_revision,
+                        component_revision_for_replay: component_revision,
                         component_size,
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,

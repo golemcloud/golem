@@ -18,11 +18,10 @@ use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, O
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    OplogEntry, OplogIndex, OplogPayload, PayloadId, PersistenceLevel,
+    OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::{
     OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
@@ -99,15 +98,15 @@ impl PrimaryOplogService {
         }
     }
 
-    async fn upload_payload(
+    async fn upload_raw_payload(
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         max_payload_size: usize,
         owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String> {
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
         if data.len() > max_payload_size {
             let payload_id: PayloadId = PayloadId::new();
-            let md5_hash = md5::compute(data).to_vec();
+            let md5_hash = md5::compute(&data).to_vec();
 
             blob_storage
                 .put_raw(
@@ -118,32 +117,27 @@ impl PrimaryOplogService {
                         worker_id: owned_worker_id.worker_id(),
                     },
                     Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
-                    data,
+                    &data,
                 )
                 .await
                 .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"))?;
 
-            Ok(OplogPayload::External {
+            Ok(RawOplogPayload::External {
                 payload_id,
                 md5_hash,
             })
         } else {
-            Ok(OplogPayload::Inline(data.to_vec()))
+            Ok(RawOplogPayload::SerializedInline(data))
         }
     }
 
-    async fn download_payload(
+    async fn download_raw_payload(
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String> {
-        match payload {
-            OplogPayload::Inline(data) => Ok(Bytes::copy_from_slice(data)),
-            OplogPayload::External {
-                payload_id,
-                md5_hash,
-            } => {
-                blob_storage
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        blob_storage
                     .get_raw(
                         "oplog",
                         "download_payload",
@@ -151,13 +145,11 @@ impl PrimaryOplogService {
                             environment_id: owned_worker_id.environment_id(),
                             worker_id: owned_worker_id.worker_id(),
                         },
-                        Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
+                        Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
                     )
                     .await
                     .map_err(|e| format!("Failed downloading oplog data from the blob store {e}"))?
                     .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
-            }
-        }
     }
 }
 
@@ -344,12 +336,12 @@ impl OplogService for PrimaryOplogService {
         ))
     }
 
-    async fn upload_payload(
+    async fn upload_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        data: &[u8],
-    ) -> Result<OplogPayload, String> {
-        Self::upload_payload(
+        data: Vec<u8>,
+    ) -> Result<RawOplogPayload, String> {
+        Self::upload_raw_payload(
             self.blob_storage.clone(),
             self.max_payload_size,
             owned_worker_id,
@@ -358,12 +350,19 @@ impl OplogService for PrimaryOplogService {
         .await
     }
 
-    async fn download_payload(
+    async fn download_raw_payload(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        payload: &OplogPayload,
-    ) -> Result<Bytes, String> {
-        Self::download_payload(self.blob_storage.clone(), owned_worker_id, payload).await
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        Self::download_raw_payload(
+            self.blob_storage.clone(),
+            owned_worker_id,
+            payload_id,
+            md5_hash,
+        )
+        .await
     }
 }
 
@@ -716,7 +715,7 @@ impl Oplog for PrimaryOplog {
         state.length().await
     }
 
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
         let (blob_storage, owned_worker_id, max_length) = {
             let state = self.state.lock().await;
             (
@@ -725,15 +724,26 @@ impl Oplog for PrimaryOplog {
                 state.max_payload_size,
             )
         };
-        PrimaryOplogService::upload_payload(blob_storage, max_length, &owned_worker_id, data).await
+        PrimaryOplogService::upload_raw_payload(blob_storage, max_length, &owned_worker_id, data)
+            .await
     }
 
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
         let (blob_storage, owned_worker_id) = {
             let state = self.state.lock().await;
             (state.blob_storage.clone(), state.owned_worker_id.clone())
         };
-        PrimaryOplogService::download_payload(blob_storage, &owned_worker_id, payload).await
+        PrimaryOplogService::download_raw_payload(
+            blob_storage,
+            &owned_worker_id,
+            payload_id,
+            md5_hash,
+        )
+        .await
     }
 
     async fn switch_persistence_level(&self, mode: PersistenceLevel) {

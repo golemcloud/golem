@@ -157,7 +157,7 @@ impl ComponentObjectStore {
                             environment_id: environment_id.clone(),
                         },
                         &PathBuf::from(object_key),
-                        &data,
+                        data.as_ref(),
                     )
                     .await?;
             }

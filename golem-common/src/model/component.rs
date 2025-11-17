@@ -25,8 +25,8 @@ use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
 };
-use bincode::{Decode, Encode};
 use derive_more::Display;
+use desert_rust::BinaryCodec;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
@@ -56,7 +56,8 @@ declare_transparent_newtypes! {
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, Encode, Decode, IntoValue, FromValue)]
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, BinaryCodec, IntoValue, FromValue)]
+    #[desert(transparent)]
     pub struct PluginPriority(pub i32);
 }
 
@@ -192,7 +193,7 @@ impl InitialComponentFile {
 }
 
 declare_enums! {
-    #[derive(Encode, Decode, FromRepr)]
+    #[derive(FromRepr, ::desert_rust::BinaryCodec)]
     #[repr(i32)]
     pub enum ComponentType {
         Durable = 0,

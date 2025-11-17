@@ -17,13 +17,19 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
 use crate::durable_host::http::end_http_request;
-use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
-use crate::durable_host::serialized::SerializableStreamError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
+use golem_common::model::oplog::host_functions::{
+    HttpTypesIncomingBodyStreamBlockingRead, HttpTypesIncomingBodyStreamBlockingSkip,
+    HttpTypesIncomingBodyStreamRead, HttpTypesIncomingBodyStreamSkip,
+};
+use golem_common::model::oplog::types::SerializableStreamError;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestHttpRequest, HostResponseStreamChunk, HostResponseStreamSkip,
+    OplogIndex,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
@@ -40,10 +46,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
         if is_incoming_http_body_stream(self, &self_) {
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamRead>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "read",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -51,17 +55,27 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let result = if durability.is_live() {
                 let request = get_http_stream_request(self, handle)?;
                 let result = HostInputStream::read(&mut self.as_wasi_view().0, self_, len).await;
+
                 durability
                     .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
-                durability.persist(self, request, result).await
+
+                durability
+                    .persist(
+                        self,
+                        request,
+                        HostResponseStreamChunk {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
             } else {
                 durability.replay(self).await
-            };
+            }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
-            result
+            end_http_request_if_closed(self, handle, &result.result).await?;
+            result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "read");
             HostInputStream::read(&mut self.as_wasi_view().0, self_, len).await
@@ -77,10 +91,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<Vec<u8>, SerializableStreamError>::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingRead>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "blocking_read",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -88,17 +100,26 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let result =
                     HostInputStream::blocking_read(&mut self.as_wasi_view().0, self_, len).await;
+
                 durability
                     .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
-                durability.persist(self, request, result).await
+                durability
+                    .persist(
+                        self,
+                        request,
+                        HostResponseStreamChunk {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
             } else {
                 durability.replay(self).await
-            };
+            }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
-            result
+            end_http_request_if_closed(self, handle, &result.result).await?;
+            result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_read");
             HostInputStream::blocking_read(&mut self.as_wasi_view().0, self_, len).await
@@ -110,10 +131,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<u64, SerializableStreamError>::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamSkip>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "skip",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -124,13 +143,21 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
-                durability.persist(self, request, result).await
+                durability
+                    .persist(
+                        self,
+                        request,
+                        HostResponseStreamSkip {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
             } else {
                 durability.replay(self).await
-            };
+            }?;
 
-            end_http_request_if_closed(self, handle, &result).await?;
-            result
+            end_http_request_if_closed(self, handle, &result.result).await?;
+            result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "skip");
             HostInputStream::skip(&mut self.as_wasi_view().0, self_, len).await
@@ -146,10 +173,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let handle = self_.rep();
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
-            let durability = Durability::<u64, SerializableStreamError>::new(
+            let durability = Durability::<HttpTypesIncomingBodyStreamBlockingSkip>::new(
                 self,
-                "http::types::incoming_body_stream",
-                "blocking_skip",
                 DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
             )
             .await?;
@@ -162,12 +187,21 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
-                durability.persist(self, request, result).await
+                durability
+                    .persist(
+                        self,
+                        request,
+                        HostResponseStreamSkip {
+                            result: result.map_err(SerializableStreamError::from),
+                        },
+                    )
+                    .await
             } else {
                 durability.replay(self).await
-            };
-            end_http_request_if_closed(self, handle, &result).await?;
-            result
+            }?;
+            end_http_request_if_closed(self, handle, &result.result).await?;
+
+            result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_skip");
             HostInputStream::blocking_skip(&mut self.as_wasi_view().0, self_, len).await
@@ -330,9 +364,9 @@ fn is_incoming_http_body_stream<Ctx: WorkerCtx>(
 async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
-    result: &Result<T, StreamError>,
+    result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
-    if matches!(result, Err(StreamError::Closed)) {
+    if matches!(result, Err(SerializableStreamError::Closed)) {
         if let Some(state) = ctx.state.open_http_requests.get(&handle) {
             if state.close_owner == HttpRequestCloseOwner::InputStreamClosed {
                 end_http_request(ctx, handle).await?;
@@ -357,7 +391,7 @@ fn get_http_request_begin_idx<Ctx: WorkerCtx>(
 fn get_http_stream_request<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: u32,
-) -> Result<SerializableHttpRequest, StreamError> {
+) -> Result<HostRequestHttpRequest, StreamError> {
     let request_state = ctx.state.open_http_requests.get(&handle).ok_or_else(|| {
         StreamError::Trap(anyhow!(
             "No matching HTTP request is associated with resource handle"

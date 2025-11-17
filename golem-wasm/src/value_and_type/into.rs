@@ -87,6 +87,16 @@ impl IntoValue for u64 {
     }
 }
 
+impl IntoValue for usize {
+    fn into_value(self) -> Value {
+        Value::U64(self as u64)
+    }
+
+    fn get_type() -> AnalysedType {
+        analysed_type::u64()
+    }
+}
+
 impl IntoValue for i8 {
     fn into_value(self) -> Value {
         Value::S8(self)

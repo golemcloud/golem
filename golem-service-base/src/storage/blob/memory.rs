@@ -35,8 +35,13 @@ struct Key {
 
 #[derive(Debug, Clone)]
 enum Entry {
-    Directory { files: HashSet<String> },
-    File { data: Bytes, metadata: BlobMetadata },
+    Directory {
+        files: HashSet<String>,
+    },
+    File {
+        data: Vec<u8>,
+        metadata: BlobMetadata,
+    },
 }
 
 #[derive(Debug)]
@@ -66,7 +71,7 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -120,7 +125,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .data
             .read_async(&key, |_, entry| match entry {
                 Entry::File { data, .. } => {
-                    let stream = tokio_stream::once(Ok(data.clone()));
+                    let stream = tokio_stream::once(Ok(Bytes::from(data.clone())));
                     let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
                         Box::pin(stream);
                     Some(boxed)
@@ -194,10 +199,11 @@ impl BlobStorage for InMemoryBlobStorage {
             file: None,
         };
 
+        let size = data.len() as u64;
         let entry = Entry::File {
-            data: Bytes::copy_from_slice(data),
+            data: data.to_vec(),
             metadata: BlobMetadata {
-                size: data.len() as u64,
+                size,
                 last_modified_at: Timestamp::now_utc(),
             },
         };
@@ -239,11 +245,12 @@ impl BlobStorage for InMemoryBlobStorage {
             .to_string();
 
         let stream = stream.make_stream_erased().await?;
-        let data = stream.try_collect::<Vec<_>>().await?;
+        let data = stream.try_collect::<Vec<_>>().await?.concat();
+        let size = data.len() as u64;
         let entry = Entry::File {
-            data: Bytes::from(data.concat()),
+            data,
             metadata: BlobMetadata {
-                size: data.iter().map(|b| b.len() as u64).sum(),
+                size,
                 last_modified_at: Timestamp::now_utc(),
             },
         };

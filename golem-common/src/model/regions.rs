@@ -12,20 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::OplogIndex;
+use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
+use range_set_blaze::RangeSetBlaze;
+use serde::{Deserialize, Serialize};
 use std::collections::btree_map::{IntoValues, Values};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::ops::Bound::{Included, Unbounded};
 use std::ops::RangeInclusive;
 
-use crate::model::oplog::OplogIndex;
-use bincode::{Decode, Encode};
-use range_set_blaze::RangeSetBlaze;
-use serde::{Deserialize, Serialize};
-
 #[derive(
-    Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize, poem_openapi::Object,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    BinaryCodec,
+    Serialize,
+    Deserialize,
+    poem_openapi::Object,
+    IntoValue,
+    FromValue,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct OplogRegion {
@@ -111,7 +121,8 @@ impl DeletedRegionsBuilder {
 
 /// Structure holding all the regions deleted from the oplog by jumps. Deleted regions
 /// can be stacked to introduce temporary overrides.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct DeletedRegions {
     regions: Vec<BTreeMap<OplogIndex, OplogRegion>>,
 }

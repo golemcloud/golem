@@ -194,7 +194,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -220,7 +220,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw_slice(target_label, op_label, namespace, path, start, end)
             .await
@@ -436,7 +436,7 @@ async fn get_put_get_root(
     let storage = test.get_blob_storage().await;
 
     let path = Path::new("test-path");
-    let data = Bytes::from("test-data");
+    let data = Bytes::from("test-data").to_vec();
 
     let result1 = storage
         .get_raw("get_put_get_root", "get-raw", namespace.clone(), path)
@@ -472,7 +472,7 @@ async fn get_put_get_new_dir(
     let storage = test.get_blob_storage().await;
 
     let path = Path::new("non-existing-dir/test-path");
-    let data = Bytes::from("test-data");
+    let data = Bytes::from("test-data").to_vec();
 
     let result1 = storage
         .get_raw("get_put_get_new_dir", "get-raw", namespace.clone(), path)

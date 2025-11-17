@@ -412,8 +412,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     CommandOutcome::Continue
                 }
             }
-            WorkerInvocation::ManualUpdate { target_version } => {
-                self.manual_update(target_version).await
+            WorkerInvocation::ManualUpdate { target_revision } => {
+                self.manual_update(target_revision).await
             }
         }
     }
@@ -754,7 +754,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .data()
                                 .get_public_state()
                                 .oplog()
-                                .create_snapshot_based_update_description(target_version, &bytes)
+                                .create_snapshot_based_update_description(target_version, bytes)
                                 .await
                             {
                                 Ok(update_description) => {

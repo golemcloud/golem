@@ -13,17 +13,19 @@
 // limitations under the License.
 
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
-use crate::services::rdbms::{
-    Error as RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService,
-};
-use crate::services::rdbms::{RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
+use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::oplog::DurableFunctionType;
-use golem_common::model::{OplogIndex, TransactionId, WorkerId};
+use golem_common::model::oplog::HostPayloadPair;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestGolemRdbmsRequest, HostRequestNoInput,
+    HostResponseGolemRdbmsColumns, HostResponseGolemRdbmsRequest, HostResponseGolemRdbmsResult,
+    HostResponseGolemRdbmsResultChunk, HostResponseGolemRdbmsRowCount,
+};
+use golem_common::model::{OplogIndex, RdbmsPoolKey, TransactionId, WorkerId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -35,16 +37,40 @@ pub mod postgres;
 pub mod serialized;
 pub mod types;
 
-fn get_db_connection_interface<T: RdbmsType>() -> String {
-    format!("rdbms::{}::db-connection", T::default())
-}
-
-fn get_db_transaction_interface<T: RdbmsType>() -> String {
-    format!("rdbms::{}::db-transaction", T::default())
-}
-
-fn get_db_result_stream_interface<T: RdbmsType>() -> String {
-    format!("rdbms::{}::db-result-stream", T::default())
+// Trait to map RdbmsType to the correct HostPayloadPair types for durability
+pub trait RdbmsDurabilityPairs {
+    type ConnExecute: HostPayloadPair<
+        Req = HostRequestGolemRdbmsRequest,
+        Resp = HostResponseGolemRdbmsRowCount,
+    >;
+    type ConnQuery: HostPayloadPair<
+        Req = HostRequestGolemRdbmsRequest,
+        Resp = HostResponseGolemRdbmsResult,
+    >;
+    type ConnQueryStream: HostPayloadPair<
+        Req = HostRequestNoInput,
+        Resp = HostResponseGolemRdbmsRequest,
+    >;
+    type TxnExecute: HostPayloadPair<
+        Req = HostRequestGolemRdbmsRequest,
+        Resp = HostResponseGolemRdbmsRowCount,
+    >;
+    type TxnQuery: HostPayloadPair<
+        Req = HostRequestGolemRdbmsRequest,
+        Resp = HostResponseGolemRdbmsResult,
+    >;
+    type TxnQueryStream: HostPayloadPair<
+        Req = HostRequestNoInput,
+        Resp = HostResponseGolemRdbmsRequest,
+    >;
+    type StreamGetColumns: HostPayloadPair<
+        Req = HostRequestNoInput,
+        Resp = HostResponseGolemRdbmsColumns,
+    >;
+    type StreamGetNext: HostPayloadPair<
+        Req = HostRequestNoInput,
+        Resp = HostResponseGolemRdbmsResultChunk,
+    >;
 }
 
 async fn open_db_connection<Ctx, T, E>(
@@ -57,8 +83,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_connection_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "open");
+    ctx.observe_function_call(T::durability_connection_interface(), "open");
 
     let worker_id = ctx.state.owned_worker_id.worker_id.clone();
     let result = ctx
@@ -88,8 +113,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_connection_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "begin-transaction");
+    ctx.observe_function_call(T::durability_connection_interface(), "begin-transaction");
 
     let pool_key = ctx
         .as_wasi_view()
@@ -124,29 +148,33 @@ async fn db_connection_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_connection_interface::<T>();
-    let durability = Durability::<u64, SerializableError>::new(
-        ctx,
-        interface.leak(),
-        "execute",
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
+    let durability =
+        Durability::<T::ConnExecute>::new(ctx, DurableFunctionType::WriteRemote).await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, input, result).await
+
+        let result = result.map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsRowCount { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    Ok(result.map_err(|e| e.into()))
+    Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
 
 async fn db_connection_durable_query<Ctx, T, P, R, E>(
@@ -157,36 +185,42 @@ async fn db_connection_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_connection_interface::<T>();
-    let durability = Durability::<crate::services::rdbms::DbResult<T>, SerializableError>::new(
-        ctx,
-        interface.leak(),
-        "query",
-        DurableFunctionType::WriteRemote,
-    )
-    .await?;
+    let durability = Durability::<T::ConnQuery>::new(ctx, DurableFunctionType::WriteRemote).await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, input, result).await
+
+        let result = result.map(|result| result.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsResult { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    match result {
+    match result.result {
         Ok(result) => {
+            let result: DbResult<T> = result
+                .try_into()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = FromRdbmsValue::from(result, ctx.as_wasi_view().table())
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -198,18 +232,15 @@ async fn db_connection_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_connection_interface::<T>();
     let begin_index = ctx
         .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
         .await?;
-    let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
+    let durability = Durability::<T::ConnQueryStream>::new(
         ctx,
-        interface.leak(),
-        "query-stream",
         DurableFunctionType::WriteRemoteBatched(Some(begin_index)),
     )
     .await?;
@@ -217,15 +248,24 @@ where
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
         durability.try_trigger_retry(ctx, &result).await?;
-        let input = result.clone().ok();
-        durability.persist(ctx, input, result).await
+
+        let result = result.map(|request| request.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsRequest { request: result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
-    match result {
+    }?;
+    match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
-                request,
+                request
+                    .try_into()
+                    .map_err(|err| anyhow!("Invalid payload: {err}"))?,
                 RdbmsResultStreamState::New,
                 None,
                 begin_index,
@@ -241,7 +281,7 @@ where
             )
             .await?;
 
-            Ok(Err(error.into()))
+            Ok(Err(RdbmsError::from(error).into()))
         }
     }
 }
@@ -255,8 +295,7 @@ where
     T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_connection_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "drop");
+    ctx.observe_function_call(T::durability_connection_interface(), "drop");
     let worker_id = ctx.state.owned_worker_id.worker_id.clone();
     let pool_key = ctx
         .as_wasi_view()
@@ -284,11 +323,10 @@ async fn db_result_stream_durable_get_columns<Ctx, T, R>(
 ) -> anyhow::Result<Vec<R>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<T::DbColumn>,
 {
-    let interface = get_db_result_stream_interface::<T>();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
     let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
@@ -297,13 +335,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let durability = Durability::<Vec<T::DbColumn>, SerializableError>::new(
-        ctx,
-        interface.leak(),
-        "get-columns",
-        durable_function_type,
-    )
-    .await?;
+    let durability = Durability::<T::StreamGetColumns>::new(ctx, durable_function_type).await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -312,13 +344,28 @@ where
             Err(error) => Err(error),
         };
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, (), result).await
+
+        let result = result
+            .map(|columns| columns.into_iter().map(|c| c.into()).collect())
+            .map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsColumns { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    match result {
+    match result.result {
         Ok(columns) => {
+            let columns = columns
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = columns
                 .into_iter()
                 .map(|r| FromRdbmsValue::from(r, ctx.as_wasi_view().table()))
@@ -326,7 +373,7 @@ where
                 .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
             Ok(result)
         }
-        Err(error) => Err(anyhow!(error)),
+        Err(error) => Err(anyhow!(RdbmsError::from(error))),
     }
 }
 
@@ -336,11 +383,10 @@ async fn db_result_stream_durable_get_next<Ctx, T, R>(
 ) -> anyhow::Result<Option<Vec<R>>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     R: FromRdbmsValue<crate::services::rdbms::DbRow<T::DbValue>>,
 {
-    let interface = get_db_result_stream_interface::<T>();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
     let durable_function_type = if is_db_query_stream_in_transaction(ctx, entry)? {
@@ -349,11 +395,7 @@ where
         DurableFunctionType::WriteRemoteBatched(Some(begin_oplog_idx))
     };
 
-    let durability = Durability::<
-        Option<Vec<crate::services::rdbms::DbRow<T::DbValue>>>,
-        SerializableError,
-    >::new(ctx, interface.leak(), "get-next", durable_function_type)
-    .await?;
+    let durability = Durability::<T::StreamGetNext>::new(ctx, durable_function_type).await?;
 
     let result = if durability.is_live() {
         let query_stream = get_db_query_stream(ctx, entry).await;
@@ -362,18 +404,42 @@ where
             Err(error) => Err(error),
         };
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, (), result).await
+
+        let result = result
+            .map(|chunk| {
+                chunk.map(|rows| {
+                    rows.into_iter()
+                        .map(|row| row.values.into_iter().map(|v| v.into()).collect())
+                        .collect()
+                })
+            })
+            .map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsResultChunk { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    match result {
+    match result.result {
         Ok(rows) => {
             let rows = match rows {
                 Some(rows) => {
                     let result = rows
                         .into_iter()
-                        .map(|r| FromRdbmsValue::from(r, ctx.as_wasi_view().table()))
+                        .map(|serialized_values| {
+                            let row = DbRow {
+                                values: serialized_values
+                                    .into_iter()
+                                    .map(|v| v.try_into())
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            };
+                            FromRdbmsValue::from(row, ctx.as_wasi_view().table())
+                        })
                         .collect::<Result<Vec<R>, String>>()
                         .map_err(|e| anyhow!(RdbmsError::QueryResponseFailure(e)))?;
                     Some(result)
@@ -382,7 +448,7 @@ where
             };
             Ok(rows)
         }
-        Err(error) => Err(anyhow!(error)),
+        Err(error) => Err(anyhow!(RdbmsError::from(error))),
     }
 }
 
@@ -394,8 +460,7 @@ where
     Ctx: WorkerCtx,
     T: RdbmsType + 'static,
 {
-    let interface = get_db_result_stream_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "drop");
+    ctx.observe_function_call(T::durability_result_stream_interface(), "drop");
 
     let entry = ctx
         .as_wasi_view()
@@ -422,18 +487,15 @@ async fn db_transaction_durable_query<Ctx, T, P, R, E>(
 ) -> anyhow::Result<Result<R, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_transaction_interface::<T>();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<crate::services::rdbms::DbResult<T>, SerializableError>::new(
+    let durability = Durability::<T::TxnQuery>::new(
         ctx,
-        interface.leak(),
-        "query",
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
@@ -441,18 +503,31 @@ where
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
         durability.try_trigger_retry(ctx, &result).await?;
-        durability.persist(ctx, input, result).await
+
+        let result = result.map(|result| result.into()).map_err(|err| err.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsResult { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    match result {
+    match result.result {
         Ok(result) => {
+            let result = result
+                .try_into()
+                .map_err(|err| anyhow!("Invalid payload: {err}"))?;
             let result = FromRdbmsValue::from(result, ctx.as_wasi_view().table())
                 .map_err(|e| RdbmsError::QueryResponseFailure(e).into());
             Ok(result)
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -464,32 +539,37 @@ async fn db_transaction_durable_execute<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<u64, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let interface = get_db_transaction_interface::<T>();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<u64, SerializableError>::new(
+    let durability = Durability::<T::TxnExecute>::new(
         ctx,
-        interface.leak(),
-        "execute",
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
-        tracing::warn!("result: {result:?}");
         durability.try_trigger_retry(ctx, &result).await?;
-        tracing::warn!("after try trigger retry");
-        durability.persist(ctx, input, result).await
+
+        let result = result.map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestGolemRdbmsRequest {
+                    request: input.map(|request| request.into()),
+                },
+                HostResponseGolemRdbmsRowCount { result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
+    }?;
 
-    Ok(result.map_err(|e| e.into()))
+    Ok(result.result.map_err(|e| RdbmsError::from(e).into()))
 }
 
 async fn db_transaction_durable_query_stream<Ctx, T, P, E>(
@@ -500,17 +580,14 @@ async fn db_transaction_durable_query_stream<Ctx, T, P, E>(
 ) -> anyhow::Result<Result<Resource<RdbmsResultStreamEntry<T>>, E>>
 where
     Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
+    T: RdbmsType + RdbmsDurabilityPairs + 'static,
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
     let handle = entry.rep();
-    let interface = get_db_transaction_interface::<T>();
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
-    let durability = Durability::<RdbmsRequest<T>, SerializableError>::new(
+    let durability = Durability::<T::TxnQueryStream>::new(
         ctx,
-        interface.leak(),
-        "query-stream",
         DurableFunctionType::WriteRemoteTransaction(Some(begin_oplog_idx)),
     )
     .await?;
@@ -518,15 +595,24 @@ where
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
         durability.try_trigger_retry(ctx, &result).await?;
-        let input = result.clone().ok();
-        durability.persist(ctx, input, result).await
+
+        let result = result.map(|request| request.into()).map_err(|e| e.into());
+        durability
+            .persist(
+                ctx,
+                HostRequestNoInput {},
+                HostResponseGolemRdbmsRequest { request: result },
+            )
+            .await
     } else {
         durability.replay(ctx).await
-    };
-    match result {
+    }?;
+    match result.request {
         Ok(request) => {
             let entry = RdbmsResultStreamEntry::new(
-                request,
+                request
+                    .try_into()
+                    .map_err(|e| anyhow!("Invalid payload: {e}"))?,
                 RdbmsResultStreamState::New,
                 Some(handle),
                 begin_oplog_idx,
@@ -534,7 +620,7 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
-        Err(error) => Ok(Err(error.into())),
+        Err(error) => Ok(Err(RdbmsError::from(error).into())),
     }
 }
 
@@ -548,8 +634,7 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_transaction_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "rollback");
+    ctx.observe_function_call(T::durability_transaction_interface(), "rollback");
 
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
@@ -597,8 +682,7 @@ where
     E: From<RdbmsError>,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_transaction_interface::<T>();
-    ctx.observe_function_call(interface.as_str(), "commit");
+    ctx.observe_function_call(T::durability_transaction_interface(), "commit");
 
     let begin_oplog_idx = ctx.table().get(entry)?.begin_index;
 
@@ -643,9 +727,7 @@ where
     T: RdbmsType + 'static,
     dyn RdbmsService: RdbmsTypeService<T>,
 {
-    let interface = get_db_transaction_interface::<T>();
-
-    ctx.observe_function_call(interface.as_str(), "drop");
+    ctx.observe_function_call(T::durability_transaction_interface(), "drop");
 
     let entry = ctx
         .as_wasi_view()

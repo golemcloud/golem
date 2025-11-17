@@ -18,7 +18,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "host", serde(tag = "type"))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysedExport {
@@ -28,7 +28,7 @@ pub enum AnalysedExport {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunction {
     pub name: String,
@@ -68,7 +68,7 @@ impl AnalysedFunction {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedInstance {
     pub name: String,
@@ -77,7 +77,7 @@ pub struct AnalysedInstance {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeResult {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -90,7 +90,7 @@ pub struct TypeResult {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameTypePair {
     pub name: String,
@@ -99,7 +99,7 @@ pub struct NameTypePair {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameOptionTypePair {
     pub name: String,
@@ -108,7 +108,7 @@ pub struct NameOptionTypePair {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeVariant {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -120,7 +120,7 @@ pub struct TypeVariant {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeOption {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -132,7 +132,7 @@ pub struct TypeOption {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeEnum {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -144,7 +144,7 @@ pub struct TypeEnum {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeFlags {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -156,7 +156,7 @@ pub struct TypeFlags {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeRecord {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -168,7 +168,7 @@ pub struct TypeRecord {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeTuple {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -180,7 +180,7 @@ pub struct TypeTuple {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeList {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -192,85 +192,85 @@ pub struct TypeList {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeStr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeChr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeBool;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeHandle {
     #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
@@ -284,7 +284,7 @@ pub struct TypeHandle {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "host", serde(tag = "type"))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysedType {
@@ -633,7 +633,7 @@ pub mod analysed_type {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Enum))]
 pub enum AnalysedResourceMode {
     Owned,
@@ -642,13 +642,14 @@ pub enum AnalysedResourceMode {
 
 #[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "host", desert(transparent))]
 #[cfg_attr(feature = "host", derive(poem_openapi::NewType))]
 pub struct AnalysedResourceId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionParameter {
     pub name: String,
@@ -657,7 +658,7 @@ pub struct AnalysedFunctionParameter {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionResult {
     pub typ: AnalysedType,
@@ -665,7 +666,7 @@ pub struct AnalysedFunctionResult {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct InterfaceCouldNotBeAnalyzedWarning {
     pub name: String,
@@ -675,7 +676,7 @@ pub struct InterfaceCouldNotBeAnalyzedWarning {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "host", serde(tag = "type"))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysisWarning {
@@ -698,7 +699,7 @@ impl Display for AnalysisWarning {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysisFailure {
     pub reason: String,

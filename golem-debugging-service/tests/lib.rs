@@ -249,8 +249,7 @@ impl RegularWorkerExecutorTestDependencies {
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
-        let component_directory =
-            Path::new("../golem-debugging-service/test-components").to_path_buf();
+        let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
         let project_name = "default".to_string();

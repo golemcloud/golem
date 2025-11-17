@@ -58,7 +58,7 @@ use golem_client::model::{InvokeResult, ScanCursor};
 use golem_common::model::agent::AgentId;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
     RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WasiConfigVars,
 };

@@ -1,4 +1,4 @@
-package golem:api@1.1.7;
+package golem:api@1.3.0;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
@@ -22,11 +22,11 @@ interface host {
 
     /// Represents a Golem Cloud account
     record account-id {
-        value: string
+        uuid: uuid
     }
 
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 

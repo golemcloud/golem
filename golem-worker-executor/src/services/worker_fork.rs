@@ -13,11 +13,8 @@
 // limitations under the License.
 
 use super::file_loader::FileLoader;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::preview2::golem_api_1_x::host::ForkResult;
-use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -42,11 +39,14 @@ use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
+use golem_common::model::oplog::host_functions::GolemApiFork;
+use golem_common::model::oplog::{
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemApiFork, HostResponse,
+    HostResponseGolemApiFork, OplogIndex, OplogIndexRange,
+};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::model::{Timestamp, WorkerMetadata};
 use golem_common::read_only_lock;
-use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -333,7 +333,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        agent_types: Arc<dyn AgentTypesService>,
+        agent_types: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -552,20 +552,16 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         // durability.persist will write an ImportedFunctionInvoked entry persisting ForkResult::Original
         // we write an alternative version of that entry to the new oplog, so it is going to return with
         // ForkResult::Forked in the other worker
-        let serialized_input = serialize(&target_worker_id.worker_name).map_err(|err| {
-            WorkerExecutorError::runtime(format!("failed to serialize worker name for persisting durable function invocation: {err}"))
-        })?.to_vec();
-
-        let forked: Result<ForkResult, SerializableError> = Ok(ForkResult::Forked);
-        let serialized_response = serialize(&forked).map_err(|err| {
-            WorkerExecutorError::runtime(format!("failed to serialize fork result for persisting durable function invocation: {err}"))
-        })?.to_vec();
 
         let _ = new_oplog
-            .add_raw_imported_function_invoked(
-                "golem::api::fork".to_string(),
-                &serialized_input,
-                &serialized_response,
+            .add_imported_function_invoked(
+                GolemApiFork::HOST_FUNCTION_NAME,
+                &HostRequest::GolemApiFork(HostRequestGolemApiFork {
+                    name: target_worker_id.worker_name.clone(),
+                }),
+                &HostResponse::GolemApiFork(HostResponseGolemApiFork {
+                    result: Ok(golem_common::model::ForkResult::Forked),
+                }),
                 DurableFunctionType::WriteRemote,
             )
             .await

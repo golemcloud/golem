@@ -14,7 +14,6 @@
 
 use super::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
 use std::time::Duration;
@@ -149,7 +148,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         let query = sqlx::query(
             r#"
@@ -218,7 +217,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         let query = sqlx::query_as(
             "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id BETWEEN ? AND ?;",
         )
@@ -242,7 +241,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let query = sqlx::query_as(
                     "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id ASC LIMIT 1;",
                 )
@@ -264,7 +263,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let query = sqlx::query_as(
                     "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
                 )
@@ -287,7 +286,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         let query = sqlx::query_as(
             "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id >= ? ORDER BY id ASC LIMIT 1;",
         )
@@ -333,7 +332,7 @@ struct DBIdValue {
 }
 
 impl DBIdValue {
-    fn into_pair(self) -> (u64, Bytes) {
-        (self.id as u64, Bytes::from(self.value))
+    fn into_pair(self) -> (u64, Vec<u8>) {
+        (self.id as u64, self.value)
     }
 }

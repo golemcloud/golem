@@ -137,16 +137,16 @@ pub fn update_status_with_new_entries(
         pending_updates,
         failed_updates,
         successful_updates,
-        component_version,
+        component_revision,
         component_size,
-        component_version_for_replay,
+        component_revision_for_replay,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
         last_known.successful_updates,
-        last_known.component_version,
+        last_known.component_revision,
         last_known.component_size,
-        last_known.component_version_for_replay,
+        last_known.component_revision_for_replay,
         &deleted_regions,
         &new_entries,
     );
@@ -184,13 +184,13 @@ pub fn update_status_with_new_entries(
         successful_updates,
         invocation_results,
         current_idempotency_key,
-        component_version,
+        component_revision,
         component_size,
         owned_resources,
         total_linear_memory_size,
         active_plugins,
         deleted_regions,
-        component_version_for_replay,
+        component_revision_for_replay,
         current_retry_count,
     };
 
@@ -458,32 +458,35 @@ fn calculate_pending_invocations(
                 });
             }
             OplogEntry::PendingUpdate {
-                description: UpdateDescription::SnapshotBased { target_version, .. },
+                description:
+                    UpdateDescription::SnapshotBased {
+                        target_revision, ..
+                    },
                 ..
             } => result.retain(|invocation| match invocation {
                 TimestampedWorkerInvocation {
                     invocation:
                         WorkerInvocation::ManualUpdate {
-                            target_version: version,
+                            target_revision: revision,
                             ..
                         },
                     ..
-                } => version != target_version,
+                } => revision != target_revision,
                 _ => true,
             }),
-            OplogEntry::FailedUpdate { target_version, .. } => {
-                result.retain(|invocation| match invocation {
-                    TimestampedWorkerInvocation {
-                        invocation:
-                            WorkerInvocation::ManualUpdate {
-                                target_version: version,
-                                ..
-                            },
-                        ..
-                    } => version != target_version,
-                    _ => true,
-                })
-            }
+            OplogEntry::FailedUpdate {
+                target_revision, ..
+            } => result.retain(|invocation| match invocation {
+                TimestampedWorkerInvocation {
+                    invocation:
+                        WorkerInvocation::ManualUpdate {
+                            target_revision: revision,
+                            ..
+                        },
+                    ..
+                } => revision != target_revision,
+                _ => true,
+            }),
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
@@ -525,9 +528,9 @@ fn calculate_update_fields(
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
-    let mut version = initial_version;
+    let mut revision = initial_version;
     let mut size = initial_component_size;
-    let mut component_version_for_replay = initial_component_version_for_replay;
+    let mut component_revision_for_replay = initial_component_version_for_replay;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -537,12 +540,12 @@ fn calculate_update_fields(
 
         match entry {
             OplogEntry::Create {
-                component_version,
+                component_revision,
                 component_size,
                 ..
             } => {
-                version = *component_version;
-                component_version_for_replay = *component_version;
+                revision = *component_revision;
+                component_revision_for_replay = *component_revision;
                 size = *component_size;
             }
             OplogEntry::PendingUpdate {
@@ -558,27 +561,27 @@ fn calculate_update_fields(
             }
             OplogEntry::FailedUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 details,
             } => {
                 failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
-                    target_version: *target_version,
+                    target_revision: *target_revision,
                     details: details.clone(),
                 });
                 pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
-                target_version,
+                target_revision,
                 new_component_size,
                 ..
             } => {
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
-                    target_version: *target_version,
+                    target_revision: *target_revision,
                 });
-                version = *target_version;
+                revision = *target_revision;
                 size = *new_component_size;
 
                 let applied_update = pending_updates.pop_front();
@@ -589,7 +592,7 @@ fn calculate_update_fields(
                         ..
                     })
                 ) {
-                    component_version_for_replay = *target_version
+                    component_revision_for_replay = *target_revision
                 }
             }
             _ => {}
@@ -599,9 +602,9 @@ fn calculate_update_fields(
         pending_updates,
         failed_updates,
         successful_updates,
-        version,
+        revision,
         size,
-        component_version_for_replay,
+        component_revision_for_replay,
     )
 }
 
@@ -766,23 +769,21 @@ fn is_worker_error_retriable(
 mod test {
     use crate::model::ExecutionStatus;
     use crate::services::golem_config::GolemConfig;
-    use crate::services::oplog::tests::rounded;
     use crate::services::oplog::{Oplog, OplogService};
     use crate::services::{HasConfig, HasOplogService};
     use crate::worker::status::{
         calculate_last_known_status, calculate_last_known_status_for_existing_worker,
     };
     use async_trait::async_trait;
-    use bincode::Encode;
-    use bytes::Bytes;
     use golem_common::base_model::OplogIndex;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
+    use golem_common::model::oplog::host_functions::HostFunctionName;
     use golem_common::model::oplog::{
-        DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
-        UpdateDescription,
+        DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
+        OplogPayload, PayloadId, RawOplogPayload, TimestampedUpdateDescription, UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
@@ -791,9 +792,8 @@ mod test {
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use golem_common::read_only_lock;
-    use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_wasm::Value;
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
@@ -812,12 +812,12 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .exported_function_completed(&'x', k1)
-            .exported_function_invoked("b", &1, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_completed(None, k1)
+            .exported_function_invoked("b", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -829,13 +829,13 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
             .jump(OplogIndex::from_u64(2))
-            .exported_function_completed(&'x', k1)
-            .exported_function_invoked("b", &1, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_completed(None, k1)
+            .exported_function_invoked("b", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -847,12 +847,12 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
-            .exported_function_completed(&'x', k1)
-            .exported_function_invoked("b", &1, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_completed(None, k1)
+            .exported_function_invoked("b", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .revert(OplogIndex::from_u64(5))
             .build();
 
@@ -863,17 +863,27 @@ mod test {
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_version: ComponentRevision(2),
+            target_revision: ComponentRevision(2),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
-            .exported_function_completed(&'x', k1)
+            .exported_function_completed(None, k1)
             .build();
 
         run_test_case(test_case).await;
@@ -883,23 +893,33 @@ mod test {
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_version: ComponentRevision(2),
+            target_revision: ComponentRevision(2),
         };
         let update2 = UpdateDescription::Automatic {
-            target_version: ComponentRevision(3),
+            target_revision: ComponentRevision(3),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_update(&update1, |_| {})
             .pending_update(&update2, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .exported_function_completed(&'x', k1)
+            .exported_function_completed(None, k1)
             .build();
 
         run_test_case(test_case).await;
@@ -910,23 +930,33 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .exported_function_completed(&'x', k1)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .exported_function_completed(None, k1)
             .pending_update(&update1, |status| status.total_linear_memory_size = 200)
             .successful_update(update1, 2000, &HashSet::new())
-            .exported_function_invoked("c", &0, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_invoked("c", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -937,23 +967,33 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .exported_function_completed(&'x', k1)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .exported_function_completed(None, k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
-            .exported_function_invoked("c", &0, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_invoked("c", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -964,20 +1004,25 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
             .failed_update(update2)
-            .exported_function_invoked("c", &0, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_invoked("c", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .build();
 
         run_test_case(test_case).await;
@@ -987,23 +1032,33 @@ mod test {
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_version: ComponentRevision(2),
+            target_revision: ComponentRevision(2),
         };
         let update2 = UpdateDescription::Automatic {
-            target_version: ComponentRevision(3),
+            target_revision: ComponentRevision(3),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_update(&update1, |_| {})
             .pending_update(&update2, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
-            .exported_function_completed(&'x', k1)
+            .exported_function_completed(None, k1)
             .revert(OplogIndex::from_u64(3))
             .build();
 
@@ -1015,23 +1070,33 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .exported_function_completed(&'x', k1)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .exported_function_completed(None, k1)
             .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
-            .exported_function_invoked("c", &0, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_invoked("c", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .revert(OplogIndex::from_u64(4))
             .build();
 
@@ -1043,30 +1108,40 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: ComponentRevision(2),
-            payload: OplogPayload::Inline(vec![]),
+            target_revision: ComponentRevision(2),
+            payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
         let test_case = TestCase::builder(1)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
-            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .exported_function_completed(&'x', k1)
+            .imported_function_invoked(
+                "b",
+                HostRequest::NoInput(HostRequestNoInput {}),
+                HostResponse::Custom(1.into_value_and_type()),
+                DurableFunctionType::ReadLocal,
+            )
+            .exported_function_completed(None, k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
-            .exported_function_invoked("c", &0, k2.clone())
+            .exported_function_invoked("c", vec![], k2.clone())
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_version: ComponentRevision(2),
+                target_revision: ComponentRevision(2),
             })
-            .exported_function_completed(&'y', k2)
+            .exported_function_completed(None, k2)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
             .revert(OplogIndex::from_u64(5))
@@ -1081,7 +1156,7 @@ mod test {
         let k2 = IdempotencyKey::fresh();
 
         let test_case = TestCase::builder(0)
-            .exported_function_invoked("a", &0, k1.clone())
+            .exported_function_invoked("a", vec![], k1.clone())
             .grow_memory(10)
             .grow_memory(100)
             .pending_invocation(WorkerInvocation::ExportedFunction {
@@ -1090,13 +1165,13 @@ mod test {
                 function_input: vec![Value::Bool(true)],
                 invocation_context: InvocationContextStack::fresh(),
             })
-            .exported_function_completed(&'x', k1.clone())
-            .exported_function_invoked("b", &1, k2.clone())
-            .exported_function_completed(&'y', k2.clone())
+            .exported_function_completed(None, k1.clone())
+            .exported_function_invoked("b", vec![], k2.clone())
+            .exported_function_completed(None, k2.clone())
             .revert(OplogIndex::from_u64(5))
-            .exported_function_completed(&'x', k1)
-            .exported_function_invoked("b", &1, k2.clone())
-            .exported_function_completed(&'y', k2)
+            .exported_function_completed(None, k1)
+            .exported_function_invoked("b", vec![], k2.clone())
+            .exported_function_completed(None, k2)
             .revert(OplogIndex::from_u64(2))
             .build();
 
@@ -1156,11 +1231,11 @@ mod test {
         pub fn new(
             account_id: AccountId,
             owned_worker_id: OwnedWorkerId,
-            component_version: ComponentRevision,
+            component_revision: ComponentRevision,
         ) -> Self {
             let status = WorkerStatusRecord {
-                component_version,
-                component_version_for_replay: component_version,
+                component_revision,
+                component_revision_for_replay: component_revision,
                 component_size: 100,
                 total_linear_memory_size: 200,
                 oplog_idx: OplogIndex::INITIAL,
@@ -1170,16 +1245,16 @@ mod test {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
                         owned_worker_id.worker_id(),
-                        component_version,
+                        component_revision,
                         vec![],
                         vec![],
-                        BTreeMap::new(),
                         owned_worker_id.environment_id(),
                         account_id.clone(),
                         None,
                         100,
                         200,
                         HashSet::new(),
+                        BTreeMap::new(),
                     ),
                     expected_status: status.clone(),
                 }],
@@ -1202,17 +1277,17 @@ mod test {
             self
         }
 
-        pub fn exported_function_invoked<R: Encode>(
+        pub fn exported_function_invoked(
             self,
             function_name: &str,
-            request: &R,
+            request: Vec<Value>,
             idempotency_key: IdempotencyKey,
         ) -> Self {
             self.add(
                 OplogEntry::ExportedFunctionInvoked {
                     timestamp: Timestamp::now_utc(),
                     function_name: function_name.to_string(),
-                    request: OplogPayload::Inline(serialize(request).unwrap().to_vec()),
+                    request: OplogPayload::Inline(Box::new(request)),
                     idempotency_key: idempotency_key.clone(),
                     trace_id: TraceId::generate(),
                     trace_states: vec![],
@@ -1229,15 +1304,15 @@ mod test {
             )
         }
 
-        pub fn exported_function_completed<R: Encode>(
+        pub fn exported_function_completed(
             self,
-            response: &R,
+            response: Option<ValueAndType>,
             idempotency_key: IdempotencyKey,
         ) -> Self {
             self.add(
                 OplogEntry::ExportedFunctionCompleted {
                     timestamp: Timestamp::now_utc(),
-                    response: OplogPayload::Inline(serialize(response).unwrap().to_vec()),
+                    response: OplogPayload::Inline(Box::new(response)),
                     consumed_fuel: 0,
                 },
                 move |mut status| {
@@ -1251,19 +1326,19 @@ mod test {
             )
         }
 
-        pub fn imported_function_invoked<I: Encode, O: Encode>(
+        pub fn imported_function_invoked(
             self,
             name: &str,
-            i: &I,
-            o: &O,
+            i: HostRequest,
+            o: HostResponse,
             func_type: DurableFunctionType,
         ) -> Self {
             self.add(
                 OplogEntry::ImportedFunctionInvoked {
                     timestamp: Timestamp::now_utc(),
-                    function_name: name.to_string(),
-                    request: OplogPayload::Inline(serialize(i).unwrap().to_vec()),
-                    response: OplogPayload::Inline(serialize(o).unwrap().to_vec()),
+                    function_name: HostFunctionName::Custom(name.to_string()),
+                    request: OplogPayload::Inline(Box::new(i)),
+                    response: OplogPayload::Inline(Box::new(o)),
                     durable_function_type: func_type,
                 },
                 |status| status,
@@ -1294,7 +1369,7 @@ mod test {
                 .clone();
             self.add(OplogEntry::jump(region.clone()), move |mut status| {
                 status.status = old_status.status;
-                status.component_version = old_status.component_version;
+                status.component_revision = old_status.component_revision;
                 status.current_idempotency_key = old_status.current_idempotency_key;
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
@@ -1322,7 +1397,7 @@ mod test {
                 status.deleted_regions.add(region);
 
                 status.status = old_status.status;
-                status.component_version = old_status.component_version;
+                status.component_revision = old_status.component_revision;
                 status.current_idempotency_key = old_status.current_idempotency_key;
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
@@ -1332,14 +1407,14 @@ mod test {
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
-                status.component_version_for_replay = old_status.component_version_for_replay;
+                status.component_revision_for_replay = old_status.component_revision_for_replay;
 
                 status
             })
         }
 
         pub fn pending_invocation(self, invocation: WorkerInvocation) -> Self {
-            let entry = rounded(OplogEntry::pending_worker_invocation(invocation.clone()));
+            let entry = OplogEntry::pending_worker_invocation(invocation.clone()).rounded();
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
@@ -1352,9 +1427,7 @@ mod test {
         }
 
         pub fn cancel_pending_invocation(self, idempotency_key: IdempotencyKey) -> Self {
-            let entry = rounded(OplogEntry::cancel_pending_invocation(
-                idempotency_key.clone(),
-            ));
+            let entry = OplogEntry::cancel_pending_invocation(idempotency_key.clone()).rounded();
             self.add(entry.clone(), move |mut status| {
                 status
                     .pending_invocations
@@ -1378,7 +1451,7 @@ mod test {
             update_description: &UpdateDescription,
             extra_status_updates: impl Fn(&mut WorkerStatusRecord),
         ) -> Self {
-            let entry = rounded(OplogEntry::pending_update(update_description.clone()));
+            let entry = OplogEntry::pending_update(update_description.clone()).rounded();
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(entry.clone(), move |mut status| {
                 status
@@ -1414,19 +1487,20 @@ mod test {
             new_active_plugins: &HashSet<PluginPriority>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
-            let entry = rounded(OplogEntry::successful_update(
-                *update_description.target_version(),
+            let entry = OplogEntry::successful_update(
+                *update_description.target_revision(),
                 new_component_size,
                 new_active_plugins.clone(),
-            ));
+            )
+            .rounded();
             self.add(entry.clone(), move |mut status| {
                 let _ = status.pending_updates.pop_front();
                 status.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: entry.timestamp(),
-                    target_version: *update_description.target_version(),
+                    target_revision: *update_description.target_revision(),
                 });
                 status.component_size = new_component_size;
-                status.component_version = *update_description.target_version();
+                status.component_revision = *update_description.target_revision();
                 status.active_plugins = new_active_plugins.clone();
 
                 if status.skipped_regions.is_overridden() {
@@ -1435,9 +1509,11 @@ mod test {
                     status.owned_resources = HashMap::new();
                 }
 
-                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                if let UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } = update_description
                 {
-                    status.component_version_for_replay = target_version;
+                    status.component_revision_for_replay = target_revision;
                 };
 
                 status
@@ -1445,14 +1521,15 @@ mod test {
         }
 
         pub fn failed_update(self, update_description: UpdateDescription) -> Self {
-            let entry = rounded(OplogEntry::failed_update(
-                *update_description.target_version(),
+            let entry = OplogEntry::failed_update(
+                *update_description.target_revision(),
                 Some("details".to_string()),
-            ));
+            )
+            .rounded();
             self.add(entry.clone(), move |mut status| {
                 status.failed_updates.push(FailedUpdateRecord {
                     timestamp: entry.timestamp(),
-                    target_version: *update_description.target_version(),
+                    target_revision: *update_description.target_revision(),
                     details: Some("details".to_string()),
                 });
                 status.pending_updates.pop_front();
@@ -1461,7 +1538,9 @@ mod test {
                     status.skipped_regions.drop_override();
                 }
 
-                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                if let UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } = update_description
                 {
                     status
                         .pending_invocations
@@ -1469,11 +1548,11 @@ mod test {
                             TimestampedWorkerInvocation {
                                 invocation:
                                     WorkerInvocation::ManualUpdate {
-                                        target_version: version,
+                                        target_revision: revision,
                                         ..
                                     },
                                 ..
-                            } => *version != target_version,
+                            } => *revision != target_revision,
                             _ => true,
                         });
                 };
@@ -1503,7 +1582,7 @@ mod test {
     impl TestEntry {
         pub fn rounded(self) -> Self {
             TestEntry {
-                oplog_entry: rounded(self.oplog_entry),
+                oplog_entry: self.oplog_entry.rounded(),
                 expected_status: self.expected_status,
             }
         }
@@ -1602,19 +1681,20 @@ mod test {
             unreachable!()
         }
 
-        async fn upload_payload(
+        async fn upload_raw_payload(
             &self,
             _owned_worker_id: &OwnedWorkerId,
-            _data: &[u8],
-        ) -> Result<OplogPayload, String> {
+            _data: Vec<u8>,
+        ) -> Result<RawOplogPayload, String> {
             unreachable!()
         }
 
-        async fn download_payload(
+        async fn download_raw_payload(
             &self,
             _owned_worker_id: &OwnedWorkerId,
-            _payload: &OplogPayload,
-        ) -> Result<Bytes, String> {
+            _payload_id: PayloadId,
+            _md5_hash: Vec<u8>,
+        ) -> Result<Vec<u8>, String> {
             unreachable!()
         }
     }

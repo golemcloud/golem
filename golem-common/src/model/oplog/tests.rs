@@ -12,50 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::test;
-
-use crate::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, EndRegionParameters, ErrorParameters,
-    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
-    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
-    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
+use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::oplog::public_oplog_entry::{
+    BeginAtomicRegionParams, BeginRemoteWriteParams, ChangeRetryPolicyParams, CreateParams,
+    CreateResourceParams, DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams,
+    ErrorParams, ExitedParams, ExportedFunctionCompletedParams, ExportedFunctionInvokedParams,
+    FailedUpdateParams, GrowMemoryParams, ImportedFunctionInvokedParams, InterruptedParams,
+    JumpParams, LogParams, NoOpParams, PendingUpdateParams, PendingWorkerInvocationParams,
+    RestartParams, SuccessfulUpdateParams, SuspendParams,
+};
+use crate::model::oplog::{
+    ExportedFunctionParameters, LogLevel, PluginInstallationDescription, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData, PublicOplogEntry,
     PublicRetryConfig, PublicSpanData, PublicUpdateDescription, PublicWorkerInvocation,
-    ResourceParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
-    SuccessfulUpdateParameters, TimestampParameter,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WorkerResourceId,
 };
-use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, PluginPriority, Timestamp, WorkerId,
-};
-use std::collections::{BTreeMap, BTreeSet};
-use uuid::Uuid;
-
-use crate::model::invocation_context::{SpanId, TraceId};
-use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::regions::OplogRegion;
+use crate::model::{
+    AccountId, ComponentId, Empty, IdempotencyKey, OplogIndex, PluginPriority, Timestamp, WorkerId,
+};
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
 use golem_wasm::{Value, ValueAndType};
 use poem_openapi::types::ToJSON;
-
-fn rounded_ts(ts: Timestamp) -> Timestamp {
-    Timestamp::from(ts.to_millis())
-}
+use std::collections::{BTreeMap, BTreeSet};
+use test_r::test;
+use uuid::Uuid;
 
 #[test]
 fn create_serialization_poem_serde_equivalence() {
     use crate::model::component::ComponentRevision;
     use crate::model::environment::EnvironmentId;
 
-    let entry = PublicOplogEntry::Create(CreateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Create(CreateParams {
+        timestamp: Timestamp::now_utc().rounded(),
         worker_id: WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
             ),
             worker_name: "test1".to_string(),
         },
-        component_version: ComponentRevision(1),
+        component_revision: ComponentRevision(1),
         args: vec!["a".to_string(), "b".to_string()],
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
@@ -86,8 +82,8 @@ fn create_serialization_poem_serde_equivalence() {
 
 #[test]
 fn imported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
+        timestamp: Timestamp::now_utc().rounded(),
         function_name: "test".to_string(),
         request: ValueAndType {
             value: Value::String("test".to_string()),
@@ -106,8 +102,8 @@ fn imported_function_invoked_serialization_poem_serde_equivalence() {
 
 #[test]
 fn exported_function_invoked_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParams {
+        timestamp: Timestamp::now_utc().rounded(),
         function_name: "test".to_string(),
         request: vec![
             ValueAndType {
@@ -124,7 +120,7 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
         trace_states: vec!["a".to_string(), "b".to_string()],
         invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
             span_id: SpanId::generate(),
-            start: rounded_ts(Timestamp::now_utc()),
+            start: Timestamp::now_utc().rounded(),
             parent_id: None,
             linked_context: None,
             attributes: vec![PublicAttribute {
@@ -143,8 +139,8 @@ fn exported_function_invoked_serialization_poem_serde_equivalence() {
 
 #[test]
 fn exported_function_completed_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
+        timestamp: Timestamp::now_utc().rounded(),
         response: Some(ValueAndType {
             value: Value::Enum(1),
             typ: r#enum(&["red", "green", "blue"]),
@@ -158,8 +154,8 @@ fn exported_function_completed_serialization_poem_serde_equivalence() {
 
 #[test]
 fn suspend_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Suspend(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Suspend(SuspendParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -168,8 +164,8 @@ fn suspend_serialization_poem_serde_equivalence() {
 
 #[test]
 fn error_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Error(ErrorParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Error(ErrorParams {
+        timestamp: Timestamp::now_utc().rounded(),
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
     });
@@ -180,8 +176,8 @@ fn error_serialization_poem_serde_equivalence() {
 
 #[test]
 fn no_op_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::NoOp(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::NoOp(NoOpParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -190,8 +186,8 @@ fn no_op_serialization_poem_serde_equivalence() {
 
 #[test]
 fn jump_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Jump(JumpParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Jump(JumpParams {
+        timestamp: Timestamp::now_utc().rounded(),
         jump: OplogRegion {
             start: OplogIndex::from_u64(1),
             end: OplogIndex::from_u64(2),
@@ -204,8 +200,8 @@ fn jump_serialization_poem_serde_equivalence() {
 
 #[test]
 fn interrupted_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Interrupted(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Interrupted(InterruptedParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -214,8 +210,8 @@ fn interrupted_serialization_poem_serde_equivalence() {
 
 #[test]
 fn exited_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Exited(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Exited(ExitedParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -224,8 +220,8 @@ fn exited_serialization_poem_serde_equivalence() {
 
 #[test]
 fn change_retry_policy_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
+        timestamp: Timestamp::now_utc().rounded(),
         new_policy: PublicRetryConfig {
             max_attempts: 10,
             min_delay: std::time::Duration::from_secs(1),
@@ -241,8 +237,8 @@ fn change_retry_policy_serialization_poem_serde_equivalence() {
 
 #[test]
 fn begin_atomic_region_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::BeginAtomicRegion(BeginAtomicRegionParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -251,8 +247,8 @@ fn begin_atomic_region_serialization_poem_serde_equivalence() {
 
 #[test]
 fn end_atomic_region_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::EndAtomicRegion(EndAtomicRegionParams {
+        timestamp: Timestamp::now_utc().rounded(),
         begin_index: OplogIndex::from_u64(1),
     });
     let serialized = entry.to_json_string();
@@ -262,8 +258,8 @@ fn end_atomic_region_serialization_poem_serde_equivalence() {
 
 #[test]
 fn begin_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::BeginRemoteWrite(BeginRemoteWriteParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -272,8 +268,8 @@ fn begin_remote_write_serialization_poem_serde_equivalence() {
 
 #[test]
 fn end_remote_write_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::EndRemoteWrite(EndRemoteWriteParams {
+        timestamp: Timestamp::now_utc().rounded(),
         begin_index: OplogIndex::from_u64(1),
     });
     let serialized = entry.to_json_string();
@@ -283,8 +279,8 @@ fn end_remote_write_serialization_poem_serde_equivalence() {
 
 #[test]
 fn pending_worker_invocation_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParams {
+        timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
             idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
             full_function_name: "test".to_string(),
@@ -302,7 +298,7 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
             trace_states: vec!["a".to_string(), "b".to_string()],
             invocation_context: vec![vec![PublicSpanData::LocalSpan(PublicLocalSpanData {
                 span_id: SpanId::generate(),
-                start: rounded_ts(Timestamp::now_utc()),
+                start: Timestamp::now_utc().rounded(),
                 parent_id: None,
                 linked_context: None,
                 attributes: vec![PublicAttribute {
@@ -324,9 +320,9 @@ fn pending_worker_invocation_serialization_poem_serde_equivalence() {
 fn pending_update_serialization_poem_serde_equivalence_1() {
     use crate::model::component::ComponentRevision;
 
-    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: ComponentRevision(1),
+    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision(1),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
         }),
@@ -340,9 +336,9 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
 fn pending_update_serialization_poem_serde_equivalence_2() {
     use crate::model::component::ComponentRevision;
 
-    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: ComponentRevision(1),
+    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision(1),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -354,9 +350,9 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
 fn successful_update_serialization_poem_serde_equivalence() {
     use crate::model::component::ComponentRevision;
 
-    let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: ComponentRevision(1),
+    let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision(1),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
             plugin_priority: PluginPriority(0),
@@ -375,9 +371,9 @@ fn successful_update_serialization_poem_serde_equivalence() {
 fn failed_update_serialization_poem_serde_equivalence_1() {
     use crate::model::component::ComponentRevision;
 
-    let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: ComponentRevision(1),
+    let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision(1),
         details: Some("test".to_string()),
     });
     let serialized = entry.to_json_string();
@@ -389,9 +385,9 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
 fn failed_update_serialization_poem_serde_equivalence_2() {
     use crate::model::component::ComponentRevision;
 
-    let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        target_version: ComponentRevision(1),
+    let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision(1),
         details: None,
     });
     let serialized = entry.to_json_string();
@@ -401,8 +397,8 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
 
 #[test]
 fn grow_memory_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::GrowMemory(GrowMemoryParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::GrowMemory(GrowMemoryParams {
+        timestamp: Timestamp::now_utc().rounded(),
         delta: 100_000_000,
     });
     let serialized = entry.to_json_string();
@@ -412,8 +408,8 @@ fn grow_memory_serialization_poem_serde_equivalence() {
 
 #[test]
 fn create_resource_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::CreateResource(ResourceParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::CreateResource(CreateResourceParams {
+        timestamp: Timestamp::now_utc().rounded(),
         id: WorkerResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
@@ -426,8 +422,8 @@ fn create_resource_serialization_poem_serde_equivalence() {
 
 #[test]
 fn drop_resource_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::DropResource(ResourceParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::DropResource(DropResourceParams {
+        timestamp: Timestamp::now_utc().rounded(),
         id: WorkerResourceId(100),
         name: "test".to_string(),
         owner: "owner".to_string(),
@@ -440,8 +436,8 @@ fn drop_resource_serialization_poem_serde_equivalence() {
 
 #[test]
 fn log_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Log(LogParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Log(LogParams {
+        timestamp: Timestamp::now_utc().rounded(),
         level: LogLevel::Stderr,
         context: "test".to_string(),
         message: "test".to_string(),
@@ -453,8 +449,8 @@ fn log_serialization_poem_serde_equivalence() {
 
 #[test]
 fn restart_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::Restart(TimestampParameter {
-        timestamp: rounded_ts(Timestamp::now_utc()),
+    let entry = PublicOplogEntry::Restart(RestartParams {
+        timestamp: Timestamp::now_utc().rounded(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

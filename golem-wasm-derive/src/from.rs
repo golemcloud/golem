@@ -15,7 +15,7 @@
 use crate::{is_unit_case, parse_wit_field_attribute, WitField};
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Type};
+use syn::{Attribute, Data, DeriveInput, Fields, Type};
 
 pub fn derive_from_value(input: TokenStream) -> TokenStream {
     let ast: DeriveInput = syn::parse(input).expect("derive input");
@@ -138,7 +138,11 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                 let field_ident = field.ident.as_ref().unwrap();
                                 let field_ty = &field.ty;
                                 let wit_field = &wit_fields[field_idx];
-                                let field_from_value = apply_from_conversions(field_ty, wit_field, quote! { fields[#field_idx].clone() });
+                                let field_from_value = if wit_field.skip || has_from_value_skip_attribute(&field.attrs) {
+                                    quote! { Default::default() }
+                                } else {
+                                    apply_from_conversions(field_ty, wit_field, quote! { fields[#field_idx].clone() })
+                                };
                                 quote! {
                                     #field_ident: #field_from_value
                                 }
@@ -149,7 +153,10 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident(Default::default()))
                                 }
                             } else {
-                                let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
+                                let expected_len = variant.fields.iter().enumerate().filter(|(field_idx, field)| {
+                                    let wit_field = &wit_fields[*field_idx];
+                                    !wit_field.skip && !has_from_value_skip_attribute(&field.attrs)
+                                }).count();
                                 quote! {
                                     #idx => {
                                         let fields = case_value.ok_or("Missing case value")?;
@@ -167,7 +174,11 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                             let field_values = variant.fields.iter().enumerate().map(|(field_idx, field)| {
                                 let elem_ty = &field.ty;
                                 let wit_field = &wit_fields[field_idx];
-                                let field_from_value = apply_from_conversions(elem_ty, wit_field, quote! { elements[#field_idx].clone() });
+                                let field_from_value = if wit_field.skip || has_from_value_skip_attribute(&field.attrs) {
+                                    quote! { Default::default() }
+                                } else {
+                                    apply_from_conversions(elem_ty, wit_field, quote! { elements[#field_idx].clone() })
+                                };
                                 quote! {
                                     #field_from_value
                                 }
@@ -178,7 +189,10 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
                                     #idx => Ok(#ident::#case_ident(Default::default()))
                                 }
                             } else {
-                                let expected_len = wit_fields.iter().filter(|f| !f.skip).count();
+                                let expected_len = variant.fields.iter().enumerate().filter(|(field_idx, field)| {
+                                    let wit_field = &wit_fields[*field_idx];
+                                    !wit_field.skip && !has_from_value_skip_attribute(&field.attrs)
+                                }).count();
                                 quote! {
                                     #idx => {
                                         let elements = case_value.ok_or("Missing case value")?;
@@ -241,7 +255,7 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
         let field_values = fields.iter().enumerate().map(|(idx, field)| {
             let wit_field = &wit_fields[idx];
             let field_name = field.ident.as_ref().unwrap();
-            if wit_field.skip {
+            if wit_field.skip || has_from_value_skip_attribute(&field.attrs) {
                 quote! {
                     #field_name: Default::default()
                 }
@@ -293,6 +307,18 @@ fn has_only_named_fields(fields: &Fields) -> bool {
     fields.iter().all(|field| field.ident.is_some())
 }
 
+fn has_from_value_skip_attribute(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("from_value") && {
+            if let Ok(nested) = attr.parse_args::<syn::Ident>() {
+                nested == "skip"
+            } else {
+                false
+            }
+        }
+    })
+}
+
 fn apply_from_conversions(
     ty: &Type,
     wit_field: &WitField,
@@ -304,13 +330,13 @@ fn apply_from_conversions(
         &wit_field.convert_option,
     ) {
         (Some(convert_to), None, None) => {
-            quote! { TryInto::<#ty>::try_into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?)? }
+            quote! { Into::<#ty>::into(<#convert_to as golem_wasm::FromValue>::from_value(#field_access)?) }
         }
         (None, Some(convert_to), None) => {
-            quote! { Vec::<#convert_to>::from_value(#field_access)?.into_iter().map(TryInto::<#ty>::try_into).collect::<Result<Vec<_>, _>>()? }
+            quote! { Vec::<#convert_to>::from_value(#field_access)?.into_iter().map(|item| Into::into(item)).collect::<Vec<_>>() }
         }
         (None, None, Some(convert_to)) => {
-            quote! { Option::<#convert_to>::from_value(#field_access)?.into_iter().map(TryInto::<#ty>::try_into).transpose()? }
+            quote! { Option::<#convert_to>::from_value(#field_access)?.into_iter().map(Into::into) }
         }
         _ => quote! { <#ty as golem_wasm::FromValue>::from_value(#field_access)? },
     }

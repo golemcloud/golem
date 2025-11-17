@@ -17,7 +17,6 @@ use std::{path::PathBuf, sync::Arc};
 use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
-use bytes::Bytes;
 use golem_common::model::account::AccountId;
 use golem_common::model::plugin_registration::PluginWasmFileKey;
 use tracing::debug;
@@ -39,7 +38,7 @@ impl PluginWasmFilesService {
         &self,
         account_id: &AccountId,
         key: &PluginWasmFileKey,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         self.blob_storage
             .get_raw(
                 PLUGIN_WASM_FILES_LABEL,

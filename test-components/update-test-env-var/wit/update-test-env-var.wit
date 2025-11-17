@@ -7,8 +7,8 @@ interface api {
 world update-test-env-var {
   import wasi:cli/environment@0.2.3;
 
-  export golem:api/save-snapshot@1.1.7;
-  export golem:api/load-snapshot@1.1.7;
+  export golem:api/save-snapshot@1.3.0;
+  export golem:api/load-snapshot@1.3.0;
 
   export api;
 }

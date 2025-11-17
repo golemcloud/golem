@@ -23,8 +23,8 @@ golem-service-base = { workspace = true }
 anyhow = { workspace = true }
 async-rwlock = { workspace = true }
 async-trait = { workspace = true }
-bincode = { workspace = true }
 bytes = { workspace = true }
+desert_rust = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
