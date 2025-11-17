@@ -34,15 +34,15 @@ impl Guest for Component {
             .find(|x| x.type_name == agent_type)
             .expect(
                 format!(
-                    "Agent definition not found for agent name: {}. Available agents in this app is {}",
-                    agent_type,
-                    agent_types
-                        .iter()
-                        .map(|x| x.type_name.clone())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                    .as_str(),
+                "Agent definition not found for agent name: {}. Available agents in this app is {}",
+                agent_type,
+                agent_types
+                    .iter()
+                    .map(|x| x.type_name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+                .as_str(),
             );
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
