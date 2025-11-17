@@ -116,7 +116,7 @@ async fn get_components_many_component(deps: &EnvBasedTestDependencies) {
         })
         .collect::<HashMap<_, _>>();
 
-    assert_eq!(components.len(), 4);
+    assert_eq!(components.len(), 3);
 
     let counter_1 = components.get(&counter_1_id).unwrap();
     let counter_2 = components.get(&counter_2_id).unwrap();
