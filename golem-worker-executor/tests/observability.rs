@@ -94,7 +94,6 @@ async fn get_oplog_1(
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
     drop(executor);
 
-    tracing::warn!("oplog: {oplog:?}");
     assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
