@@ -1,6 +1,6 @@
 mod model;
 
-use golem_rust::agentic::{Agent, Multimodal};
+use golem_rust::agentic::{Agent, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -86,6 +86,9 @@ trait FooAgent {
     ) -> EnumWithOnlyLiterals;
 
     async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+    async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+    async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
 struct FooAgentImpl {
@@ -245,6 +248,18 @@ impl FooAgent for FooAgentImpl {
     async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
         self.client.fun_multi_modal(input).await
     }
+
+    async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+        self.client.fun_unstructured_text(input).await
+    }
+
+    async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+        self.client.fun_unstructured_text_lc(input).await
+    }
+
+    async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+        self.client.fun_unstructured_binary(input).await
+    }
 }
 
 #[agent_definition]
@@ -323,6 +338,12 @@ trait BarAgent {
     ) -> EnumWithOnlyLiterals;
 
     fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+
+    fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+
+    fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+
+    fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
 struct BarAgentImpl {
@@ -473,4 +494,17 @@ impl BarAgent for BarAgentImpl {
     fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
         input
     }
+
+    fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
+        input
+    }
+
+    fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang> {
+        input
+    }
+
+    fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType> {
+        input
+    }
+
 }

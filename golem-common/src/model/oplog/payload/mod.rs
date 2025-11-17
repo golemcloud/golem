@@ -127,7 +127,9 @@ oplog_payload! {
             function_name: String,
             function_params: Vec<ValueAndType>,
             #[from_value(skip)]
+            #[transient(None::<String>)]
             remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[transient(None::<DataValue>)]
             #[from_value(skip)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
@@ -138,8 +140,10 @@ oplog_payload! {
             function_params: Vec<ValueAndType>,
             datetime: SerializableDateTime,
             #[from_value(skip)]
+            #[transient(None::<String>)]
             remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
             #[from_value(skip)]
+            #[transient(None::<DataValue>)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocationCancellation {

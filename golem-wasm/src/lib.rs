@@ -218,29 +218,49 @@ impl PartialEq for Uri {
 #[cfg_attr(feature = "host", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub enum Value {
+    #[cfg_attr(feature = "host", desert(transparent))]
     Bool(bool),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U8(u8),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U16(u16),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U32(u32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U64(u64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S8(i8),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S16(i16),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S32(i32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S64(i64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     F32(f32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     F64(f64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Char(char),
+    #[cfg_attr(feature = "host", desert(transparent))]
     String(String),
+    #[cfg_attr(feature = "host", desert(custom = crate::desert::VecValueWrapper))]
     List(Vec<Value>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Tuple(Vec<Value>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Record(Vec<Value>),
     Variant {
         case_idx: u32,
         case_value: Option<Box<Value>>,
     },
+    #[cfg_attr(feature = "host", desert(transparent))]
     Enum(u32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Flags(Vec<bool>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Option(Option<Box<Value>>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
     Handle {
         uri: String,

@@ -694,7 +694,8 @@ impl BinarySerializer for InvocationContextSpan {
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        let mut serializer = AdtSerializer::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context);
+        let mut serializer =
+            AdtSerializer::<_, 1>::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context);
         match self {
             InvocationContextSpan::Local {
                 span_id,
@@ -704,8 +705,10 @@ impl BinarySerializer for InvocationContextSpan {
             } => {
                 serializer.write_constructor(0, |context| {
                     let state = state.read().unwrap();
-                    let mut inner =
-                        AdtSerializer::new_v0(&INVOCATION_CONTEXT_SPAN_LOCAL_METADATA, context);
+                    let mut inner = AdtSerializer::<_, 1>::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_LOCAL_METADATA,
+                        context,
+                    );
                     inner.write_field("span_id", span_id)?;
                     inner.write_field("start", start)?;
                     inner.write_field("parent", &state.parent)?;
@@ -718,7 +721,7 @@ impl BinarySerializer for InvocationContextSpan {
             }
             InvocationContextSpan::ExternalParent { span_id } => {
                 serializer.write_constructor(1, |context| {
-                    let mut inner = AdtSerializer::new_v0(
+                    let mut inner = AdtSerializer::<_, 1>::new_v0(
                         &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
                         context,
                     );
@@ -736,69 +739,69 @@ impl BinaryDeserializer for InvocationContextSpan {
         use desert_rust::BinaryInput;
         let stored_version = context.read_u8()?;
         let mut deserializer = if stored_version == 0 {
-            AdtDeserializer::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context)?
+            AdtDeserializer::<1>::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context)?
         } else {
-            AdtDeserializer::new(&INVOCATION_CONTEXT_SPAN_METADATA, context, stored_version)?
+            AdtDeserializer::<1>::new(&INVOCATION_CONTEXT_SPAN_METADATA, context, stored_version)?
         };
 
-        if let Some(result) = deserializer.read_constructor(0i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                AdtDeserializer::new_v0(&INVOCATION_CONTEXT_SPAN_LOCAL_METADATA, context)?
-            } else {
-                AdtDeserializer::new(
-                    &INVOCATION_CONTEXT_SPAN_LOCAL_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
+        let constructor_id = deserializer.read_constructor_idx()?;
 
-            let span_id = deserializer.read_field("span_id", None)?;
-            let start = deserializer.read_field("start", None)?;
-            let parent = deserializer.read_optional_field("parent", Some(None))?;
-            let attributes = deserializer.read_field("attributes", None)?;
-            let linked_context = deserializer.read_optional_field("linked_context", Some(None))?;
-            let inherited = deserializer.read_field("inherited", None)?;
+        match constructor_id {
+            0u32 => {
+                let stored_version = context.read_u8()?;
+                let mut deserializer = if stored_version == 0 {
+                    AdtDeserializer::<1>::new_v0(&INVOCATION_CONTEXT_SPAN_LOCAL_METADATA, context)?
+                } else {
+                    AdtDeserializer::<1>::new(
+                        &INVOCATION_CONTEXT_SPAN_LOCAL_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
 
-            Ok(Self::Local {
-                span_id,
-                start,
-                state: RwLock::new(LocalInvocationContextSpanState {
-                    parent,
-                    attributes,
-                    linked_context,
-                }),
-                inherited,
-            })
-        })? {
-            return Ok(result);
+                let span_id = deserializer.read_field("span_id", None)?;
+                let start = deserializer.read_field("start", None)?;
+                let parent = deserializer.read_optional_field("parent", Some(None))?;
+                let attributes = deserializer.read_field("attributes", None)?;
+                let linked_context =
+                    deserializer.read_optional_field("linked_context", Some(None))?;
+                let inherited = deserializer.read_field("inherited", None)?;
+
+                Ok(Self::Local {
+                    span_id,
+                    start,
+                    state: RwLock::new(LocalInvocationContextSpanState {
+                        parent,
+                        attributes,
+                        linked_context,
+                    }),
+                    inherited,
+                })
+            }
+            1u32 => {
+                let stored_version = context.read_u8()?;
+                let mut deserializer = if stored_version == 0 {
+                    AdtDeserializer::<1>::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                    )?
+                } else {
+                    AdtDeserializer::<1>::new(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+
+                let span_id = deserializer.read_field("span_id", None)?;
+
+                Ok(Self::ExternalParent { span_id })
+            }
+            _ => Err(desert_rust::Error::InvalidConstructorId {
+                type_name: "InvocationContextSpan".to_string(),
+                constructor_id,
+            }),
         }
-
-        if let Some(result) = deserializer.read_constructor(1i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                AdtDeserializer::new_v0(&INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA, context)?
-            } else {
-                AdtDeserializer::new(
-                    &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-
-            let span_id = deserializer.read_field("span_id", None)?;
-
-            Ok(Self::ExternalParent { span_id })
-        })? {
-            return Ok(result);
-        }
-
-        Err(desert_rust::Error::InvalidConstructorId {
-            type_name: "InvocationContextSpan".to_string(),
-            constructor_id: deserializer
-                .read_or_get_constructor_idx()
-                .unwrap_or(u32::MAX),
-        })
     }
 }
 
