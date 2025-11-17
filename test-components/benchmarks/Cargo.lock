@@ -24,6 +24,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "auditable-serde"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -78,7 +89,20 @@ checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
 
 [[package]]
 name = "bytes"
+<<<<<<< HEAD
 version = "1.10.1"
+||||||| parent of 0cdcd0653 (update test components)
+name = "camino"
+version = "1.1.11"
+=======
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+
+[[package]]
+name = "camino"
+version = "1.1.11"
+>>>>>>> 0cdcd0653 (update test components)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
@@ -196,6 +220,24 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+||||||| parent of 0cdcd0653 (update test components)
+name = "durability-overhead"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+ "wit-bindgen-rt 0.40.0",
+]
+
+[[package]]
+=======
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+>>>>>>> 0cdcd0653 (update test components)
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,23 +394,48 @@ dependencies = [
 
 [[package]]
 name = "golem-rust"
+<<<<<<< HEAD
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4dbe55772df1ed873b710a20bd0647a250f7eb12fb05d8cea13d3e2a9d1b8e9d"
+||||||| parent of 0cdcd0653 (update test components)
+version = "0.0.0"
+=======
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad98dc0099640c6dd204a4b8328c088d9f2330c0af76fe87025ef9b4e7ddc516"
+>>>>>>> 0cdcd0653 (update test components)
 dependencies = [
+ "async-trait",
  "golem-rust-macro",
- "golem-wasm-rpc",
+ "golem-wasm",
  "serde",
  "serde_json",
  "uuid",
+<<<<<<< HEAD
  "wit-bindgen 0.40.0",
+||||||| parent of 0cdcd0653 (update test components)
+ "wit-bindgen",
+=======
+ "wasi",
+ "wit-bindgen",
+ "wstd",
+>>>>>>> 0cdcd0653 (update test components)
 ]
 
 [[package]]
 name = "golem-rust-macro"
+<<<<<<< HEAD
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd5300f3d39b299b0f7a3587e9596738c250011a986f655a36372583ce6f20ec"
+||||||| parent of 0cdcd0653 (update test components)
+version = "0.0.0"
+=======
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "301a4fa6c1df3cee3d05559aa9360dfb278efd8f43abb9f276b2b68b592247dd"
+>>>>>>> 0cdcd0653 (update test components)
 dependencies = [
  "heck",
  "proc-macro2",
@@ -377,13 +444,24 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "golem-wasm-rpc"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea1fad3153d628a6b09f67235e141bbf7bafa6684747dbbbdecbf645cfbc0daf"
+||||||| parent of 0cdcd0653 (update test components)
+name = "golem-wasm-rpc"
+version = "0.0.0"
+=======
+name = "golem-wasm"
+version = "1.3.2-dev.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e717d6fcd63eeda700e83a3793f7099c1d981e2666944a4017a8b5fa046ef2ab"
+>>>>>>> 0cdcd0653 (update test components)
 dependencies = [
  "cargo_metadata",
  "chrono",
+ "itertools",
  "uuid",
  "wit-bindgen-rt 0.40.0",
 ]
@@ -412,6 +490,23 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "http"
 version = "1.3.1"
+<<<<<<< HEAD
+||||||| parent of 0cdcd0653 (update test components)
+name = "iana-time-zone"
+version = "0.1.63"
+=======
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4a85d31aea989eead29a3aaf9e1115a180df8282431156e533de47660892565"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
+name = "iana-time-zone"
+version = "0.1.63"
+>>>>>>> 0cdcd0653 (update test components)
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4a85d31aea989eead29a3aaf9e1115a180df8282431156e533de47660892565"
 dependencies = [
@@ -567,6 +662,15 @@ dependencies = [
  "hashbrown 0.16.0",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
 ]
 
 [[package]]
@@ -1001,9 +1105,21 @@ dependencies = [
 
 [[package]]
 name = "wasi"
+<<<<<<< HEAD
 version = "0.14.7+wasi-0.2.4"
+||||||| parent of 0cdcd0653 (update test components)
+version = "0.14.2+wasi-0.2.4"
+=======
+version = "0.14.1+wasi-0.2.3"
+>>>>>>> 0cdcd0653 (update test components)
 source = "registry+https://github.com/rust-lang/crates.io-index"
+<<<<<<< HEAD
 checksum = "883478de20367e224c0090af9cf5f9fa85bed63a95c1abf3afc5c083ebc06e8c"
+||||||| parent of 0cdcd0653 (update test components)
+checksum = "9683f9a5a998d873c0d21fcbe3c083009670149a8fab228644b8bd36b2c48cb3"
+=======
+checksum = "ad7df608df60a1c33e247881838b0f809512086e3e3bb1c18323b77eeb1f844e"
+>>>>>>> 0cdcd0653 (update test components)
 dependencies = [
  "wasip2",
 ]
