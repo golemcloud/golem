@@ -193,10 +193,19 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
     )
     .await;
 
+    run_and_assert(
+        &ctx,
+        "fun-map",
+        &[r#"[("foo", 1), ("bar", 2), ("baz", 3)]"#],
+    )
+    .await;
+
     let collections_arg = r#"
     {
         list-u8: [1, 2, 3, 4, 5],
         list-str: ["foo", "bar", "baz"],
+        map-num: [("pi", 3.14), ("e", 2.71), ("phi", 1.61)],
+        map-text: [(1, "one"), (2, "two"), (3, "three")]
     }
     "#;
 
@@ -232,6 +241,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 flag: false,
             }
         ],
+        map: [("a", 1), ("b", 2)],
         option: some("optional value"),
         result: ok("result value")
     }
@@ -272,7 +282,9 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         },
         collections: {
             list-u8: [10, 20, 30],
-            list-str: ["x", "y", "z"]
+            list-str: ["x", "y", "z"],
+            map-num: [("a", 1.11), ("b", 2.22), ("c", 3.33)],
+            map-text: [(100, "hundred"), (200, "two hundred"), (300, "three hundred")]
         },
         simple-struct: {
             name: "comp_simple",
@@ -287,6 +299,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 flag: true,
             },
             list: [],
+            map: [],
             option: none,
             result: ok("nested result")
         },
@@ -329,6 +342,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             flag: false,
         },
         list: [],
+        map: [],
         option: none,
         result: ok("result in nested")
     })
@@ -352,6 +366,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             flag: true,
         },
         list: [],
+        map: [],
         option: none,
         result: err("error in nested")
     })

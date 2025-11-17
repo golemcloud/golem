@@ -27,8 +27,8 @@ pub struct OptionResultBound {
     pub option_str: Option<String>,
     pub res_ok: Result<String, String>,
     pub res_num_err: Result<u32, String>,
-    pub res_unit_ok: Result<String, String>, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
-    pub res_unit_err: Result<String, String>, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2274
+    pub res_unit_ok: Result<String, String>,
+    pub res_unit_err: Result<String, String>,
     pub bound_u8: Bound<u8>,
     pub bound_str: Bound<String>,
 }
@@ -89,7 +89,6 @@ pub enum EnumWithOnlyLiterals {
 #[derive(Schema)]
 pub enum EnumWithCollections {
     Vec(Vec<u8>),
-    // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2273
     Map(HashMap<String, f64>),
     Tuple((String, f64)),
     Bound(Bound<u8>),
