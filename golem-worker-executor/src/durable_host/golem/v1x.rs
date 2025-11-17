@@ -1413,7 +1413,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),
-            component_version: value.component_revision.0,
+            component_revision: value.component_revision.0,
             retry_count: 0,
         }
     }
