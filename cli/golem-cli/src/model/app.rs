@@ -2813,16 +2813,13 @@ mod test {
                     linkedWasm: release-custom-a-linked-wasm
                     env:
                       A: release-custom-a-env-var
-                    componentType: ephemeral
 
             components:
               app:comp-profiled-a:
                 template: template-profiled
                 profiles:
                   release-custom:
-                    componentType: durable
                     componentWasm: release-comp-a-component-wasm
-                componentType: ephemeral
                 componentWasm: comp-a-component-wasm
         "};
 
