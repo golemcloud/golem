@@ -26,8 +26,7 @@ use golem_test_framework::dsl::{
 };
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

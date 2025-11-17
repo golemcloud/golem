@@ -22,8 +22,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::{IntoValueAndType, Value};
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::StatusCode;
 use log::info;

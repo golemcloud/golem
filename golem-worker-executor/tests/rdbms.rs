@@ -26,8 +26,7 @@ use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use serde_json::json;
 use std::collections::HashMap;

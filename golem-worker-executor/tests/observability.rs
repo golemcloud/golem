@@ -25,8 +25,7 @@ use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Record, Value};
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;
 use log::info;

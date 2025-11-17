@@ -22,8 +22,7 @@ use golem_test_framework::dsl::{worker_error_underlying_error, TestDsl};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use std::collections::HashMap;
 use std::time::SystemTime;

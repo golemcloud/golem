@@ -23,8 +23,7 @@ use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use log::info;
 use test_r::{inherit_test_dep, test};

@@ -5,7 +5,6 @@ pub mod dsl;
 use crate::debug_mode::debug_bootstrap::TestDebuggingServerBootStrap;
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use golem_common::config::RedisConfig;
-use golem_common::model::auth::TokenSecret;
 use golem_debugging_service::config::DebugConfig;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::compiled_component::{

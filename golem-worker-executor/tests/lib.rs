@@ -13,22 +13,12 @@
 // limitations under the License.
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
-use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
-use golem_worker_executor::test_utils::component_writer::FileSystemComponentWriter;
 use golem_worker_executor::test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
-use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
+use std::fmt::Debug;
+use std::path::Path;
 use std::sync::atomic::AtomicU16;
-use std::sync::Arc;
-use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
-use tracing::Level;
 
 pub mod agent;
 pub mod api;

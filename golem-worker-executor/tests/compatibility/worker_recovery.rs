@@ -18,8 +18,7 @@ use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::test_utils::{
-    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
