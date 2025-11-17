@@ -310,7 +310,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -340,7 +340,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(response) => {
                 let body = response.body;
                 let aggregated_bytes = body.collect().await?;
-                let bytes = aggregated_bytes.into_bytes();
+                let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }
@@ -407,7 +407,7 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -438,7 +438,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(response) => {
                 let body = response.body;
                 let aggregated_bytes = body.collect().await?;
-                let bytes = aggregated_bytes.into_bytes();
+                let bytes = aggregated_bytes.to_vec();
 
                 Ok(Some(bytes))
             }

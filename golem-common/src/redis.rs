@@ -17,8 +17,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{atomic, Arc};
 use std::time::Instant;
 
-use bincode::{Decode, Encode};
-use bytes::Bytes;
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use fred::clients::Transaction;
 use fred::cmd;
 use fred::prelude::{Pool as FredRedisPool, *};
@@ -88,11 +87,11 @@ impl RedisPool {
         }
     }
 
-    pub fn serialize<T: Encode>(&self, value: &T) -> Result<Bytes, String> {
+    pub fn serialize<T: BinarySerializer>(&self, value: &T) -> Result<Vec<u8>, String> {
         serialize(value)
     }
 
-    pub fn deserialize<T: Decode<()>>(&self, bytes: &[u8]) -> Result<T, String> {
+    pub fn deserialize<T: BinaryDeserializer>(&self, bytes: &[u8]) -> Result<T, String> {
         deserialize(bytes)
     }
 }

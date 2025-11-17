@@ -26,7 +26,7 @@ use cli_table::{format::Justify, Table};
 use colored::Colorize;
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_common::model::public_oplog::{
+use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
@@ -317,15 +317,15 @@ impl TextView for PublicOplogEntry {
             PublicOplogEntry::Create(params) => {
                 logln(format_message_highlight("CREATE"));
                 logln(format!(
-                    "{pad}at:                {}",
+                    "{pad}at:                 {}",
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}component version: {}",
-                    format_id(&params.component_version),
+                    "{pad}component revision: {}",
+                    format_id(&params.component_revision),
                 ));
                 logln(format!(
-                    "{pad}args:              {}",
+                    "{pad}args:               {}",
                     format_id(&params.args.join(", ")),
                 ));
                 logln(format!("{pad}env:"));
@@ -554,8 +554,8 @@ impl TextView for PublicOplogEntry {
                         format_id(&params.timestamp)
                     ));
                     logln(format!(
-                        "{pad}target version: {}",
-                        format_id(&inner_params.target_version),
+                        "{pad}target revision:   {}",
+                        format_id(&inner_params.target_revision),
                     ));
                 }
             },
@@ -566,8 +566,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 match &params.description {
                     PublicUpdateDescription::Automatic(_) => {
@@ -595,8 +595,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
@@ -615,8 +615,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}target version:    {}",
-                    format_id(&params.target_version),
+                    "{pad}target revision:   {}",
+                    format_id(&params.target_revision),
                 ));
                 if let Some(details) = &params.details {
                     logln(format!("{pad}error:             {}", format_error(details)));
@@ -703,7 +703,7 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.dropped_region.start.previous()),
                 ));
             }
-            PublicOplogEntry::CancelInvocation(params) => {
+            PublicOplogEntry::CancelPendingInvocation(params) => {
                 logln(format_message_highlight("CANCEL INVOCATION"));
                 logln(format!(
                     "{pad}at:                {}",

@@ -16,15 +16,19 @@ use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use golem_common::model::component::ComponentId;
-use golem_common::model::{TransactionId, WorkerId};
+use golem_common::model::oplog::types::{
+    Enumeration, EnumerationType, Interval, TimeTz, ValuesRange,
+};
+use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
+use golem_worker_executor::services::rdbms::postgres::types::Range;
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
-use golem_worker_executor::services::rdbms::{DbResult, DbRow, Error, RdbmsTransactionStatus};
+use golem_worker_executor::services::rdbms::RdbmsService;
+use golem_worker_executor::services::rdbms::{DbResult, DbRow, RdbmsError, RdbmsTransactionStatus};
 use golem_worker_executor::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
-use golem_worker_executor::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use mac_address::MacAddress;
 use serde_json::json;
 use std::any::{Any, TypeId};
@@ -482,7 +486,7 @@ async fn postgres_create_insert_select_test(
             vec![postgres_types::DbValue::Varchar(format!("{i:03}"))];
 
         if i % 2 == 0 {
-            let tstzbounds = postgres_types::ValuesRange::new(
+            let tstzbounds = ValuesRange::new(
                 Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
                         chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
@@ -498,7 +502,7 @@ async fn postgres_create_insert_select_test(
                     chrono::Utc,
                 )),
             );
-            let tsbounds = postgres_types::ValuesRange::new(
+            let tsbounds = ValuesRange::new(
                 Bound::Included(chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
                     chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
@@ -510,7 +514,7 @@ async fn postgres_create_insert_select_test(
             );
 
             params.append(&mut vec![
-                postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
+                postgres_types::DbValue::Enumeration(Enumeration::new(
                     "test_enum".to_string(),
                     "regular".to_string(),
                 )),
@@ -538,11 +542,11 @@ async fn postgres_create_insert_select_test(
                 )),
                 postgres_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
                 postgres_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
-                postgres_types::DbValue::Timetz(postgres_types::TimeTz::new(
+                postgres_types::DbValue::Timetz(TimeTz::new(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                     chrono::FixedOffset::west_opt(3 * 60 * 60).unwrap(),
                 )),
-                postgres_types::DbValue::Interval(postgres_types::Interval::new(10, 20, 30)),
+                postgres_types::DbValue::Interval(Interval::new(10, 20, 30)),
                 postgres_types::DbValue::Bytea("bytea".as_bytes().to_vec()),
                 postgres_types::DbValue::Uuid(Uuid::new_v4()),
                 postgres_types::DbValue::Json(
@@ -569,21 +573,21 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Bit(BitVec::from_iter(vec![true, false, true])),
                 postgres_types::DbValue::Varbit(BitVec::from_iter(vec![true, false, false])),
                 postgres_types::DbValue::Xml(format!("<foo>{i}</foo>")),
-                postgres_types::DbValue::Int4range(postgres_types::ValuesRange::new(
+                postgres_types::DbValue::Int4range(ValuesRange::new(
                     Bound::Included(1),
                     Bound::Excluded(4),
                 )),
-                postgres_types::DbValue::Int8range(postgres_types::ValuesRange::new(
+                postgres_types::DbValue::Int8range(ValuesRange::new(
                     Bound::Included(1),
                     Bound::Unbounded,
                 )),
-                postgres_types::DbValue::Numrange(postgres_types::ValuesRange::new(
+                postgres_types::DbValue::Numrange(ValuesRange::new(
                     Bound::Included(BigDecimal::from(11)),
                     Bound::Excluded(BigDecimal::from(221)),
                 )),
                 postgres_types::DbValue::Tsrange(tsbounds),
                 postgres_types::DbValue::Tstzrange(tstzbounds),
-                postgres_types::DbValue::Daterange(postgres_types::ValuesRange::new(
+                postgres_types::DbValue::Daterange(ValuesRange::new(
                     Bound::Included(
                         chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
                     ),
@@ -604,17 +608,17 @@ async fn postgres_create_insert_select_test(
                         postgres_types::DbValue::Numeric(BigDecimal::from(111)),
                     ],
                 )),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                     "posint4".to_string(),
                     postgres_types::DbValue::Int4(1 + i as i32),
-                )),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                ))),
+                postgres_types::DbValue::Range(Box::new(Range::new(
                     "float8range".to_string(),
-                    postgres_types::ValuesRange::new(
+                    ValuesRange::new(
                         Bound::Included(postgres_types::DbValue::Float8(1.23)),
                         Bound::Excluded(postgres_types::DbValue::Float8(4.55)),
                     ),
-                )),
+                ))),
             ]);
         } else {
             for _ in 0..41 {
@@ -631,7 +635,7 @@ async fn postgres_create_insert_select_test(
         let values = params
             .into_iter()
             .map(|v| match v {
-                postgres_types::DbValue::Domain(v) => *v.value,
+                postgres_types::DbValue::Domain(v) => v.value,
                 _ => v,
             })
             .collect();
@@ -656,9 +660,9 @@ async fn postgres_create_insert_select_test(
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Enumeration(
-                postgres_types::EnumerationType::new("test_enum".to_string()),
-            ),
+            db_type: postgres_types::DbColumnType::Enumeration(EnumerationType::new(
+                "test_enum".to_string(),
+            )),
             db_type_name: "test_enum".to_string(),
         },
         postgres_types::DbColumn {
@@ -1211,7 +1215,7 @@ async fn postgres_create_insert_select_array_test(
             vec![postgres_types::DbValue::Varchar(format!("{i:03}"))];
 
         if i % 2 == 0 {
-            let tstzbounds = postgres_types::ValuesRange::new(
+            let tstzbounds = ValuesRange::new(
                 Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
                     chrono::NaiveDateTime::new(
                         chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
@@ -1227,7 +1231,7 @@ async fn postgres_create_insert_select_array_test(
                     chrono::Utc,
                 )),
             );
-            let tsbounds = postgres_types::ValuesRange::new(
+            let tsbounds = ValuesRange::new(
                 Bound::Included(chrono::NaiveDateTime::new(
                     chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
                     chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
@@ -1240,11 +1244,11 @@ async fn postgres_create_insert_select_array_test(
 
             params.append(&mut vec![
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
+                    postgres_types::DbValue::Enumeration(Enumeration::new(
                         "a_test_enum".to_string(),
                         "second".to_string(),
                     )),
-                    postgres_types::DbValue::Enumeration(postgres_types::Enumeration::new(
+                    postgres_types::DbValue::Enumeration(Enumeration::new(
                         "a_test_enum".to_string(),
                         "third".to_string(),
                     )),
@@ -1289,14 +1293,12 @@ async fn postgres_create_insert_select_array_test(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
                     chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
-                    postgres_types::TimeTz::new(
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
-                    ),
-                )]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(TimeTz::new(
+                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
+                ))]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
-                    postgres_types::Interval::new(10, 20, 30),
+                    Interval::new(10, 20, 30),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Bytea(
                     "bytea".as_bytes().to_vec(),
@@ -1337,13 +1339,13 @@ async fn postgres_create_insert_select_array_test(
                     "<foo>{i}</foo>"
                 ))]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int4range(
-                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
+                    ValuesRange::new(Bound::Included(1), Bound::Excluded(4)),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Int8range(
-                    postgres_types::ValuesRange::new(Bound::Included(1), Bound::Unbounded),
+                    ValuesRange::new(Bound::Included(1), Bound::Unbounded),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Numrange(
-                    postgres_types::ValuesRange::new(
+                    ValuesRange::new(
                         Bound::Included(BigDecimal::from(11)),
                         Bound::Excluded(BigDecimal::from(221)),
                     ),
@@ -1353,7 +1355,7 @@ async fn postgres_create_insert_select_array_test(
                     tstzbounds,
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
-                    postgres_types::ValuesRange::new(
+                    ValuesRange::new(
                         Bound::Included(
                             chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
                         ),
@@ -1391,50 +1393,50 @@ async fn postgres_create_insert_select_array_test(
                     )),
                 ]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                         "posint8".to_string(),
                         postgres_types::DbValue::Int8(1 + i as i64),
-                    )),
-                    postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                    ))),
+                    postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                         "posint8".to_string(),
                         postgres_types::DbValue::Int8(2 + i as i64),
-                    )),
+                    ))),
                 ]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "float4range".to_string(),
-                        postgres_types::ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "float4range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Unbounded,
                             Bound::Excluded(postgres_types::DbValue::Float4(6.55)),
                         ),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "float4range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Included(postgres_types::DbValue::Float4(2.23)),
                             Bound::Excluded(postgres_types::DbValue::Float4(4.55)),
                         ),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "float4range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Included(postgres_types::DbValue::Float4(1.23)),
                             Bound::Unbounded,
                         ),
-                    )),
+                    ))),
                 ]),
                 postgres_types::DbValue::Array(vec![
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "a_custom_type_range".to_string(),
-                        postgres_types::ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                        ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "a_custom_type_range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Unbounded,
                             Bound::Excluded(postgres_types::DbValue::Composite(
                                 postgres_types::Composite::new(
@@ -1443,10 +1445,10 @@ async fn postgres_create_insert_select_array_test(
                                 ),
                             )),
                         ),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "a_custom_type_range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Included(postgres_types::DbValue::Composite(
                                 postgres_types::Composite::new(
                                     "a_custom_type".to_string(),
@@ -1460,10 +1462,10 @@ async fn postgres_create_insert_select_array_test(
                                 ),
                             )),
                         ),
-                    )),
-                    postgres_types::DbValue::Range(postgres_types::Range::new(
+                    ))),
+                    postgres_types::DbValue::Range(Box::new(Range::new(
                         "a_custom_type_range".to_string(),
-                        postgres_types::ValuesRange::new(
+                        ValuesRange::new(
                             Bound::Included(postgres_types::DbValue::Composite(
                                 postgres_types::Composite::new(
                                     "a_custom_type".to_string(),
@@ -1472,7 +1474,7 @@ async fn postgres_create_insert_select_array_test(
                             )),
                             Bound::Unbounded,
                         ),
-                    )),
+                    ))),
                 ]),
             ]);
         } else {
@@ -1507,9 +1509,9 @@ async fn postgres_create_insert_select_array_test(
         postgres_types::DbColumn {
             name: "enum_col".to_string(),
             ordinal: 1,
-            db_type: postgres_types::DbColumnType::Enumeration(
-                postgres_types::EnumerationType::new("a_test_enum".to_string()),
-            )
+            db_type: postgres_types::DbColumnType::Enumeration(EnumerationType::new(
+                "a_test_enum".to_string(),
+            ))
             .into_array(),
             db_type_name: "a_test_enum[]".to_string(),
         },
@@ -1756,9 +1758,11 @@ async fn postgres_create_insert_select_array_test(
         postgres_types::DbColumn {
             name: "posint8_col".to_string(),
             ordinal: 40,
-            db_type: postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
-                "posint8".to_string(),
-                postgres_types::DbColumnType::Int8,
+            db_type: postgres_types::DbColumnType::Domain(Box::new(
+                postgres_types::DomainType::new(
+                    "posint8".to_string(),
+                    postgres_types::DbColumnType::Int8,
+                ),
             ))
             .into_array(),
             db_type_name: "posint8[]".to_string(),
@@ -2444,9 +2448,9 @@ async fn execute_rdbms_test<T: RdbmsType + 'static>(
     test: RdbmsTest<T>,
 ) -> (
     Option<TransactionId>,
-    Vec<Result<StatementResult<T>, Error>>,
+    Vec<Result<StatementResult<T>, RdbmsError>>,
 ) {
-    let mut results: Vec<Result<StatementResult<T>, Error>> =
+    let mut results: Vec<Result<StatementResult<T>, RdbmsError>> =
         Vec::with_capacity(test.statements.len());
     let mut transaction_id: Option<TransactionId> = None;
     if let Some(te) = test.transaction_end {
@@ -2624,7 +2628,7 @@ async fn check_transaction<T: RdbmsType + 'static>(
 fn check_test_results<T: RdbmsType>(
     worker_id: &WorkerId,
     test: RdbmsTest<T>,
-    results: Vec<Result<StatementResult<T>, Error>>,
+    results: Vec<Result<StatementResult<T>, RdbmsError>>,
 ) {
     for (i, st) in test.statements.into_iter().enumerate() {
         match st.action {
@@ -2690,14 +2694,16 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "pg://user:password@localhost:3506",
-        Error::ConnectionFailure("scheme 'pg' in url is invalid".to_string()),
+        RdbmsError::ConnectionFailure("scheme 'pg' in url is invalid".to_string()),
     )
     .await;
 
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "postgres://user:password@localhost:5999",
-        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
+        RdbmsError::ConnectionFailure(
+            "pool timed out while waiting for an open connection".to_string(),
+        ),
     )
     .await
 }
@@ -2715,7 +2721,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: relation \"xxx\" does not exist".to_string(),
         ),
     )
@@ -2725,7 +2731,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT 'a fat cat sat on a mat and ate a fat rat'::tsvector;",
         vec![],
-        Error::QueryResponseFailure("Column type 'TSVECTOR' is not supported".to_string()),
+        RdbmsError::QueryResponseFailure("Column type 'TSVECTOR' is not supported".to_string()),
     )
     .await;
 
@@ -2737,11 +2743,11 @@ async fn postgres_query_err_test(
             postgres_types::DbValue::Text("tag1".to_string()),
             postgres_types::DbValue::Int8(0),
         ])],
-        Error::QueryParameterFailure(
+        RdbmsError::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
-    .await;
+        .await;
 }
 
 #[test]
@@ -2757,7 +2763,7 @@ async fn postgres_execute_err_test(
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: relation \"xxx\" does not exist".to_string(),
         ),
     )
@@ -2771,11 +2777,11 @@ async fn postgres_execute_err_test(
             postgres_types::DbValue::Text("tag1".to_string()),
             postgres_types::DbValue::Int8(0),
         ])],
-        Error::QueryParameterFailure(
+        RdbmsError::QueryParameterFailure(
             "Array element '0' with index 1 has different type than expected (value do not have 'text' type)".to_string(),
         ),
     )
-    .await;
+        .await;
 }
 
 #[test]
@@ -2788,7 +2794,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServi
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
@@ -2800,7 +2806,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsServi
         &db_address,
         "SELECT Point(56.7, 53.34);",
         vec![],
-        Error::QueryResponseFailure("Column type 'GEOMETRY' is not supported".to_string()),
+        RdbmsError::QueryResponseFailure("Column type 'GEOMETRY' is not supported".to_string()),
     )
     .await;
 }
@@ -2815,7 +2821,7 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdb, rdbms_service: &RdbmsSer
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryExecutionFailure(
+        RdbmsError::QueryExecutionFailure(
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
@@ -2828,14 +2834,16 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "msql://user:password@localhost:3506",
-        Error::ConnectionFailure("scheme 'msql' in url is invalid".to_string()),
+        RdbmsError::ConnectionFailure("scheme 'msql' in url is invalid".to_string()),
     )
     .await;
 
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "mysql://user:password@localhost:3506",
-        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
+        RdbmsError::ConnectionFailure(
+            "pool timed out while waiting for an open connection".to_string(),
+        ),
     )
     .await;
 }
@@ -2843,7 +2851,7 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
 async fn rdbms_connection_err_test<T: RdbmsType>(
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     db_address: &str,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let result = rdbms.create(db_address, &worker_id).await;
@@ -2862,7 +2870,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     db_address: &str,
     query: &str,
     params: Vec<T::DbValue>,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
@@ -2896,7 +2904,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     db_address: &str,
     query: &str,
     params: Vec<T::DbValue>,
-    expected: Error,
+    expected: RdbmsError,
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(db_address, &worker_id).await;
@@ -3051,7 +3059,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         }
     }
 
-    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, Error>>> =
+    let mut workers_results: HashMap<WorkerId, Vec<Result<StatementResult<T>, RdbmsError>>> =
         HashMap::new();
     let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
     let mut workers_transactions: HashMap<WorkerId, Option<TransactionId>> = HashMap::new();

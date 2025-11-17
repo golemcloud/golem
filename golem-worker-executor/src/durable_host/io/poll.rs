@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
 use chrono::{Duration, Utc};
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
+    HostResponsePollResult,
+};
 use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
@@ -25,20 +29,25 @@ use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
-        let durability = Durability::<bool, SerializableError>::new(
-            self,
-            "golem io::poll",
-            "ready",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<IoPollReady>::new(self, DurableFunctionType::ReadLocal).await?;
 
-        if durability.is_live() {
-            let result = HostPollable::ready(&mut self.as_wasi_view().0, self_).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = HostPollable::ready(&mut self.as_wasi_view().0, self_)
+                .await
+                .map_err(|err| err.to_string());
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponsePollReady { result },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        result.result.map_err(|err| anyhow!(err))
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {
@@ -83,32 +92,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let durability = Durability::<Vec<u32>, SerializableError>::new(
-            self,
-            "golem io::poll",
-            "poll",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<IoPollPoll>::new(self, DurableFunctionType::ReadLocal).await?;
 
-        let result = if durability.is_live() {
+        let result: Result<HostResponsePollResult, Duration> = if durability.is_live() {
             let count = in_.len();
             let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
-            if is_suspend_for_sleep(&result).is_none() {
-                durability.persist(self, count, result).await
-            } else {
-                result
+            match is_suspend_for_sleep(&result) {
+                Some(duration) => Err(duration),
+                None => Ok(durability
+                    .persist(
+                        self,
+                        HostRequestPollCount { count },
+                        HostResponsePollResult {
+                            result: result.map_err(|err| err.to_string()),
+                        },
+                    )
+                    .await?),
             }
         } else {
-            durability.replay(self).await
+            Ok(durability.replay(self).await?)
         };
 
-        match is_suspend_for_sleep(&result) {
-            Some(duration) => {
+        match result {
+            Ok(result) => result.result.map_err(|err| anyhow!(err)),
+            Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
                 Err(InterruptKind::Suspend.into())
             }
-            None => result,
         }
     }
 }

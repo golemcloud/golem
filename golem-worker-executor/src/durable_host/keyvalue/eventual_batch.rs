@@ -12,18 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::DurableFunctionType;
-use wasmtime::component::Resource;
-use wasmtime_wasi::{IoView, ResourceTableError};
-
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::{
+    KeyvalueEventualBatchDeleteMany, KeyvalueEventualBatchGetKeys, KeyvalueEventualBatchGetMany,
+    KeyvalueEventualBatchSetMany,
+};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestKVBucket, HostRequestKVBucketAndKeySizePairs,
+    HostRequestKVBucketAndKeys, HostResponseKVGetMany, HostResponseKVKeys, HostResponseKVUnit,
+};
+use wasmtime::component::Resource;
+use wasmtime_wasi::{IoView, ResourceTableError};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_many(
@@ -39,27 +44,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Vec<Option<Vec<u8>>>, SerializableError>::new(
-            self,
-            "golem keyvalue::eventual_batch",
-            "get_many",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualBatchGetMany>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
         let result = if durability.is_live() {
-            let input = (bucket.clone(), keys.clone());
+            let input = HostRequestKVBucketAndKeys {
+                bucket: bucket.clone(),
+                keys: keys.clone(),
+            };
             let result = self
                 .state
                 .key_value_service
                 .get_many(environment_id, bucket, keys)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, input, result).await
+            durability
+                .persist(self, input, HostResponseKVGetMany { result })
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(values) => {
                 let mut result = Vec::new();
                 for maybe_incoming_value in values {
@@ -79,10 +86,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok(Ok(result))
             }
             Err(e) => {
-                let error = self
-                    .as_wasi_view()
-                    .table()
-                    .push(ErrorEntry::new(format!("{e:?}")))?;
+                let error = self.as_wasi_view().table().push(ErrorEntry::new(e))?;
                 Ok(Err(error))
             }
         }
@@ -100,26 +104,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<Vec<String>, SerializableError>::new(
-            self,
-            "golem keyvalue::eventual_batch",
-            "get_keys",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
-        let keys = if durability.is_live() {
+        let durability =
+            Durability::<KeyvalueEventualBatchGetKeys>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
+        let result = if durability.is_live() {
             let result = self
                 .state
                 .key_value_service
                 .get_keys(environment_id, bucket.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, bucket, result).await
+            durability
+                .persist(
+                    self,
+                    HostRequestKVBucket { bucket },
+                    HostResponseKVKeys { result },
+                )
+                .await
         } else {
             durability.replay(self).await
         }?;
 
-        Ok(Ok(keys))
+        match result.result {
+            Ok(keys) => Ok(Ok(keys)),
+            Err(e) => {
+                let error = self.as_wasi_view().table().push(ErrorEntry::new(e))?;
+                Ok(Err(error))
+            }
+        }
     }
 
     async fn set_many(
@@ -149,40 +162,36 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "golem keyvalue::eventual_batch",
-            "set_many",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<KeyvalueEventualBatchSetMany>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let result = if durability.is_live() {
-            let input: (String, Vec<(String, u64)>) = (
-                bucket.clone(),
-                key_values
+            let input = HostRequestKVBucketAndKeySizePairs {
+                bucket: bucket.clone(),
+                keys: key_values
                     .iter()
-                    .map(|(k, v)| (k.clone(), v.len() as u64))
+                    .map(|(k, v)| (k.clone(), v.len()))
                     .collect(),
-            );
+            };
             let result = self
                 .state
                 .key_value_service
                 .set_many(environment_id, bucket, key_values)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, input, result).await
+            durability
+                .persist(self, input, HostResponseKVUnit { result })
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .as_wasi_view()
-                    .table()
-                    .push(ErrorEntry::new(format!("{e:?}")))?;
+                let error = self.as_wasi_view().table().push(ErrorEntry::new(e))?;
                 Ok(Err(error))
             }
         }
@@ -201,34 +210,35 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<(), SerializableError>::new(
+        let durability = Durability::<KeyvalueEventualBatchDeleteMany>::new(
             self,
-            "golem keyvalue::eventual_batch",
-            "delete_many",
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
         let result = if durability.is_live() {
-            let input = (bucket.clone(), keys.clone());
+            let input = HostRequestKVBucketAndKeys {
+                bucket: bucket.clone(),
+                keys: keys.clone(),
+            };
             let result = self
                 .state
                 .key_value_service
                 .delete_many(project_id, bucket, keys)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, input, result).await
+            durability
+                .persist(self, input, HostResponseKVUnit { result })
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(()) => Ok(Ok(())),
             Err(e) => {
-                let error = self
-                    .as_wasi_view()
-                    .table()
-                    .push(ErrorEntry::new(format!("{e:?}")))?;
+                let error = self.as_wasi_view().table().push(ErrorEntry::new(e))?;
                 Ok(Err(error))
             }
         }

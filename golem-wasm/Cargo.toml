@@ -23,10 +23,11 @@ arbitrary = { workspace = true, features = ["derive"], optional = true }
 async-recursion = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bigdecimal = { workspace = true, optional = true }
-bincode = { workspace = true, optional = true }
 bit-vec = { workspace = true, optional = true }
 chrono = { workspace = true }
+desert_rust = { workspace = true, optional = true }
 itertools = { workspace = true }
+lazy_static = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
@@ -61,8 +62,9 @@ host = [
     "dep:async-recursion",
     "dep:async-trait",
     "dep:bigdecimal",
-    "dep:bincode",
     "dep:bit-vec",
+    "dep:desert_rust",
+    "dep:lazy_static",
     "dep:miette",
     "dep:poem-openapi",
     "dep:prost",

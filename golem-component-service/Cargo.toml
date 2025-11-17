@@ -33,12 +33,12 @@ golem-wasm = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
-bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
 darling = { workspace = true }
+desert_rust = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }

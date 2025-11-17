@@ -26,6 +26,7 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcE
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
+use golem_common::base_model::{PromiseId, WorkerId};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
@@ -43,15 +44,13 @@ use golem_common::model::environment::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::worker::{FlatComponentFileSystemNode, UpdateRecord, WorkerMetadataDto};
-use golem_common::model::{
-    IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
+use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::worker::{
+    FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord, WorkerMetadataDto,
 };
+use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm::Value;
-use golem_wasm::ValueAndType;
+use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

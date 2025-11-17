@@ -16,7 +16,7 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::public_oplog::PublicOplogEntry;
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::worker::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::OplogIndex;
 use golem_service_base::error::worker_executor::WorkerExecutorError;

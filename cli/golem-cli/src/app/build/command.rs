@@ -627,7 +627,7 @@ trait CommandExt {
         });
 
         tokio::spawn({
-            let prefix = format!("{} | ", command_name).red().bold();
+            let prefix = format!("{} | ", command_name).yellow().bold();
             async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {

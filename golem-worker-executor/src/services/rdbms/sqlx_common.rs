@@ -15,7 +15,7 @@
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
 use crate::services::rdbms::metrics::record_rdbms_metrics;
 use crate::services::rdbms::{
-    DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
+    DbResult, DbResultStream, DbRow, DbTransaction, Rdbms, RdbmsError, RdbmsStatus,
     RdbmsTransactionStatus, RdbmsType,
 };
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{TransactionId, WorkerId};
+use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
 use itertools::Either;
 use sqlx::pool::PoolConnection;
 use sqlx::{Database, Describe, Execute, Pool, Row, TransactionManager};
@@ -43,7 +43,7 @@ where
 {
     rdbms_type: T,
     config: RdbmsConfig,
-    pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
+    pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, RdbmsError>,
     pool_workers_cache: scc::HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
 }
 
@@ -82,7 +82,7 @@ where
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-    ) -> Result<Arc<Pool<DB>>, Error> {
+    ) -> Result<Arc<Pool<DB>>, RdbmsError> {
         let key_clone = key.clone();
         let pool_config = self.config.pool;
         let rdbms_type = self.rdbms_type.to_string();
@@ -122,7 +122,7 @@ where
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, Error> {
+    pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, RdbmsError> {
         let _ = self.pool_workers_cache.remove_async(key).await;
         let pool = self.pool_cache.try_get(key).await;
         if let Some(pool) = pool {
@@ -138,8 +138,8 @@ where
         &self,
         name: &'static str,
         start: Instant,
-        result: Result<R, Error>,
-    ) -> Result<R, Error> {
+        result: Result<R, RdbmsError>,
+    ) -> Result<R, RdbmsError> {
         record_rdbms_metrics(&self.rdbms_type, name, start, result)
     }
 }
@@ -157,7 +157,11 @@ where
     for<'c> &'c mut <DB as Database>::Connection: sqlx::Executor<'c, Database = DB>,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
+    async fn create(
+        &self,
+        address: &str,
+        worker_id: &WorkerId,
+    ) -> Result<RdbmsPoolKey, RdbmsError> {
         let start = Instant::now();
 
         let result = match RdbmsPoolKey::from(address) {
@@ -185,7 +189,7 @@ where
                     rdbms_type = self.rdbms_type.to_string(),
                     "create connection error: {}", e
                 );
-                Err(Error::ConnectionFailure(e))
+                Err(RdbmsError::ConnectionFailure(e))
             }
         };
         self.record_metrics("create-connection", start, result)
@@ -211,7 +215,7 @@ where
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<u64, Error>
+    ) -> Result<u64, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -249,7 +253,7 @@ where
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -295,7 +299,7 @@ where
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<DbResult<T>, Error>
+    ) -> Result<DbResult<T>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -331,7 +335,7 @@ where
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error> {
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -364,7 +368,7 @@ where
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, Error> {
+    ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -397,7 +401,7 @@ where
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -441,7 +445,7 @@ where
 
 #[async_trait]
 pub(crate) trait PoolCreator<DB: Database> {
-    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, Error>;
+    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, RdbmsError>;
 }
 
 #[async_trait]
@@ -450,7 +454,7 @@ pub(crate) trait QueryExecutor<T: RdbmsType, DB: Database> {
         statement: &str,
         params: Vec<T::DbValue>,
         executor: E,
-    ) -> Result<u64, Error>
+    ) -> Result<u64, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
@@ -458,7 +462,7 @@ pub(crate) trait QueryExecutor<T: RdbmsType, DB: Database> {
         statement: &str,
         params: Vec<T::DbValue>,
         executor: E,
-    ) -> Result<DbResult<T>, Error>
+    ) -> Result<DbResult<T>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
@@ -467,7 +471,7 @@ pub(crate) trait QueryExecutor<T: RdbmsType, DB: Database> {
         params: Vec<T::DbValue>,
         batch: usize,
         executor: E,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync + 'c>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync + 'c>, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 }
@@ -559,8 +563,8 @@ where
         &self,
         name: &'static str,
         start: Instant,
-        result: Result<R, Error>,
-    ) -> Result<R, Error> {
+        result: Result<R, RdbmsError>,
+    ) -> Result<R, RdbmsError> {
         record_rdbms_metrics(&self.rdbms_type, name, start, result)
     }
 }
@@ -653,7 +657,7 @@ where
         self.transaction_id.clone()
     }
 
-    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
+    async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -685,7 +689,11 @@ where
         self.record_metrics("execute", start, result)
     }
 
-    async fn query(&self, statement: &str, params: Vec<T::DbValue>) -> Result<DbResult<T>, Error>
+    async fn query(
+        &self,
+        statement: &str,
+        params: Vec<T::DbValue>,
+    ) -> Result<DbResult<T>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -720,7 +728,7 @@ where
         &self,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -754,7 +762,7 @@ where
         self.record_metrics("query-stream", start, result)
     }
 
-    async fn pre_commit(&self) -> Result<(), Error> {
+    async fn pre_commit(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -778,7 +786,7 @@ where
         self.record_metrics("pre-commit-transaction", start, result)
     }
 
-    async fn pre_rollback(&self) -> Result<(), Error> {
+    async fn pre_rollback(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -802,7 +810,7 @@ where
         self.record_metrics("pre-rollback-transaction", start, result)
     }
 
-    async fn commit(&self) -> Result<(), Error> {
+    async fn commit(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -819,7 +827,7 @@ where
         }
 
         let result = result.map_err(|e| {
-            let e = Error::query_execution_failure(e);
+            let e = RdbmsError::query_execution_failure(e);
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
@@ -832,7 +840,7 @@ where
         self.record_metrics("commit-transaction", start, result)
     }
 
-    async fn rollback(&self) -> Result<(), Error> {
+    async fn rollback(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -849,7 +857,7 @@ where
         }
 
         let result = result.map_err(|e| {
-            let e = Error::query_execution_failure(e);
+            let e = RdbmsError::query_execution_failure(e);
             error!(
                 rdbms_type = self.rdbms_type.to_string(),
                 pool_key = self.pool_key.to_string(),
@@ -862,7 +870,7 @@ where
         self.record_metrics("rollback-transaction", start, result)
     }
 
-    async fn rollback_if_open(&self) -> Result<(), Error> {
+    async fn rollback_if_open(&self) -> Result<(), RdbmsError> {
         let start = Instant::now();
         debug!(
             rdbms_type = self.rdbms_type.to_string(),
@@ -877,7 +885,7 @@ where
             let result = DB::TransactionManager::rollback(&mut tx_conn.connection)
                 .await
                 .map_err(|e| {
-                    let e = Error::query_execution_failure(e);
+                    let e = RdbmsError::query_execution_failure(e);
                     error!(
                         rdbms_type = self.rdbms_type.to_string(),
                         pool_key = self.pool_key.to_string(),
@@ -946,7 +954,7 @@ where
     pub(crate) async fn create(
         stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
         batch: usize,
-    ) -> Result<SqlxDbResultStream<'q, T, DB>, Error> {
+    ) -> Result<SqlxDbResultStream<'q, T, DB>, RdbmsError> {
         let mut row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>> =
             Box::pin(stream.chunks(batch));
 
@@ -957,7 +965,7 @@ where
                 let rows: Vec<DB::Row> = rows
                     .into_iter()
                     .collect::<Result<Vec<_>, sqlx::Error>>()
-                    .map_err(Error::query_execution_failure)?;
+                    .map_err(RdbmsError::query_execution_failure)?;
 
                 let result = create_db_result::<T, DB>(rows)?;
 
@@ -979,12 +987,12 @@ where
     DB: Database,
     DbRow<T::DbValue>: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
-    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, Error> {
+    async fn get_columns(&self) -> Result<Vec<T::DbColumn>, RdbmsError> {
         debug!(rdbms_type = self.rdbms_type.to_string(), "get columns");
         Ok(self.columns.clone())
     }
 
-    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, Error> {
+    async fn get_next(&self) -> Result<Option<Vec<DbRow<T::DbValue>>>, RdbmsError> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
             debug!(
@@ -1003,10 +1011,10 @@ where
                 let values: Vec<DbRow<T::DbValue>> = rows
                     .into_iter()
                     .map(|row| {
-                        let row = row.map_err(Error::query_response_failure)?;
-                        (&row).try_into().map_err(Error::QueryResponseFailure)
+                        let row = row.map_err(RdbmsError::query_response_failure)?;
+                        (&row).try_into().map_err(RdbmsError::QueryResponseFailure)
                     })
-                    .collect::<Result<Vec<_>, Error>>()
+                    .collect::<Result<Vec<_>, RdbmsError>>()
                     .map_err(|e| {
                         error!(
                             rdbms_type = self.rdbms_type.to_string(),
@@ -1026,10 +1034,10 @@ pub(crate) trait QueryParamsBinder<'q, T: RdbmsType, DB: Database> {
     fn bind_params(
         self,
         params: Vec<T::DbValue>,
-    ) -> Result<sqlx::query::Query<'q, DB, <DB as Database>::Arguments<'q>>, Error>;
+    ) -> Result<sqlx::query::Query<'q, DB, <DB as Database>::Arguments<'q>>, RdbmsError>;
 }
 
-pub(crate) fn create_db_result<T, DB>(rows: Vec<DB::Row>) -> Result<DbResult<T>, Error>
+pub(crate) fn create_db_result<T, DB>(rows: Vec<DB::Row>) -> Result<DbResult<T>, RdbmsError>
 where
     T: RdbmsType + Sync,
     DB: Database,
@@ -1044,13 +1052,13 @@ where
             .iter()
             .map(|c: &DB::Column| c.try_into())
             .collect::<Result<Vec<_>, String>>()
-            .map_err(Error::QueryResponseFailure)?;
+            .map_err(RdbmsError::QueryResponseFailure)?;
 
         let values = rows
             .iter()
             .map(|r: &DB::Row| r.try_into())
             .collect::<Result<Vec<_>, String>>()
-            .map_err(Error::QueryResponseFailure)?;
+            .map_err(RdbmsError::QueryResponseFailure)?;
 
         Ok(DbResult::new(columns, values))
     }
@@ -1062,7 +1070,7 @@ pub(crate) trait BeginTransactionSupport<T: RdbmsType, DB: Database> {
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
         query_config: RdbmsQueryConfig,
-    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error>;
+    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, RdbmsError>;
 }
 
 #[async_trait]
@@ -1076,12 +1084,12 @@ where
         key: &RdbmsPoolKey,
         pool: Arc<Pool<DB>>,
         query_config: RdbmsQueryConfig,
-    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, Error> {
+    ) -> Result<Arc<SqlxDbTransaction<T, DB>>, RdbmsError> {
         let mut connection = pool
             .deref()
             .acquire()
             .await
-            .map_err(Error::connection_failure)?;
+            .map_err(RdbmsError::connection_failure)?;
 
         let id = TransactionId::generate();
 
@@ -1089,7 +1097,7 @@ where
 
         DB::TransactionManager::begin(&mut connection, None)
             .await
-            .map_err(Error::query_execution_failure)?;
+            .map_err(RdbmsError::query_execution_failure)?;
 
         let db_transaction: Arc<SqlxDbTransaction<T, DB>> = Arc::new(SqlxDbTransaction::new(
             id,
@@ -1108,19 +1116,19 @@ pub(crate) trait TransactionSupport<T: RdbmsType, DB: Database> {
     async fn pre_commit_transaction(
         pool: &Pool<DB>,
         db_transaction: &SqlxDbTransaction<T, DB>,
-    ) -> Result<(), Error>;
+    ) -> Result<(), RdbmsError>;
 
     async fn pre_rollback_transaction(
         pool: &Pool<DB>,
         db_transaction: &SqlxDbTransaction<T, DB>,
-    ) -> Result<(), Error>;
+    ) -> Result<(), RdbmsError>;
 
     async fn get_transaction_status(
         pool: &Pool<DB>,
         id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, Error>;
+    ) -> Result<RdbmsTransactionStatus, RdbmsError>;
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), Error>;
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), RdbmsError>;
 }
 
 #[async_trait]
@@ -1133,7 +1141,7 @@ where
     async fn pre_commit_transaction(
         _pool: &Pool<DB>,
         db_transaction: &SqlxDbTransaction<T, DB>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         let id = db_transaction.transaction_id();
         let updated = <T as GolemTransactionRepo<DB>>::update_transaction_status(
             &id,
@@ -1145,7 +1153,7 @@ where
         if updated {
             Ok(())
         } else {
-            Err(Error::other_response_failure(
+            Err(RdbmsError::other_response_failure(
                 "Pre-commit transaction status not updated, transaction not found",
             ))
         }
@@ -1154,7 +1162,7 @@ where
     async fn pre_rollback_transaction(
         pool: &Pool<DB>,
         db_transaction: &SqlxDbTransaction<T, DB>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), RdbmsError> {
         let id = db_transaction.transaction_id();
         let updated = <T as GolemTransactionRepo<DB>>::update_transaction_status(
             &id,
@@ -1166,7 +1174,7 @@ where
         if updated {
             Ok(())
         } else {
-            Err(Error::other_response_failure(
+            Err(RdbmsError::other_response_failure(
                 "Pre-rollback transaction status not updated, transaction not found",
             ))
         }
@@ -1175,11 +1183,11 @@ where
     async fn get_transaction_status(
         pool: &Pool<DB>,
         id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, Error> {
+    ) -> Result<RdbmsTransactionStatus, RdbmsError> {
         <T as GolemTransactionRepo<DB>>::get_transaction_status(id, pool).await
     }
 
-    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), Error> {
+    async fn cleanup_transaction(pool: &Pool<DB>, id: &TransactionId) -> Result<(), RdbmsError> {
         <T as GolemTransactionRepo<DB>>::delete_transaction(id, pool).await?;
         Ok(())
     }
@@ -1187,15 +1195,15 @@ where
 
 #[async_trait]
 pub(crate) trait GolemTransactionRepo<DB: Database> {
-    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
+    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), Error>
+    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
-    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, Error>
+    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
@@ -1203,14 +1211,14 @@ pub(crate) trait GolemTransactionRepo<DB: Database> {
         id: &TransactionId,
         status: RdbmsTransactionStatus,
         executor: E,
-    ) -> Result<bool, Error>
+    ) -> Result<bool, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 
     async fn get_transaction_status<'c, E>(
         id: &TransactionId,
         executor: E,
-    ) -> Result<RdbmsTransactionStatus, Error>
+    ) -> Result<RdbmsTransactionStatus, RdbmsError>
     where
         E: sqlx::Executor<'c, Database = DB>;
 }

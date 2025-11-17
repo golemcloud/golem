@@ -17,11 +17,6 @@ use crate::golem_agentic::{
 };
 use async_trait::async_trait;
 
-/**
- * An initiator for an agent implementation.
- * This is used to create an instance of the agent with the given parameters.
- */
-
 #[async_trait(?Send)]
 pub trait AgentInitiator {
     async fn initiate(&self, params: DataValue) -> Result<(), AgentError>;

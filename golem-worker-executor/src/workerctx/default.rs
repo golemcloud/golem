@@ -55,7 +55,7 @@ use golem_common::model::component::{
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -393,12 +393,12 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await
     }
 }

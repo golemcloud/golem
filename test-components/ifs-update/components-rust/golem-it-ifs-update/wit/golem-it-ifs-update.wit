@@ -10,6 +10,6 @@ interface golem-it-ifs-update-api {
 world golem-it-ifs-update {
   export golem-it-ifs-update-api;
 
-  export golem:api/save-snapshot@1.1.7;
-  export golem:api/load-snapshot@1.1.7;
+  export golem:api/save-snapshot@1.3.0;
+  export golem:api/load-snapshot@1.3.0;
 }

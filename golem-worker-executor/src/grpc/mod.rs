@@ -17,7 +17,7 @@ mod invocation;
 use crate::grpc::invocation::{CanStartWorker, GrpcInvokeRequest};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
-    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{LastError, ReadFileResult};
 use crate::services::events::Event;
@@ -1032,7 +1032,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_worker_id.worker_id(),
             ))?;
 
-        if metadata.last_known_status.component_version.0 == request.target_version {
+        if metadata.last_known_status.component_revision.0 == request.target_version {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is already at the target version",
             ));
@@ -1042,7 +1042,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .component_service()
             .get_metadata(
                 &owned_worker_id.worker_id.component_id,
-                Some(metadata.last_known_status.component_version),
+                Some(metadata.last_known_status.component_revision),
             )
             .await?;
         if component_metadata.component_type == ComponentType::Ephemeral {
@@ -1054,7 +1054,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match request.mode() {
             UpdateMode::Automatic => {
                 let update_description = UpdateDescription::Automatic {
-                    target_version: ComponentRevision(request.target_version),
+                    target_revision: ComponentRevision(request.target_version),
                 };
 
                 if metadata
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
-                            Some(metadata.last_known_status.component_version),
+                            Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
                         )
@@ -1133,7 +1133,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if target_version.0 == request.target_version)
+                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_revision, .. }, ..} if target_revision.0 == request.target_version)
                 ) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1246,7 +1246,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
                 let initial_component_version =
-                    find_component_version_at(self.oplog_service(), &owned_worker_id, start)
+                    find_component_revision_at(self.oplog_service(), &owned_worker_id, start)
                         .await?;
 
                 get_public_oplog_chunk(
@@ -1271,7 +1271,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_version.0,
+                current_component_version: chunk.current_component_revision.0,
             })
         };
 
@@ -1321,7 +1321,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None => {
                 let start = OplogIndex::INITIAL;
                 let initial_component_version =
-                    find_component_version_at(self.oplog_service(), &owned_worker_id, start)
+                    find_component_revision_at(self.oplog_service(), &owned_worker_id, start)
                         .await?;
                 search_public_oplog(
                     self.component_service(),
@@ -1346,7 +1346,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_version.0,
+                current_component_version: chunk.current_component_revision.0,
             })
         };
 
@@ -1530,7 +1530,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .component_service()
                         .get_metadata(
                             &owned_worker_id.worker_id.component_id,
-                            Some(metadata.last_known_status.component_version),
+                            Some(metadata.last_known_status.component_revision),
                         )
                         .await?;
 
@@ -1603,7 +1603,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .component_service()
                 .get_metadata(
                     &owned_worker_id.worker_id.component_id,
-                    Some(metadata.last_known_status.component_version),
+                    Some(metadata.last_known_status.component_revision),
                 )
                 .await?;
 
@@ -1644,12 +1644,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_invocation in &latest_status.pending_invocations {
             if let TimestampedWorkerInvocation {
                 timestamp,
-                invocation: WorkerInvocation::ManualUpdate { target_version },
+                invocation: WorkerInvocation::ManualUpdate { target_revision },
             } = pending_invocation
             {
                 updates.push(golem::worker::UpdateRecord {
                     timestamp: Some((*timestamp).into()),
-                    target_version: target_version.0,
+                    target_version: target_revision.0,
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
@@ -1659,7 +1659,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_version: pending_update.description.target_version().0,
+                target_version: pending_update.description.target_revision().0,
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
@@ -1668,7 +1668,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for successful_update in &latest_status.successful_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(successful_update.timestamp.into()),
-                target_version: successful_update.target_version.0,
+                target_version: successful_update.target_revision.0,
                 update: Some(golem::worker::update_record::Update::Successful(
                     golem::worker::SuccessfulUpdate {},
                 )),
@@ -1677,7 +1677,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for failed_update in &latest_status.failed_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(failed_update.timestamp.into()),
-                target_version: failed_update.target_version.0,
+                target_version: failed_update.target_revision.0,
                 update: Some(golem::worker::update_record::Update::Failed(
                     golem::worker::FailedUpdate {
                         details: failed_update.details.clone(),
@@ -1704,7 +1704,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),
             wasi_config_vars: Some(metadata.wasi_config_vars.into()),
-            component_version: latest_status.component_version.0,
+            component_version: latest_status.component_revision.0,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()

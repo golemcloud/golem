@@ -44,19 +44,19 @@ pub mod exports {
                     fn save() -> _rt::Vec<u8>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_golem_api_save_snapshot_1_1_7_cabi {
+                macro_rules! __export_golem_api_save_snapshot_1_3_0_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[unsafe (export_name =
-                        "golem:api/save-snapshot@1.1.7#save")] unsafe extern "C" fn
+                        "golem:api/save-snapshot@1.3.0#save")] unsafe extern "C" fn
                         export_save() -> * mut u8 { unsafe { $($path_to_types)*::
                         _export_save_cabi::<$ty > () } } #[unsafe (export_name =
-                        "cabi_post_golem:api/save-snapshot@1.1.7#save")] unsafe extern
+                        "cabi_post_golem:api/save-snapshot@1.3.0#save")] unsafe extern
                         "C" fn _post_return_save(arg0 : * mut u8,) { unsafe {
                         $($path_to_types)*:: __post_return_save::<$ty > (arg0) } } };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_golem_api_save_snapshot_1_1_7_cabi;
+                pub(crate) use __export_golem_api_save_snapshot_1_3_0_cabi;
                 #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                 #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
                 struct _RetArea(
@@ -203,7 +203,7 @@ macro_rules! __export_update_test_v2_impl {
         exports::golem::component::api::__export_golem_component_api_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::component::api);
         $($path_to_types_root)*::
-        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_1_1_7_cabi!($ty
+        exports::golem::api::save_snapshot::__export_golem_api_save_snapshot_1_3_0_cabi!($ty
         with_types_in $($path_to_types_root)*:: exports::golem::api::save_snapshot);
     };
 }
@@ -220,7 +220,7 @@ pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 303] = *b"\
 A\x04\x01B\x06\x01@\x01\x08speed-msw\0w\x04\0\x02f1\x01\0\x01@\0\0w\x04\0\x02f2\x01\
 \x01\x04\0\x02f3\x01\x01\x04\0\x02f4\x01\x01\x04\0\x13golem:component/api\x05\0\x01\
 B\x03\x01p}\x01@\0\0\0\x04\0\x04save\x01\x01\x04\0\x1dgolem:api/save-snapshot@1.\
-1.7\x05\x01\x04\0\x1egolem:component/update-test-v2\x04\0\x0b\x14\x01\0\x0eupdat\
+3.0\x05\x01\x04\0\x1egolem:component/update-test-v2\x04\0\x0b\x14\x01\0\x0eupdat\
 e-test-v2\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.\
 227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]

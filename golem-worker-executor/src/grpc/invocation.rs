@@ -441,10 +441,10 @@ impl GrpcInvokeRequest
 
 /// Assumes what component version a worker will execute the next enqueued invocation with
 fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentRevision {
-    let mut version = metadata.last_known_status.component_version;
+    let mut version = metadata.last_known_status.component_revision;
     for pending_update in &metadata.last_known_status.pending_updates {
         // Assuming this update will succeed
-        version = *pending_update.description.target_version();
+        version = *pending_update.description.target_revision();
     }
     version
 }

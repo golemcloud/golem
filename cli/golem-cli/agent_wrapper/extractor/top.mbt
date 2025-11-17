@@ -118,6 +118,11 @@ impl Extractor for WitValueExtractor with bool(self : WitValueExtractor) -> Bool
 }
 
 ///|
+impl Extractor for WitValueExtractor with char(self : WitValueExtractor) -> Char? {
+  self.value.nodes.get(0).bind(node => Extractor::char(self.extract(node)))
+}
+
+///|
 impl Extractor for WitValueExtractor with string(self : WitValueExtractor) -> String? {
   self.value.nodes.get(0).bind(node => Extractor::string(self.extract(node)))
 }
@@ -297,6 +302,14 @@ impl Extractor for NodeExtractor with bool(self : NodeExtractor) -> Bool? {
 }
 
 ///|
+impl Extractor for NodeExtractor with char(self : NodeExtractor) -> Char? {
+  match self.node {
+    PrimChar(value) => Some(value)
+    _ => None
+  }
+}
+
+///|
 impl Extractor for NodeExtractor with string(self : NodeExtractor) -> String? {
   match self.node {
     PrimString(value) => Some(value)
@@ -447,6 +460,7 @@ pub(open) trait Extractor {
   f32(Self) -> Float?
   f64(Self) -> Double?
   bool(Self) -> Bool?
+  char(Self) -> Char?
   string(Self) -> String?
   field(Self, field_idx : Int) -> &Extractor?
   variant(Self) -> (UInt, &Extractor?)?

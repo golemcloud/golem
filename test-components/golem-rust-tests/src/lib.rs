@@ -150,9 +150,11 @@ impl Guest for Component {
                 format!("http://localhost:{port}/fork-test/step2/{self_name}/original/{input}")
             }
             ForkResult::Forked => {
+                let self_name = get_self_metadata().agent_id.agent_id;
                 format!("http://localhost:{port}/fork-test/step2/{self_name}/forked/{input}")
             }
         };
+
         let response2: Response = client.get(&url).send().expect("Request failed");
         let part2_raw = response2.text().expect("Invalid response");
         println!("Received {part2_raw}");

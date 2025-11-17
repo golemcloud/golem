@@ -18,7 +18,8 @@ use crate::durable_host::rdbms::{
     db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
     db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
     db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
-    FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
+    FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
+    RdbmsTransactionEntry,
 };
 use crate::durable_host::DurableWorkerCtx;
 use crate::preview2::golem::rdbms::mysql::{
@@ -30,8 +31,20 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bit_vec::BitVec;
+use golem_common::model::oplog::host_functions::*;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
+
+impl RdbmsDurabilityPairs for MysqlType {
+    type ConnExecute = RdbmsMysqlDbConnectionExecute;
+    type ConnQuery = RdbmsMysqlDbConnectionQuery;
+    type ConnQueryStream = RdbmsMysqlDbConnectionQueryStream;
+    type TxnExecute = RdbmsMysqlDbTransactionExecute;
+    type TxnQuery = RdbmsMysqlDbTransactionQuery;
+    type TxnQueryStream = RdbmsMysqlDbTransactionQueryStream;
+    type StreamGetColumns = RdbmsMysqlDbResultStreamGetColumns;
+    type StreamGetNext = RdbmsMysqlDbResultStreamGetNext;
+}
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -397,18 +410,20 @@ impl From<mysql_types::DbColumn> for DbColumn {
     }
 }
 
-impl From<crate::services::rdbms::Error> for Error {
-    fn from(value: crate::services::rdbms::Error) -> Self {
+impl From<crate::services::rdbms::RdbmsError> for Error {
+    fn from(value: crate::services::rdbms::RdbmsError) -> Self {
         match value {
-            crate::services::rdbms::Error::ConnectionFailure(v) => Self::ConnectionFailure(v),
-            crate::services::rdbms::Error::QueryParameterFailure(v) => {
+            crate::services::rdbms::RdbmsError::ConnectionFailure(v) => Self::ConnectionFailure(v),
+            crate::services::rdbms::RdbmsError::QueryParameterFailure(v) => {
                 Self::QueryParameterFailure(v)
             }
-            crate::services::rdbms::Error::QueryExecutionFailure(v) => {
+            crate::services::rdbms::RdbmsError::QueryExecutionFailure(v) => {
                 Self::QueryExecutionFailure(v)
             }
-            crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
-            crate::services::rdbms::Error::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => {
+                Self::QueryResponseFailure(v)
+            }
+            crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
         }
     }
 }

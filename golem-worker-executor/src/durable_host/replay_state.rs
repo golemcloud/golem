@@ -33,7 +33,7 @@ use tracing::debug;
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {
     ReplayFinished,
-    UpdateReplayed { new_version: ComponentRevision },
+    UpdateReplayed { new_revision: ComponentRevision },
 }
 
 #[derive(Debug, Clone)]
@@ -320,9 +320,12 @@ impl ReplayState {
         let oplog_entry = oplog_entries.into_iter().next().unwrap();
 
         // record side effects that need to be applied at the next opportunity
-        if let OplogEntry::SuccessfulUpdate { target_version, .. } = oplog_entry {
+        if let OplogEntry::SuccessfulUpdate {
+            target_revision, ..
+        } = oplog_entry
+        {
             self.record_replay_event(ReplayEvent::UpdateReplayed {
-                new_version: target_version,
+                new_revision: target_revision,
             })
             .await
         }
@@ -444,28 +447,21 @@ impl ReplayState {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
-                match &oplog_entry {
+                match oplog_entry {
                     OplogEntry::ExportedFunctionInvoked {
                         function_name,
                         idempotency_key,
                         trace_id,
                         trace_states: trace_state,
                         invocation_context: spans,
+                        request,
                         ..
                     } => {
-                        let request: Vec<golem_wasm::protobuf::Val> = self
+                        let request = self
                             .oplog
-                            .get_payload_of_entry(&oplog_entry)
+                            .download_payload(request)
                             .await
-                            .expect("failed to deserialize function request payload")
-                            .unwrap();
-                        let request = request
-                            .into_iter()
-                            .map(|val| {
-                                val.try_into()
-                                    .expect("failed to decode serialized protobuf value")
-                            })
-                            .collect::<Vec<Value>>();
+                            .expect("failed to deserialize function request payload");
 
                         let invocation_context =
                             InvocationContextStack::from_oplog_data(trace_id, trace_state, spans);
@@ -491,21 +487,19 @@ impl ReplayState {
         }
     }
 
-    // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_completed(
         &mut self,
     ) -> Result<Option<Option<ValueAndType>>, WorkerExecutorError> {
         loop {
             if self.is_replay() {
                 let (_, oplog_entry) = self.get_oplog_entry().await;
-                match &oplog_entry {
-                    OplogEntry::ExportedFunctionCompleted { .. } => {
+                match oplog_entry {
+                    OplogEntry::ExportedFunctionCompleted { response, .. } => {
                         let response: Option<ValueAndType> = self
                             .oplog
-                            .get_payload_of_entry(&oplog_entry)
+                            .download_payload(response)
                             .await
-                            .expect("failed to deserialize function response payload")
-                            .unwrap();
+                            .expect("failed to deserialize function response payload");
 
                         break Ok(Some(response));
                     }

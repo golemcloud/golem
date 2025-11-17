@@ -30,12 +30,10 @@ mod logging;
 mod random;
 pub mod rdbms;
 mod replay_state;
-pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
 use self::golem::v1x::GetPromiseResultEntry;
-use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
@@ -91,8 +89,9 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
+    PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
@@ -166,7 +165,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -973,16 +972,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 description: description @ UpdateDescription::SnapshotBased { .. },
                 ..
             }) => {
-                let target_version = *description.target_version();
+                let target_revision = *description.target_revision();
 
-                debug!("Finalizing snapshot update to version {target_version}");
+                debug!("Finalizing snapshot update to revision {target_revision}");
 
                 match store
                     .as_context_mut()
                     .data_mut()
                     .get_public_state()
                     .oplog()
-                    .get_upload_description_payload(&description)
+                    .get_upload_description_payload(description)
                     .await
                 {
                     Ok(Some(data)) => {
@@ -1071,7 +1070,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             store
                                 .as_context_mut()
                                 .data_mut()
-                                .on_worker_update_failed(target_version, Some(error))
+                                .on_worker_update_failed(target_revision, Some(error))
                                 .await;
                             Some(RetryDecision::Immediate)
                         } else {
@@ -1082,7 +1081,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .on_worker_update_succeeded(
-                                    &description,
+                                    target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
@@ -1100,7 +1099,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .on_worker_update_failed(
-                                target_version,
+                                target_revision,
                                 Some("Failed to find snapshot data for update".to_string()),
                             )
                             .await;
@@ -1110,7 +1109,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .on_worker_update_failed(target_version, Some(error))
+                            .on_worker_update_failed(target_revision, Some(error))
                             .await;
                         Some(RetryDecision::Immediate)
                     }
@@ -1131,7 +1130,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         for event in replay_events {
             match event {
-                ReplayEvent::UpdateReplayed { new_version } => {
+                ReplayEvent::UpdateReplayed {
+                    new_revision: new_version,
+                } => {
                     debug!("Updating worker state to component metadata version {new_version}");
                     self.update_state_to_new_component_version(new_version)
                         .await?;
@@ -1148,18 +1149,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
 
                     match pending_update.description {
-                        UpdateDescription::Automatic { target_version } => {
+                        UpdateDescription::Automatic { target_revision } => {
                             debug!("Finalizing pending automatic update");
 
                             if let Err(error) = self
-                                .update_state_to_new_component_version(target_version)
+                                .update_state_to_new_component_version(target_revision)
                                 .await
                             {
                                 let stringified_error =
                                     format!("Applying worker update failed: {error}");
 
                                 self.on_worker_update_failed(
-                                    target_version,
+                                    target_revision,
                                     Some(stringified_error),
                                 )
                                 .await;
@@ -1170,7 +1171,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let component_metadata = self.component_metadata().clone();
 
                             self.on_worker_update_succeeded(
-                                &pending_update.description,
+                                target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
@@ -1181,7 +1182,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             )
                             .await;
 
-                            debug!("Finalizing automatic update to version {target_version}");
+                            debug!("Finalizing automatic update to revision {target_revision}");
                         }
                         _ => {
                             panic!("Expected automatic update description")
@@ -1345,11 +1346,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
-                .iter()
-                .map(|value| value.clone().into())
-                .collect();
-
             let stack = self.get_current_invocation_context().await;
 
             self.public_state
@@ -1357,7 +1353,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .oplog()
                 .add_exported_function_invoked(
                     full_function_name.to_string(),
-                    &proto_function_input,
+                    function_input,
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
@@ -1572,29 +1568,28 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         details: Option<String>,
     ) {
-        let entry = OplogEntry::failed_update(target_version, details.clone());
+        let entry = OplogEntry::failed_update(target_revision, details.clone());
         self.public_state.worker().add_and_commit_oplog(entry).await;
 
         warn!(
             "Worker failed to update to {}: {}, update attempt aborted",
-            target_version,
+            target_revision,
             details.unwrap_or_else(|| "?".to_string())
         );
     }
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginPriority>,
     ) {
-        let target_version = *update.target_version();
-        info!("Worker update to {} finished successfully", target_version);
+        info!("Worker update to {} finished successfully", target_revision);
         let entry = OplogEntry::successful_update(
-            target_version,
+            target_revision,
             new_component_size,
             new_active_plugins.clone(),
         );
@@ -1685,13 +1680,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if is_live {
             self.public_state
                 .worker()
-                .add_to_oplog(OplogEntry::start_span(
-                    span.start().unwrap_or(Timestamp::now_utc()),
-                    span.span_id().clone(),
-                    Some(parent.clone()),
-                    span.linked_context().map(|link| link.span_id().clone()),
-                    HashMap::from_iter(initial_attributes.iter().cloned()),
-                ))
+                .add_to_oplog(OplogEntry::StartSpan {
+                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
+                    span_id: span.span_id().clone(),
+                    parent_id: Some(parent.clone()),
+                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
+                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()),
+                })
                 .await;
         }
 
@@ -2126,7 +2121,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                             Ok(Self::finalize_pending_snapshot_update(instance, store).await)
                         }
-                        UpdateDescription::Automatic { target_version, .. } => {
+                        UpdateDescription::Automatic {
+                            target_revision, ..
+                        } => {
                             // snapshot update will be succeeded as part of the replay.
                             let result = Self::resume_replay(store, instance, false).await;
                             record_resume_worker(start.elapsed());
@@ -2153,7 +2150,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 .as_context_mut()
                                                 .data_mut()
                                                 .on_worker_update_failed(
-                                                    *target_version,
+                                                    *target_revision,
                                                     Some(format!(
                                                         "Automatic update failed: {error}"
                                                     )),
@@ -2598,7 +2595,7 @@ struct HttpRequestState {
     /// The BeginRemoteWrite entry's index
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
-    pub request: SerializableHttpRequest,
+    pub request: HostRequestHttpRequest,
     /// SpanId
     pub span_id: SpanId,
 }
@@ -3258,7 +3255,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {

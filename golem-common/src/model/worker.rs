@@ -21,9 +21,9 @@ use super::regions::OplogRegion;
 use super::{Timestamp, WorkerId, WorkerResourceDescription, WorkerStatus};
 use crate::model::OplogIndex;
 use crate::{declare_enums, declare_structs, declare_unions};
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_wasm::{FromValue, IntoValue, Value};
-use golem_wasm_derive::IntoValue;
+use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
@@ -115,7 +115,8 @@ declare_unions! {
         FailedUpdate(FailedUpdate),
     }
 
-    #[derive(Encode, Decode, IntoValue)]
+    #[derive(BinaryCodec, IntoValue, FromValue)]
+    #[desert(evolution())]
     pub enum RevertWorkerTarget {
         RevertToOplogIndex(RevertToOplogIndex),
         RevertLastInvocations(RevertLastInvocations),
@@ -170,12 +171,14 @@ declare_structs! {
         pub deleted_regions: Vec<OplogRegion>
     }
 
-    #[derive(Encode, Decode, IntoValue)]
+    #[derive(BinaryCodec, IntoValue, FromValue)]
+    #[desert(evolution())]
     pub struct RevertToOplogIndex {
         pub last_oplog_index: OplogIndex,
     }
 
-    #[derive(Encode, Decode, IntoValue)]
+    #[derive(BinaryCodec, IntoValue, FromValue)]
+    #[desert(evolution())]
     pub struct RevertLastInvocations {
         pub number_of_invocations: u64,
     }

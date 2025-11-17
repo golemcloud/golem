@@ -34,8 +34,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::worker::{FlatComponentFileSystemNode, WorkerMetadataDto};
 use golem_common::model::PromiseId;

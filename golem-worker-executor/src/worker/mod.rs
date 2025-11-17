@@ -634,9 +634,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_version })
+        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_revision })
             .await
     }
 
@@ -1425,7 +1425,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .component_service()
                     .get_metadata(
                         &component_id,
-                        Some(initial_worker_metadata.last_known_status.component_version),
+                        Some(initial_worker_metadata.last_known_status.component_revision),
                     )
                     .await?;
 
@@ -1508,8 +1508,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = WorkerStatusRecord {
-                    component_version: component.revision,
-                    component_version_for_replay: component.revision,
+                    component_revision: component.revision,
+                    component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component
                         .metadata
@@ -1542,10 +1542,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.worker_id.clone(),
-                    initial_worker_metadata.last_known_status.component_version,
+                    initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.wasi_config_vars.clone(),
                     initial_worker_metadata.environment_id.clone(),
                     initial_worker_metadata.created_by.clone(),
                     initial_worker_metadata.parent.clone(),
@@ -1557,6 +1556,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
+                    initial_worker_metadata.wasi_config_vars.clone(),
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
@@ -1879,18 +1879,18 @@ impl RunningWorker {
                 .cloned();
 
             let component_version = pending_update.as_ref().map_or(
-                worker_metadata.last_known_status.component_version,
+                worker_metadata.last_known_status.component_revision,
                 |update| {
-                    let target_version = *update.description.target_version();
+                    let target_revision = *update.description.target_revision();
                     info!(
-                        "Attempting {} update from {} to version {target_version}",
+                        "Attempting {} update from {} to version {target_revision}",
                         match update.description {
                             UpdateDescription::Automatic { .. } => "automatic",
                             UpdateDescription::SnapshotBased { .. } => "snapshot based",
                         },
-                        worker_metadata.last_known_status.component_version
+                        worker_metadata.last_known_status.component_revision
                     );
-                    target_version
+                    target_revision
                 },
             );
 
@@ -1903,7 +1903,7 @@ impl RunningWorker {
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
-                    if component_version != worker_metadata.last_known_status.component_version {
+                    if component_version != worker_metadata.last_known_status.component_revision {
                         // An update was attempted but the targeted version does not exist
                         warn!(
                             "Attempting update to version {component_version} failed with {error}"
@@ -1944,13 +1944,15 @@ impl RunningWorker {
             .pending_updates
             .front()
             .and_then(|update| match update.description {
-                UpdateDescription::SnapshotBased { target_version, .. } => Some(target_version),
+                UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } => Some(target_revision),
                 _ => None,
             })
             .unwrap_or(
                 worker_metadata
                     .last_known_status
-                    .component_version_for_replay,
+                    .component_revision_for_replay,
             );
 
         let context = Ctx::create(
@@ -2099,9 +2101,9 @@ impl InvocationResult {
             let entry = services.oplog().read(oplog_idx).await;
 
             let result = match entry {
-                OplogEntry::ExportedFunctionCompleted { .. } => {
+                OplogEntry::ExportedFunctionCompleted { response, .. } => {
                     let value: Option<ValueAndType> =
-                        services.oplog().get_payload_of_entry(&entry).await.expect("failed to deserialize function response payload").unwrap();
+                        services.oplog().download_payload(response).await.expect("failed to deserialize function response payload");
 
                     Ok(value)
                 }

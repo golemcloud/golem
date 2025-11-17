@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::oplog::PublicAttributeValue;
 use crate::model::oplog::SpanData;
-use crate::model::public_oplog::PublicAttributeValue;
 use crate::model::Timestamp;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
+use desert_rust::adt::{AdtDeserializer, AdtMetadata, AdtSerializer};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    Evolution, SerializationContext,
+};
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
+use lazy_static::lazy_static;
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,7 +33,8 @@ use std::num::{NonZeroU128, NonZeroU64};
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(transparent)]
 pub struct TraceId(pub NonZeroU128);
 
 impl TraceId {
@@ -83,7 +86,7 @@ impl Serialize for TraceId {
     where
         S: Serializer,
     {
-        self.to_string().serialize(serializer)
+        Serialize::serialize(&self.to_string(), serializer)
     }
 }
 
@@ -92,7 +95,10 @@ impl<'de> Deserialize<'de> for TraceId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
+        Self::from_string(<std::string::String as Deserialize>::deserialize(
+            deserializer,
+        )?)
+        .map_err(Error::custom)
     }
 }
 
@@ -146,7 +152,8 @@ impl poem_openapi::types::ToJSON for TraceId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(transparent)]
 pub struct SpanId(pub NonZeroU64);
 
 impl SpanId {
@@ -202,7 +209,7 @@ impl Serialize for SpanId {
     where
         S: Serializer,
     {
-        self.to_string().serialize(serializer)
+        Serialize::serialize(&self.to_string(), serializer)
     }
 }
 
@@ -211,7 +218,10 @@ impl<'de> Deserialize<'de> for SpanId {
     where
         D: Deserializer<'de>,
     {
-        Self::from_string(String::deserialize(deserializer)?).map_err(Error::custom)
+        Self::from_string(<std::string::String as Deserialize>::deserialize(
+            deserializer,
+        )?)
+        .map_err(Error::custom)
     }
 }
 
@@ -265,7 +275,8 @@ impl poem_openapi::types::ToJSON for SpanId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue, FromValue)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
 pub enum AttributeValue {
     String(String),
 }
@@ -312,6 +323,11 @@ impl LocalInvocationContextSpanBuilder {
             linked_context: None,
             inherited: false,
         }
+    }
+
+    pub fn rounded(mut self) -> Self {
+        self.start = self.start.rounded();
+        self
     }
 
     pub fn span_id(mut self, span_id: Option<SpanId>) -> Self {
@@ -664,103 +680,133 @@ impl PartialEq for InvocationContextSpan {
     }
 }
 
-impl Encode for InvocationContextSpan {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+lazy_static! {
+    static ref INVOCATION_CONTEXT_SPAN_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref INVOCATION_CONTEXT_SPAN_LOCAL_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+    static ref INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA: AdtMetadata =
+        AdtMetadata::new(vec![Evolution::InitialVersion]);
+}
+
+impl BinarySerializer for InvocationContextSpan {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        let mut serializer =
+            AdtSerializer::<_, 1>::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context);
         match self {
-            Self::Local {
+            InvocationContextSpan::Local {
                 span_id,
                 start,
                 state,
                 inherited,
             } => {
-                let state = state.read().unwrap();
-                0u8.encode(encoder)?;
-                span_id.encode(encoder)?;
-                start.encode(encoder)?;
-                state.parent.encode(encoder)?;
-                state.attributes.encode(encoder)?;
-                state.linked_context.encode(encoder)?;
-                inherited.encode(encoder)
+                serializer.write_constructor(0, |context| {
+                    let state = state.read().unwrap();
+                    let mut inner = AdtSerializer::<_, 1>::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_LOCAL_METADATA,
+                        context,
+                    );
+                    inner.write_field("span_id", span_id)?;
+                    inner.write_field("start", start)?;
+                    inner.write_field("parent", &state.parent)?;
+                    inner.write_field("attributes", &state.attributes)?;
+                    inner.write_field("linked_context", &state.linked_context)?;
+                    inner.write_field("inherited", inherited)?;
+                    inner.finish()
+                })?;
+                serializer.finish()
             }
-            Self::ExternalParent { span_id } => {
-                1u8.encode(encoder)?;
-                span_id.encode(encoder)
+            InvocationContextSpan::ExternalParent { span_id } => {
+                serializer.write_constructor(1, |context| {
+                    let mut inner = AdtSerializer::<_, 1>::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                    );
+                    inner.write_field("span_id", span_id)?;
+                    inner.finish()
+                })?;
+                serializer.finish()
             }
         }
     }
 }
 
-impl<Context> Decode<Context> for InvocationContextSpan {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let tag = u8::decode(decoder)?;
-        match tag {
-            0 => {
-                let span_id = SpanId::decode(decoder)?;
-                let start = Timestamp::decode(decoder)?;
-                let parent = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
-                let attributes = HashMap::decode(decoder)?;
-                let linked_context = Option::<Arc<InvocationContextSpan>>::decode(decoder)?;
-                let inherited = bool::decode(decoder)?;
-                let state = RwLock::new(LocalInvocationContextSpanState {
-                    parent,
-                    attributes,
-                    linked_context,
-                });
+impl BinaryDeserializer for InvocationContextSpan {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        use desert_rust::BinaryInput;
+        let stored_version = context.read_u8()?;
+        let mut deserializer = if stored_version == 0 {
+            AdtDeserializer::<1>::new_v0(&INVOCATION_CONTEXT_SPAN_METADATA, context)?
+        } else {
+            AdtDeserializer::<1>::new(&INVOCATION_CONTEXT_SPAN_METADATA, context, stored_version)?
+        };
+
+        let constructor_id = deserializer.read_constructor_idx()?;
+
+        match constructor_id {
+            0u32 => {
+                let stored_version = context.read_u8()?;
+                let mut deserializer = if stored_version == 0 {
+                    AdtDeserializer::<1>::new_v0(&INVOCATION_CONTEXT_SPAN_LOCAL_METADATA, context)?
+                } else {
+                    AdtDeserializer::<1>::new(
+                        &INVOCATION_CONTEXT_SPAN_LOCAL_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+
+                let span_id = deserializer.read_field("span_id", None)?;
+                let start = deserializer.read_field("start", None)?;
+                let parent = deserializer.read_optional_field("parent", Some(None))?;
+                let attributes = deserializer.read_field("attributes", None)?;
+                let linked_context =
+                    deserializer.read_optional_field("linked_context", Some(None))?;
+                let inherited = deserializer.read_field("inherited", None)?;
+
                 Ok(Self::Local {
                     span_id,
                     start,
-                    state,
+                    state: RwLock::new(LocalInvocationContextSpanState {
+                        parent,
+                        attributes,
+                        linked_context,
+                    }),
                     inherited,
                 })
             }
-            1 => {
-                let span_id = SpanId::decode(decoder)?;
+            1u32 => {
+                let stored_version = context.read_u8()?;
+                let mut deserializer = if stored_version == 0 {
+                    AdtDeserializer::<1>::new_v0(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                    )?
+                } else {
+                    AdtDeserializer::<1>::new(
+                        &INVOCATION_CONTEXT_SPAN_EXTERNAL_PARENT_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+
+                let span_id = deserializer.read_field("span_id", None)?;
+
                 Ok(Self::ExternalParent { span_id })
             }
-            _ => Err(DecodeError::custom(format!(
-                "Invalid tag for InvocationContextSpan: {tag}"
-            ))),
+            _ => Err(desert_rust::Error::InvalidConstructorId {
+                type_name: "InvocationContextSpan".to_string(),
+                constructor_id,
+            }),
         }
     }
 }
 
-impl<'de, Context> BorrowDecode<'de, Context> for InvocationContextSpan {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let tag = u8::borrow_decode(decoder)?;
-        match tag {
-            0 => {
-                let span_id = SpanId::borrow_decode(decoder)?;
-                let start = Timestamp::borrow_decode(decoder)?;
-                let parent = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
-                let attributes = HashMap::borrow_decode(decoder)?;
-                let linked_context = Option::<Arc<InvocationContextSpan>>::borrow_decode(decoder)?;
-                let state = RwLock::new(LocalInvocationContextSpanState {
-                    parent,
-                    attributes,
-                    linked_context,
-                });
-                let inherited = bool::borrow_decode(decoder)?;
-                Ok(Self::Local {
-                    span_id,
-                    start,
-                    state,
-                    inherited,
-                })
-            }
-            1 => {
-                let span_id = SpanId::borrow_decode(decoder)?;
-                Ok(Self::ExternalParent { span_id })
-            }
-            _ => Err(DecodeError::custom(format!(
-                "Invalid tag for InvocationContextSpan: {tag}"
-            ))),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct InvocationContextStack {
     pub trace_id: TraceId,
     pub spans: NEVec<Arc<InvocationContextSpan>>,
@@ -771,6 +817,16 @@ impl InvocationContextStack {
     pub fn fresh() -> Self {
         let trace_id = TraceId::generate();
         let root = InvocationContextSpan::local().build();
+        Self {
+            trace_id,
+            spans: NEVec::new(root),
+            trace_states: Vec::new(),
+        }
+    }
+
+    pub fn fresh_rounded() -> Self {
+        let trace_id = TraceId::generate();
+        let root = InvocationContextSpan::local().rounded().build();
         Self {
             trace_id,
             spans: NEVec::new(root),
@@ -791,23 +847,23 @@ impl InvocationContextStack {
     }
 
     pub fn from_oplog_data(
-        trace_id: &TraceId,
-        trace_states: &[String],
-        spans: &[SpanData],
+        trace_id: TraceId,
+        trace_states: Vec<String>,
+        spans: Vec<SpanData>,
     ) -> Self {
         if spans.is_empty() {
             let root = InvocationContextSpan::local().build();
             Self {
-                trace_id: trace_id.clone(),
+                trace_id,
                 spans: NEVec::new(root),
-                trace_states: trace_states.to_vec(),
+                trace_states,
             }
         } else {
             let mut result_spans = Vec::new();
-            for span_data in spans.iter().rev() {
+            for span_data in spans.into_iter().rev() {
                 let result_span = match span_data {
                     SpanData::ExternalSpan { span_id } => {
-                        InvocationContextSpan::external_parent(span_id.clone())
+                        InvocationContextSpan::external_parent(span_id)
                     }
                     SpanData::LocalSpan {
                         span_id,
@@ -817,19 +873,15 @@ impl InvocationContextStack {
                         attributes,
                         inherited,
                     } => InvocationContextSpan::local()
-                        .with_span_id(span_id.clone())
-                        .with_start(*start)
-                        .parent(
-                            parent_id
-                                .as_ref()
-                                .and_then(|_| result_spans.first().cloned()),
-                        )
-                        .with_attributes(attributes.clone())
-                        .with_inherited(*inherited)
-                        .linked_context(linked_context.as_ref().map(|linked_spans| {
+                        .with_span_id(span_id)
+                        .with_start(start)
+                        .parent(parent_id.and_then(|_| result_spans.first().cloned()))
+                        .with_attributes(attributes)
+                        .with_inherited(inherited)
+                        .linked_context(linked_context.map(|linked_spans| {
                             let linked_stack = InvocationContextStack::from_oplog_data(
-                                trace_id,
-                                trace_states,
+                                trace_id.clone(),
+                                trace_states.clone(),
                                 linked_spans,
                             );
                             linked_stack.spans.first().clone()
@@ -882,45 +934,6 @@ impl InvocationContextStack {
                 })
                 .collect(),
         )
-    }
-}
-
-impl Encode for InvocationContextStack {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.trace_id.encode(encoder)?;
-        Encode::encode(&(self.spans.len().get() as u64), encoder)?;
-        for item in self.spans.iter() {
-            item.encode(encoder)?;
-        }
-        self.trace_states.encode(encoder)
-    }
-}
-
-impl<Context> Decode<Context> for InvocationContextStack {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let trace_id = TraceId::decode(decoder)?;
-        let spans = Vec::<Arc<InvocationContextSpan>>::decode(decoder)?;
-        let trace_states = Vec::<String>::decode(decoder)?;
-        Ok(Self {
-            trace_id,
-            spans: NEVec::try_from_vec(spans).ok_or(DecodeError::custom("No spans"))?,
-            trace_states,
-        })
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for InvocationContextStack {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let trace_id = TraceId::borrow_decode(decoder)?;
-        let spans = Vec::borrow_decode(decoder)?;
-        let trace_state = Vec::borrow_decode(decoder)?;
-        Ok(Self {
-            trace_id,
-            spans: NEVec::try_from_vec(spans).ok_or(DecodeError::custom("No spans"))?,
-            trace_states: trace_state,
-        })
     }
 }
 

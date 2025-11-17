@@ -16,8 +16,10 @@ pub mod auth;
 pub mod component;
 pub mod plugin_registration;
 
-use golem_common::model::component::{ComponentFilePermissions, ComponentRevision};
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntryWithIndex};
+use golem_common::model::component::{
+    ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
+};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
     FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind, WorkerUpdateMode,
 };
@@ -166,6 +168,11 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct BatchPluginInstallationUpdates {
+    pub actions: Vec<PluginInstallationAction>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -29,13 +29,17 @@ use wasmtime_wasi::p2::FsError;
 use wasmtime_wasi::p2::ReaddirIterator;
 use wasmtime_wasi::runtime::spawn_blocking;
 
-use golem_common::model::oplog::DurableFunctionType;
-
-use crate::durable_host::serialized::{
-    SerializableDateTime, SerializableError, SerializableFileTimes,
-};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::host_functions::{
+    FilesystemTypesDescriptorStat, FilesystemTypesDescriptorStatAt,
+};
+use golem_common::model::oplog::types::{
+    FileSystemError, SerializableDateTime, SerializableFileTimes,
+};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestFileSystemPath, HostResponseFileSystemStat,
+};
 
 impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     fn read_via_stream(
@@ -183,58 +187,77 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::<SerializableFileTimes, SerializableError>::new(
-            self,
-            "filesystem::types::descriptor",
-            "stat",
-            DurableFunctionType::ReadLocal,
-        )
-        .await
-        .map_err(FsError::trap)?;
+        let durability =
+            Durability::<FilesystemTypesDescriptorStat>::new(self, DurableFunctionType::ReadLocal)
+                .await
+                .map_err(FsError::trap)?;
 
         let path = match self.table().get(&self_)? {
             Descriptor::File(f) => f.path.clone(),
             Descriptor::Dir(d) => d.path.clone(),
         };
 
-        let mut stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await?;
-        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+        let stat = HostDescriptor::stat(&mut self.as_wasi_view(), self_).await;
+        let stat = match stat {
+            Ok(mut stat) => {
+                stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+                Ok(stat)
+            }
+            Err(fs_error) => Err(fs_error
+                .downcast_ref()
+                .cloned()
+                .ok_or_else(|| fs_error.to_string())),
+        };
 
-        let times = if durability.is_live() {
+        let result = if durability.is_live() {
+            let result = stat
+                .clone()
+                .map(|stat| SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
+                })
+                .map_err(FileSystemError::from_result);
+
             durability
                 .persist(
                     self,
-                    path.to_string_lossy().to_string(),
-                    Ok(SerializableFileTimes {
-                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                        data_modification_timestamp: stat
-                            .data_modification_timestamp
-                            .map(|t| t.into()),
-                    }),
+                    HostRequestFileSystemPath {
+                        path: path.to_string_lossy().to_string(),
+                    },
+                    HostResponseFileSystemStat { result },
                 )
                 .await
         } else {
-            durability
-                .replay::<SerializableFileTimes, anyhow::Error>(self)
-                .await
+            durability.replay(self).await
         }
         .map_err(FsError::trap)?;
 
-        let accessed = times.data_access_timestamp.as_ref().map(|t| {
-            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
-        });
-        let modified = times.data_modification_timestamp.as_ref().map(|t| {
-            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
-        });
-        let span = tracing::Span::current();
-        spawn_blocking(move || {
-            let _enter = span.enter();
-            set_symlink_times(path, accessed, modified)
-        })
-        .await?;
-        stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
-        stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
-        Ok(stat)
+        match result.result {
+            Ok(times) => {
+                let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                        t.clone(),
+                    ))
+                });
+                let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                        t.clone(),
+                    ))
+                });
+                let span = tracing::Span::current();
+                spawn_blocking(move || {
+                    let _enter = span.enter();
+                    set_symlink_times(path, accessed, modified)
+                })
+                .await?;
+                let mut stat = stat.unwrap();
+                stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+                stat.data_modification_timestamp =
+                    times.data_modification_timestamp.map(|t| t.into());
+                Ok(stat)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     async fn stat_at(
@@ -243,10 +266,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let durability = Durability::<SerializableFileTimes, SerializableError>::new(
+        let durability = Durability::<FilesystemTypesDescriptorStatAt>::new(
             self,
-            "filesystem::types::descriptor",
-            "stat_at",
             DurableFunctionType::ReadLocal,
         )
         .await
@@ -257,45 +278,67 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             Descriptor::Dir(d) => d.path.join(path.clone()),
         };
 
-        let mut stat =
-            HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await?;
-        stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+        let stat = HostDescriptor::stat_at(&mut self.as_wasi_view(), self_, path_flags, path).await;
+        let stat = match stat {
+            Ok(mut stat) => {
+                stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
+                Ok(stat)
+            }
+            Err(fs_error) => Err(fs_error
+                .downcast_ref()
+                .cloned()
+                .ok_or_else(|| fs_error.to_string())),
+        };
 
-        let times = if durability.is_live() {
+        let result = if durability.is_live() {
+            let result = stat
+                .clone()
+                .map(|stat| SerializableFileTimes {
+                    data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
+                    data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
+                })
+                .map_err(FileSystemError::from_result);
+
             durability
                 .persist(
                     self,
-                    full_path.to_string_lossy().to_string(),
-                    Ok(SerializableFileTimes {
-                        data_access_timestamp: stat.data_access_timestamp.map(|t| t.into()),
-                        data_modification_timestamp: stat
-                            .data_modification_timestamp
-                            .map(|t| t.into()),
-                    }),
+                    HostRequestFileSystemPath {
+                        path: full_path.to_string_lossy().to_string(),
+                    },
+                    HostResponseFileSystemStat { result },
                 )
                 .await
         } else {
-            durability
-                .replay::<SerializableFileTimes, anyhow::Error>(self)
-                .await
+            durability.replay(self).await
         }
         .map_err(FsError::trap)?;
 
-        let accessed = times.data_access_timestamp.as_ref().map(|t| {
-            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
-        });
-        let modified = times.data_modification_timestamp.as_ref().map(|t| {
-            SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(t.clone()))
-        });
-        let span = tracing::Span::current();
-        spawn_blocking(move || {
-            let _enter = span.enter();
-            set_symlink_times(full_path, accessed, modified)
-        })
-        .await?;
-        stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
-        stat.data_modification_timestamp = times.data_modification_timestamp.map(|t| t.into());
-        Ok(stat)
+        match result.result {
+            Ok(times) => {
+                let accessed = times.data_access_timestamp.as_ref().map(|t| {
+                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                        t.clone(),
+                    ))
+                });
+                let modified = times.data_modification_timestamp.as_ref().map(|t| {
+                    SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
+                        t.clone(),
+                    ))
+                });
+                let span = tracing::Span::current();
+                spawn_blocking(move || {
+                    let _enter = span.enter();
+                    set_symlink_times(full_path, accessed, modified)
+                })
+                .await?;
+                let mut stat = stat.unwrap();
+                stat.data_access_timestamp = times.data_access_timestamp.map(|t| t.into());
+                stat.data_modification_timestamp =
+                    times.data_modification_timestamp.map(|t| t.into());
+                Ok(stat)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     async fn set_times_at(

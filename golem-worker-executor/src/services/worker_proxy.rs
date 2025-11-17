@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
@@ -125,7 +125,8 @@ pub trait WorkerProxy: Send + Sync {
     ) -> Result<bool, WorkerProxyError>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerProxyError {
     BadRequest(Vec<String>),
     Unauthorized(String),

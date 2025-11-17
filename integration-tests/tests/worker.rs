@@ -22,8 +22,8 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
 use golem_client::model::AnalysedType;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
-use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
-use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
+use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, WorkerResourceId};
 use golem_common::model::worker::{
     ExportedResourceMetadata, FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind,
 };
@@ -36,8 +36,7 @@ use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerL
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::IntoValue;
-use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::{IntoValue, IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -950,7 +949,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
             .iter()
             .filter(
                 |entry| matches!(&entry.entry, PublicOplogEntry::ExportedFunctionInvoked(
-        ExportedFunctionInvokedParameters { function_name, .. }
+        ExportedFunctionInvokedParams { function_name, .. }
     ) if function_name == "golem:it/api.{generate-idempotency-keys}")
             )
             .count(),

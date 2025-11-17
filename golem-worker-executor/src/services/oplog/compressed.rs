@@ -17,7 +17,7 @@ use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -370,7 +370,8 @@ impl OplogArchive for CompressedOplogArchive {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
 pub struct CompressedOplogChunk {
     pub count: u64,
     pub compressed_data: Vec<u8>,

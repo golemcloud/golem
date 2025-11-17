@@ -38,7 +38,6 @@ pub mod oplog;
 pub mod plugin_registration;
 pub mod poem;
 pub mod protobuf;
-pub mod public_oplog;
 pub mod regions;
 pub mod reports;
 pub mod trim_date;
@@ -54,15 +53,16 @@ use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
 use crate::SafeDisplay;
-use bincode::de::{BorrowDecoder, Decoder};
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
+use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::Uri;
+use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
@@ -71,6 +71,7 @@ use std::fmt::{Display, Formatter, Write};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
+use url::Url;
 use uuid::{uuid, Uuid};
 
 pub trait PoemTypeRequirements:
@@ -103,6 +104,10 @@ impl Timestamp {
         self.0
             .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
             .whole_milliseconds() as u64
+    }
+
+    pub fn rounded(self) -> Self {
+        Self::from(self.to_millis())
     }
 }
 
@@ -141,7 +146,7 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
             iso8601_timestamp::Timestamp::deserialize(deserializer).map(Self)
         } else {
             // For non-human-readable formats we assume it was an i64 representing milliseconds from epoch
-            let timestamp = i64::deserialize(deserializer)?;
+            let timestamp = <i64 as Deserialize>::deserialize(deserializer)?;
             Ok(Timestamp(
                 iso8601_timestamp::Timestamp::UNIX_EPOCH
                     .add(Duration::from_millis(timestamp as u64)),
@@ -150,32 +155,26 @@ impl<'de> serde::Deserialize<'de> for Timestamp {
     }
 }
 
-impl bincode::Encode for Timestamp {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        (self
-            .0
-            .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
-            .whole_milliseconds() as i64)
-            .encode(encoder)
+impl BinarySerializer for Timestamp {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        BinarySerializer::serialize(
+            &(self
+                .0
+                .duration_since(iso8601_timestamp::Timestamp::UNIX_EPOCH)
+                .whole_milliseconds() as u64),
+            context,
+        )
     }
 }
 
-impl<Context> bincode::Decode<Context> for Timestamp {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let timestamp: i64 = bincode::Decode::decode(decoder)?;
+impl BinaryDeserializer for Timestamp {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let timestamp: u64 = BinaryDeserializer::deserialize(context)?;
         Ok(Timestamp(
-            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
-        ))
-    }
-}
-
-impl<'de, Context> bincode::BorrowDecode<'de, Context> for Timestamp {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let timestamp: i64 = bincode::BorrowDecode::borrow_decode(decoder)?;
-        Ok(Timestamp(
-            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp as u64)),
+            iso8601_timestamp::Timestamp::UNIX_EPOCH.add(Duration::from_millis(timestamp)),
         ))
     }
 }
@@ -223,7 +222,8 @@ impl FromValue for Timestamp {
 }
 
 /// Associates a worker-id with its owner project
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct OwnedWorkerId {
     pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
@@ -267,7 +267,8 @@ impl AsRef<WorkerId> for OwnedWorkerId {
 }
 
 /// Actions that can be scheduled to be executed at a given point in time
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
@@ -332,7 +333,8 @@ impl Display for ScheduledAction {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, BinaryCodec)]
+#[desert(evolution())]
 pub struct ScheduleId {
     pub timestamp: i64,
     pub action: ScheduledAction,
@@ -457,7 +459,8 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[derive(Clone, Debug, BinaryCodec, Eq, Hash, PartialEq, IntoValue, FromValue)]
+#[desert(transparent)]
 #[wit_transparent]
 pub struct IdempotencyKey {
     pub value: String,
@@ -505,7 +508,7 @@ impl Serialize for IdempotencyKey {
     where
         S: Serializer,
     {
-        self.value.serialize(serializer)
+        Serialize::serialize(&self.value, serializer)
     }
 }
 
@@ -514,7 +517,7 @@ impl<'de> Deserialize<'de> for IdempotencyKey {
     where
         D: Deserializer<'de>,
     {
-        let value = String::deserialize(deserializer)?;
+        let value = <String as Deserialize>::deserialize(deserializer)?;
         Ok(IdempotencyKey { value })
     }
 }
@@ -586,35 +589,9 @@ impl WorkerMetadata {
     }
 }
 
-impl IntoValue for WorkerMetadata {
-    fn into_value(self) -> Value {
-        Value::Record(vec![
-            self.worker_id.into_value(),
-            self.args.into_value(),
-            self.env.into_value(),
-            self.wasi_config_vars.into_value(),
-            self.last_known_status.status.into_value(),
-            self.last_known_status.component_version.into_value(),
-            0u64.into_value(), // retry count could be computed from the worker status record here but we don't support it yet
-        ])
-    }
-
-    fn get_type() -> AnalysedType {
-        record(vec![
-            field("worker-id", WorkerId::get_type()),
-            field("args", list(str())),
-            field("env", list(tuple(vec![str(), str()]))),
-            field("wasi-config-vars", HashMap::<String, String>::get_type()),
-            field("status", WorkerStatus::get_type()),
-            field("component-version", u64()),
-            field("retry-count", u64()),
-        ])
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[serde(rename_all = "camelCase")]
-#[derive(poem_openapi::Object)]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
@@ -622,7 +599,8 @@ pub struct WorkerResourceDescription {
     pub resource_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct RetryConfig {
     pub max_attempts: u32,
     #[serde(with = "humantime_serde")]
@@ -654,7 +632,8 @@ impl SafeDisplay for RetryConfig {
 /// This status is just cached information, all fields must be computable by the oplog alone.
 /// By having an associated oplog_idx, the cached information can be used together with the
 /// tail of the oplog to determine the actual status of the worker.
-#[derive(Clone, Debug, PartialEq, Encode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct WorkerStatusRecord {
     pub status: WorkerStatus,
     pub skipped_regions: DeletedRegions,
@@ -665,7 +644,7 @@ pub struct WorkerStatusRecord {
     pub successful_updates: Vec<SuccessfulUpdateRecord>,
     pub invocation_results: HashMap<IdempotencyKey, OplogIndex>,
     pub current_idempotency_key: Option<IdempotencyKey>,
-    pub component_version: ComponentRevision,
+    pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
@@ -674,61 +653,10 @@ pub struct WorkerStatusRecord {
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
-    pub component_version_for_replay: ComponentRevision,
+    pub component_revision_for_replay: ComponentRevision,
     /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
     /// the last invocation boundary.
     pub current_retry_count: HashMap<OplogIndex, u32>,
-}
-
-impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        Ok(Self {
-            status: Decode::decode(decoder)?,
-            skipped_regions: Decode::decode(decoder)?,
-            overridden_retry_config: Decode::decode(decoder)?,
-            pending_invocations: Decode::decode(decoder)?,
-            pending_updates: Decode::decode(decoder)?,
-            failed_updates: Decode::decode(decoder)?,
-            successful_updates: Decode::decode(decoder)?,
-            invocation_results: Decode::decode(decoder)?,
-            current_idempotency_key: Decode::decode(decoder)?,
-            component_version: Decode::decode(decoder)?,
-            component_size: Decode::decode(decoder)?,
-            total_linear_memory_size: Decode::decode(decoder)?,
-            owned_resources: Decode::decode(decoder)?,
-            oplog_idx: Decode::decode(decoder)?,
-            active_plugins: Decode::decode(decoder)?,
-            deleted_regions: Decode::decode(decoder)?,
-            component_version_for_replay: Decode::decode(decoder)?,
-            current_retry_count: Decode::decode(decoder)?,
-        })
-    }
-}
-impl<'de, Context> BorrowDecode<'de, Context> for WorkerStatusRecord {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        Ok(Self {
-            status: BorrowDecode::borrow_decode(decoder)?,
-            skipped_regions: BorrowDecode::borrow_decode(decoder)?,
-            overridden_retry_config: BorrowDecode::borrow_decode(decoder)?,
-            pending_invocations: BorrowDecode::borrow_decode(decoder)?,
-            pending_updates: BorrowDecode::borrow_decode(decoder)?,
-            failed_updates: BorrowDecode::borrow_decode(decoder)?,
-            successful_updates: BorrowDecode::borrow_decode(decoder)?,
-            invocation_results: BorrowDecode::borrow_decode(decoder)?,
-            current_idempotency_key: BorrowDecode::borrow_decode(decoder)?,
-            component_version: BorrowDecode::borrow_decode(decoder)?,
-            component_size: BorrowDecode::borrow_decode(decoder)?,
-            total_linear_memory_size: BorrowDecode::borrow_decode(decoder)?,
-            owned_resources: BorrowDecode::borrow_decode(decoder)?,
-            oplog_idx: BorrowDecode::borrow_decode(decoder)?,
-            active_plugins: BorrowDecode::borrow_decode(decoder)?,
-            deleted_regions: BorrowDecode::borrow_decode(decoder)?,
-            component_version_for_replay: BorrowDecode::borrow_decode(decoder)?,
-            current_retry_count: BorrowDecode::borrow_decode(decoder)?,
-        })
-    }
 }
 
 impl Default for WorkerStatusRecord {
@@ -743,30 +671,32 @@ impl Default for WorkerStatusRecord {
             successful_updates: Vec::new(),
             invocation_results: HashMap::new(),
             current_idempotency_key: None,
-            component_version: ComponentRevision(0),
+            component_revision: ComponentRevision(0),
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
-            component_version_for_replay: ComponentRevision(0),
+            component_revision_for_replay: ComponentRevision(0),
             current_retry_count: HashMap::new(),
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentRevision,
+    pub target_revision: ComponentRevision,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
-    pub target_version: ComponentRevision,
+    pub target_revision: ComponentRevision,
 }
 
 /// Represents last known status of a worker
@@ -781,11 +711,12 @@ pub struct SuccessfulUpdateRecord {
     Hash,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     IntoValue,
+    FromValue,
     poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum WorkerStatus {
     /// The worker is running an invoked function
     Running,
@@ -879,82 +810,11 @@ impl From<WorkerStatus> for i32 {
     }
 }
 
-/// Internal representation of `WorkerInvocation` to support backward compatibility
-/// in its binary format.
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
-enum SerializedWorkerInvocation {
-    ExportedFunctionV1 {
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-    },
-    ManualUpdate {
-        target_version: ComponentRevision,
-    },
-    ExportedFunction {
-        idempotency_key: IdempotencyKey,
-        full_function_name: String,
-        function_input: Vec<Value>,
-        invocation_context: InvocationContextStack,
-    },
-}
-
-impl From<WorkerInvocation> for SerializedWorkerInvocation {
-    fn from(value: WorkerInvocation) -> Self {
-        match value {
-            WorkerInvocation::ManualUpdate { target_version } => {
-                Self::ManualUpdate { target_version }
-            }
-            WorkerInvocation::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            },
-        }
-    }
-}
-
-impl From<SerializedWorkerInvocation> for WorkerInvocation {
-    fn from(value: SerializedWorkerInvocation) -> Self {
-        match value {
-            SerializedWorkerInvocation::ExportedFunctionV1 {
-                idempotency_key,
-                full_function_name,
-                function_input,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context: InvocationContextStack::fresh(),
-            },
-            SerializedWorkerInvocation::ManualUpdate { target_version } => {
-                Self::ManualUpdate { target_version }
-            }
-            SerializedWorkerInvocation::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            } => Self::ExportedFunction {
-                idempotency_key,
-                full_function_name,
-                function_input,
-                invocation_context,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub enum WorkerInvocation {
     ManualUpdate {
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
     },
     ExportedFunction {
         idempotency_key: IdempotencyKey,
@@ -993,38 +853,15 @@ impl WorkerInvocation {
     }
 }
 
-impl Encode for WorkerInvocation {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        let serialized: SerializedWorkerInvocation = self.clone().into();
-        serialized.encode(encoder)
-    }
-}
-
-impl<Context> Decode<Context> for WorkerInvocation {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let serialized: SerializedWorkerInvocation = Decode::decode(decoder)?;
-        Ok(serialized.into())
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for WorkerInvocation {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let serialized: SerializedWorkerInvocation = BorrowDecode::borrow_decode(decoder)?;
-        Ok(serialized.into())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct TimestampedWorkerInvocation {
     pub timestamp: Timestamp,
     pub invocation: WorkerInvocation,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNameFilter {
@@ -1044,9 +881,8 @@ impl Display for WorkerNameFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerStatusFilter {
@@ -1066,11 +902,10 @@ impl Display for WorkerStatusFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
     pub value: ComponentRevision,
@@ -1088,11 +923,10 @@ impl Display for WorkerVersionFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerCreatedAtFilter {
     pub comparator: FilterComparator,
     pub value: Timestamp,
@@ -1110,11 +944,10 @@ impl Display for WorkerCreatedAtFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct WorkerEnvFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -1137,9 +970,8 @@ impl Display for WorkerEnvFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerWasiConfigVarsFilter {
@@ -1168,9 +1000,8 @@ impl Display for WorkerWasiConfigVarsFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerAndFilter {
@@ -1197,9 +1028,8 @@ impl Display for WorkerAndFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerOrFilter {
@@ -1226,9 +1056,8 @@ impl Display for WorkerOrFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNotFilter {
@@ -1249,9 +1078,8 @@ impl Display for WorkerNotFilter {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, Union)]
+#[desert(evolution())]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum WorkerFilter {
@@ -1295,8 +1123,8 @@ impl WorkerFilter {
                 comparator.matches(&metadata.worker_id.worker_name, &value)
             }
             WorkerFilter::Version(WorkerVersionFilter { comparator, value }) => {
-                let version: ComponentRevision = metadata.last_known_status.component_version;
-                comparator.matches(&version, &value)
+                let revision: ComponentRevision = metadata.last_known_status.component_revision;
+                comparator.matches(&revision, &value)
             }
             WorkerFilter::Env(WorkerEnvFilter {
                 name,
@@ -1486,8 +1314,9 @@ impl FromStr for WorkerFilter {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum StringFilterComparator {
     Equal,
     NotEqual,
@@ -1570,8 +1399,9 @@ impl Display for StringFilterComparator {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, BinaryCodec, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 pub enum FilterComparator {
     Equal,
     NotEqual,
@@ -1652,18 +1482,8 @@ impl From<FilterComparator> for i32 {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Encode,
-    Decode,
-    Default,
-    poem_openapi::Object,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, Default, Object)]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ScanCursor {
@@ -1715,7 +1535,8 @@ impl FromStr for ScanCursor {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, BinaryCodec, Serialize, Deserialize)]
+#[desert(evolution())]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -1818,7 +1639,7 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -1826,8 +1647,9 @@ pub struct Empty {}
 
 // Custom Deserialize is replaced with Simple Deserialize
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize, poem_openapi::Enum,
+    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
 )]
+#[desert(evolution())]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]
 pub enum GatewayBindingType {
@@ -1869,319 +1691,83 @@ impl From<golem_wasm::AgentId> for WorkerId {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::model::component::{ComponentFilePath, ComponentRevision};
-    use crate::model::environment::EnvironmentId;
-    use crate::model::oplog::OplogIndex;
-    use crate::model::{
-        AccountId, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
-        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
-    };
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, IntoValue, FromValue, BinaryCodec)]
+pub enum ForkResult {
+    /// The original worker that called `fork`
+    Original,
+    /// The new worker
+    Forked,
+}
 
-    use std::collections::BTreeMap;
-    use std::str::FromStr;
-    use std::vec;
-    use test_r::test;
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct RdbmsPoolKey {
+    pub address: Url,
+}
 
-    #[test]
-    fn timestamp_conversion() {
-        let ts: Timestamp = Timestamp::now_utc();
-
-        let prost_ts: prost_types::Timestamp = ts.into();
-
-        let ts2: Timestamp = prost_ts.into();
-
-        assert_eq!(ts2, ts);
+impl RdbmsPoolKey {
+    pub fn new(address: Url) -> Self {
+        Self { address }
     }
 
-    #[test]
-    fn worker_filter_parse() {
-        assert_eq!(
-            WorkerFilter::from_str(" name =  worker-1").unwrap(),
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-        );
-
-        assert_eq!(
-            WorkerFilter::from_str("status == Running").unwrap(),
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
-        );
-
-        assert_eq!(
-            WorkerFilter::from_str("version >= 10").unwrap(),
-            WorkerFilter::new_version(FilterComparator::GreaterEqual, ComponentRevision(10))
-        );
-
-        assert_eq!(
-            WorkerFilter::from_str("env.tag1 == abc ").unwrap(),
-            WorkerFilter::new_env(
-                "tag1".to_string(),
-                StringFilterComparator::Equal,
-                "abc".to_string(),
-            )
-        );
+    pub fn from(address: &str) -> Result<Self, String> {
+        let url = Url::parse(address).map_err(|e| e.to_string())?;
+        Ok(Self::new(url))
     }
 
-    #[test]
-    fn worker_filter_combination() {
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
-            WorkerFilter::new_not(WorkerFilter::new_name(
-                StringFilterComparator::Equal,
-                "worker-1".to_string(),
-            ))
-        );
+    pub fn masked_address(&self) -> String {
+        let mut output: String = self.address.scheme().to_string();
+        output.push_str("://");
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).and(
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
-            ),
-            WorkerFilter::new_and(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-            ])
-        );
+        let username = self.address.username();
+        output.push_str(username);
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .and(WorkerFilter::new_status(
-                    FilterComparator::Equal,
-                    WorkerStatus::Running,
-                ))
-                .and(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                )),
-            WorkerFilter::new_and(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
-            ])
-        );
+        let password = self.address.password();
+        if password.is_some() {
+            output.push_str(":*****");
+        }
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).or(
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running)
-            ),
-            WorkerFilter::new_or(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running),
-            ])
-        );
+        if let Some(h) = self.address.host_str() {
+            if !username.is_empty() || password.is_some() {
+                output.push('@');
+            }
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .or(WorkerFilter::new_status(
-                    FilterComparator::NotEqual,
-                    WorkerStatus::Running,
-                ))
-                .or(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                )),
-            WorkerFilter::new_or(vec![
-                WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
-            ])
-        );
+            output.push_str(h);
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .and(WorkerFilter::new_status(
-                    FilterComparator::NotEqual,
-                    WorkerStatus::Running,
-                ))
-                .or(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                )),
-            WorkerFilter::new_or(vec![
-                WorkerFilter::new_and(vec![
-                    WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                    WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-                ]),
-                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
-            ])
-        );
+            if let Some(p) = self.address.port() {
+                output.push(':');
+                output.push_str(p.to_string().as_str());
+            }
+        }
 
-        assert_eq!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .or(WorkerFilter::new_status(
-                    FilterComparator::NotEqual,
-                    WorkerStatus::Running,
-                ))
-                .and(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                )),
-            WorkerFilter::new_and(vec![
-                WorkerFilter::new_or(vec![
-                    WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
-                    WorkerFilter::new_status(FilterComparator::NotEqual, WorkerStatus::Running),
-                ]),
-                WorkerFilter::new_version(FilterComparator::Equal, ComponentRevision(1)),
-            ])
-        );
+        output.push_str(self.address.path());
+
+        let query_pairs = self.address.query_pairs();
+
+        if query_pairs.count() > 0 {
+            output.push('?');
+        }
+        for (index, (key, value)) in query_pairs.enumerate() {
+            let key = &*key;
+            output.push_str(key);
+            output.push('=');
+
+            if key == "password" || key == "secret" {
+                output.push_str("*****");
+            } else {
+                output.push_str(&value);
+            }
+            if index < query_pairs.count() - 1 {
+                output.push('&');
+            }
+        }
+
+        output
     }
+}
 
-    #[test]
-    fn worker_filter_matches() {
-        let component_id = ComponentId::new_v4();
-        let worker_metadata = WorkerMetadata {
-            worker_id: WorkerId {
-                worker_name: "worker-1".to_string(),
-                component_id,
-            },
-            args: vec![],
-            env: vec![
-                ("env1".to_string(), "value1".to_string()),
-                ("env2".to_string(), "value2".to_string()),
-            ],
-            environment_id: EnvironmentId::new_v4(),
-            created_by: AccountId::new_v4(),
-            wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
-            created_at: Timestamp::now_utc(),
-            parent: None,
-            last_known_status: WorkerStatusRecord {
-                component_version: ComponentRevision(1),
-                ..WorkerStatusRecord::default()
-            },
-        };
-
-        assert!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .and(WorkerFilter::new_status(
-                    FilterComparator::Equal,
-                    WorkerStatus::Idle,
-                ))
-                .matches(&worker_metadata)
-        );
-
-        assert!(WorkerFilter::new_env(
-            "env1".to_string(),
-            StringFilterComparator::Equal,
-            "value1".to_string(),
-        )
-        .and(WorkerFilter::new_status(
-            FilterComparator::Equal,
-            WorkerStatus::Idle,
-        ))
-        .matches(&worker_metadata));
-
-        assert!(WorkerFilter::new_env(
-            "env1".to_string(),
-            StringFilterComparator::Equal,
-            "value2".to_string(),
-        )
-        .not()
-        .and(
-            WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Running).or(
-                WorkerFilter::new_status(FilterComparator::Equal, WorkerStatus::Idle)
-            )
-        )
-        .matches(&worker_metadata));
-
-        assert!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
-                .and(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                ))
-                .matches(&worker_metadata)
-        );
-
-        assert!(
-            WorkerFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
-                .or(WorkerFilter::new_version(
-                    FilterComparator::Equal,
-                    ComponentRevision(1)
-                ))
-                .matches(&worker_metadata)
-        );
-
-        assert!(
-            WorkerFilter::new_version(FilterComparator::GreaterEqual, ComponentRevision(1))
-                .and(WorkerFilter::new_version(
-                    FilterComparator::Less,
-                    ComponentRevision(2)
-                ))
-                .or(WorkerFilter::new_name(
-                    StringFilterComparator::Equal,
-                    "worker-2".to_string(),
-                ))
-                .matches(&worker_metadata)
-        );
-
-        assert!(WorkerFilter::new_wasi_config_vars(
-            "var1".to_string(),
-            StringFilterComparator::Equal,
-            "value1".to_string(),
-        )
-        .matches(&worker_metadata));
-
-        assert!(!WorkerFilter::new_wasi_config_vars(
-            "var1".to_string(),
-            StringFilterComparator::Equal,
-            "value2".to_string(),
-        )
-        .matches(&worker_metadata));
-    }
-
-    #[test]
-    fn derived_idempotency_key() {
-        let base1 = IdempotencyKey::fresh();
-        let base2 = IdempotencyKey::fresh();
-        let base3 = IdempotencyKey {
-            value: "base3".to_string(),
-        };
-
-        assert_ne!(base1, base2);
-
-        let idx1 = OplogIndex::from_u64(2);
-        let idx2 = OplogIndex::from_u64(11);
-
-        let derived11a = IdempotencyKey::derived(&base1, idx1);
-        let derived12a = IdempotencyKey::derived(&base1, idx2);
-        let derived21a = IdempotencyKey::derived(&base2, idx1);
-        let derived22a = IdempotencyKey::derived(&base2, idx2);
-
-        let derived11b = IdempotencyKey::derived(&base1, idx1);
-        let derived12b = IdempotencyKey::derived(&base1, idx2);
-        let derived21b = IdempotencyKey::derived(&base2, idx1);
-        let derived22b = IdempotencyKey::derived(&base2, idx2);
-
-        let derived31 = IdempotencyKey::derived(&base3, idx1);
-        let derived32 = IdempotencyKey::derived(&base3, idx2);
-
-        assert_eq!(derived11a, derived11b);
-        assert_eq!(derived12a, derived12b);
-        assert_eq!(derived21a, derived21b);
-        assert_eq!(derived22a, derived22b);
-
-        assert_ne!(derived11a, derived12a);
-        assert_ne!(derived11a, derived21a);
-        assert_ne!(derived11a, derived22a);
-        assert_ne!(derived12a, derived21a);
-        assert_ne!(derived12a, derived22a);
-        assert_ne!(derived21a, derived22a);
-
-        assert_ne!(derived11a, derived31);
-        assert_ne!(derived21a, derived31);
-        assert_ne!(derived12a, derived32);
-        assert_ne!(derived22a, derived32);
-        assert_ne!(derived31, derived32);
-    }
-
-    #[test]
-    fn initial_component_file_path_from_absolute() {
-        let path = ComponentFilePath::from_abs_str("/a/b/c").unwrap();
-        assert_eq!(path.to_string(), "/a/b/c");
-    }
-
-    #[test]
-    fn initial_component_file_path_from_relative() {
-        let path = ComponentFilePath::from_abs_str("a/b/c");
-        assert!(path.is_err());
+impl Display for RdbmsPoolKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.masked_address())
     }
 }

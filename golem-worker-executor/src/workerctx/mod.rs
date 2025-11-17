@@ -47,7 +47,7 @@ use golem_common::model::component::{
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
@@ -322,14 +322,14 @@ pub trait UpdateManagement {
     /// Called when an update attempt has failed
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentRevision,
+        target_revision: ComponentRevision,
         details: Option<String>,
     );
 
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginPriority>,
     );

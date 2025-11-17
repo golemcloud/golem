@@ -12,50 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
-use bincode::Encode;
-use golem_common::model::TransactionId;
-use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm::{IntoValue, Value, ValueAndType};
+use crate::services::rdbms::RdbmsType;
+use golem_common::model::oplog::types::SerializableRdbmsRequest;
+use golem_common::model::{RdbmsPoolKey, TransactionId};
 
-#[derive(Debug, Clone, Encode)]
+#[derive(Debug, Clone)]
 pub struct RdbmsRequest<T: RdbmsType + 'static> {
     pub pool_key: RdbmsPoolKey,
     pub statement: String,
     pub params: Vec<T::DbValue>,
     pub transaction_id: Option<TransactionId>,
-}
-
-impl<T: RdbmsType + 'static> bincode::Decode<()> for RdbmsRequest<T>
-where
-    T: bincode::Decode<()>,
-{
-    fn decode<D: bincode::de::Decoder<Context = ()>>(
-        decoder: &mut D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            pool_key: bincode::Decode::decode(decoder)?,
-            statement: bincode::Decode::decode(decoder)?,
-            params: bincode::Decode::decode(decoder)?,
-            transaction_id: bincode::Decode::decode(decoder)?,
-        })
-    }
-}
-
-impl<'de, T: RdbmsType + 'static> bincode::BorrowDecode<'de, ()> for RdbmsRequest<T>
-where
-    T: bincode::de::BorrowDecode<'de, ()>,
-{
-    fn borrow_decode<__D: bincode::de::BorrowDecoder<'de, Context = ()>>(
-        decoder: &mut __D,
-    ) -> Result<Self, bincode::error::DecodeError> {
-        Ok(Self {
-            pool_key: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-            statement: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-            params: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-            transaction_id: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
-        })
-    }
 }
 
 impl<T: RdbmsType> RdbmsRequest<T> {
@@ -72,38 +38,32 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             transaction_id,
         }
     }
+}
 
-    fn get_analysed_type(params_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("pool-key", RdbmsPoolKey::get_type()),
-            analysed_type::field("statement", analysed_type::str()),
-            analysed_type::field("params", params_type),
-            analysed_type::field(
-                "transaction-id",
-                analysed_type::option(TransactionId::get_type()),
-            ),
-        ])
+impl<T: RdbmsType + 'static> From<RdbmsRequest<T>> for SerializableRdbmsRequest {
+    fn from(request: RdbmsRequest<T>) -> Self {
+        SerializableRdbmsRequest {
+            pool_key: request.pool_key,
+            statement: request.statement,
+            params: request.params.into_iter().map(|p| p.into()).collect(),
+            transaction_id: request.transaction_id,
+        }
     }
 }
 
-impl<T> RdbmsIntoValueAndType for RdbmsRequest<T>
-where
-    T: RdbmsType + 'static,
-    Vec<T::DbValue>: RdbmsIntoValueAndType,
-{
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = self.params.into_value_and_type();
-        let t = RdbmsRequest::<T>::get_analysed_type(v.typ);
-        let v = Value::Record(vec![
-            self.pool_key.into_value(),
-            self.statement.into_value(),
-            v.value,
-            self.transaction_id.into_value(),
-        ]);
-        ValueAndType::new(v, t)
-    }
+impl<T: RdbmsType + 'static> TryFrom<SerializableRdbmsRequest> for RdbmsRequest<T> {
+    type Error = String;
 
-    fn get_base_type() -> AnalysedType {
-        RdbmsRequest::<T>::get_analysed_type(<Vec<T::DbValue>>::get_base_type())
+    fn try_from(value: SerializableRdbmsRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pool_key: value.pool_key,
+            statement: value.statement,
+            params: value
+                .params
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?,
+            transaction_id: value.transaction_id,
+        })
     }
 }

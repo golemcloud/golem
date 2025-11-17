@@ -123,13 +123,13 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, Error> {
+    ) -> Result<Option<Vec<u8>>, Error> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
             let data = async_fs::read(&full_path).await?;
-            Ok(Some(Bytes::from(data)))
+            Ok(Some(data))
         } else {
             Ok(None)
         }

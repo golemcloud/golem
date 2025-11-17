@@ -56,11 +56,10 @@ pub type OutputStream = wasmtime_wasi::DynOutputStream;
 pub type Pollable = golem_wasm::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
-pub use self::golem::api1_1_7 as golem_api_1_x;
+pub use self::golem::api1_3_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 use golem_common::model::account::AccountId;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
-use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::analysed_type::r#enum;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, Value};
@@ -94,28 +93,6 @@ impl From<AccountId> for golem_api_1_x::host::AccountId {
 
 impl From<golem_api_1_x::host::AccountId> for AccountId {
     fn from(value: golem_api_1_x::host::AccountId) -> Self {
-        let high_bits = value.uuid.high_bits;
-        let low_bits = value.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<EnvironmentId> for golem_api_1_x::host::EnvironmentId {
-    fn from(value: EnvironmentId) -> Self {
-        let (high_bits, low_bits) = value.0.as_u64_pair();
-
-        Self {
-            uuid: golem_wasm::Uuid {
-                high_bits,
-                low_bits,
-            },
-        }
-    }
-}
-
-impl From<golem_api_1_x::host::EnvironmentId> for EnvironmentId {
-    fn from(value: golem_api_1_x::host::EnvironmentId) -> Self {
         let high_bits = value.uuid.high_bits;
         let low_bits = value.uuid.low_bits;
 

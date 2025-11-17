@@ -36,12 +36,10 @@ use golem_common::model::component::{
     ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::PublicOplogEntryWithIndex;
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
-use golem_common::model::worker::RevertWorkerTarget;
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::WorkerUpdateMode;
+use golem_common::model::worker::{RevertWorkerTarget, WorkerMetadataDto};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
