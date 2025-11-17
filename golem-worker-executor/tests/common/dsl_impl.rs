@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
+    ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
     InitialComponentFile, PluginInstallation,
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -66,7 +66,6 @@ impl TestDsl for TestWorkerExecutor {
         wasm_name: &str,
         environment_id: EnvironmentId,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
@@ -88,10 +87,7 @@ impl TestDsl for TestWorkerExecutor {
             let uuid = Uuid::new_v4();
             ComponentName(format!("{name}-{uuid}"))
         } else {
-            match component_type {
-                ComponentType::Durable => ComponentName(name.to_string()),
-                ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
-            }
+            ComponentName(name.to_string())
         };
         let dynamic_linking = HashMap::from_iter(
             dynamic_linking
@@ -137,7 +133,6 @@ impl TestDsl for TestWorkerExecutor {
                     .add_component(
                         &source_path,
                         &component_name.0,
-                        component_type,
                         converted_files,
                         dynamic_linking,
                         unverified,
@@ -155,7 +150,6 @@ impl TestDsl for TestWorkerExecutor {
                     .get_or_add_component(
                         &source_path,
                         &component_name.0,
-                        component_type,
                         converted_files,
                         dynamic_linking,
                         unverified,
@@ -187,7 +181,6 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         previous_version: ComponentRevision,
         wasm_name: Option<&str>,
-        component_type: Option<ComponentType>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
@@ -237,7 +230,6 @@ impl TestDsl for TestWorkerExecutor {
             .update_component(
                 component_id,
                 source_path.as_deref(),
-                component_type,
                 converted_new_files,
                 removed_files,
                 dynamic_linking,

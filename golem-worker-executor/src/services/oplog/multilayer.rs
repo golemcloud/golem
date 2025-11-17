@@ -21,7 +21,8 @@ use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
 use async_trait::async_trait;
-use golem_common::model::component::{ComponentId, ComponentType};
+use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
@@ -214,10 +215,10 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let component_type = self.execution_status.read().component_type();
+        let agent_mode = self.execution_status.read().agent_mode();
 
-        match component_type {
-            ComponentType::Durable => {
+        match agent_mode {
+            AgentMode::Durable => {
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     self.primary
                         .create(
@@ -241,7 +242,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 };
                 MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await
             }
-            ComponentType::Ephemeral => {
+            AgentMode::Ephemeral => {
                 let primary = self
                     .primary
                     .open(

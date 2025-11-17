@@ -7,7 +7,6 @@ import "golem/common/environment.proto";
 import "golem/common/application.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
-import "golem/component/component_type.proto";
 import "golem/component/plugin_installation.proto";
 import "golem/component/component_id.proto";
 import "golem/auth/environment_role.proto";
@@ -21,12 +20,11 @@ message Component {
   ComponentMetadata metadata = 5;
   golem.common.EnvironmentId environment_id = 6;
   google.protobuf.Timestamp created_at = 7;
-  optional ComponentType component_type = 8;
-  repeated golem.component.InitialComponentFile files = 9;
-  repeated golem.component.PluginInstallation installed_plugins = 10;
-  golem.common.AccountId account_id = 11;
-  map<string, string> env = 12;
-  repeated uint32 wasm_hash_bytes = 13;
-  golem.common.ApplicationId application_id = 14;
-  repeated golem.auth.EnvironmentRole environment_roles_from_shares = 15;
+  repeated golem.component.InitialComponentFile files = 8;
+  repeated golem.component.PluginInstallation installed_plugins = 9;
+  golem.common.AccountId account_id = 10;
+  map<string, string> env = 11;
+  repeated uint32 wasm_hash_bytes = 12;
+  golem.common.ApplicationId application_id = 13;
+  repeated golem.auth.EnvironmentRole environment_roles_from_shares = 14;
 }

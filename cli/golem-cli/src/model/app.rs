@@ -185,7 +185,6 @@ impl DynamicHelpSections {
 pub struct ComponentStubInterfaces {
     pub stub_interface_name: String,
     pub component_name: ComponentName,
-    pub is_ephemeral: bool,
     pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
 
@@ -1180,19 +1179,8 @@ impl<'a> Component<'a> {
             .join(naming::wit::WIT_DIR)
     }
 
-    pub fn is_ephemeral(&self) -> bool {
-        self.properties().component_type == AppComponentType::Ephemeral
-    }
-
-    pub fn is_durable(&self) -> bool {
-        self.properties().component_type == AppComponentType::Durable
-    }
-
     pub fn is_deployable(&self) -> bool {
-        self.properties()
-            .component_type
-            .as_deployable_component_type()
-            .is_some()
+        self.properties().component_type.is_deployable()
     }
 
     pub fn custom_commands(&self) -> &BTreeMap<String, Vec<app_raw::ExternalCommand>> {

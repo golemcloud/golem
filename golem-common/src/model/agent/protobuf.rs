@@ -1,15 +1,33 @@
 use crate::model::agent::{
-    AgentConstructor, AgentDependency, AgentMethod, AgentType, BinaryDescriptor, BinaryReference,
-    BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
-    ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas, NamedElementValue,
-    NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference, TextSource, TextType,
-    Url,
+    AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    BinaryReference, BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue,
+    ElementSchema, ElementValue, ElementValues, NamedElementSchema, NamedElementSchemas,
+    NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference,
+    TextSource, TextType, Url,
 };
 use golem_api_grpc::proto::golem::component::data_schema;
 use golem_api_grpc::proto::golem::component::element_schema;
 use golem_api_grpc::proto::golem::component::{
     binary_reference, data_value, element_value, text_reference,
 };
+
+impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
+    fn from(value: golem_api_grpc::proto::golem::component::AgentMode) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::component::AgentMode::Durable => AgentMode::Durable,
+            golem_api_grpc::proto::golem::component::AgentMode::Ephemeral => AgentMode::Ephemeral,
+        }
+    }
+}
+
+impl From<AgentMode> for golem_api_grpc::proto::golem::component::AgentMode {
+    fn from(value: AgentMode) -> Self {
+        match value {
+            AgentMode::Durable => golem_api_grpc::proto::golem::component::AgentMode::Durable,
+            AgentMode::Ephemeral => golem_api_grpc::proto::golem::component::AgentMode::Ephemeral,
+        }
+    }
+}
 
 impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
     type Error = String;
@@ -18,6 +36,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
         proto: golem_api_grpc::proto::golem::component::AgentType,
     ) -> Result<Self, Self::Error> {
         Ok(AgentType {
+            mode: proto.mode().into(),
             type_name: proto.type_name,
             description: proto.description,
             constructor: proto
@@ -41,6 +60,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentType> for AgentType {
 impl From<AgentType> for golem_api_grpc::proto::golem::component::AgentType {
     fn from(value: AgentType) -> Self {
         golem_api_grpc::proto::golem::component::AgentType {
+            mode: golem_api_grpc::proto::golem::component::AgentMode::from(value.mode) as i32,
             type_name: value.type_name,
             description: value.description,
             constructor: Some(value.constructor.into()),

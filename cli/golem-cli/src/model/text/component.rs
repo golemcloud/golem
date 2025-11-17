@@ -57,7 +57,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
     fields
         .fmt_field("Component name", &view.component_name, format_main_id)
         .fmt_field("Component ID", &view.component_id, format_id)
-        .fmt_field("Component type", &view.component_type, |t| t.to_string())
         .fmt_field("Component revision", &view.component_revision, format_id)
         .fmt_field_option("Component version", &view.component_version, format_id)
         .fmt_field_option("Environment ID", &view.environment_id, format_id)

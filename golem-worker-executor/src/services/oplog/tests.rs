@@ -21,7 +21,8 @@ use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentId, ComponentType};
+use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::{LogLevel, WorkerError};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::WorkerStatusRecord;
@@ -60,10 +61,10 @@ fn default_last_known_status() -> read_only_lock::tokio::ReadOnlyLock<WorkerStat
 }
 
 fn default_execution_status(
-    component_type: ComponentType,
+    agent_mode: AgentMode,
 ) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
-        component_type,
+        agent_mode,
         timestamp: Timestamp::now_utc(),
     })))
 }
@@ -91,7 +92,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -163,7 +164,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Ephemeral),
+            default_execution_status(AgentMode::Ephemeral),
         )
         .await;
 
@@ -222,7 +223,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -372,7 +373,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -597,7 +598,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
     let mut entries = Vec::new();
@@ -629,7 +630,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await
             .length()
@@ -659,7 +660,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -739,7 +740,7 @@ async fn read_from_archive_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -773,7 +774,7 @@ async fn read_from_archive_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -869,7 +870,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -998,7 +999,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
     info!("FIRST OPEN DONE");
@@ -1033,7 +1034,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -1059,7 +1060,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await
     } else if reopen == Reopen::Full {
@@ -1085,7 +1086,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await
     } else {
@@ -1122,7 +1123,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -1148,7 +1149,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await
     } else if reopen == Reopen::Full {
@@ -1174,7 +1175,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await
     } else {
@@ -1307,7 +1308,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await;
 
@@ -1351,7 +1352,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -1443,7 +1444,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await;
         for entry in &entries {
@@ -1470,7 +1471,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -1504,7 +1505,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await;
         let result = MultiLayerOplog::try_archive(&oplog).await;
@@ -1524,7 +1525,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 environment_id.clone(),
             ),
             default_last_known_status(),
-            default_execution_status(ComponentType::Durable),
+            default_execution_status(AgentMode::Durable),
         )
         .await
         .length()
@@ -1603,7 +1604,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                     environment_id.clone(),
                 ),
                 default_last_known_status(),
-                default_execution_status(ComponentType::Durable),
+                default_execution_status(AgentMode::Durable),
             )
             .await;
 

@@ -27,8 +27,8 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::AgentId;
-use golem_common::model::component::{ComponentFilePath, ComponentRevision, ComponentType};
+use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
@@ -650,8 +650,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     )
                     .await?;
 
-                if self.store.data().component_metadata().component_type == ComponentType::Ephemeral
-                {
+                if self.parent.agent_mode() == AgentMode::Ephemeral {
                     // For ephemeral agents, we allow running the 'initialize' call and one another
                     if self.store.data().component_metadata().metadata.is_agent()
                         && full_function_name == "golem:agent/guest.{initialize}"

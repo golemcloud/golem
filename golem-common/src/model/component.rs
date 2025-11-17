@@ -32,9 +32,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::Debug;
 use std::str::FromStr;
-use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
 
@@ -95,7 +94,6 @@ impl ComponentName {
 declare_structs! {
     pub struct ComponentCreation {
         pub component_name: ComponentName,
-        pub component_type: Option<ComponentType>,
         #[serde(default)]
         #[oai(default)]
         pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
@@ -115,7 +113,6 @@ declare_structs! {
 
     pub struct ComponentUpdate {
         pub current_revision: ComponentRevision,
-        pub component_type: Option<ComponentType>,
         #[serde(default)]
         #[oai(default)]
         pub removed_files: Vec<ComponentFilePath>,
@@ -140,7 +137,6 @@ declare_structs! {
         pub component_size: u64,
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
-        pub component_type: ComponentType,
         pub files: Vec<InitialComponentFile>,
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
@@ -193,40 +189,11 @@ impl InitialComponentFile {
 }
 
 declare_enums! {
-    #[derive(FromRepr, ::desert_rust::BinaryCodec)]
-    #[repr(i32)]
-    pub enum ComponentType {
-        Durable = 0,
-        Ephemeral = 1,
-    }
-
     #[derive(Default)]
     pub enum ComponentFilePermissions {
         #[default]
         ReadOnly,
         ReadWrite,
-    }
-}
-
-impl Display for ComponentType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ComponentType::Durable => "Durable",
-            ComponentType::Ephemeral => "Ephemeral",
-        };
-        write!(f, "{s}")
-    }
-}
-
-impl FromStr for ComponentType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Durable" => Ok(ComponentType::Durable),
-            "Ephemeral" => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {s}")),
-        }
     }
 }
 
@@ -247,7 +214,6 @@ impl ComponentFilePermissions {
 }
 
 declare_unions! {
-
     pub enum PluginInstallationAction {
         Install(PluginInstallation),
         Uninstall(PluginUninstallation),
@@ -353,7 +319,7 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 
 mod protobuf {
     use super::{ComponentDto, InstalledPlugin};
-    use super::{ComponentName, ComponentRevision, ComponentType, PluginPriority};
+    use super::{ComponentName, ComponentRevision, PluginPriority};
     use crate::model::auth::EnvironmentRole;
     use applying::Apply;
     use std::collections::BTreeMap;
@@ -431,12 +397,6 @@ mod protobuf {
                 .map_err(|_| "Failed to convert timestamp".to_string())?
                 .into();
 
-            let component_type = value
-                .component_type
-                .ok_or("missing component type")?
-                .apply(ComponentType::from_repr)
-                .ok_or("Invalid component type")?;
-
             let files = value
                 .files
                 .into_iter()
@@ -480,7 +440,6 @@ mod protobuf {
                 component_size,
                 metadata,
                 created_at,
-                component_type,
                 files,
                 installed_plugins,
                 env,
@@ -509,11 +468,6 @@ mod protobuf {
                 created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                     value.created_at,
                 ))),
-                component_type: Some(
-                    golem_api_grpc::proto::golem::component::ComponentType::from(
-                        value.component_type,
-                    ) as i32,
-                ),
                 files: value.files.into_iter().map(|file| file.into()).collect(),
                 installed_plugins: value
                     .installed_plugins

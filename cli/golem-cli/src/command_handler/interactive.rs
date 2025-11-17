@@ -334,12 +334,12 @@ impl InteractiveHandler {
             match dependency_type {
                 DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc => {
                     match component_type {
-                        AppComponentType::Durable | AppComponentType::Ephemeral => true,
+                        AppComponentType::Agent => true,
                         AppComponentType::Library => false,
                     }
                 }
                 DependencyType::Wasm => match component_type {
-                    AppComponentType::Durable | AppComponentType::Ephemeral => false,
+                    AppComponentType::Agent => false,
                     AppComponentType::Library => true,
                 },
             }
@@ -407,7 +407,7 @@ impl InteractiveHandler {
 
         let dependency_type = {
             let (offered_dependency_types, valid_dependency_types) = match component_type {
-                AppComponentType::Durable | AppComponentType::Ephemeral => (
+                AppComponentType::Agent => (
                     vec![DependencyType::DynamicWasmRpc, DependencyType::Wasm],
                     vec![
                         DependencyType::DynamicWasmRpc,

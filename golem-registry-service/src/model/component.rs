@@ -16,9 +16,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::component::InitialComponentFile;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
-use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
@@ -34,12 +34,11 @@ pub struct NewComponentRevision {
     pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
     pub component_name: ComponentName,
-    pub component_type: ComponentType,
     pub original_files: Vec<InitialComponentFile>,
     pub files: Vec<InitialComponentFile>,
     pub original_env: BTreeMap<String, String>,
     pub env: BTreeMap<String, String>,
-    pub wasm_hash: golem_common::model::diff::Hash,
+    pub wasm_hash: Hash,
     pub object_store_key: String,
     pub installed_plugins: Vec<InstalledPlugin>,
 
@@ -52,7 +51,6 @@ impl NewComponentRevision {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_name: ComponentName,
-        component_type: ComponentType,
         files: Vec<InitialComponentFile>,
         env: BTreeMap<String, String>,
         wasm_hash: Hash,
@@ -65,7 +63,6 @@ impl NewComponentRevision {
             environment_id,
             component_id,
             component_name,
-            component_type,
             original_files: files.clone(),
             files,
             original_env: env.clone(),
@@ -93,7 +90,6 @@ impl NewComponentRevision {
             environment_id: self.environment_id,
             component_id: self.component_id,
             component_name: self.component_name,
-            component_type: self.component_type,
             original_files: self.original_files,
             files: self.files,
             original_env: self.original_env,
@@ -114,7 +110,6 @@ pub struct FinalizedComponentRevision {
     pub component_id: ComponentId,
     pub environment_id: EnvironmentId,
     pub component_name: ComponentName,
-    pub component_type: ComponentType,
     pub original_files: Vec<InitialComponentFile>,
     pub files: Vec<InitialComponentFile>,
     pub original_env: BTreeMap<String, String>,
@@ -140,7 +135,6 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
@@ -160,7 +154,6 @@ impl Component {
             component_id: self.id,
             environment_id: self.environment_id,
             component_name: self.component_name,
-            component_type: self.component_type,
             original_files: self.original_files,
             files: self.files,
             original_env: self.original_env,
@@ -187,7 +180,6 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             component_size: value.component_size,
             metadata: value.metadata,
             created_at: value.created_at,
-            component_type: value.component_type,
             files: value.files,
             installed_plugins: value.installed_plugins,
             env: value.env,

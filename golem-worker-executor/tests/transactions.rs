@@ -931,14 +931,13 @@ async fn idempotency_keys_in_ephemeral_workers(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&context.default_environment_id, "runtime-service")
-        .ephemeral()
+        .component(&context.default_environment_id, "it_agent_counters_release")
         .store()
         .await?;
 
-    let target_worker_id = WorkerId {
+    let worker_id = WorkerId {
         component_id: component.id,
-        worker_name: "ephemeral".to_string(),
+        worker_name: "host-function-tests(\"idempotency_keys_in_ephemeral_workers\")".to_string(),
     };
 
     let idempotency_key1 = IdempotencyKey::fresh();
@@ -946,52 +945,52 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result11 = executor
         .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{generate-idempotency-keys}",
+            &worker_id,
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;
 
     let result21 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key1,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;
 
     let result31 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key2,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;
 
     let result12 = executor
         .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{generate-idempotency-keys}",
+            &worker_id,
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;
 
     let result22 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key1,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;
 
     let result32 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key2,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await??;

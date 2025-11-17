@@ -26,8 +26,8 @@ use anyhow::{anyhow, Context as AnyhowContext};
 use golem_client::api::{ComponentClient, PluginClient};
 use golem_client::model::ComponentQuery;
 use golem_client::model::{
-    ComponentTransformerDefinition, ComponentType, OplogProcessorDefinition,
-    PluginDefinitionCreation, PluginScope, PluginTypeSpecificCreation,
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinitionCreation,
+    PluginScope, PluginTypeSpecificCreation,
 };
 use golem_common::model::plugin::{ComponentPluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentId, Empty};
@@ -149,7 +149,6 @@ impl PluginCommandHandler {
                                 component_name: component_name.0.clone(),
                             },
                             component_file,
-                            Some(&ComponentType::Durable), // TODO: do we want to support ephemeral oplog processors?
                             None,
                             None::<File>,
                             None,

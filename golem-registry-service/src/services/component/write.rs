@@ -33,7 +33,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
-    ComponentType, ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
+    ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
@@ -154,9 +154,6 @@ impl ComponentWriteService {
             environment_id.clone(),
             component_id.clone(),
             component_creation.component_name.clone(),
-            component_creation
-                .component_type
-                .unwrap_or(ComponentType::Durable),
             initial_component_files,
             component_creation.env,
             wasm_hash,
@@ -284,9 +281,6 @@ impl ComponentWriteService {
             environment_id.clone(),
             component_id.clone(),
             component.component_name,
-            component_update
-                .component_type
-                .unwrap_or(component.component_type),
             self.update_initial_component_files(
                 &environment_id,
                 component.files,

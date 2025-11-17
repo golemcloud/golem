@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+test_r::enable!();
+
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::agentic::{Multimodal, UnstructuredBinary, UnstructuredText};
+    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use test_r::test;
 
     #[agent_definition]
     trait Echo {
@@ -114,6 +118,90 @@ mod tests {
             input: UnstructuredBinary<MyMimeType>,
         ) -> UnstructuredBinary<MyMimeType> {
             input
+        }
+    }
+
+    // Test: #[agent_definition(mode = "ephemeral")]
+    #[agent_definition(mode = "ephemeral")]
+    trait EchoEphemeralExplicit {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct EchoEphemeralExplicitImpl {
+        _id: UserId,
+    }
+
+    #[agent_implementation]
+    impl EchoEphemeralExplicit for EchoEphemeralExplicitImpl {
+        fn new(id: UserId) -> Self {
+            EchoEphemeralExplicitImpl { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message.to_string()
+        }
+    }
+
+    // Test: #[agent_definition(ephemeral)]
+    #[agent_definition(ephemeral)]
+    trait EchoEphemeralShorthand {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct EchoEphemeralShorthandImpl {
+        _id: UserId,
+    }
+
+    #[agent_implementation]
+    impl EchoEphemeralShorthand for EchoEphemeralShorthandImpl {
+        fn new(id: UserId) -> Self {
+            EchoEphemeralShorthandImpl { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message.to_string()
+        }
+    }
+
+    // Test: #[agent_definition(mode = "durable")]
+    #[agent_definition(mode = "durable")]
+    trait EchoDurableExplicit {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct EchoDurableExplicitImpl {
+        _id: UserId,
+    }
+
+    #[agent_implementation]
+    impl EchoDurableExplicit for EchoDurableExplicitImpl {
+        fn new(id: UserId) -> Self {
+            EchoDurableExplicitImpl { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message.to_string()
+        }
+    }
+
+    // Test: #[agent_definition] (default, should be durable)
+    #[agent_definition]
+    trait EchoDurableDefault {
+        fn new(init: UserId) -> Self;
+        fn echo(&self, message: String) -> String;
+    }
+
+    struct EchoDurableDefaultImpl {
+        _id: UserId,
+    }
+
+    #[agent_implementation]
+    impl EchoDurableDefault for EchoDurableDefaultImpl {
+        fn new(id: UserId) -> Self {
+            EchoDurableDefaultImpl { _id: id }
+        }
+        fn echo(&self, message: String) -> String {
+            message.to_string()
         }
     }
 
@@ -226,5 +314,53 @@ mod tests {
     #[test] // only to verify that the agent compiles correctly
     fn test_agent_compilation() {
         assert!(true);
+    }
+
+    #[test]
+    fn test_agent_modes() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        // Helper to find an agent type by name
+        let find_agent = |name: &str| -> Option<AgentType> {
+            agent_types.iter().find(|a| a.type_name == name).cloned()
+        };
+
+        // Test: default (no attribute) should be Durable
+        if let Some(agent) = find_agent("EchoDurableDefault") {
+            assert_eq!(
+                &agent.mode,
+                &AgentMode::Durable,
+                "EchoDurableDefault should be Durable"
+            );
+        }
+
+        // Test: mode = "durable" should be Durable
+        if let Some(agent) = find_agent("EchoDurableExplicit") {
+            assert_eq!(
+                &agent.mode,
+                &AgentMode::Durable,
+                "EchoDurableExplicit should be Durable"
+            );
+        }
+
+        // Test: ephemeral shorthand should be Ephemeral
+        if let Some(agent) = find_agent("EchoEphemeralShorthand") {
+            assert_eq!(
+                &agent.mode,
+                &AgentMode::Ephemeral,
+                "EchoEphemeralShorthand should be Ephemeral"
+            );
+        }
+
+        // Test: mode = "ephemeral" should be Ephemeral
+        if let Some(agent) = find_agent("EchoEphemeralExplicit") {
+            assert_eq!(
+                &agent.mode,
+                &AgentMode::Ephemeral,
+                "EchoEphemeralExplicit should be Ephemeral"
+            );
+        }
     }
 }

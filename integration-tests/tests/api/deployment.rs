@@ -133,7 +133,6 @@ async fn get_component_version_from_previous_deployment(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                component_type: None,
                 new_file_options: BTreeMap::new(),
                 removed_files: Vec::new(),
                 dynamic_linking: None,

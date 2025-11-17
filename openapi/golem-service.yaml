@@ -11415,6 +11415,11 @@ components:
       - description
       - inputSchema
       - outputSchema
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
     AgentType:
       title: AgentType
       type: object
@@ -11433,12 +11438,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentDependency'
+        mode:
+          $ref: '#/components/schemas/AgentMode'
       required:
       - typeName
       - description
       - constructor
       - methods
       - dependencies
+      - mode
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -11658,8 +11666,6 @@ components:
       properties:
         componentName:
           type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         fileOptions:
           default: {}
           type: object
@@ -11716,8 +11722,6 @@ components:
         createdAt:
           type: string
           format: date-time
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         files:
           type: array
           items:
@@ -11747,7 +11751,6 @@ components:
       - componentSize
       - metadata
       - createdAt
-      - componentType
       - files
       - installedPlugins
       - env
@@ -11840,11 +11843,6 @@ components:
       required:
       - validateUrl
       - transformUrl
-    ComponentType:
-      type: string
-      enum:
-      - durable
-      - ephemeral
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -11852,8 +11850,6 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         removedFiles:
           default: []
           type: array
@@ -13178,12 +13174,9 @@ components:
           type: string
         componentName:
           type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
       required:
       - interfaceName
       - componentName
-      - componentType
   securitySchemes:
     Cookie:
       type: apiKey

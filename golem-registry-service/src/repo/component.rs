@@ -562,7 +562,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -589,7 +589,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -616,7 +616,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -649,7 +649,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -694,7 +694,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                           c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM distinct_revs dr
                     JOIN component_revisions cr
@@ -724,7 +724,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -754,7 +754,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -782,7 +782,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -809,7 +809,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -846,7 +846,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -879,7 +879,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.version, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.component_type, cr.size, cr.metadata, cr.original_env, cr.env,
+                           cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -1131,12 +1131,12 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                     INSERT INTO component_revisions
                     (component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
-                        component_type,size, metadata, original_env, env,
+                        size, metadata, original_env, env,
                         object_store_key, binary_hash, transformed_object_store_key)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                     RETURNING component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
-                        component_type,size, metadata, original_env, env,
+                        size, metadata, original_env, env,
                         object_store_key, binary_hash, transformed_object_store_key
                 "# })
                 .bind(revision.component_id)
@@ -1144,7 +1144,6 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                 .bind(revision.version)
                 .bind(revision.hash)
                 .bind_deletable_revision_audit(revision.audit)
-                .bind(revision.component_type)
                 .bind(revision.size)
                 .bind(revision.metadata)
                 .bind(revision.original_env)

@@ -37,7 +37,7 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
-    ComponentRevision, ComponentType, PluginInstallation,
+    ComponentRevision, PluginInstallation,
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
@@ -95,7 +95,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         wasm_name: &str,
         environment_id: EnvironmentId,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: Vec<IFSEntry>,
@@ -103,18 +102,13 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         env: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto> {
-        let component_directy = self.deps.component_directory();
-
-        let source_path = component_directy.join(format!("{wasm_name}.wasm"));
-
+        let component_directory = self.deps.component_directory();
+        let source_path = component_directory.join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
             let uuid = Uuid::new_v4();
-            ComponentName(format!("{name}-{uuid}"))
+            ComponentName(format!("{name}---{uuid}"))
         } else {
-            match component_type {
-                ComponentType::Durable => ComponentName(name.to_string()),
-                ComponentType::Ephemeral => ComponentName(format!("{name}-ephemeral")),
-            }
+            ComponentName(name.to_string())
         };
         let dynamic_linking = HashMap::from_iter(
             dynamic_linking
@@ -134,7 +128,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         };
 
         let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
-            let (tmp_dir, files_archive) = build_ifs_archive(component_directy, &files).await?;
+            let (tmp_dir, files_archive) = build_ifs_archive(component_directory, &files).await?;
             (Some(tmp_dir), Some(File::open(files_archive).await?))
         } else {
             (None, None)
@@ -161,7 +155,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &environment_id.0,
                 &ComponentCreation {
                     component_name,
-                    component_type: Some(component_type),
                     file_options,
                     dynamic_linking,
                     env,
@@ -195,7 +188,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         component_id: &ComponentId,
         previous_version: ComponentRevision,
         wasm_name: Option<&str>,
-        component_type: Option<ComponentType>,
         new_files: Vec<IFSEntry>,
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
@@ -237,7 +229,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &component_id.0,
                 &ComponentUpdate {
                     current_revision: previous_version,
-                    component_type,
                     new_file_options,
                     removed_files,
                     dynamic_linking,

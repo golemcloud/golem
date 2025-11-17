@@ -53,7 +53,6 @@ async fn all_wit_types() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: ComponentName("test:component".to_string()),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -378,7 +377,6 @@ async fn resource() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: ComponentName("test:component".to_string()),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -434,7 +432,6 @@ async fn circular_resources() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: ComponentName("test:main".to_string()),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -495,7 +492,6 @@ async fn inline_resources() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: ComponentName("test:main".to_string()),
-        is_ephemeral: false,
     })
     .unwrap();
 

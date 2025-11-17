@@ -1589,7 +1589,7 @@ mod tests {
 
     #[test]
     pub fn char_type() {
-        let component_name = ComponentName("example:bug".to_string());
+        let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::char_type();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
@@ -1599,7 +1599,7 @@ mod tests {
 
     #[test]
     pub fn unit_result_type() {
-        let component_name = ComponentName("example:bug".to_string());
+        let component_name = "example:bug".try_into().unwrap();
         let agent_types = test::unit_result_type();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 

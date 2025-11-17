@@ -601,7 +601,6 @@ pub async fn test_component_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        component_type: 0,
         size: 10,
         metadata: ComponentMetadata::from_parts(
             vec![],
@@ -1357,7 +1356,6 @@ pub async fn test_account_usage(deps: &Deps) {
                     version: "".to_string(),
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                    component_type: 0,
                     size: 0,
                     metadata: ComponentMetadata::from_parts(
                         vec![],
