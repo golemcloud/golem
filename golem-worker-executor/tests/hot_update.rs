@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use async_mutex::Mutex;
 use axum::routing::post;
@@ -21,6 +21,10 @@ use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use http::StatusCode;
 use log::info;
 use pretty_assertions::assert_eq;
@@ -142,8 +146,8 @@ async fn auto_update_on_running(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -225,8 +229,8 @@ async fn auto_update_on_idle(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let component = executor
         .component(&context.default_environment_id, "update-test-v1")
@@ -274,8 +278,8 @@ async fn failing_auto_update_on_idle(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -347,8 +351,8 @@ async fn auto_update_on_idle_with_non_diverging_history(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let component = executor
         .component(&context.default_environment_id, "update-test-v1")
@@ -410,8 +414,8 @@ async fn failing_auto_update_on_running(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -504,8 +508,8 @@ async fn manual_update_on_idle(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -574,8 +578,8 @@ async fn manual_update_on_idle_without_save_snapshot(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -645,8 +649,8 @@ async fn auto_update_on_running_followed_by_manual(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let mut http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -750,8 +754,8 @@ async fn manual_update_on_idle_with_failing_load(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -820,8 +824,8 @@ async fn manual_update_on_idle_using_v11(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -896,8 +900,8 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start().await;
     let mut env = HashMap::new();
@@ -972,8 +976,8 @@ async fn auto_update_on_idle_to_non_existing(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let component = executor
         .component(&context.default_environment_id, "update-test-v1")
@@ -1034,8 +1038,8 @@ async fn update_component_version_environment_variable(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await?;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
 
     let component = executor
         .component(&context.default_environment_id, "update-test-env-var")

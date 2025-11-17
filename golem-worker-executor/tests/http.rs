@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::{check, let_assert};
 use axum::routing::post;
 use axum::Router;
@@ -21,6 +20,10 @@ use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, RetryConfig};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::json;

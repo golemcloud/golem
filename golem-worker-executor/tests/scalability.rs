@@ -12,13 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use std::future::Future;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};

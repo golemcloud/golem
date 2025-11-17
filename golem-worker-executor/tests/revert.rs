@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::{check, let_assert};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -23,6 +22,10 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use log::info;
 use test_r::{inherit_test_dep, test};
 

@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::let_assert;
 use assert2::{assert, check};
 use golem_common::model::oplog::WorkerError;
@@ -21,6 +20,9 @@ use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor::test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::plugins::PluginsService;
 use async_trait::async_trait;
 use golem_common::model::component::{
     ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
@@ -19,7 +20,6 @@ use golem_common::model::component::{
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::plugin_registration::PluginRegistration;
-use golem_worker_executor::services::plugins::PluginsService;
 
 #[derive(Clone)]
 pub struct PluginsUnavailable;

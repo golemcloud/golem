@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext, TestWorkerExecutor};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
@@ -26,6 +25,10 @@ use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fmt::Display;

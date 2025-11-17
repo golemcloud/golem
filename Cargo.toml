@@ -5,7 +5,7 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
-    # "golem-debugging-service",
+    "golem-debugging-service",
     "golem-service-base",
     "golem-component-compilation-service",
     "golem-registry-service",

@@ -12,6 +12,16 @@ harness = false
 name = "golem-debugging-service"
 path = "src/server.rs"
 
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
+required-features = ["testing"]
+
+[features]
+default = []
+testing = ["golem-worker-executor/testing"]
+
 [dependencies]
 golem-worker-executor = { workspace = true }
 golem-common = { workspace = true }
@@ -57,8 +67,3 @@ wasmtime-wasi-http = { workspace = true }
 [dev-dependencies]
 test-r = { workspace = true }
 golem-test-framework = { workspace = true }
-
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-harness = false

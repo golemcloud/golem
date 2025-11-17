@@ -155,7 +155,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Ctx>>,

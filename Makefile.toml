@@ -402,6 +402,8 @@ args = [
     "test",
     "--package",
     "golem-worker-executor",
+    "--features",
+    "testing",
     "--test",
     "*",
     "--",
@@ -413,8 +415,8 @@ dependencies = ["wit"]
 description = "Runs only untagged and rdbms worker-executor-tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
-cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --features testing --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --features testing --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group1]
@@ -422,7 +424,7 @@ dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/2)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --features testing --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -430,7 +432,7 @@ dependencies = ["wit"]
 description = "Runs worker executor tests only (group 2/2)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo-test-r run --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --features testing --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.integration-tests]
@@ -467,7 +469,7 @@ script = '''
 cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-debugging-service --features testing --test '*' -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]

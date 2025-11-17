@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::component_writer::LocalFileSystemComponentMetadata;
+use crate::services::component::ComponentService;
 use async_lock::{RwLock, Semaphore};
 use async_trait::async_trait;
 use golem_common::cache::SimpleCache;
@@ -23,8 +24,8 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
-use golem_worker_executor::services::component::ComponentService;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -323,6 +324,14 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             Some(version) => self.get_metadata_for_version(component_id, version).await,
             None => self.get_latest_metadata(component_id).await,
         }
+    }
+
+    async fn get_caller_specific_latest_metadata(
+        &self,
+        component_id: &ComponentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<ComponentDto, WorkerExecutorError> {
+        self.get_latest_metadata(component_id).await
     }
 
     async fn resolve_component(

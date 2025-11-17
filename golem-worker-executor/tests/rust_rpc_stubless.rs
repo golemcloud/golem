@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
-
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
@@ -24,8 +21,13 @@ use golem_common::model::oplog::WorkerError;
 use golem_test_framework::dsl::{worker_error_underlying_error, TestDsl};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

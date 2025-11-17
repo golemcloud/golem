@@ -14,12 +14,61 @@
 
 pub mod component_service;
 pub mod component_writer;
-mod dsl_impl;
+pub mod dsl_impl;
 pub mod plugins;
 
-use self::component_service::ComponentServiceLocalFileSystem;
-use self::plugins::PluginsUnavailable;
-use crate::{LastUniqueId, WorkerExecutorTestDependencies};
+use self::component_writer::FileSystemComponentWriter;
+use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
+use crate::model::{
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+};
+use crate::preview2::golem::durability;
+use crate::preview2::{golem_agent, golem_api_1_x};
+use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
+use crate::services::blob_store::BlobStoreService;
+use crate::services::component::ComponentService;
+use crate::services::events::Events;
+use crate::services::file_loader::FileLoader;
+use crate::services::golem_config::{
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
+};
+use crate::services::key_value::KeyValueService;
+use crate::services::oplog::plugin::OplogProcessorPlugin;
+use crate::services::oplog::{CommitLevel, Oplog, OplogService};
+use crate::services::plugins::PluginsService;
+use crate::services::promise::PromiseService;
+use crate::services::rdbms::mysql::MysqlType;
+use crate::services::rdbms::postgres::PostgresType;
+use crate::services::rdbms::{
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
+};
+use crate::services::resource_limits::ResourceLimits;
+use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
+use crate::services::shard_manager::ShardManagerService;
+use crate::services::worker::WorkerService;
+use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_enumeration::{
+    RunningWorkerEnumerationService, WorkerEnumerationService,
+};
+use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
+use crate::services::worker_proxy::WorkerProxy;
+use crate::services::{rdbms, resource_limits, All, HasAll};
+use crate::test_utils::component_service::ComponentServiceLocalFileSystem;
+use crate::test_utils::plugins::PluginsUnavailable;
+use crate::wasi_host::create_linker;
+use crate::worker::{RetryDecision, Worker};
+use crate::workerctx::{
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
+};
+use crate::{Bootstrap, RunDetails};
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -30,8 +79,8 @@ use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountId, PlanId};
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::AccountRole;
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
+use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentType};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -54,75 +103,31 @@ use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
 };
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_test_framework::components::redis::spawned::SpawnedRedis;
+use golem_test_framework::components::redis::Redis;
+use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
+use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
-use golem_worker_executor::durable_host::{
-    DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
-};
-use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
-};
-use golem_worker_executor::preview2::golem::durability;
-use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
-use golem_worker_executor::services::active_workers::ActiveWorkers;
-use golem_worker_executor::services::agent_types::AgentTypesService;
-use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::events::Events;
-use golem_worker_executor::services::file_loader::FileLoader;
-use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-};
-use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
-use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
-use golem_worker_executor::services::plugins::PluginsService;
-use golem_worker_executor::services::promise::PromiseService;
-use golem_worker_executor::services::rdbms::mysql::MysqlType;
-use golem_worker_executor::services::rdbms::postgres::PostgresType;
-use golem_worker_executor::services::rdbms::{
-    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
-};
-use golem_worker_executor::services::resource_limits::ResourceLimits;
-use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
-use golem_worker_executor::services::scheduler::SchedulerService;
-use golem_worker_executor::services::shard::ShardService;
-use golem_worker_executor::services::shard_manager::ShardManagerService;
-use golem_worker_executor::services::worker::WorkerService;
-use golem_worker_executor::services::worker_activator::WorkerActivator;
-use golem_worker_executor::services::worker_enumeration::{
-    RunningWorkerEnumerationService, WorkerEnumerationService,
-};
-use golem_worker_executor::services::worker_event::WorkerEventService;
-use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
-use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
-use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::worker::{RetryDecision, Worker};
-use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    StatusManagement, UpdateManagement, WorkerCtx,
-};
-use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
-use tracing::{debug, info};
+use tracing::{debug, info, Level};
 use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -130,11 +135,69 @@ use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
 #[derive(Clone)]
+pub struct WorkerExecutorTestDependencies {
+    pub redis: Arc<dyn Redis>,
+    pub redis_monitor: Arc<dyn RedisMonitor>,
+    pub component_writer: Arc<FileSystemComponentWriter>,
+    pub initial_component_files_service: Arc<InitialComponentFilesService>,
+    pub component_directory: PathBuf,
+    pub component_temp_directory: Arc<TempDir>,
+    pub component_service_directory: PathBuf,
+}
+
+impl Debug for WorkerExecutorTestDependencies {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WorkerExecutorTestDependencies")
+    }
+}
+
+impl WorkerExecutorTestDependencies {
+    pub async fn new() -> Self {
+        let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
+            6379,
+            "".to_string(),
+            Level::INFO,
+            Level::ERROR,
+        ));
+        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
+            redis.clone(),
+            Level::TRACE,
+            Level::ERROR,
+        ));
+
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(Path::new("data/blobs"))
+                .await
+                .unwrap(),
+        );
+
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let component_directory = Path::new("../test-components").to_path_buf();
+        let component_service_directory = Path::new("data/components");
+
+        let component_writer: Arc<FileSystemComponentWriter> =
+            Arc::new(FileSystemComponentWriter::new(component_service_directory).await);
+
+        Self {
+            redis,
+            redis_monitor,
+            component_directory,
+            component_service_directory: component_service_directory.to_path_buf(),
+            component_writer,
+            initial_component_files_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
-    deps: WorkerExecutorTestDependencies,
-    client: WorkerExecutorClient<Channel>,
-    context: TestContext,
+    pub deps: WorkerExecutorTestDependencies,
+    pub client: WorkerExecutorClient<Channel>,
+    pub context: TestContext,
 }
 
 impl TestWorkerExecutor {
@@ -199,6 +262,11 @@ impl TestWorkerExecutor {
     }
 }
 
+#[derive(Debug)]
+pub struct LastUniqueId {
+    pub id: AtomicU16,
+}
+
 #[derive(Debug, Clone)]
 pub struct TestContext {
     base_prefix: String,
@@ -210,6 +278,8 @@ pub struct TestContext {
     pub account_plan_id: PlanId,
     // roles of the account plan
     pub account_roles: HashSet<AccountRole>,
+    // tokens of account to use
+    pub account_token: TokenSecret,
     // application id to use during tests
     pub application_id: ApplicationId,
     // default environment id to use during tests
@@ -226,6 +296,7 @@ impl TestContext {
         let account_roles = HashSet::new();
         let application_id = ApplicationId::new_v4();
         let default_environment_id = EnvironmentId::new_v4();
+        let account_token = TokenSecret::new_v4();
 
         Self {
             base_prefix,
@@ -233,6 +304,7 @@ impl TestContext {
             account_id,
             account_plan_id,
             account_roles,
+            account_token,
             application_id,
             default_environment_id,
         }
@@ -262,7 +334,7 @@ pub async fn start_customized(
     redis_monitor.assert_valid();
     info!("Using Redis on port {}", redis.public_port());
 
-    let prometheus = golem_worker_executor::metrics::register_all();
+    let prometheus = crate::metrics::register_all();
 
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {

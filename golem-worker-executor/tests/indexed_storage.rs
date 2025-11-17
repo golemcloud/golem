@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::WorkerExecutorTestDependencies;
+use crate::Tracing;
 use assert2::check;
 use async_trait::async_trait;
 use golem_common::config::RedisConfig;
@@ -24,6 +24,10 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageNamespace, ScanCursor,
+};
+use golem_worker_executor::test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
 };
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
