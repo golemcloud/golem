@@ -22,6 +22,10 @@ pub fn multiple_constructor_methods_error(item_trait: &ItemTrait) -> proc_macro2
     compile_error(item_trait, "Agent traits can have only one constructor method. Please ensure there is only one method returning `Self`.")
 }
 
+pub fn async_trait_in_agent_definition_error(item_trait: &ItemTrait) -> proc_macro2::TokenStream {
+    compile_error(item_trait, "The `#[async_trait]` attribute is not allowed on agent traits. Agent traits automatically support async methods without this attribute.")
+}
+
 pub fn compile_error(item_trait: &ItemTrait, msg: &str) -> proc_macro2::TokenStream {
     syn::Error::new_spanned(item_trait, msg).to_compile_error()
 }
