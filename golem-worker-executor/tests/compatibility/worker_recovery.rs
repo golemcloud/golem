@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext, TestWorkerExecutor};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use anyhow::anyhow;
 use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
+};
 use redis::AsyncCommands;
 use std::collections::BTreeMap;
 use std::path::Path;

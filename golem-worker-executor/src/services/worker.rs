@@ -124,6 +124,8 @@ impl WorkerService for DefaultWorkerService {
             .into_iter()
             .next();
 
+        tracing::debug!("Found initial oplog entry for worker: {initial_oplog_entry:?}");
+
         match initial_oplog_entry {
             None => None,
             Some((

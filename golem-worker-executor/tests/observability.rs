@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -25,6 +24,9 @@ use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Record, Value};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;

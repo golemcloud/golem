@@ -141,7 +141,26 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
+        // NOTE: This is caller specific and cannot be cached independently of the caller. Use CachableComponent if you need
+        // to cache and share components between callers.
+        // TODO: this probably wants to be allowed_actions instead, consolidating auth in the registry service
         pub environment_roles_from_shares: HashSet<EnvironmentRole>
+    }
+
+    pub struct CachableComponent {
+        pub id: ComponentId,
+        pub revision: ComponentRevision,
+        pub environment_id: EnvironmentId,
+        pub application_id: ApplicationId,
+        pub account_id: AccountId,
+        pub component_name: ComponentName,
+        pub component_size: u64,
+        pub metadata: ComponentMetadata,
+        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub files: Vec<InitialComponentFile>,
+        pub installed_plugins: Vec<InstalledPlugin>,
+        pub env: BTreeMap<String, String>,
+        pub wasm_hash: crate::model::diff::Hash
     }
 
     #[derive(Default)]
@@ -185,6 +204,26 @@ declare_structs! {
 impl InitialComponentFile {
     pub fn is_read_only(&self) -> bool {
         self.permissions == ComponentFilePermissions::ReadOnly
+    }
+}
+
+impl From<ComponentDto> for CachableComponent {
+    fn from(value: ComponentDto) -> Self {
+        Self {
+            id: value.id,
+            revision: value.revision,
+            environment_id: value.environment_id,
+            application_id: value.application_id,
+            account_id: value.account_id,
+            component_name: value.component_name,
+            component_size: value.component_size,
+            metadata: value.metadata,
+            created_at: value.created_at,
+            files: value.files,
+            installed_plugins: value.installed_plugins,
+            env: value.env,
+            wasm_hash: value.wasm_hash,
+        }
     }
 }
 

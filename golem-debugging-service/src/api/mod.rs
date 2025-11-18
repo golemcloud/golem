@@ -13,12 +13,13 @@
 // limitations under the License.
 
 pub mod debugging;
+pub mod errors;
 
 use self::debugging::DebuggingApi;
 use crate::debug_context::DebugContext;
 use crate::services::debug_service::DebugServiceDefault;
 use golem_service_base::api::HealthcheckApi;
-use golem_worker_executor::services::All;
+use golem_worker_executor::services::{All, HasExtraDeps};
 use poem_openapi::OpenApiService;
 use std::sync::Arc;
 
@@ -30,7 +31,10 @@ pub fn make_open_api_service(services: &All<DebugContext>) -> OpenApiService<Api
             HealthcheckApi,
             // TODO: DebugService should be part of DebugConectx::ExtraDeps, but currently not possible as it causes
             // issues with cyclic wiring of All<DebugContext>
-            DebuggingApi::new(Arc::new(DebugServiceDefault::new(services.clone()))),
+            DebuggingApi::new(
+                Arc::new(DebugServiceDefault::new(services.clone())),
+                services.extra_deps().auth_service(),
+            ),
         ),
         "Golem API",
         "1.0",

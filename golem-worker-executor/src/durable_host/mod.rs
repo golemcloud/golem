@@ -81,7 +81,7 @@ use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
+    CachableComponent, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -155,7 +155,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Ctx>>,
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    pub fn component_metadata(&self) -> &golem_common::model::component::ComponentDto {
+    pub fn component_metadata(&self) -> &CachableComponent {
         &self.state.component_metadata
     }
 
@@ -2636,7 +2636,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: golem_common::model::component::ComponentDto,
+    component_metadata: CachableComponent,
 
     total_linear_memory_size: u64,
 
@@ -2702,7 +2702,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: golem_common::model::component::ComponentDto,
+        component_metadata: CachableComponent,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,

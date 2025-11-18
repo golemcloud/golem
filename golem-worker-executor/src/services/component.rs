@@ -19,7 +19,9 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::component::{
+    CachableComponent, ComponentDto, ComponentId, ComponentRevision,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -43,7 +45,7 @@ pub trait ComponentService: Send + Sync {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
+    ) -> Result<(Component, CachableComponent), WorkerExecutorError>;
 
     // If a version is provided, deleted components will also be returned.
     // If no version is provided, only the latest non-deleted version is returned.
@@ -51,6 +53,13 @@ pub trait ComponentService: Send + Sync {
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
+    ) -> Result<CachableComponent, WorkerExecutorError>;
+
+    // Get uncached latest metadata of the component including caller specific permissions.
+    async fn get_caller_specific_latest_metadata(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, WorkerExecutorError>;
 
     /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
@@ -65,7 +74,7 @@ pub trait ComponentService: Send + Sync {
 
     /// Returns all the component metadata the implementation has cached.
     /// This is useful for some mock/local implementations.
-    async fn all_cached_metadata(&self) -> Vec<ComponentDto>;
+    async fn all_cached_metadata(&self) -> Vec<CachableComponent>;
 }
 
 pub fn configured(
@@ -88,7 +97,7 @@ pub fn configured(
 
 pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
+    component_metadata_cache: Cache<ComponentKey, (), CachableComponent, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
 }
@@ -120,7 +129,7 @@ impl ComponentService for ComponentServiceDefault {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
+    ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
         let key = ComponentKey {
             component_id: component_id.clone(),
             component_version,
@@ -227,7 +236,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<CachableComponent, WorkerExecutorError> {
         match forced_version {
             Some(version) => {
                 let client = self.registry_client.clone();
@@ -252,7 +261,7 @@ impl ComponentService for ComponentServiceDefault {
                                             "Failed getting component metadata: {e}"
                                         ))
                                     })?;
-                                Ok(metadata)
+                                Ok(metadata.into())
                             })
                         },
                     )
@@ -276,13 +285,41 @@ impl ComponentService for ComponentServiceDefault {
                             component_id: component_id.clone(),
                             component_version: metadata.revision,
                         },
-                        || Box::pin(async move { Ok(metadata) }),
+                        || Box::pin(async move { Ok(metadata.into()) }),
                     )
                     .await?;
 
                 Ok(metadata)
             }
         }
+    }
+
+    async fn get_caller_specific_latest_metadata(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ComponentDto, WorkerExecutorError> {
+        let metadata = self
+            .registry_client
+            .get_latest_component_metadata(component_id, auth_ctx)
+            .await
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}"))
+            })?;
+
+        let metadata_clone = metadata.clone();
+
+        self.component_metadata_cache
+            .get_or_insert_simple(
+                &ComponentKey {
+                    component_id: component_id.clone(),
+                    component_version: metadata.revision,
+                },
+                || Box::pin(async move { Ok(metadata_clone.into()) }),
+            )
+            .await?;
+
+        Ok(metadata)
     }
 
     async fn resolve_component(
@@ -309,7 +346,7 @@ impl ComponentService for ComponentServiceDefault {
         Ok(component.map(|c| c.id))
     }
 
-    async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
+    async fn all_cached_metadata(&self) -> Vec<CachableComponent> {
         self.component_metadata_cache
             .iter()
             .await
@@ -328,7 +365,7 @@ struct ComponentKey {
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentKey, (), ComponentDto, WorkerExecutorError> {
+) -> Cache<ComponentKey, (), CachableComponent, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -353,126 +390,4 @@ fn create_component_cache(
         },
         "component",
     )
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct ComponentSlug {
-    account_email: Option<String>,
-    application_name: Option<String>,
-    environment_name: Option<String>,
-    component_name: String,
-}
-
-impl ComponentSlug {
-    pub fn parse(str: &str) -> Result<Self, String> {
-        // TODO: We probably want more validations here.
-        if str.is_empty() {
-            Err("Empty component references are not allowed")?;
-        };
-
-        let mut parts = str.split("/").collect::<Vec<_>>();
-
-        if parts.is_empty() || parts.len() > 4 {
-            Err("Unexpected number of \"/\"-delimited parts in component reference")?
-        };
-
-        if parts.iter().any(|p| p.is_empty()) {
-            Err("Empty part in the component reference")?
-        };
-
-        parts.reverse();
-
-        Ok(ComponentSlug {
-            account_email: parts.get(3).map(|s| s.to_string()),
-            application_name: parts.get(2).map(|s| s.to_string()),
-            environment_name: parts.get(1).map(|s| s.to_string()),
-            component_name: parts[0].to_string(), // safe due to the check above
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ComponentSlug;
-    use test_r::test;
-
-    #[test]
-    fn parse_component() {
-        let res = ComponentSlug::parse("foobar");
-        assert_eq!(
-            res,
-            Ok(ComponentSlug {
-                account_email: None,
-                application_name: None,
-                environment_name: None,
-                component_name: "foobar".to_string()
-            })
-        )
-    }
-
-    #[test]
-    fn parse_environment_component() {
-        let res = ComponentSlug::parse("bar/foobar");
-        assert_eq!(
-            res,
-            Ok(ComponentSlug {
-                account_email: None,
-                application_name: None,
-                environment_name: Some("bar".to_string()),
-                component_name: "foobar".to_string()
-            })
-        )
-    }
-
-    #[test]
-    fn parse_application_environment_component() {
-        let res = ComponentSlug::parse("foo/bar/foobar");
-        assert_eq!(
-            res,
-            Ok(ComponentSlug {
-                account_email: None,
-                application_name: Some("foo".to_string()),
-                environment_name: Some("bar".to_string()),
-                component_name: "foobar".to_string()
-            })
-        )
-    }
-
-    #[test]
-    fn parse_account_application_environment_component() {
-        let res = ComponentSlug::parse("foo@golem.cloud/foo/bar/foobar");
-        assert_eq!(
-            res,
-            Ok(ComponentSlug {
-                account_email: Some("foo@golem.cloud".to_string()),
-                application_name: Some("foo".to_string()),
-                environment_name: Some("bar".to_string()),
-                component_name: "foobar".to_string()
-            })
-        )
-    }
-
-    #[test]
-    fn reject_longer() {
-        let res = ComponentSlug::parse("toolong/foo@golem.cloud/foo/bar/foobar");
-        assert!(res.is_err())
-    }
-
-    #[test]
-    fn reject_empty() {
-        let res = ComponentSlug::parse("");
-        assert!(res.is_err())
-    }
-
-    #[test]
-    fn reject_empty_group_1() {
-        let res = ComponentSlug::parse("foo/");
-        assert!(res.is_err())
-    }
-
-    #[test]
-    fn reject_empty_group_2() {
-        let res = ComponentSlug::parse("/foo");
-        assert!(res.is_err())
-    }
 }

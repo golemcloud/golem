@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext, TestWorkerExecutor};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use anyhow::anyhow;
 use assert2::{check, let_assert};
 use axum::routing::get;
@@ -40,6 +39,10 @@ use golem_wasm::analysis::{
 };
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor_test_utils::{
+    start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies,
+};
 use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;

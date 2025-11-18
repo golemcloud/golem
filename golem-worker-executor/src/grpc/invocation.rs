@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::WorkerId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentDto;
+use golem_common::model::component::CachableComponent;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -450,7 +450,7 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentRevisi
 }
 
 fn resolve_function<'t>(
-    component: &'t ComponentDto,
+    component: &'t CachableComponent,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
