@@ -190,10 +190,9 @@ pub fn remove_async_trait_attrs(impl_block: &mut syn::ItemImpl) {
 
 pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
     let path = attr.path();
+
     path.is_ident("async_trait")
         || path.is_ident("async_trait::async_trait")
-        || path.is_ident("golem_rust::async_trait")
-        || path.is_ident("golem_rust::async_trait::async_trait")
 }
 
 fn is_multimodal_type(ty: &Type) -> bool {
