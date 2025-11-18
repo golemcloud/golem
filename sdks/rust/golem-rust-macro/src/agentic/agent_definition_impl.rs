@@ -20,13 +20,18 @@ use crate::agentic::helpers::{
     extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
     FunctionInputInfo, FunctionOutputInfo,
 };
-use crate::agentic::{async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error, no_constructor_method_error};
+use crate::agentic::{
+    async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal,
+    multiple_constructor_methods_error, no_constructor_method_error,
+};
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
 
-    let has_async_trait_attribute =
-        item_trait.attrs.iter().any(|attr| is_async_trait_attr(attr));
+    let has_async_trait_attribute = item_trait
+        .attrs
+        .iter()
+        .any(|attr| is_async_trait_attr(attr));
 
     if has_async_trait_attribute {
         return async_trait_in_agent_definition_error(&item_trait).into();

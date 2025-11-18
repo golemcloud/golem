@@ -17,7 +17,7 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, is_constructor_method, has_async_trait_attribute, DefaultOrMultimodal,
+    get_function_kind, has_async_trait_attribute, is_constructor_method, DefaultOrMultimodal,
     FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate,
 };
 
