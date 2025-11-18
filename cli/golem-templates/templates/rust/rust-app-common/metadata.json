@@ -5,6 +5,6 @@
   "requiresGolemHostWIT": true,
   "requiresWASI": true,
   "witDepsPaths": [
-    "golem-temp/wit/deps"
+    ".wit/wit/deps"
   ]
 }
