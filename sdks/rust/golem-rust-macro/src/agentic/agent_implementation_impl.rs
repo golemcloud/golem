@@ -39,9 +39,8 @@ fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
         || path.is_ident("async_trait::async_trait")
         || path.is_ident("golem_rust::async_trait")
         || path.is_ident("golem_rust::async_trait::async_trait")
-        || path.is_ident("tokio::main")  // optional safeguard
+        || path.is_ident("tokio::main") // optional safeguard
 }
-
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let impl_block = match parse_impl_block(&item) {
