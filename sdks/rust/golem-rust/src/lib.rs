@@ -143,6 +143,9 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
+#[cfg(feature = "export_golem_agentic")]
+pub use ctor as ctor;
+
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {
     use wit_bindgen::generate;

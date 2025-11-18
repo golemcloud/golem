@@ -442,13 +442,16 @@ fn generate_register_initiator_fn(
         trait_name_str_raw.to_lowercase()
     );
 
+    // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+    // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
     quote! {
-        #[::ctor::ctor]
-        fn #register_initiator_fn_name() {
-            golem_rust::agentic::register_agent_initiator(
-                #trait_name_str_raw.to_string().as_str(),
-                std::sync::Arc::new(#initiator_ident)
-            );
-        }
+        ::golem_rust::ctor::__support::ctor_parse!(
+            #[ctor] fn #register_initiator_fn_name() {
+                golem_rust::agentic::register_agent_initiator(
+                    #trait_name_str_raw.to_string().as_str(),
+                    std::sync::Arc::new(#initiator_ident)
+                );  
+            } 
+        );
     }
 }

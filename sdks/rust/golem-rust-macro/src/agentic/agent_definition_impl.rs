@@ -36,15 +36,16 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
 
             let register_fn_name = get_register_function_ident(&item_trait);
 
+            // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+            // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
             let register_fn = quote! {
-                #[::ctor::ctor]
-                fn #register_fn_name() {
+                ::golem_rust::ctor::__support::ctor_parse!(#[ctor]fn #register_fn_name() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
                     );
-                }
+                });
             };
 
             let result = quote! {
