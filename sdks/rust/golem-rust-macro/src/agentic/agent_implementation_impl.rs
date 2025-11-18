@@ -16,15 +16,17 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemImpl;
 
-use crate::agentic::helpers::{get_function_kind, is_constructor_method, remove_async_trait_attrs, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate};
-
+use crate::agentic::helpers::{
+    get_function_kind, is_constructor_method, remove_async_trait_attrs, DefaultOrMultimodal,
+    FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate,
+};
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
         Err(e) => return e.to_compile_error().into(),
     };
-    
+
     remove_async_trait_attrs(&mut impl_block);
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
