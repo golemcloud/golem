@@ -40,6 +40,7 @@ import {
 } from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
 import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
+import { ParameterDetail } from './mapping/values/dataValue';
 
 export function getConstructorDataSchema(
   agentClassName: string,
@@ -67,8 +68,13 @@ export function getConstructorDataSchema(
         );
       }
 
-      const typeInfoInternals = multiModalDetails.val.map(
-        ([name, , typeInfo]) => [name, typeInfo] as [string, TypeInfoInternal],
+      const typeInfoInternals: ParameterDetail[] = multiModalDetails.val.map(
+        ([name, , typeInfo]) => {
+          return {
+            name: name,
+            type: typeInfo,
+          };
+        },
       );
 
       const schemaDetails = multiModalDetails.val.map(
@@ -260,8 +266,13 @@ export function buildMethodInputSchema(
         );
       }
 
-      const typeInfoInternals = multiModalDetails.val.map(
-        ([name, , typeInfo]) => [name, typeInfo] as [string, TypeInfoInternal],
+      const typeInfoInternals: ParameterDetail[] = multiModalDetails.val.map(
+        ([name, , typeInfo]) => {
+          return {
+            name: name,
+            type: typeInfo,
+          };
+        },
       );
 
       const schemaDetails = multiModalDetails.val.map(
@@ -323,7 +334,7 @@ export function buildMethodInputSchema(
 
 type TypeDetails =
   | { tag: 'analysed'; val: AnalysedType }
-  | { tag: 'multimodal'; val: [string, TypeInfoInternal][] }
+  | { tag: 'multimodal'; val: ParameterDetail[] }
   | { tag: 'unstructured-text' }
   | { tag: 'unstructured-binary' };
 
@@ -355,8 +366,13 @@ export function buildOutputSchema(
       );
     }
 
-    const multiModalTypeInfos = multiModalDetails.val.map(
-      ([name, , typeInfo]) => [name, typeInfo] as [string, TypeInfoInternal],
+    const multiModalTypeInfos: ParameterDetail[] = multiModalDetails.val.map(
+      ([name, , typeInfo]) => {
+        return {
+          name: name,
+          type: typeInfo,
+        };
+      },
     );
 
     const schemaDetails = multiModalDetails.val.map(

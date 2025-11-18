@@ -853,8 +853,8 @@ function deserializeReturnValue(
 
   const result = deserializeDataValue(returnValue, [
     {
-      parameterName: 'return-value',
-      parameterTypeInfo: returnTypeAnalysedType,
+      name: 'return-value',
+      type: returnTypeAnalysedType,
     },
   ]);
 

@@ -437,9 +437,9 @@ function convertToValue(
       if (Array.isArray(arg)) {
         for (const elem of arg) {
           const index = types.findIndex((type) => {
-            switch (type.parameterTypeInfo.tag) {
+            switch (type.type.tag) {
               case 'analysed':
-                return matchesType(elem, type.parameterTypeInfo.val);
+                return matchesType(elem, type.type.val);
 
               case 'unstructured-binary':
                 const isObjectBinary =
@@ -465,7 +465,7 @@ function convertToValue(
             }
           });
 
-          const result = convertToValue(arg[index], types[index].parameterTypeInfo);
+          const result = convertToValue(arg[index], types[index].type);
 
           if (Either.isLeft(result)) {
             return Either.left(
@@ -536,8 +536,8 @@ function deserializeRpcResult(
       const result = Either.map(
         deserializeDataValue(dataValue, [
           {
-            parameterName: 'return-value',
-            parameterTypeInfo: typeInfoInternal,
+            name: 'return-value',
+            type: typeInfoInternal,
           },
         ]),
         (values) => values[0],
@@ -573,8 +573,8 @@ function deserializeRpcResult(
       const textResult = Either.map(
         deserializeDataValue(dataValueText, [
           {
-            parameterName: 'return-value',
-            parameterTypeInfo: typeInfoInternal,
+            name: 'return-value',
+            type: typeInfoInternal,
           },
         ]),
         (values) => values[0],
@@ -653,10 +653,10 @@ function deserializeRpcResult(
 
                   const elementValue = convertNonMultimodalValueToElementValue(
                     caseValue,
-                    paramDetail.parameterTypeInfo,
+                    paramDetail.type,
                   );
 
-                  return [paramDetail.parameterName, elementValue];
+                  return [paramDetail.name, elementValue];
 
                 default:
                   throw new Error(
