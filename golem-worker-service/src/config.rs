@@ -32,7 +32,6 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: GatewaySessionStorageConfig,
-    pub component_service: ComponentServiceConfig,
     pub db: DbConfig,
     pub port: u16,
     pub custom_request_port: u16,
@@ -127,7 +126,6 @@ impl Default for WorkerServiceConfig {
                 foreign_keys: false,
             }),
             gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
-            component_service: ComponentServiceConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
@@ -205,19 +203,6 @@ impl Default for GatewaySessionStorageConfig {
 impl GatewaySessionStorageConfig {
     pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceConfig {
-    pub cache_capacity: usize,
-}
-
-impl Default for ComponentServiceConfig {
-    fn default() -> Self {
-        Self {
-            cache_capacity: 1000,
-        }
     }
 }
 

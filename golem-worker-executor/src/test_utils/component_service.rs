@@ -20,7 +20,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::ComponentDto;
+use golem_common::model::component::{CachableComponent, ComponentDto};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -283,7 +283,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
+    ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
         let key = CacheKey {
             component_id: component_id.clone(),
             component_version,
@@ -312,14 +312,14 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             )
             .await?;
 
-        Ok((component, metadata.into()))
+        Ok((component, ComponentDto::from(metadata).into()))
     }
 
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
+    ) -> Result<CachableComponent, WorkerExecutorError> {
         match forced_version {
             Some(version) => self.get_metadata_for_version(component_id, version).await,
             None => self.get_latest_metadata(component_id).await,
@@ -350,19 +350,13 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             .cloned())
     }
 
-    async fn all_cached_metadata(&self) -> Vec<golem_common::model::component::ComponentDto> {
+    async fn all_cached_metadata(&self) -> Vec<CachableComponent> {
         self.index
             .read()
             .await
             .metadata
             .values()
-            .map(|local_metadata| {
-                warn!(
-                    "all_cached_metadata returning: {} ({})",
-                    local_metadata.component_id, local_metadata.component_name
-                );
-                golem_common::model::component::ComponentDto::from(local_metadata.clone())
-            })
+            .map(|local_metadata| ComponentDto::from(local_metadata.clone()).into())
             .collect()
     }
 }

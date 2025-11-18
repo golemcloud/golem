@@ -80,7 +80,7 @@ use golem_common::model::account::{AccountId, PlanId};
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentType};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{

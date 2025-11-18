@@ -141,6 +141,9 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
+        // NOTE: This is caller specific and cannot be cached independently of the caller. Use CachableComponent if you need
+        // to cache and share components between callers.
+        // TODO: this probably wants to be allowed_actions instead, consolidating auth in the registry service
         pub environment_roles_from_shares: HashSet<EnvironmentRole>
     }
 

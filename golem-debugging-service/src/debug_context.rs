@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentDto, ComponentFilePath, PluginPriority};
+use golem_common::model::component::{CachableComponent, ComponentRevision};
+use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -446,7 +446,7 @@ impl DynamicLinking<Self> for DebugContext {
         engine: &Engine,
         linker: &mut Linker<Self>,
         component: &Component,
-        component_metadata: &ComponentDto,
+        component_metadata: &CachableComponent,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -617,7 +617,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &ComponentDto {
+    fn component_metadata(&self) -> &CachableComponent {
         self.durable_ctx.component_metadata()
     }
 

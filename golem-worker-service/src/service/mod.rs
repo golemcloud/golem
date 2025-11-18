@@ -78,7 +78,7 @@ use golem_common::model::RetryConfig;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 // use golem_service_base::storage::blob::BlobStorage;
 use self::auth::{AuthService, RemoteAuthService};
-use self::component::{CachedComponentService, RemoteComponentService};
+use self::component::RemoteComponentService;
 use self::limit::{LimitService, RemoteLimitService};
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use std::sync::Arc;
@@ -230,10 +230,8 @@ impl Services {
         //     dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
         // > = Arc::new(HttpApiDefinitionValidator {});
 
-        let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
-            Arc::new(RemoteComponentService::new(registry_service_client.clone())),
-            config.component_service.cache_capacity,
-        ));
+        let component_service: Arc<dyn ComponentService> =
+            Arc::new(RemoteComponentService::new(registry_service_client.clone()));
 
         // let identity_provider = Arc::new(DefaultIdentityProvider);
 
