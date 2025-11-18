@@ -25,7 +25,7 @@ use golem_test_framework::dsl::{
     worker_error_message, worker_error_underlying_error, TestDsl,
 };
 use golem_wasm::{IntoValueAndType, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use std::collections::HashMap;

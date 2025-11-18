@@ -14,7 +14,7 @@
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
-use golem_worker_executor::test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
+use golem_worker_executor_test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::atomic::AtomicU16;

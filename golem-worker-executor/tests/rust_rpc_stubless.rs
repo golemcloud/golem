@@ -21,7 +21,7 @@ use golem_common::model::oplog::WorkerError;
 use golem_test_framework::dsl::{worker_error_underlying_error, TestDsl};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use std::collections::HashMap;

@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use golem_common::model::{WorkerId, WorkerStatus};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use redis::AsyncCommands;

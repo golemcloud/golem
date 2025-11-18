@@ -24,7 +24,7 @@ use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Record, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;

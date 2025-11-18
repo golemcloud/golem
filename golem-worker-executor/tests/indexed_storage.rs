@@ -24,7 +24,7 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageNamespace, ScanCursor,
 };
-use golem_worker_executor::test_utils::WorkerExecutorTestDependencies;
+use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
 use std::sync::Arc;

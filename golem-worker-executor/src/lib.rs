@@ -26,9 +26,6 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
-#[cfg(feature = "testing")]
-pub mod test_utils;
-
 #[cfg(test)]
 test_r::enable!();
 

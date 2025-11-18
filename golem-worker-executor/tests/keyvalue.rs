@@ -16,7 +16,7 @@ use crate::Tracing;
 use assert2::check;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use test_r::{inherit_test_dep, test};

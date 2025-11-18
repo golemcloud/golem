@@ -14,6 +14,7 @@ members = [
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor",
+    "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
     "golem-wasm",
@@ -99,6 +100,7 @@ golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
 golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
 golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
+golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
 
 

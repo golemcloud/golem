@@ -20,7 +20,7 @@ use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;

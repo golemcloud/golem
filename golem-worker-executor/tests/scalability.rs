@@ -18,7 +18,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use std::future::Future;

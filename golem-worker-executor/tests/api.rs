@@ -39,7 +39,7 @@ use golem_wasm::analysis::{
 };
 use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies,
 };

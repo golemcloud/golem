@@ -22,7 +22,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use log::info;

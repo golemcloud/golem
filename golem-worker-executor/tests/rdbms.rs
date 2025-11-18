@@ -25,7 +25,7 @@ use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use serde_json::json;

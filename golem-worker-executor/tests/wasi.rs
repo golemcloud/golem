@@ -30,7 +30,7 @@ use golem_test_framework::dsl::{
 };
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::{HeaderMap, StatusCode};
@@ -1688,7 +1688,7 @@ async fn sleep_and_awaiting_parallel_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
@@ -1746,7 +1746,7 @@ async fn sleep_below_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
@@ -1798,7 +1798,7 @@ async fn sleep_above_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor

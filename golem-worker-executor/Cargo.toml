@@ -25,11 +25,6 @@ test = false
 name = "integration"
 path = "tests/lib.rs"
 harness = false
-required-features = ["testing"]
-
-[features]
-default = []
-testing = ["dep:golem-test-framework"]
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -38,8 +33,6 @@ golem-rib = { workspace = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
-
-golem-test-framework = { workspace = true, optional = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -108,6 +101,8 @@ wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
 axum = { workspace = true }

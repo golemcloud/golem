@@ -14,8 +14,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
 };
-use golem_worker_executor::test_utils::TestWorkerExecutor;
 use golem_worker_executor::Bootstrap;
+use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
 use std::path::Path;
 use tokio::runtime::Handle;

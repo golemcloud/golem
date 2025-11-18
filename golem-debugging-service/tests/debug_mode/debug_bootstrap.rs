@@ -39,10 +39,10 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
-use golem_worker_executor::test_utils::component_service::ComponentServiceLocalFileSystem;
-use golem_worker_executor::test_utils::plugins::PluginsUnavailable;
-use golem_worker_executor::test_utils::TestWorkerExecutor;
 use golem_worker_executor::{Bootstrap, RunDetails};
+use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
+use golem_worker_executor_test_utils::plugins::PluginsUnavailable;
+use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
 use std::sync::Arc;
 use std::time::Duration;

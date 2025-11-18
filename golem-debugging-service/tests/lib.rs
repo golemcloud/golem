@@ -5,7 +5,7 @@ pub mod services;
 pub use debug_mode::dsl::TestDslDebugMode;
 pub use debug_mode::start_debug_worker_executor;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_worker_executor::test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
+use golem_worker_executor_test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
 use std::fmt::Debug;
 use std::sync::atomic::AtomicU16;
 use test_r::test_dep;

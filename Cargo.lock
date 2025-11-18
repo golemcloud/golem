@@ -3702,6 +3702,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm",
  "golem-worker-executor",
+ "golem-worker-executor-test-utils",
  "humansize",
  "log",
  "poem",
@@ -4124,6 +4125,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",
+ "golem-worker-executor-test-utils",
  "heck",
  "hex",
  "http 1.3.1",
@@ -4171,6 +4173,38 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "zstd",
+]
+
+[[package]]
+name = "golem-worker-executor-test-utils"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "applying",
+ "async-lock",
+ "async-trait",
+ "blake3",
+ "bytes 1.10.1",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-test-framework",
+ "golem-wasm",
+ "golem-worker-executor",
+ "prometheus",
+ "regex",
+ "scc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "tokio",
+ "tonic 0.14.2",
+ "tracing",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
 ]
 
 [[package]]

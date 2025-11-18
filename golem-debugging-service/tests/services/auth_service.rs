@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use golem_common::model::auth::TokenSecret;
 use golem_debugging_service::services::auth::{AuthService, AuthServiceError};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use golem_worker_executor::test_utils::TestContext;
+use golem_worker_executor_test_utils::TestContext;
 
 // This will be used by debugging service in tests
 pub struct TestAuthService {

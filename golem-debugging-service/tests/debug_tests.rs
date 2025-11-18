@@ -8,7 +8,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type::{record, str, variant};
 use golem_wasm::analysis::{NameOptionTypePair, NameTypePair};
 use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
-use golem_worker_executor::test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
+use golem_worker_executor_test_utils::{LastUniqueId, TestContext, TestWorkerExecutor};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -24,7 +24,7 @@ async fn test_connect_non_invoked_worker(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -58,7 +58,7 @@ async fn test_connect_invoked_worker(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -107,7 +107,7 @@ async fn test_connect_and_playback(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -148,7 +148,7 @@ async fn test_connect_and_playback_raw(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -283,7 +283,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -325,7 +325,7 @@ async fn test_playback_from_breakpoint(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -383,7 +383,7 @@ async fn test_playback_and_rewind(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -428,7 +428,7 @@ async fn test_playback_and_fork(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor
@@ -507,7 +507,7 @@ async fn test_playback_with_overrides(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let regular_worker_executor = golem_worker_executor::test_utils::start(deps, &context).await?;
+    let regular_worker_executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     let mut debug_executor = start_debug_worker_executor(&regular_worker_executor).await?;
 
     let component = regular_worker_executor

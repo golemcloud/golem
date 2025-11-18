@@ -20,7 +20,7 @@ use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, RetryConfig};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
-use golem_worker_executor::test_utils::{
+use golem_worker_executor_test_utils::{
     start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
 };
 use http::HeaderMap;
