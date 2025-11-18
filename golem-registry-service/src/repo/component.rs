@@ -1133,7 +1133,7 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
                         created_at, created_by, deleted,
                         size, metadata, original_env, env,
                         object_store_key, binary_hash, transformed_object_store_key)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     RETURNING component_id, revision_id, version, hash,
                         created_at, created_by, deleted,
                         size, metadata, original_env, env,

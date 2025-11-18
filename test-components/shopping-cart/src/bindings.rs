@@ -39,7 +39,7 @@ pub mod golem {
                 }
             }
             /// Represents a Golem component's version
-            pub type ComponentVersion = u64;
+            pub type ComponentRevision = u64;
             /// Configures how the executor retries failures
             #[repr(C)]
             #[derive(Clone, Copy)]
@@ -503,7 +503,7 @@ pub mod golem {
                 /// The current agent status
                 pub status: AgentStatus,
                 /// The component version the agent is running with
-                pub component_version: u64,
+                pub component_revision: u64,
                 /// The agent's current retry count
                 pub retry_count: u64,
             }
@@ -518,7 +518,7 @@ pub mod golem {
                         .field("env", &self.env)
                         .field("config-vars", &self.config_vars)
                         .field("status", &self.status)
-                        .field("component-version", &self.component_version)
+                        .field("component-revision", &self.component_revision)
                         .field("retry-count", &self.retry_count)
                         .finish()
                 }
@@ -1092,7 +1092,7 @@ pub mod golem {
                                                 env: result24,
                                                 config_vars: result33,
                                                 status: AgentStatus::_lift(l34 as u8),
-                                                component_version: l35 as u64,
+                                                component_revision: l35 as u64,
                                                 retry_count: l36 as u64,
                                             }
                                         };
@@ -1668,7 +1668,7 @@ pub mod golem {
             /// not waiting for the agent to get updated.
             pub fn update_agent(
                 agent_id: &AgentId,
-                target_version: ComponentVersion,
+                target_revision: ComponentRevision,
                 mode: UpdateMode,
             ) -> () {
                 unsafe {
@@ -1716,7 +1716,7 @@ pub mod golem {
                             _rt::as_i64(low_bits2),
                             ptr3.cast_mut(),
                             len3,
-                            _rt::as_i64(target_version),
+                            _rt::as_i64(target_revision),
                             mode.clone() as i32,
                         )
                     };
@@ -1901,7 +1901,7 @@ pub mod golem {
                         env: result21,
                         config_vars: result30,
                         status: AgentStatus::_lift(l31 as u8),
-                        component_version: l32 as u64,
+                        component_revision: l32 as u64,
                         retry_count: l33 as u64,
                     };
                     result34
@@ -2123,7 +2123,7 @@ pub mod golem {
                                     env: result26,
                                     config_vars: result35,
                                     status: AgentStatus::_lift(l36 as u8),
-                                    component_version: l37 as u64,
+                                    component_revision: l37 as u64,
                                     retry_count: l38 as u64,
                                 }
                             };
@@ -6632,8 +6632,8 @@ pub(crate) use __export_shopping_cart_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5818] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb6,\x01A\x02\x01A\x13\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5821] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb9,\x01A\x02\x01A\x13\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -6692,7 +6692,7 @@ agent-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\
 \x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\
 \x08agent-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\
 \x0boplog-index\x03\0\x0c\x01r\x02\x08agent-id\x09\x09oplog-idx\x0d\x04\0\x0apro\
-mise-id\x03\0\x0e\x01w\x04\0\x11component-version\x03\0\x10\x01r\x01\x04uuid\x05\
+mise-id\x03\0\x0e\x01w\x04\0\x12component-revision\x03\0\x10\x01r\x01\x04uuid\x05\
 \x04\0\x0aaccount-id\x03\0\x12\x01r\x01\x04uuid\x05\x04\0\x0eenvironment-id\x03\0\
 \x14\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultip\
 lieru\x11max-jitter-factor\x16\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\x0fpersi\
@@ -6712,8 +6712,8 @@ r\x03\0)\x01r\x03\x04names\x0acomparator\x20\x05values\x04\0\x10agent-env-filter
 ated-at\x01*\0\x03env\x01,\0\x10wasi-config-vars\x01.\0\x04\0\x15agent-property-\
 filter\x03\0/\x01p0\x01r\x01\x07filters1\x04\0\x10agent-all-filter\x03\02\x01p3\x01\
 r\x01\x07filters4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\
-\x08agent-id\x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x11component-versi\
-onw\x0bretry-countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01\
+\x08agent-id\x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x12component-revis\
+ionw\x0bretry-countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01\
 q\x02\x15revert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\
 \x13revert-agent-target\x03\0=\x01m\x02\x08original\x06forked\x04\0\x0bfork-resu\
 lt\x03\0?\x04\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-\
@@ -6732,27 +6732,27 @@ gin-operation\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\
 Y\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-lev\
 el\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
 \x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
-tency-key\x01]\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
-\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\x01\
-\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource-age\
-nt-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afork-ag\
-ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
-c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
-d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
-resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
-s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x17\x01r\
-\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cproduct-item\x03\0\0\
-\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timestampw\x04\0\x05or\
-der\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\0\x05\x01q\x02\
-\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\0\x07\x01@\x01\
-\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04item\x01\x01\0\x04\
-\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0bremove-item\x01\x0b\
-\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-item-quantity\x01\x0c\
-\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11get-cart-contents\x01\
-\x0e\x01@\x01\x05count}\x01\0\x04\0\x0cforce-commit\x01\x0f\x04\0\x0cgolem:it/ap\
-i\x05\x0c\x04\0\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping-cart\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-\
-bindgen-rust\x060.41.0";
+tency-key\x01]\x01@\x03\x08agent-id\x09\x0ftarget-revision\x11\x04mode\x1c\x01\0\
+\x04\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\
+\x01\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource\
+-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afor\
+k-agent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-ag\
+ent\x01c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-comp\
+onent-id\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\
+\0\x10resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08ne\
+w-names\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x17\
+\x01r\x04\x0aproduct-ids\x04names\x05pricev\x08quantityy\x04\0\x0cproduct-item\x03\
+\0\0\x01p\x01\x01r\x04\x08order-ids\x05items\x02\x05totalv\x09timestampw\x04\0\x05\
+order\x03\0\x03\x01r\x01\x08order-ids\x04\0\x12order-confirmation\x03\0\x05\x01q\
+\x02\x05error\x01s\0\x07success\x01\x06\0\x04\0\x0fcheckout-result\x03\0\x07\x01\
+@\x01\x07user-ids\x01\0\x04\0\x0finitialize-cart\x01\x09\x01@\x01\x04item\x01\x01\
+\0\x04\0\x08add-item\x01\x0a\x01@\x01\x0aproduct-ids\x01\0\x04\0\x0bremove-item\x01\
+\x0b\x01@\x02\x0aproduct-ids\x08quantityy\x01\0\x04\0\x14update-item-quantity\x01\
+\x0c\x01@\0\0\x08\x04\0\x08checkout\x01\x0d\x01@\0\0\x02\x04\0\x11get-cart-conte\
+nts\x01\x0e\x01@\x01\x05count}\x01\0\x04\0\x0cforce-commit\x01\x0f\x04\0\x0cgole\
+m:it/api\x05\x0c\x04\0\x16golem:it/shopping-cart\x04\0\x0b\x13\x01\0\x0dshopping\
+-cart\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.\
+1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
