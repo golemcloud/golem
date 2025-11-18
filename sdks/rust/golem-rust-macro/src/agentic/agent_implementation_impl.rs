@@ -339,7 +339,7 @@ fn generate_base_agent_impl(
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
     quote! {
-        #[async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait(?Send)]
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
@@ -423,7 +423,7 @@ fn generate_initiator_impl(
     quote! {
         struct #initiator_ident;
 
-        #[async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
             async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
