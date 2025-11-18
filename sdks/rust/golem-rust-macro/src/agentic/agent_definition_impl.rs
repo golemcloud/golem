@@ -25,7 +25,11 @@ use crate::agentic::{
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
+
+    item_trait
+        .attrs
+        .retain(|attr| !attr.path().is_ident("async_trait"));
 
     match get_agent_type_with_remote_client(&item_trait) {
         Ok(agent_type_with_remote_client) => {
