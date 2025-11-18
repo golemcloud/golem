@@ -115,7 +115,7 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
 }
 
 async function getDefinition(): Promise<AgentType> {
-  return getResolvedAgentOrThrow(resolvedAgent).getDefinition();
+  return getResolvedAgentOrThrow(resolvedAgent).getAgentType();
 }
 
 async function save(): Promise<Uint8Array> {

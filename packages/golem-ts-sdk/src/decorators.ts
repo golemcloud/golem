@@ -15,10 +15,8 @@
 import {
   AgentType,
   DataValue,
-  AgentError,
   AgentMode,
 } from 'golem:agent/common';
-import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
@@ -36,15 +34,12 @@ import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
-import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
 import {
   deserializeDataValue,
   ParameterDetail,
-  serializeToDataValue,
 } from './internal/mapping/values/dataValue';
 import { getRawSelfAgentId } from './host/hostapi';
 
@@ -311,9 +306,7 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        (instance as BaseAgent).getId = () => agentId;
-
-        const agentInternal = getAgentInternal(
+        const resolvedAgent = new ResolvedAgent(
           instance,
           agentClassName,
           agentId,
@@ -322,7 +315,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
         return {
           tag: 'ok',
-          val: new ResolvedAgent(agentInternal, instance),
+          val: resolvedAgent
         };
       },
     });
@@ -432,155 +425,5 @@ export function description(description: string) {
 
       AgentMethodRegistry.setDescription(className, methodName, description);
     }
-  };
-}
-
-function getAgentInternal(
-  agentInstance: any,
-  agentClassName: AgentClassName,
-  uniqueAgentId: AgentId,
-  constructorInput: DataValue,
-): AgentInternal {
-  return {
-    getId: () => {
-      return uniqueAgentId;
-    },
-
-    getParameters(): DataValue {
-      return constructorInput;
-    },
-
-    getAgentType: () => {
-      return (agentInstance as BaseAgent).getAgentType();
-    },
-
-    loadSnapshot(bytes: Uint8Array): Promise<void> {
-      return (agentInstance as BaseAgent).loadSnapshot(bytes);
-    },
-
-    saveSnapshot(): Promise<Uint8Array> {
-      return (agentInstance as BaseAgent).saveSnapshot();
-    },
-
-    invoke: async (methodName, methodArgs) => {
-      const agentMethod = agentInstance[methodName];
-
-      if (!agentMethod)
-        throw new Error(
-          `Method ${methodName} not found on agent ${agentClassName.value}`,
-        );
-
-      const methodParams = TypeMetadata.get(agentClassName.value)?.methods.get(
-        methodName,
-      )?.methodParams;
-
-      if (!methodParams) {
-        const error: AgentError = {
-          tag: 'invalid-method',
-          val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName.value}.`,
-        };
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
-      const methodParamTypes = Array.from(methodParams.entries()).map(
-        (param) => {
-          const paramName = param[0];
-
-          const paramTypeInfo = AgentMethodParamRegistry.getParamType(
-            agentClassName.value,
-            methodName,
-            paramName,
-          );
-
-          if (!paramTypeInfo) {
-            throw new Error(
-              `Internal error: Unsupported parameter ${paramName} in method ${methodName} of agent ${agentClassName.value}`,
-            );
-          }
-
-          return { parameterName: paramName, parameterTypeInfo: paramTypeInfo };
-        },
-      );
-
-      const deserializedArgs: Either.Either<any[], string> =
-        deserializeDataValue(methodArgs, methodParamTypes);
-
-      if (Either.isLeft(deserializedArgs)) {
-        const error: AgentError = {
-          tag: 'invalid-input',
-          val: `Failed to deserialize arguments for method ${methodName} in agent ${agentClassName.value}: ${deserializedArgs.val}`,
-        };
-
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
-      const methodResult = await agentMethod.apply(
-        agentInstance,
-        deserializedArgs.val,
-      );
-
-      const agentType = (agentInstance as BaseAgent).getAgentType();
-
-      const methodSignature = agentType.methods.find(
-        (m) => m.name === methodName,
-      );
-
-      if (!methodSignature) {
-        const error: AgentError = {
-          tag: 'invalid-method',
-          val: `Method ${methodName} not found in agent type ${agentClassName.value}`,
-        };
-
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
-      const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
-        agentClassName.value,
-        methodName,
-      );
-
-      if (!returnTypeAnalysed) {
-        const error: AgentError = {
-          tag: 'invalid-type',
-          val: `Return type of method ${methodName} in agent ${agentClassName.value} is not supported.`,
-        };
-
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
-      // Converting the result from method back to data-value
-      const dataValueEither = serializeToDataValue(
-        methodResult,
-        returnTypeAnalysed,
-      );
-
-      if (Either.isLeft(dataValueEither)) {
-        const agentError = createCustomError(
-          `Failed to serialize the return value from ${methodName}: ${dataValueEither.val}`,
-        );
-
-        return {
-          tag: 'err',
-          val: agentError,
-        };
-      }
-
-      return {
-        tag: 'ok',
-        val: dataValueEither.val,
-      };
-    },
   };
 }
