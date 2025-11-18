@@ -17,17 +17,26 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, is_constructor_method, remove_async_trait_attrs, DefaultOrMultimodal,
+    get_function_kind, is_constructor_method, has_async_trait_attribute, DefaultOrMultimodal,
     FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let mut impl_block = match parse_impl_block(&item) {
+    let impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
         Err(e) => return e.to_compile_error().into(),
     };
 
-    remove_async_trait_attrs(&mut impl_block);
+    let has_async_trait_attribute = has_async_trait_attribute(&impl_block);
+
+    if has_async_trait_attribute {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "#[async_trait] cannot be used along with #[agent_implementation]. #[agent_implementation] automatically handles async methods. Please remove it",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
 
@@ -341,7 +350,7 @@ fn generate_base_agent_impl(
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
     quote! {
-        #[golem_rust::async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait]
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
@@ -425,7 +434,7 @@ fn generate_initiator_impl(
     quote! {
         struct #initiator_ident;
 
-        #[golem_rust::async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
             async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {

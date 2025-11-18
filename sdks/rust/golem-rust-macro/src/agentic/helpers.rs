@@ -177,14 +177,8 @@ pub fn is_unstructured_binary(ty: &Type) -> bool {
     false
 }
 
-pub fn remove_async_trait_attrs(impl_block: &mut syn::ItemImpl) {
-    impl_block.attrs.retain(|attr| !is_async_trait_attr(attr));
-
-    for item in &mut impl_block.items {
-        if let syn::ImplItem::Fn(method) = item {
-            method.attrs.retain(|attr| !is_async_trait_attr(attr));
-        }
-    }
+pub fn has_async_trait_attribute(impl_block: &syn::ItemImpl)  -> bool{
+    impl_block.attrs.iter().any(|attr| is_async_trait_attr(attr))
 }
 
 pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
