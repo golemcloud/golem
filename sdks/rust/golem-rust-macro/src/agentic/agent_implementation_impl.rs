@@ -450,8 +450,8 @@ fn generate_register_initiator_fn(
                 golem_rust::agentic::register_agent_initiator(
                     #trait_name_str_raw.to_string().as_str(),
                     std::sync::Arc::new(#initiator_ident)
-                );  
-            } 
+                );
+            }
         );
     }
 }

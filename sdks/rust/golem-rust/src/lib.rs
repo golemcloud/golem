@@ -144,7 +144,7 @@ pub mod golem_agentic {
 }
 
 #[cfg(feature = "export_golem_agentic")]
-pub use ctor as ctor;
+pub use ctor;
 
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {
