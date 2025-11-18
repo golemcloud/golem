@@ -147,15 +147,8 @@ export class ResolvedAgent {
       );
     }
 
-    const methodParameterMetadata = this.parameterMetadata!.get(methodName);
-    if (!methodParameterMetadata) {
-      return {
-        tag: 'err',
-        val: invalidMethod(
-          `Failed to retrieve parameter metadata for method ${methodName} in agent ${this.agentClassName.value}.`,
-        ),
-      };
-    }
+    const methodParameterMetadata =
+      this.parameterMetadata!.get(methodName) ?? new Map();
 
     return {
       tag: 'ok',
