@@ -77,6 +77,10 @@ class AgentMethodRegistryImpl {
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.returnType = returnType;
   }
+
+  debugDump(): void {
+    console.log(JSON.stringify(this.registry));
+  }
 }
 
 export const AgentMethodRegistry: AgentMethodRegistryImpl =

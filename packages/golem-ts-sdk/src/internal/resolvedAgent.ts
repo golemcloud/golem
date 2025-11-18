@@ -142,22 +142,12 @@ export class ResolvedAgent {
     methodName: string,
   ): Result<Map<string, AgentMethodParamMetadata>, AgentError> {
     if (!this.parameterMetadata) {
-      const parameterMetadata = AgentMethodParamRegistry.get(
+      this.parameterMetadata = AgentMethodParamRegistry.get(
         this.agentClassName.value,
       );
-      if (!parameterMetadata) {
-        return {
-          tag: 'err',
-          val: invalidMethod(
-            `Failed to retrieve metadata for agent ${this.agentClassName.value}.`,
-          ),
-        };
-      }
-
-      this.parameterMetadata = parameterMetadata;
     }
 
-    const methodParameterMetadata = this.parameterMetadata.get(methodName);
+    const methodParameterMetadata = this.parameterMetadata!.get(methodName);
     if (!methodParameterMetadata) {
       return {
         tag: 'err',
@@ -180,10 +170,11 @@ export class ResolvedAgent {
     if (!this.methodMetadata) {
       const methodMetadata = AgentMethodRegistry.get(this.agentClassName.value);
       if (!methodMetadata) {
+        AgentMethodRegistry.debugDump();
         return {
           tag: 'err',
           val: invalidMethod(
-            `Failed to retrieve metadata for agent ${this.agentClassName.value}.`,
+            `Failed to retrieve method metadata for agent ${this.agentClassName.value}.`,
           ),
         };
       }

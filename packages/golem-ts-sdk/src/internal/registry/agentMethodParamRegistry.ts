@@ -51,6 +51,9 @@ class AgentMethodParamRegistryImpl {
   get(
     agentClassName: string,
   ): Map<string, Map<string, AgentMethodParamMetadata>> | undefined {
+    if (!this.registry.has(agentClassName)) {
+      this.registry.set(agentClassName, new Map());
+    }
     return this.registry.get(agentClassName);
   }
 
@@ -73,6 +76,10 @@ class AgentMethodParamRegistryImpl {
     const classMeta = this.registry.get(agentClassName)!;
     const methodMeta = classMeta.get(agentMethodName)!;
     methodMeta.get(paramName)!.typeInfo = typeInfo;
+  }
+
+  debugDump(): void {
+    console.log(JSON.stringify(this.registry));
   }
 }
 
