@@ -16,9 +16,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{ItemTrait, Type};
 
-use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
-};
+use crate::agentic::helpers::{extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method, FunctionInputInfo, FunctionOutputInfo};
 use crate::agentic::{
     get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
     no_constructor_method_error,
@@ -29,7 +27,7 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
 
     item_trait
         .attrs
-        .retain(|attr| !attr.path().is_ident("async_trait"));
+        .retain(|attr| !is_async_trait_attr(attr));
 
     match get_agent_type_with_remote_client(&item_trait) {
         Ok(agent_type_with_remote_client) => {

@@ -177,6 +177,25 @@ pub fn is_unstructured_binary(ty: &Type) -> bool {
     false
 }
 
+
+pub fn remove_async_trait_attrs(impl_block: &mut syn::ItemImpl) {
+    impl_block.attrs.retain(|attr| !is_async_trait_attr(attr));
+
+    for item in &mut impl_block.items {
+        if let syn::ImplItem::Fn(method) = item {
+            method.attrs.retain(|attr| !is_async_trait_attr(attr));
+        }
+    }
+}
+
+pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
+    let path = attr.path();
+    path.is_ident("async_trait")
+        || path.is_ident("async_trait::async_trait")
+        || path.is_ident("golem_rust::async_trait")
+        || path.is_ident("golem_rust::async_trait::async_trait")
+}
+
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {

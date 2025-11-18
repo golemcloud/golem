@@ -16,40 +16,15 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemImpl;
 
-use crate::agentic::helpers::{
-    get_function_kind, is_constructor_method, DefaultOrMultimodal, FunctionInputInfo,
-    FunctionOutputInfo, FutureOrImmediate,
-};
+use crate::agentic::helpers::{get_function_kind, is_constructor_method, remove_async_trait_attrs, DefaultOrMultimodal, FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate};
 
-fn remove_async_trait_attrs(impl_block: &mut syn::ItemImpl) {
-    // Remove #[async_trait] from the impl block itself
-    impl_block.attrs.retain(|attr| !is_async_trait_attr(attr));
-
-    // Remove #[async_trait] from each method
-    for item in &mut impl_block.items {
-        if let syn::ImplItem::Fn(method) = item {
-            method.attrs.retain(|attr| !is_async_trait_attr(attr));
-        }
-    }
-}
-
-fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
-    let path = attr.path();
-    path.is_ident("async_trait")
-        || path.is_ident("async_trait::async_trait")
-        || path.is_ident("golem_rust::async_trait")
-        || path.is_ident("golem_rust::async_trait::async_trait")
-        || path.is_ident("tokio::main") // optional safeguard
-}
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let impl_block = match parse_impl_block(&item) {
+    let mut impl_block = match parse_impl_block(&item) {
         Ok(b) => b,
         Err(e) => return e.to_compile_error().into(),
     };
-
-    let mut impl_block = impl_block;
-
+    
     remove_async_trait_attrs(&mut impl_block);
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
