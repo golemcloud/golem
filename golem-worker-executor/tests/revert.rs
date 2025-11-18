@@ -253,7 +253,6 @@ async fn revert_failed_worker_to_invoke_of_failed_inocation(
 
     let revert_target = {
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-        tracing::warn!("oplog: {oplog:?}");
         oplog
             .iter()
             .rfind(|op| matches!(op.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))

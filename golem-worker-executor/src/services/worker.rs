@@ -22,10 +22,10 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -53,7 +53,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         owned_worker_id: &OwnedWorkerId,
         status_value: &WorkerStatusRecord,
-        component_type: ComponentType,
+        agent_mode: AgentMode,
     );
 }
 
@@ -188,7 +188,7 @@ impl WorkerService for DefaultWorkerService {
                         self.update_cached_status(
                             owned_worker_id,
                             &last_known_status,
-                            ComponentType::Durable,
+                            AgentMode::Durable,
                         )
                         .await;
 
@@ -265,11 +265,11 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_worker_id: &OwnedWorkerId,
         status_value: &WorkerStatusRecord,
-        component_type: ComponentType,
+        agent_mode: AgentMode,
     ) {
         record_worker_call("update_status");
 
-        if component_type != ComponentType::Ephemeral {
+        if agent_mode != AgentMode::Ephemeral {
             debug!("Updating cached worker status for {owned_worker_id} to {status_value:?}");
 
             self.key_value_storage

@@ -175,7 +175,6 @@ impl DynamicHelpSections {
 pub struct ComponentStubInterfaces {
     pub stub_interface_name: String,
     pub component_name: AppComponentName,
-    pub is_ephemeral: bool,
     pub exported_interfaces_per_stub_resource: BTreeMap<String, String>,
 }
 
@@ -1102,18 +1101,8 @@ impl ComponentProperties {
         self.component_type.unwrap_or_default()
     }
 
-    pub fn is_ephemeral(&self) -> bool {
-        self.component_type() == AppComponentType::Ephemeral
-    }
-
-    pub fn is_durable(&self) -> bool {
-        self.component_type() == AppComponentType::Durable
-    }
-
     pub fn is_deployable(&self) -> bool {
-        self.component_type()
-            .as_deployable_component_type()
-            .is_some()
+        self.component_type().is_deployable()
     }
 
     fn validate_and_normalize_env(
@@ -2787,7 +2776,6 @@ mod app_builder {
 mod test {
     use crate::model::app::{AppComponentName, Application, BuildProfileName};
     use crate::model::app_raw;
-    use crate::model::component::AppComponentType;
     use assert2::{assert, check};
     use indoc::indoc;
     use test_r::test;
@@ -2825,16 +2813,13 @@ mod test {
                     linkedWasm: release-custom-a-linked-wasm
                     env:
                       A: release-custom-a-env-var
-                    componentType: ephemeral
 
             components:
               app:comp-profiled-a:
                 template: template-profiled
                 profiles:
                   release-custom:
-                    componentType: durable
                     componentWasm: release-comp-a-component-wasm
-                componentType: ephemeral
                 componentWasm: comp-a-component-wasm
         "};
 
@@ -2871,10 +2856,6 @@ mod test {
         check!(debug_props.generated_wit == "common-a-generated-wit");
         check!(release_props.generated_wit == "release-a-generated-wit");
         check!(release_custom_props.generated_wit == "release-custom-a-generated-wit");
-
-        check!(debug_props.component_type() == AppComponentType::Ephemeral);
-        check!(release_props.component_type() == AppComponentType::Ephemeral);
-        check!(release_custom_props.component_type() == AppComponentType::Durable);
 
         check!(debug_props.component_wasm == "comp-a-component-wasm");
         check!(release_props.component_wasm == "comp-a-component-wasm");

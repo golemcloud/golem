@@ -15,7 +15,6 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
-use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
@@ -732,7 +731,6 @@ impl DynamicLinkedWasmRpc {
 pub struct WasmRpcTarget {
     pub interface_name: String,
     pub component_name: String,
-    pub component_type: ComponentType,
 }
 
 impl WasmRpcTarget {
@@ -743,11 +741,7 @@ impl WasmRpcTarget {
 
 impl Display for WasmRpcTarget {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}@{}({})",
-            self.interface_name, self.component_name, self.component_type
-        )
+        write!(f, "{}@{}", self.interface_name, self.component_name)
     }
 }
 
@@ -1362,9 +1356,6 @@ mod protobuf {
             Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: golem_api_grpc::proto::golem::component::ComponentType::from(
-                    value.component_type,
-                ) as i32,
             }
         }
     }
@@ -1378,7 +1369,6 @@ mod protobuf {
             Ok(Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: value.component_type.try_into()?,
             })
         }
     }

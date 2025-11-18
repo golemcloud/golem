@@ -6,7 +6,7 @@ rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopp
 "option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
 
-rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function")
+rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc" "benchmarks")
 
