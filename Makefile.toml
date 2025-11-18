@@ -475,7 +475,7 @@ description = "Runs integration tests (group 4/4)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
