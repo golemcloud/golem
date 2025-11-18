@@ -17,7 +17,7 @@ pub struct AllPrimitives {
     pub f32v: f32,
     pub f64v: f64,
     pub boolv: bool,
-    //pub charv: char, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
+    pub charv: char,
     pub stringv: String,
 }
 
@@ -53,7 +53,7 @@ pub struct SimpleStruct {
     pub name: String,
     pub value: f64,
     pub flag: bool,
-    //pub symbol: char, // TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
+    pub symbol: char,
 }
 
 #[derive(Schema)]
@@ -73,7 +73,7 @@ pub enum SimpleEnum {
     F32(f32),
     F64(f64),
     Bool(bool),
-    // Char(char), //TODO; Uncomment after fixing https://github.com/golemcloud/golem/issues/2272
+    Char(char),
     String(String),
     Struct(SimpleStruct),
     Unit,

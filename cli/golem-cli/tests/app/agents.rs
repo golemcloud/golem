@@ -178,6 +178,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         f32v: 3.14,
         f64v: 3.1415926535,
         boolv: true,
+        charv: 'a',
         stringv: "sample"
     }
     "#;
@@ -216,6 +217,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         name: "test",
         value: 3.14,
         flag: true,
+        symbol: 't',
     }
     "#;
 
@@ -228,17 +230,20 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             name: "inner",
             value: 2.71,
             flag: false,
+            symbol: 'i',
         },
         list: [
             {
                 name: "list1",
                 value: 1.61,
                 flag: true,
+                symbol: 'l',
             },
             {
                 name: "list2",
                 value: 0.577,
                 flag: false,
+                symbol: 'm',
             }
         ],
         map: [("a", 1), ("b", 2)],
@@ -263,6 +268,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             f32v: 1.1,
             f64v: 2.2,
             boolv: true,
+            charv: 'c',
             stringv: "complex"
         },
         options-results-bounds: {
@@ -290,6 +296,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             name: "comp_simple",
             value: 5.55,
             flag: false,
+            symbol: 's',
         },
         nested-struct: {
             id: "comp_nested",
@@ -297,6 +304,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
                 name: "comp_inner",
                 value: 6.66,
                 flag: true,
+                symbol: 'i',
             },
             list: [],
             map: [],
@@ -340,6 +348,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             name: "res_inner",
             value: 7.77,
             flag: false,
+            symbol: 'r',
         },
         list: [],
         map: [],
@@ -364,6 +373,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
             name: "opt_inner",
             value: 8.88,
             flag: true,
+            symbol: 'o',
         },
         list: [],
         map: [],
