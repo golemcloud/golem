@@ -3,7 +3,6 @@ mod bindings;
 
 use crate::bindings::exports::rpc::caller_exports::caller_inline_functions::{Guest, TimelineNode};
 use crate::bindings::rpc::counters_client::counters_client::{Api, Counter};
-use crate::bindings::rpc::ephemeral_client::ephemeral_client::Api as EphemeralApi;
 use golem_rust::wasm_rpc::{AgentId, ComponentId};
 use std::env;
 use uuid::Uuid;
@@ -112,30 +111,6 @@ impl Guest for Component {
         };
         let api = Api::custom(&worker_id);
         api.blocking_bug_wasm_rpc_i32(in_)
-    }
-
-    fn ephemeral_test1() -> Vec<(String, String)> {
-        let component_id =
-            env::var("EPHEMERAL_COMPONENT_ID").expect("EPHEMERAL_COMPONENT_ID not set");
-        let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let component_id: ComponentId = component_id.into();
-        let api1 = EphemeralApi::custom(&AgentId {
-            component_id: component_id.clone(),
-            agent_id: "eph1".to_string(),
-        });
-        let name1: String = api1.blocking_get_worker_name();
-        let key1 = api1.blocking_get_idempotency_key();
-        let name2 = api1.blocking_get_worker_name();
-        let key2 = api1.blocking_get_idempotency_key();
-
-        let api2 = EphemeralApi::custom(&AgentId {
-            component_id: component_id.clone(),
-            agent_id: "eph2".to_string(),
-        });
-        let name3: String = api2.blocking_get_worker_name();
-        let key3: String = api2.blocking_get_idempotency_key();
-
-        vec![(name1, key1), (name2, key2), (name3, key3)]
     }
 
     fn bug_golem1265(s: String) -> Result<(), String> {

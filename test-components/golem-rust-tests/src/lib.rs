@@ -145,11 +145,11 @@ impl Guest for Component {
 
         let part1: String = serde_json::from_str(&part1_raw).unwrap();
 
-        let url = match fork("forked-worker") {
-            ForkResult::Original => {
+        let url = match fork() {
+            ForkResult::Original(_) => {
                 format!("http://localhost:{port}/fork-test/step2/{self_name}/original/{input}")
             }
-            ForkResult::Forked => {
+            ForkResult::Forked(_) => {
                 let self_name = get_self_metadata().agent_id.agent_id;
                 format!("http://localhost:{port}/fork-test/step2/{self_name}/forked/{input}")
             }
