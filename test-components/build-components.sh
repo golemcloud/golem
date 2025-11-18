@@ -75,7 +75,6 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   echo "Building the Rust test apps"
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
-  export GOLEM_CLI=${TEST_COMP_DIR}/../target/debug/golem-cli
   for subdir in "${rust_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
@@ -85,12 +84,12 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      $GOLEM_CLI app clean
+      golem-cli app clean
       cargo clean
     fi
 
-    $GOLEM_CLI app -b release build
-    $GOLEM_CLI app -b release copy
+    golem-cli app -b release build
+    golem-cli app -b release copy
 
     popd || exit
   done
