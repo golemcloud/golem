@@ -15,7 +15,7 @@
 import { AgentClassName } from '../../newTypes/agentClassName';
 import { TypeInfoInternal } from './typeInfoInternal';
 
-interface AgentMethodParamMetadata {
+export interface AgentMethodParamMetadata {
   typeInfo?: TypeInfoInternal;
 }
 
@@ -49,9 +49,9 @@ class AgentMethodParamRegistryImpl {
   }
 
   get(
-    agentClassName: AgentClassName,
+    agentClassName: string,
   ): Map<string, Map<string, AgentMethodParamMetadata>> | undefined {
-    return this.registry.get(agentClassName.value);
+    return this.registry.get(agentClassName);
   }
 
   getParamType(

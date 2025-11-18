@@ -38,6 +38,27 @@ export function createCustomError(error: string): AgentError {
   };
 }
 
+export function invalidMethod(error: string): AgentError {
+  return {
+    tag: 'invalid-method',
+    val: error,
+  };
+}
+
+export function invalidInput(error: string): AgentError {
+  return {
+    tag: 'invalid-input',
+    val: error,
+  };
+}
+
+export function invalidType(error: string): AgentError {
+  return {
+    tag: 'invalid-type',
+    val: error,
+  };
+}
+
 export function isAgentError(error: any): error is AgentError {
   return (
     error.tag !== undefined &&

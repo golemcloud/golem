@@ -17,15 +17,27 @@ import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentId } from '../agentId';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { BaseAgent } from '../baseAgent';
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
+import {
+  AgentMethodParamMetadata,
+  AgentMethodParamRegistry,
+} from './registry/agentMethodParamRegistry';
 import {
   deserializeDataValue,
+  ParameterDetail,
   serializeToDataValue,
 } from './mapping/values/dataValue';
 import * as Either from '../newTypes/either';
-import { AgentMethodRegistry } from './registry/agentMethodRegistry';
-import { createCustomError } from './agentError';
+import {
+  AgentMethodMetadata,
+  AgentMethodRegistry,
+} from './registry/agentMethodRegistry';
+import {
+  createCustomError,
+  invalidInput,
+  invalidMethod,
+  invalidType,
+} from './agentError';
+import { TypeInfoInternal } from './registry/typeInfoInternal';
 
 /**
  * An AgentInternal is an internal interface that represents the basic usage of an agent
@@ -36,6 +48,13 @@ export class ResolvedAgent {
   private readonly agentClassName: AgentClassName;
   private readonly uniqueAgentId: AgentId;
   private readonly constructorInput: DataValue;
+
+  private parameterMetadata:
+    | Map<string, Map<string, AgentMethodParamMetadata>>
+    | undefined = undefined;
+  private methodMetadata: Map<string, AgentMethodMetadata> | undefined =
+    undefined;
+  private readonly cachedMethodInfo: Map<string, CachedMethodInfo> = new Map();
 
   constructor(
     agentInstance: BaseAgent,
@@ -75,61 +94,31 @@ export class ResolvedAgent {
   ): Promise<Result<DataValue, AgentError>> {
     const agentMethod = (this.agentInstance as any)[methodName];
 
-    if (!agentMethod)
-      throw new Error(
-        `Method ${methodName} not found on agent ${this.agentClassName.value}`,
-      );
-
-    const methodParams = TypeMetadata.get(
-      this.agentClassName.value,
-    )?.methods.get(methodName)?.methodParams;
-
-    if (!methodParams) {
-      const error: AgentError = {
-        tag: 'invalid-method',
-        val: `Failed to retrieve parameter types for method ${methodName} in agent ${this.agentClassName.value}.`,
-      };
+    if (!agentMethod) {
       return {
         tag: 'err',
-        val: error,
+        val: invalidMethod(
+          `Method ${methodName} not found on agent ${this.agentClassName.value}`,
+        ),
       };
     }
 
-    const methodParamTypes = Array.from(methodParams.entries()).map((param) => {
-      const paramName = param[0];
-
-      const paramTypeInfo = AgentMethodParamRegistry.getParamType(
-        this.agentClassName.value,
-        methodName,
-        paramName,
-      );
-
-      if (!paramTypeInfo) {
-        throw new Error(
-          `Internal error: Unsupported parameter ${paramName} in method ${methodName} of agent ${this.agentClassName.value}`,
-        );
-      }
-
-      return {
-        parameterName: paramName,
-        parameterTypeInfo: paramTypeInfo,
-      };
-    });
+    const methodInfo = this.getCachedMethodInfo(methodName);
+    if (methodInfo.tag == 'err') {
+      return methodInfo;
+    }
 
     const deserializedArgs: Either.Either<any[], string> = deserializeDataValue(
       methodArgs,
-      methodParamTypes,
+      methodInfo.val.paramTypes,
     );
 
     if (Either.isLeft(deserializedArgs)) {
-      const error: AgentError = {
-        tag: 'invalid-input',
-        val: `Failed to deserialize arguments for method ${methodName} in agent ${this.agentClassName.value}: ${deserializedArgs.val}`,
-      };
-
       return {
         tag: 'err',
-        val: error,
+        val: invalidInput(
+          `Failed to deserialize arguments for method ${methodName} in agent ${this.agentClassName.value}: ${deserializedArgs.val}`,
+        ),
       };
     }
 
@@ -138,55 +127,18 @@ export class ResolvedAgent {
       deserializedArgs.val,
     );
 
-    const agentType = this.agentInstance.getAgentType();
-
-    const methodSignature = agentType.methods.find(
-      (m) => m.name === methodName,
-    );
-
-    if (!methodSignature) {
-      const error: AgentError = {
-        tag: 'invalid-method',
-        val: `Method ${methodName} not found in agent type ${this.agentClassName.value}`,
-      };
-
-      return {
-        tag: 'err',
-        val: error,
-      };
-    }
-
-    const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
-      this.agentClassName.value,
-      methodName,
-    );
-
-    if (!returnTypeAnalysed) {
-      const error: AgentError = {
-        tag: 'invalid-type',
-        val: `Return type of method ${methodName} in agent ${this.agentClassName.value} is not supported.`,
-      };
-
-      return {
-        tag: 'err',
-        val: error,
-      };
-    }
-
     // Converting the result from method back to data-value
     const dataValueEither = serializeToDataValue(
       methodResult,
-      returnTypeAnalysed,
+      methodInfo.val.returnType,
     );
 
     if (Either.isLeft(dataValueEither)) {
-      const agentError = createCustomError(
-        `Failed to serialize the return value from ${methodName}: ${dataValueEither.val}`,
-      );
-
       return {
         tag: 'err',
-        val: agentError,
+        val: createCustomError(
+          `Failed to serialize the return value from ${methodName}: ${dataValueEither.val}`,
+        ),
       };
     }
 
@@ -195,4 +147,127 @@ export class ResolvedAgent {
       val: dataValueEither.val,
     };
   }
+
+  private getMethodParameterMetadata(
+    methodName: string,
+  ): Result<Map<string, AgentMethodParamMetadata>, AgentError> {
+    if (!this.parameterMetadata) {
+      const parameterMetadata = AgentMethodParamRegistry.get(
+        this.agentClassName.value,
+      );
+      if (!parameterMetadata) {
+        return {
+          tag: 'err',
+          val: invalidMethod(
+            `Failed to retrieve metadata for agent ${this.agentClassName.value}.`,
+          ),
+        };
+      }
+
+      this.parameterMetadata = parameterMetadata;
+    }
+
+    const methodParameterMetadata = this.parameterMetadata.get(methodName);
+    if (!methodParameterMetadata) {
+      return {
+        tag: 'err',
+        val: invalidMethod(
+          `Failed to retrieve parameter metadata for method ${methodName} in agent ${this.agentClassName.value}.`,
+        ),
+      };
+    }
+
+    return {
+      tag: 'ok',
+      val: methodParameterMetadata,
+    };
+  }
+
+  private getMethodMetadata(): Result<
+    Map<string, AgentMethodMetadata>,
+    AgentError
+  > {
+    if (!this.methodMetadata) {
+      const methodMetadata = AgentMethodRegistry.get(this.agentClassName.value);
+      if (!methodMetadata) {
+        return {
+          tag: 'err',
+          val: invalidMethod(
+            `Failed to retrieve metadata for agent ${this.agentClassName.value}.`,
+          ),
+        };
+      }
+      this.methodMetadata = methodMetadata;
+    }
+    return {
+      tag: 'ok',
+      val: this.methodMetadata!,
+    };
+  }
+
+  private getCachedMethodInfo(
+    methodName: string,
+  ): Result<CachedMethodInfo, AgentError> {
+    const cachedInfo = this.cachedMethodInfo.get(methodName);
+    if (cachedInfo) {
+      return {
+        tag: 'ok',
+        val: cachedInfo,
+      };
+    } else {
+      const parameterMetadata = this.getMethodParameterMetadata(methodName);
+      if (parameterMetadata.tag == 'err') {
+        return parameterMetadata;
+      }
+
+      const paramTypes = [];
+      for (const [paramName, paramMeta] of parameterMetadata.val) {
+        if (!paramMeta.typeInfo) {
+          return {
+            tag: 'err',
+            val: invalidType(
+              `Unsupported parameter ${paramName} in method ${methodName} of agent ${this.agentClassName.value}`,
+            ),
+          };
+        }
+        paramTypes.push({
+          parameterName: paramName,
+          parameterTypeInfo: paramMeta.typeInfo,
+        });
+      }
+
+      const methodMetadata = this.getMethodMetadata();
+      if (methodMetadata.tag == 'err') {
+        return methodMetadata;
+      }
+
+      const method = methodMetadata.val.get(methodName);
+      const returnType = method?.returnType;
+
+      if (!returnType) {
+        return {
+          tag: 'err',
+          val: invalidType(
+            `Return type of method ${methodName} in agent ${this.agentClassName.value} is not supported.`,
+          ),
+        };
+      }
+
+      const methodInfo = {
+        paramTypes,
+        returnType,
+      };
+      this.cachedMethodInfo.set(methodName, methodInfo);
+
+      return {
+        tag: 'ok',
+        val: methodInfo,
+      };
+    }
+  }
 }
+
+type CachedMethodInfo = {
+  paramTypes: ParameterDetail[];
+  returnType: TypeInfoInternal;
+};

@@ -14,7 +14,7 @@
 
 import { TypeInfoInternal } from './typeInfoInternal';
 
-interface AgentMethodMetadata {
+export interface AgentMethodMetadata {
   prompt?: string;
   description?: string;
   returnType?: TypeInfoInternal;
