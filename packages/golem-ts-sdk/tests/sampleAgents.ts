@@ -45,7 +45,7 @@ import {
 } from './testTypes';
 
 @agent()
-class FooAgent extends BaseAgent {
+export class FooAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;

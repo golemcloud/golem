@@ -16,32 +16,42 @@ import * as Option from '../../newTypes/option';
 import { AgentInitiator } from '../agentInitiator';
 import { AgentClassName } from '../../newTypes/agentClassName';
 
-// Although only 1 agent instance can exist max in a container,
-// the container will end up keeping track of initiators of all agent classes
-// in the user code for obvious reasons
-const agentInitiators = new Map<string, AgentInitiator>();
+/**
+ * Singleton registry for agent initiators.
+ *
+ * Although only 1 agent instance can exist max in a container,
+ * the container will end up keeping track of initiators of all agent classes
+ * in the user code for obvious reasons.
+ */
+class AgentInitiatorRegistryImpl {
+  private readonly registry: Map<string, AgentInitiator>;
 
-export const AgentInitiatorRegistry = {
+  constructor() {
+    this.registry = new Map();
+  }
+
   register(
     agentTypeName: AgentClassName,
     agentInitiator: AgentInitiator,
   ): void {
-    agentInitiators.set(agentTypeName.value, agentInitiator);
-  },
+    this.registry.set(agentTypeName.value, agentInitiator);
+  }
 
   lookup(agentTypeName: string): Option.Option<AgentInitiator> {
-    return Option.fromNullable(agentInitiators.get(agentTypeName));
-  },
+    return Option.fromNullable(this.registry.get(agentTypeName));
+  }
 
   entries(): IterableIterator<[string, AgentInitiator]> {
-    return agentInitiators.entries();
-  },
+    return this.registry.entries();
+  }
 
   agentTypeNames(): Array<string> {
-    return Array.from(agentInitiators.keys());
-  },
+    return Array.from(this.registry.keys());
+  }
 
   exists(agentTypeName: string): boolean {
-    return agentInitiators.has(agentTypeName);
-  },
-};
+    return this.registry.has(agentTypeName);
+  }
+}
+
+export const AgentInitiatorRegistry: AgentInitiatorRegistryImpl = new AgentInitiatorRegistryImpl();

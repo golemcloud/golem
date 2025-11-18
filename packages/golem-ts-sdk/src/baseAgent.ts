@@ -40,6 +40,9 @@ import { Datetime } from 'golem:rpc/types@0.2.2';
  * ```
  */
 export class BaseAgent {
+  readonly agentClassName = new AgentClassName(this.constructor.name);
+  cachedAgentType: AgentType | undefined = undefined;
+
   /**
    * Returns the unique `AgentId` for this agent instance.
    *
@@ -63,18 +66,19 @@ export class BaseAgent {
    * @throws Will throw if metadata is missing or the agent is not properly registered.
    */
   getAgentType(): AgentType {
-    const agentClassName = new AgentClassName(this.constructor.name);
+    if (!this.cachedAgentType) {
+      const agentType = AgentTypeRegistry.get(this.agentClassName);
 
-    const agentType = AgentTypeRegistry.get(agentClassName);
+      if (Option.isNone(agentType)) {
+        throw new Error(
+          `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
+            `Ensure the class is decorated with @agent()`,
+        );
+      }
 
-    if (Option.isNone(agentType)) {
-      throw new Error(
-        `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
-          `Ensure the class is decorated with @agent()`,
-      );
+      this.cachedAgentType = agentType.val;
     }
-
-    return agentType.val;
+    return this.cachedAgentType;
   }
 
   /**

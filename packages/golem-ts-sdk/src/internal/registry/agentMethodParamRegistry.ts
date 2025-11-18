@@ -13,36 +13,30 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
-import { AnalysedType } from '../mapping/types/AnalysedType';
 import { TypeInfoInternal } from './typeInfoInternal';
 
-type AgentClassNameString = string;
-type AgentMethodNameString = string;
-type AgentMethodParamNameString = string;
+interface AgentMethodParamMetadata {
+  typeInfo?: TypeInfoInternal;
+}
 
-const agentMethodParamRegistry = new Map<
-  AgentClassNameString,
-  Map<
-    AgentMethodNameString,
-    Map<
-      AgentMethodParamNameString,
-      {
-        typeInfo?: TypeInfoInternal;
-      }
-    >
-  >
->();
+/**
+ * Singleton registry for agent method parameter metadata.
+ */
+class AgentMethodParamRegistryImpl {
+  private readonly registry: Map<
+    string,
+    Map<string, Map<string, AgentMethodParamMetadata>>
+  >;
 
-export const AgentMethodParamRegistry = {
-  ensureMeta(
-    agentClassName: AgentClassName,
-    method: string,
-    paramName: string,
-  ) {
-    if (!agentMethodParamRegistry.has(agentClassName.value)) {
-      agentMethodParamRegistry.set(agentClassName.value, new Map());
+  constructor() {
+    this.registry = new Map();
+  }
+
+  ensureMeta(agentClassName: string, method: string, paramName: string): void {
+    if (!this.registry.has(agentClassName)) {
+      this.registry.set(agentClassName, new Map());
     }
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
+    const classMeta = this.registry.get(agentClassName)!;
     if (!classMeta.has(method)) {
       classMeta.set(method, new Map());
     }
@@ -52,34 +46,35 @@ export const AgentMethodParamRegistry = {
     if (!methodMeta.has(paramName)) {
       methodMeta.set(paramName, {});
     }
-  },
+  }
 
-  get(agentClassName: AgentClassName) {
-    return agentMethodParamRegistry.get(agentClassName.value);
-  },
+  get(
+    agentClassName: AgentClassName,
+  ): Map<string, Map<string, AgentMethodParamMetadata>> | undefined {
+    return this.registry.get(agentClassName.value);
+  }
 
   getParamType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     agentMethodName: string,
     paramName: string,
   ): TypeInfoInternal | undefined {
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value);
+    const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(agentMethodName)?.get(paramName)?.typeInfo;
-  },
+  }
 
   setType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     agentMethodName: string,
     paramName: string,
     typeInfo: TypeInfoInternal,
-  ) {
-    AgentMethodParamRegistry.ensureMeta(
-      agentClassName,
-      agentMethodName,
-      paramName,
-    );
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
+  ): void {
+    this.ensureMeta(agentClassName, agentMethodName, paramName);
+    const classMeta = this.registry.get(agentClassName)!;
     const methodMeta = classMeta.get(agentMethodName)!;
     methodMeta.get(paramName)!.typeInfo = typeInfo;
-  },
-};
+  }
+}
+
+export const AgentMethodParamRegistry: AgentMethodParamRegistryImpl =
+  new AgentMethodParamRegistryImpl();

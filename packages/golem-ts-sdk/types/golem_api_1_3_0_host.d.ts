@@ -123,11 +123,12 @@ declare module 'golem:api/host@1.3.0' {
    */
   export function resolveAgentIdStrict(componentReference: string, agentName: string): AgentId | undefined;
   /**
-   * Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-   * and this agent continues running as well. The return value is going to be different in this agent and
-   * the forked agent.
+   * Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+   * with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+   * both sides. The newly created agent continues running from the same point, but the return value is
+   * going to be different in this agent and the forked agent.
    */
-  export function fork(newName: string): ForkResult;
+  export function fork(): ForkResult;
   export class GetAgents {
     /**
      * Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
@@ -347,7 +348,25 @@ declare module 'golem:api/host@1.3.0' {
     val: bigint
   };
   /**
-   * Indicates which agent the code is running on after `fork`
+   * Details about the fork result
    */
-  export type ForkResult = "original" | "forked";
+  export type ForkDetails = {
+    forkedPhantomId: Uuid;
+  };
+  /**
+   * Indicates which agent the code is running on after `fork`.
+   * The parameter contains details about the fork result, such as the phantom-ID of the newly
+   * created agent.
+   */
+  export type ForkResult = 
+  /** The original agent that called `fork` */
+  {
+    tag: 'original'
+    val: ForkDetails
+  } |
+  /** The new agent */
+  {
+    tag: 'forked'
+    val: ForkDetails
+  };
 }

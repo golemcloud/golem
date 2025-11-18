@@ -17,7 +17,6 @@ import * as Either from '../src/newTypes/either';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect } from 'vitest';
-import * as GolemApiHostModule from 'golem:api/host@1.3.0';
 import {
   BarAgentClassName,
   BarAgentCustomClassName,
@@ -61,8 +60,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { Multimodal, Result, UnstructuredText } from '../src';
-import { AgentClassName } from '../src';
+import { AgentId, Multimodal, Result, UnstructuredText } from '../src';
 import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
@@ -80,7 +78,7 @@ test('BarAgent can be successfully initiated', () => {
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(BarAgentCustomClassName);
+        overrideSelfAgentId(new AgentId('my-complex-agent()'));
 
         const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
 
@@ -90,19 +88,19 @@ test('BarAgent can be successfully initiated', () => {
 
         // TestInterfaceType
         const arg0 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
+          'BarAgent',
           typeRegistry.constructorArgs[0].name,
         );
 
         // string | null
         const arg1 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
+          'BarAgent',
           typeRegistry.constructorArgs[1].name,
         );
 
         // UnionType | null
         const arg2 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
+          'BarAgent',
           typeRegistry.constructorArgs[2].name,
         );
 
@@ -210,7 +208,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         unstructuredTextWithLC,
         unstructuredBinaryWithMimeType,
       ) => {
-        overrideSelfMetadataImpl(FooAgentClassName);
+        overrideSelfAgentId(new AgentId('foo-agent()'));
 
         const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -409,7 +407,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
 });
 
 test('Invoke function that takes and returns inbuilt result type', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
+  overrideSelfAgentId(new AgentId('foo-agent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -444,7 +442,7 @@ test('Invoke function that takes and returns inbuilt result type', () => {
 });
 
 test('Invoke function that takes and returns inbuilt result type with void', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
+  overrideSelfAgentId(new AgentId('foo-agent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -502,9 +500,7 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
 });
 
 test('Invoke function that takes and returns multimodal types', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
-
-  overrideSelfMetadataImpl(FooAgentClassName);
+  overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -547,7 +543,7 @@ test('Invoke function that takes and returns multimodal types', () => {
 });
 
 test('Invoke function that takes and returns typed array', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
+  overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -620,7 +616,7 @@ test('Invoke function that takes and returns typed array', () => {
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
 test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
+  overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -677,7 +673,7 @@ function initiateFooAgent(
 
   const constructorParamTypeInfoInternal =
     AgentConstructorParamRegistry.getParamType(
-      FooAgentClassName,
+      'FooAgent',
       constructorInfo.name,
     );
 
@@ -700,7 +696,9 @@ function initiateFooAgent(
   const result = agentInitiator.initiate(constructorParams);
 
   if (result.tag !== 'ok') {
-    throw new Error('Agent initiation failed');
+    throw new Error(
+      util.format('Agent initiation failed: %s', JSON.stringify(result.val)),
+    );
   }
 
   return result.val;
@@ -751,7 +749,7 @@ function createInputDataValue(
 
     const [paramName, value] = parameterNameAndValues[0];
     const paramAnalysedType = AgentMethodParamRegistry.getParamType(
-      FooAgentClassName,
+      'FooAgent',
       methodName,
       paramName,
     );
@@ -777,7 +775,7 @@ function createInputDataValue(
   const elementValues: ElementValue[] = parameterNameAndValues.map(
     ([paramName, value]) => {
       const paramAnalysedType = AgentMethodParamRegistry.getParamType(
-        FooAgentClassName,
+        'FooAgent',
         methodName,
         paramName,
       );
@@ -845,7 +843,7 @@ function deserializeReturnValue(
   }
 
   const returnTypeAnalysedType = AgentMethodRegistry.getReturnType(
-    FooAgentClassName,
+    'FooAgent',
     methodName,
   );
 
@@ -865,22 +863,6 @@ function deserializeReturnValue(
   return Either.map(result, (r) => r[0]);
 }
 
-function overrideSelfMetadataImpl(agentClassName: AgentClassName) {
-  vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
-    agentId: {
-      componentId: {
-        uuid: {
-          highBits: 42n,
-          lowBits: 99n,
-        },
-      },
-      agentId: agentClassName.asWit,
-    },
-    args: [],
-    env: [],
-    configVars: [],
-    status: 'running',
-    componentVersion: 0n,
-    retryCount: 0n,
-  }));
+function overrideSelfAgentId(agentId: AgentId) {
+  process.env.GOLEM_AGENT_ID = agentId.value;
 }

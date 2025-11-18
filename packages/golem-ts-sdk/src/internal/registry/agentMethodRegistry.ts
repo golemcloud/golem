@@ -12,77 +12,78 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentClassName } from '../../newTypes/agentClassName';
 import { TypeInfoInternal } from './typeInfoInternal';
 
-type AgentClassNameString = string;
-type AgentMethodNameString = string;
+interface AgentMethodMetadata {
+  prompt?: string;
+  description?: string;
+  returnType?: TypeInfoInternal;
+}
 
-const agentMethodRegistry = new Map<
-  AgentClassNameString,
-  Map<
-    AgentMethodNameString,
-    {
-      prompt?: string;
-      description?: string;
-      multimodal?: boolean;
-      returnType?: TypeInfoInternal;
-    }
-  >
->();
+/**
+ * Singleton registry for agent method metadata.
+ */
+class AgentMethodRegistryImpl {
+  private readonly registry: Map<string, Map<string, AgentMethodMetadata>>;
 
-export const AgentMethodRegistry = {
-  ensureMeta(agentClassName: AgentClassName, method: string) {
-    if (!agentMethodRegistry.has(agentClassName.value)) {
-      agentMethodRegistry.set(agentClassName.value, new Map());
+  constructor() {
+    this.registry = new Map();
+  }
+
+  ensureMeta(agentClassName: string, method: string): void {
+    if (!this.registry.has(agentClassName)) {
+      this.registry.set(agentClassName, new Map());
     }
-    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+    const classMeta = this.registry.get(agentClassName)!;
     if (!classMeta.has(method)) {
       classMeta.set(method, {});
     }
-  },
+  }
 
-  get(agentClassName: AgentClassName) {
-    return agentMethodRegistry.get(agentClassName.value);
-  },
+  get(
+    agentClassName: string,
+  ): Map<string, AgentMethodMetadata> | undefined {
+    return this.registry.get(agentClassName);
+  }
 
   getReturnType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     agentMethodName: string,
   ): TypeInfoInternal | undefined {
-    const classMeta = agentMethodRegistry.get(agentClassName.value);
+    const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(agentMethodName)?.returnType;
-  },
+  }
 
-  setPrompt(agentClassName: AgentClassName, method: string, prompt: string) {
-    AgentMethodRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+  setPrompt(
+    agentClassName: string,
+    method: string,
+    prompt: string,
+  ): void {
+    this.ensureMeta(agentClassName, method);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.prompt = prompt;
-  },
+  }
 
   setDescription(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     method: string,
     description: string,
-  ) {
-    AgentMethodRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+  ): void {
+    this.ensureMeta(agentClassName, method);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.description = description;
-  },
+  }
 
   setReturnType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     method: string,
     returnType: TypeInfoInternal,
-  ) {
-    AgentMethodRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+  ): void {
+    this.ensureMeta(agentClassName, method);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.returnType = returnType;
-  },
+  }
+}
 
-  setAsMultimodal(agentClassName: AgentClassName, method: string) {
-    AgentMethodRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
-    classMeta.get(method)!.multimodal = true;
-  },
-};
+export const AgentMethodRegistry: AgentMethodRegistryImpl =
+  new AgentMethodRegistryImpl();

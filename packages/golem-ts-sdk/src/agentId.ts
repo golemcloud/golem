@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DataValue, makeAgentId, parseAgentId } from 'golem:agent/host';
+import { Uuid } from 'golem:api/host@1.3.0';
+
 /**
  * Globally unique ID of an `agent`.
  *
@@ -20,7 +23,37 @@
 export class AgentId {
   readonly value: string;
 
+  parsedCache: [string, DataValue, Uuid | undefined] | undefined = undefined;
+
   constructor(agentId: string) {
     this.value = agentId;
+  }
+
+  /**
+   * Constructs an AgentId from the given agent type name, parameters and an optional phantom ID.
+   * @param agentTypeName Agent type name in kebab-case
+   * @param parameters Constructor parameter values encoded as DataValue
+   * @param phantomId Optional phantom ID
+   */
+  static make(
+    agentTypeName: string,
+    parameters: DataValue,
+    phantomId?: Uuid,
+  ): AgentId {
+    const value = makeAgentId(agentTypeName, parameters, phantomId);
+    const result = new AgentId(value);
+    result.parsedCache = [agentTypeName, parameters, phantomId];
+    return result;
+  }
+
+  /**
+   * Returns the parsed agent ID.
+   * @returns a tuple of the agent type name, parameters and an optional phantom ID
+   */
+  parsed(): [string, DataValue, Uuid | undefined] {
+    if (!this.parsedCache) {
+      this.parsedCache = parseAgentId(this.value);
+    }
+    return this.parsedCache;
   }
 }

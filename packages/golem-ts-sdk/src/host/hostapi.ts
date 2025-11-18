@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PromiseId, getPromise } from 'golem:api/host@1.3.0';
+import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.3.0';
+import { parseUuid } from 'golem:rpc/types@0.2.2';
+import * as process from 'node:process';
+import { AgentId } from '../agentId';
 
 // reexport golem host api
 export * from 'golem:api/host@1.3.0';
@@ -21,4 +24,20 @@ export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
   await promise.subscribe().promise();
   return promise.get()!;
+}
+
+/**
+ *  Generates a new random Golem Uuid
+ */
+export function randomUuid(): Uuid {
+  const uuidString = crypto.randomUUID();
+  return parseUuid(uuidString);
+}
+
+
+/**
+ * Returns the raw string agent ID of the current agent.
+ */
+export function getRawSelfAgentId(): AgentId {
+  return new AgentId(process.env.GOLEM_AGENT_ID!);
 }

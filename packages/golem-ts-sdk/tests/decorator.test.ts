@@ -22,6 +22,7 @@ import {
 } from './testUtils';
 import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
+import { FooAgent } from './sampleAgents';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -44,6 +45,16 @@ describe('Agent decorator should register the agent class and its methods into A
   if (!barAgentMethod) {
     throw new Error('fun0 method not found in BarAgent');
   }
+
+  it('should implement getAgentType properly', () => {
+    const agent = new FooAgent('input');
+    const agentType = agent.getAgentType();
+    const knownAgentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(FooAgentClassName),
+      () => new Error('FooAgent not found in AgentTypeRegistry'),
+    );
+    expect(agentType).toEqual(knownAgentType);
+  });
 
   it('should handle UnstructuredText in method params', () => {
     const elementSchema1 = getElementSchema(

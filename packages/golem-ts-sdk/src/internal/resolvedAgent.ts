@@ -16,21 +16,15 @@ import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentInternal } from './agentInternal';
 import { AgentId } from '../agentId';
-import { AgentTypeRegistry } from './registry/agentTypeRegistry';
-import * as Option from '../newTypes/option';
-import * as AgentClassName from '../newTypes/agentClassName';
 
 export class ResolvedAgent {
   readonly classInstance: any;
   private agentInternal: AgentInternal;
-  private readonly agentClassName: AgentClassName.AgentClassName;
 
   constructor(
-    agentClassName: AgentClassName.AgentClassName,
     tsAgentInternal: AgentInternal,
     originalInstance: any,
   ) {
-    this.agentClassName = agentClassName;
     this.agentInternal = tsAgentInternal;
     this.classInstance = originalInstance;
   }
@@ -51,10 +45,7 @@ export class ResolvedAgent {
   }
 
   getDefinition(): AgentType {
-    return Option.getOrThrowWith(
-      AgentTypeRegistry.get(this.agentClassName),
-      () => new Error(`Agent class ${this.agentClassName} is not registered.`),
-    );
+    return this.agentInternal.getAgentType();
   }
 
   saveSnapshot(): Promise<Uint8Array> {

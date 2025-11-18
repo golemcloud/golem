@@ -12,45 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentClassName } from '../../newTypes/agentClassName';
+interface AgentConstructorMetadata {
+  prompt?: string;
+  description?: string;
+}
 
-type AgentClassNameString = string;
+/**
+ * Singleton registry for agent constructor metadata.
+ */
+class AgentConstructorRegistryImpl {
+  private readonly registry: Map<string, AgentConstructorMetadata>;
 
-const agentConstructorRegistry = new Map<
-  AgentClassNameString,
-  {
-    multimodal?: boolean;
-    prompt?: string;
-    description?: string;
+  constructor() {
+    this.registry = new Map();
   }
->();
 
-export const AgentConstructorRegistry = {
-  ensureMeta(agentClassName: AgentClassName) {
-    if (!agentConstructorRegistry.has(agentClassName.value)) {
-      agentConstructorRegistry.set(agentClassName.value, {});
+  ensureMeta(agentClassName: string): void {
+    if (!this.registry.has(agentClassName)) {
+      this.registry.set(agentClassName, {});
     }
-  },
+  }
 
-  lookup(agentClassName: AgentClassName) {
-    return agentConstructorRegistry.get(agentClassName.value);
-  },
+  lookup(agentClassName: string): AgentConstructorMetadata | undefined {
+    return this.registry.get(agentClassName);
+  }
 
-  setAsMultiModal(agentClassName: AgentClassName) {
-    AgentConstructorRegistry.ensureMeta(agentClassName);
-    const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
-    classMeta.multimodal = true;
-  },
-
-  setPrompt(agentClassName: AgentClassName, prompt: string) {
-    AgentConstructorRegistry.ensureMeta(agentClassName);
-    const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
+  setPrompt(agentClassName: string, prompt: string): void {
+    this.ensureMeta(agentClassName);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.prompt = prompt;
-  },
+  }
 
-  setDescription(agentClassName: AgentClassName, description: string) {
-    AgentConstructorRegistry.ensureMeta(agentClassName);
-    const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
+  setDescription(agentClassName: string, description: string): void {
+    this.ensureMeta(agentClassName);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.description = description;
-  },
-};
+  }
+}
+
+export const AgentConstructorRegistry: AgentConstructorRegistryImpl =
+  new AgentConstructorRegistryImpl();

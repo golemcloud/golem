@@ -12,52 +12,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentClassName } from '../../newTypes/agentClassName';
 import { TypeInfoInternal } from './typeInfoInternal';
 
-type AgentClassNameString = string;
-type ParamName = string;
+interface AgentConstructorParamMetadata {
+  typeInfo?: TypeInfoInternal;
+}
 
-const agentConstructorParamRegistry = new Map<
-  AgentClassNameString,
-  Map<
-    ParamName,
-    {
-      typeInfo?: TypeInfoInternal;
-    }
-  >
->();
+/**
+ * Singleton registry for agent constructor parameter metadata.
+ */
+class AgentConstructorParamRegistryImpl {
+  private readonly registry: Map<
+    string,
+    Map<string, AgentConstructorParamMetadata>
+  >;
 
-export const AgentConstructorParamRegistry = {
-  ensureMeta(agentClassName: AgentClassName, paramName: string) {
-    if (!agentConstructorParamRegistry.has(agentClassName.value)) {
-      agentConstructorParamRegistry.set(agentClassName.value, new Map());
+  constructor() {
+    this.registry = new Map();
+  }
+
+  ensureMeta(agentClassName: string, paramName: string): void {
+    if (!this.registry.has(agentClassName)) {
+      this.registry.set(agentClassName, new Map());
     }
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
+    const classMeta = this.registry.get(agentClassName)!;
     if (!classMeta.has(paramName)) {
       classMeta.set(paramName, {});
     }
-  },
+  }
 
-  get(agentClassName: AgentClassName) {
-    return agentConstructorParamRegistry.get(agentClassName.value);
-  },
+  get(
+    agentClassName: string,
+  ): Map<string, AgentConstructorParamMetadata> | undefined {
+    return this.registry.get(agentClassName);
+  }
 
   getParamType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     paramName: string,
   ): TypeInfoInternal | undefined {
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value);
+    const classMeta = this.registry.get(agentClassName);
     return classMeta?.get(paramName)?.typeInfo;
-  },
+  }
 
   setType(
-    agentClassName: AgentClassName,
+    agentClassName: string,
     paramName: string,
     typeInfo: TypeInfoInternal,
-  ) {
-    AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
+  ): void {
+    this.ensureMeta(agentClassName, paramName);
+    const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(paramName)!.typeInfo = typeInfo;
-  },
-};
+  }
+}
+
+export const AgentConstructorParamRegistry: AgentConstructorParamRegistryImpl =
+  new AgentConstructorParamRegistryImpl();

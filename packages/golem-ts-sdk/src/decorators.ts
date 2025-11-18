@@ -21,7 +21,10 @@ import {
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { getRemoteClient } from './internal/clientGeneration';
+import {
+  getPhantomRemoteClient,
+  getRemoteClient,
+} from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Either from './newTypes/either';
@@ -33,7 +36,6 @@ import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getSelfMetadata } from 'golem:api/host@1.3.0';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
@@ -44,6 +46,7 @@ import {
   ParameterDetail,
   serializeToDataValue,
 } from './internal/mapping/values/dataValue';
+import { getRawSelfAgentId } from './host/hostapi';
 
 /**
  *
@@ -140,6 +143,21 @@ import {
  * const calcRemote = CalculatorAgent.get(10);
  * calcRemote.add(5);
  * ```
+ *
+ * It is possible to create remote clients to phantom agents - agents sharing the same constructor values as a normal agent,
+ * but still having their separate identity. To address a phantom agent, use the `phantom` method instead of `get`:
+ *
+ * ```ts
+ * const phantomRemote = CalculatorAgent.phantom(undefined, 10);
+ * phantomRemote.add(5);
+ *
+ * // or
+ *
+ * const phantomRemote = CalculatorAgent.phantom(parseUuid("A09F61A8-677A-40EA-9EBE-437A0DF51749"), 10);
+ * phantomRemote.add(5);
+ * ```
+ *
+ * The first parameter is the phantom ID. If undefined, a new phantom ID will be generated.
  */
 interface AgentDecoratorOptions {
   name?: string;
@@ -154,6 +172,7 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
+    // Decorator-time validation of the class name
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -173,7 +192,7 @@ export function agent(options?: AgentDecoratorOptions) {
     );
 
     const constructorDataSchema = Either.getOrElse(
-      getConstructorDataSchema(agentClassName, classMetadata),
+      getConstructorDataSchema(agentClassName.value, classMetadata),
       (err) => {
         throw new Error(
           `Schema generation failed for agent class ${agentClassName.value} due to unsupported types in constructor. ` +
@@ -184,7 +203,7 @@ export function agent(options?: AgentDecoratorOptions) {
 
     const methodSchemaEither = getAgentMethodSchema(
       classMetadata,
-      agentClassName,
+      agentClassName.value,
     );
 
     // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
@@ -206,7 +225,7 @@ export function agent(options?: AgentDecoratorOptions) {
     }
 
     const agentTypeDescription =
-      AgentConstructorRegistry.lookup(agentClassName)?.description ??
+      AgentConstructorRegistry.lookup(agentClassName.value)?.description ??
       `Constructs the agent ${agentTypeName.value}`;
 
     const constructorParameterNames = classMetadata.constructorArgs
@@ -216,7 +235,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const defaultPromptHint = `Enter the following parameters: ${constructorParameterNames}`;
 
     const agentTypePromptHint =
-      AgentConstructorRegistry.lookup(agentClassName)?.prompt ??
+      AgentConstructorRegistry.lookup(agentClassName.value)?.prompt ??
       defaultPromptHint;
 
     const agentType: AgentType = {
@@ -238,7 +257,7 @@ export function agent(options?: AgentDecoratorOptions) {
     const constructorParamTypes: ParameterDetail[] | undefined =
       TypeMetadata.get(agentClassName.value)?.constructorArgs.map((arg) => {
         const typeInfo = AgentConstructorParamRegistry.getParamType(
-          agentClassName,
+          agentClassName.value,
           arg.name,
         );
 
@@ -257,7 +276,8 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(ctor);
+    (ctor as any).get = getRemoteClient(agentClassName, ctor);
+    (ctor as any).phantom = getPhantomRemoteClient(agentClassName, ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue) => {
@@ -279,11 +299,10 @@ export function agent(options?: AgentDecoratorOptions) {
 
         const instance = new ctor(...deserializedConstructorArgs.val);
 
-        const rawAgentId = getSelfMetadata().agentId.agentId;
-
-        if (!rawAgentId.startsWith(agentTypeName.asWit)) {
+        const agentId = getRawSelfAgentId();
+        if (!agentId.value.startsWith(agentTypeName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${rawAgentId}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${agentId.value}"`,
           );
 
           return {
@@ -292,23 +311,18 @@ export function agent(options?: AgentDecoratorOptions) {
           };
         }
 
-        // When an agent is initiated using an initializer,
-        // it runs in a worker, and the name of the worker is in-fact the agent-id
-        // Example: weather-agent-{"US", celsius}
-        const uniqueAgentId = new AgentId(rawAgentId);
-
-        (instance as BaseAgent).getId = () => uniqueAgentId;
+        (instance as BaseAgent).getId = () => agentId;
 
         const agentInternal = getAgentInternal(
           instance,
           agentClassName,
-          uniqueAgentId,
+          agentId,
           constructorInput,
         );
 
         return {
           tag: 'ok',
-          val: new ResolvedAgent(agentClassName, agentInternal, instance),
+          val: new ResolvedAgent(agentInternal, instance),
         };
       },
     });
@@ -344,29 +358,28 @@ export function prompt(prompt: string) {
   ) {
     if (propertyKey === undefined) {
       const className = (target as Function).name;
-      const agentClassName = new AgentClassName(className);
 
-      const classMetadata = TypeMetadata.get(agentClassName.value);
+      const classMetadata = TypeMetadata.get(className);
       if (!classMetadata) {
         throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
         );
       }
 
-      AgentConstructorRegistry.setPrompt(agentClassName, prompt);
+      AgentConstructorRegistry.setPrompt(className, prompt);
     } else {
-      const agentClassName = new AgentClassName(target.constructor.name);
+      const className = target.constructor.name;
 
-      const classMetadata = TypeMetadata.get(agentClassName.value);
+      const classMetadata = TypeMetadata.get(className);
       if (!classMetadata) {
         throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
         );
       }
 
       const methodName = String(propertyKey);
 
-      AgentMethodRegistry.setPrompt(agentClassName, methodName, prompt);
+      AgentMethodRegistry.setPrompt(className, methodName, prompt);
     }
   };
 }
@@ -396,33 +409,28 @@ export function description(description: string) {
   ) {
     if (propertyKey === undefined) {
       const className = (target as Function).name;
-      const agentClassName = new AgentClassName(className);
 
-      const classMetadata = TypeMetadata.get(agentClassName.value);
+      const classMetadata = TypeMetadata.get(className);
       if (!classMetadata) {
         throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
         );
       }
 
-      AgentConstructorRegistry.setDescription(agentClassName, description);
+      AgentConstructorRegistry.setDescription(className, description);
     } else {
-      const agentClassName = new AgentClassName(target.constructor.name);
+      const className = target.constructor.name;
 
-      const classMetadata = TypeMetadata.get(agentClassName.value);
+      const classMetadata = TypeMetadata.get(className);
       if (!classMetadata) {
         throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+          `Class metadata not found for agent ${className}. Ensure metadata is generated.`,
         );
       }
 
       const methodName = String(propertyKey);
 
-      AgentMethodRegistry.setDescription(
-        agentClassName,
-        methodName,
-        description,
-      );
+      AgentMethodRegistry.setDescription(className, methodName, description);
     }
   };
 }
@@ -443,15 +451,7 @@ function getAgentInternal(
     },
 
     getAgentType: () => {
-      const agentType = AgentTypeRegistry.get(agentClassName);
-
-      if (Option.isNone(agentType)) {
-        throw new Error(
-          `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
-        );
-      }
-
-      return agentType.val;
+      return (agentInstance as BaseAgent).getAgentType();
     },
 
     loadSnapshot(bytes: Uint8Array): Promise<void> {
@@ -490,7 +490,7 @@ function getAgentInternal(
           const paramName = param[0];
 
           const paramTypeInfo = AgentMethodParamRegistry.getParamType(
-            agentClassName,
+            agentClassName.value,
             methodName,
             paramName,
           );
@@ -525,20 +525,9 @@ function getAgentInternal(
         deserializedArgs.val,
       );
 
-      const agentTypeOpt = AgentTypeRegistry.get(agentClassName);
+      const agentType = (agentInstance as BaseAgent).getAgentType();
 
-      if (Option.isNone(agentTypeOpt)) {
-        const error: AgentError = {
-          tag: 'invalid-method',
-          val: `Agent type ${agentClassName} not found in registry.`,
-        };
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
-      const methodSignature = agentTypeOpt.val.methods.find(
+      const methodSignature = agentType.methods.find(
         (m) => m.name === methodName,
       );
 
@@ -555,7 +544,7 @@ function getAgentInternal(
       }
 
       const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
-        agentClassName,
+        agentClassName.value,
         methodName,
       );
 

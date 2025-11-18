@@ -21,6 +21,7 @@ import {
   getAgentType,
   makeAgentId,
   RegisteredAgentType,
+  Uuid,
 } from 'golem:agent/host';
 import { AgentClassName } from '../newTypes/agentClassName';
 import {
@@ -44,19 +45,18 @@ import {
   serializeTextReferenceTsValue,
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
-import { match } from 'node:assert';
 import {
   deserializeDataValue,
   ParameterDetail,
 } from './mapping/values/dataValue';
+import { randomUuid } from '../host/hostapi';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
+  agentClassName: AgentClassName,
   ctor: T,
 ) {
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
-
-    const agentClassName = new AgentClassName(ctor.name);
 
     const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
 
@@ -68,25 +68,60 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 
     const metadata = metadataOpt.val;
 
-    const workerIdEither = getAgentId(agentClassName, args, metadata);
+    const agentIdEither = getAgentId(agentClassName, args, metadata);
+    return createProxy(instance, metadata, agentClassName, agentIdEither);
+  };
+}
 
-    if (Either.isLeft(workerIdEither)) {
-      throw new Error(workerIdEither.val);
+export function getPhantomRemoteClient<
+  T extends new (phantomId: Uuid | undefined, ...args: any[]) => any,
+>(agentClassName: AgentClassName, ctor: T) {
+  return (phantomId: Uuid | undefined, ...args: any[]) => {
+    const instance = Object.create(ctor.prototype);
+
+    const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+
+    if (Option.isNone(metadataOpt)) {
+      throw new Error(
+        `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
+      );
     }
 
-    const workerId = workerIdEither.val;
+    const metadata = metadataOpt.val;
 
-    return new Proxy(instance, {
-      get(target, prop) {
-        const val = target[prop];
-
-        if (typeof val === 'function') {
-          return getMethodProxy(metadata, prop, agentClassName, workerId);
-        }
-        return undefined;
-      },
-    });
+    const finalPhantomId = phantomId ?? randomUuid();
+    const agentIdEither = getAgentId(
+      agentClassName,
+      args,
+      metadata,
+      finalPhantomId,
+    );
+    return createProxy(instance, metadata, agentClassName, agentIdEither);
   };
+}
+
+function createProxy(
+  instance: any,
+  metadata: ClassMetadata,
+  agentClassName: AgentClassName,
+  agentIdEither: Either.Either<AgentId, string>,
+) {
+  if (Either.isLeft(agentIdEither)) {
+    throw new Error(agentIdEither.val);
+  }
+
+  const agentId = agentIdEither.val;
+
+  return new Proxy(instance, {
+    get(target, prop) {
+      const val = target[prop];
+
+      if (typeof val === 'function') {
+        return getMethodProxy(metadata, prop, agentClassName, agentId);
+      }
+      return undefined;
+    },
+  });
 }
 
 function getMethodProxy(
@@ -96,7 +131,6 @@ function getMethodProxy(
   agentId: AgentId,
 ): RemoteMethod<any[], any> {
   const methodSignature = classMetadata.methods.get(prop.toString());
-
   const methodParams = methodSignature?.methodParams;
 
   if (!methodParams) {
@@ -108,15 +142,11 @@ function getMethodProxy(
   }
 
   const paramInfo = Array.from(methodParams);
-
   const methodName = prop.toString();
-
   const methodNameKebab = convertAgentMethodNameToKebab(methodName);
-
   const functionName = `${agentClassName.asWit}.{${methodNameKebab}}`;
-
   const returnTypeInfoInternal = AgentMethodRegistry.getReturnType(
-    agentClassName,
+    agentClassName.value,
     methodName,
   );
 
@@ -203,7 +233,7 @@ function getMethodProxy(
       fnArgs.map((fnArg, index) => {
         const param = paramInfo[index];
         const typeInfo = AgentMethodParamRegistry.getParamType(
-          agentClassName,
+          agentClassName.value,
           methodName,
           param[0],
         );
@@ -290,12 +320,13 @@ function getMethodProxy(
 
 // constructorArgs is an array of any, we can have more control depending on its types
 // Probably this implementation is going to exist in various forms in Golem. Not sure if there
-// would be a way to reuse - may be a host function that retrieves the worker-id
+// is a way to reuse - may be a host function that retrieves the worker-id
 // given value in JSON format, and the wit-type of each value and agent-type name?
 function getAgentId(
   agentClassName: AgentClassName,
   constructorArgs: any[],
   classMetadata: ClassMetadata,
+  phantomId?: Uuid,
 ): Either.Either<AgentId, string> {
   // PlaceHolder implementation that finds the container-id corresponding to the agentType!
   // We need a host function - given an agent-type, it should return a component-id as proved in the prototype.
@@ -318,7 +349,7 @@ function getAgentId(
 
   const constructorParamTypes = constructorParamInfo.map((param) => {
     const typeInfoInternal = AgentConstructorParamRegistry.getParamType(
-      agentClassName,
+      agentClassName.value,
       param.name,
     );
 
@@ -394,7 +425,11 @@ function getAgentId(
     val: constructorParamWitValuesResult.val,
   };
 
-  const agentId = makeAgentId(agentClassName.value, constructorDataValue);
+  const agentId = makeAgentId(
+    agentClassName.value,
+    constructorDataValue,
+    phantomId,
+  );
 
   return Either.right({
     componentId: registeredAgentType.implementedBy,

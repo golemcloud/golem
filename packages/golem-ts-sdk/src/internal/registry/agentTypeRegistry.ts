@@ -16,33 +16,41 @@ import { AgentType } from 'golem:agent/common';
 import { AgentClassName } from '../../newTypes/agentClassName';
 import * as Option from '../../newTypes/option';
 
-type AgentClassNameString = string;
+/**
+ * Singleton registry for agent types.
+ */
+class AgentTypeRegistryImpl {
+  private readonly registry: Map<string, AgentType>;
+  private readonly classNameCache: Map<string, AgentClassName>;
+  private cachedAgents: AgentType[] | null = null;
 
-const agentTypeRegistry = new Map<AgentClassNameString, AgentType>();
+  constructor() {
+    this.registry = new Map();
+    this.classNameCache = new Map();
+  }
 
-export const AgentTypeRegistry = {
   register(agentClassName: AgentClassName, agentType: AgentType): void {
-    agentTypeRegistry.set(agentClassName.value, agentType);
-  },
-
-  entries(): IterableIterator<[AgentClassName, AgentType]> {
-    return Array.from(agentTypeRegistry.entries())
-      .map(
-        ([name, agentType]) =>
-          [new AgentClassName(name), agentType] as [AgentClassName, AgentType],
-      )
-      [Symbol.iterator]();
-  },
+    const nameValue = agentClassName.value;
+    this.registry.set(nameValue, agentType);
+    this.classNameCache.set(nameValue, agentClassName);
+    this.cachedAgents = null;
+  }
 
   getRegisteredAgents(): AgentType[] {
-    return Array.from(agentTypeRegistry.values());
-  },
+    if (this.cachedAgents === null) {
+      this.cachedAgents = Array.from(this.registry.values());
+    }
+    return this.cachedAgents;
+  }
 
   get(agentClassName: AgentClassName): Option.Option<AgentType> {
-    return Option.fromNullable(agentTypeRegistry.get(agentClassName.value));
-  },
+    return Option.fromNullable(this.registry.get(agentClassName.value));
+  }
 
   exists(agentClassName: AgentClassName): boolean {
-    return agentTypeRegistry.has(agentClassName.value);
-  },
-};
+    return this.registry.has(agentClassName.value);
+  }
+}
+
+export const AgentTypeRegistry: AgentTypeRegistryImpl =
+  new AgentTypeRegistryImpl();

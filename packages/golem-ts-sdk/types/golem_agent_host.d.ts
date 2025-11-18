@@ -11,15 +11,18 @@ declare module 'golem:agent/host' {
   export function getAgentType(agentTypeName: string): RegisteredAgentType | undefined;
   /**
    * Constructs a string agent-id from the agent type and its constructor parameters
+   * and an optional phantom ID
    * @throws AgentError
    */
-  export function makeAgentId(agentTypeName: string, input: DataValue): string;
+  export function makeAgentId(agentTypeName: string, input: DataValue, phantomId: Uuid | undefined): string;
   /**
    * Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
+   * and an optional phantom ID
    * @throws AgentError
    */
-  export function parseAgentId(agentId: string): [string, DataValue];
+  export function parseAgentId(agentId: string): [string, DataValue, Uuid | undefined];
   export type ComponentId = golemRpc022Types.ComponentId;
+  export type Uuid = golemRpc022Types.Uuid;
   export type AgentError = golemAgentCommon.AgentError;
   export type AgentType = golemAgentCommon.AgentType;
   export type DataValue = golemAgentCommon.DataValue;

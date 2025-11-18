@@ -19,7 +19,7 @@ import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { makeAgentId, parseAgentId } from 'golem:agent/host';
+import { getRawSelfAgentId } from './host/hostapi';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -123,23 +123,13 @@ async function save(): Promise<Uint8Array> {
     throw UninitializedAgentError;
   }
 
-  const textEncoder = new TextEncoder();
-
-  const agentType = resolvedAgent.val.getDefinition().typeName;
-  const agentParameters = resolvedAgent.val.getParameters();
-
-  const agentIdString = makeAgentId(agentType, agentParameters);
-  const agentIdBytes = textEncoder.encode(agentIdString);
-
   const agentSnapshot = await resolvedAgent.val.saveSnapshot();
 
-  const totalLength = 1 + 4 + agentIdBytes.length + agentSnapshot.length;
+  const totalLength = 1 + agentSnapshot.length;
   const fullSnapshot = new Uint8Array(totalLength);
   const view = new DataView(fullSnapshot.buffer);
   view.setUint8(0, 1); // version
-  view.setUint32(1, agentIdBytes.length);
-  fullSnapshot.set(agentIdBytes, 1 + 4);
-  fullSnapshot.set(agentSnapshot, 1 + 4 + agentIdBytes.length);
+  fullSnapshot.set(agentSnapshot, 1);
 
   return fullSnapshot;
 }
@@ -149,19 +139,16 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Agent is already initialized in this container`;
   }
 
-  const textDecoder = new TextDecoder();
-
   const view = new DataView(bytes.buffer);
   const version = view.getUint8(0);
   if (version !== 1) {
     throw `Unsupported snapshot version ${version}`;
   }
-  const agentIdLength = view.getUint32(1);
 
-  const agentId = textDecoder.decode(bytes.slice(1 + 4, 1 + 4 + agentIdLength));
-  const agentSnapshot = bytes.slice(1 + 4 + agentIdLength);
+  const agentSnapshot = bytes.slice(1);
 
-  const [agentTypeName, agentParameters] = parseAgentId(agentId);
+  const [agentTypeName, agentParameters, _phantomId] =
+    getRawSelfAgentId().parsed();
 
   const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 

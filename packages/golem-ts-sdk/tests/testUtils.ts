@@ -109,7 +109,7 @@ function fetchTypeFromBarAgent(
 
   if (constructorArg) {
     const typeInfo = AgentConstructorParamRegistry.getParamType(
-      BarAgentClassName,
+      "BarAgent",
       constructorArg.name,
     );
 
@@ -130,7 +130,7 @@ function fetchTypeFromBarAgent(
       Type.getTypeName(method.returnType) === typeNameInTestData
     ) {
       const returnType = AgentMethodRegistry.getReturnType(
-        BarAgentClassName,
+        "BarAgent",
         name,
       );
 
@@ -150,7 +150,7 @@ function fetchTypeFromBarAgent(
 
     if (param) {
       const typeInfo = AgentMethodParamRegistry.getParamType(
-        BarAgentClassName,
+        "BarAgent",
         name,
         param[0],
       );
