@@ -17,15 +17,22 @@ use quote::{format_ident, quote};
 use syn::{ItemTrait, Type};
 
 use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
+    extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
+    FunctionInputInfo, FunctionOutputInfo,
 };
 use crate::agentic::{
-    get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
-    no_constructor_method_error,
+    async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal,
+    multiple_constructor_methods_error, no_constructor_method_error,
 };
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as ItemTrait);
+
+    let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
+
+    if has_async_trait_attribute {
+        return async_trait_in_agent_definition_error(&item_trait).into();
+    }
 
     match get_agent_type_with_remote_client(&item_trait) {
         Ok(agent_type_with_remote_client) => {
