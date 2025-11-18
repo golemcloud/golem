@@ -21,10 +21,7 @@ export class ResolvedAgent {
   readonly classInstance: any;
   private agentInternal: AgentInternal;
 
-  constructor(
-    tsAgentInternal: AgentInternal,
-    originalInstance: any,
-  ) {
+  constructor(tsAgentInternal: AgentInternal, originalInstance: any) {
     this.agentInternal = tsAgentInternal;
     this.classInstance = originalInstance;
   }

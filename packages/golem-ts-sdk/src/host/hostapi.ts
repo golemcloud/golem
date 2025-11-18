@@ -34,7 +34,6 @@ export function randomUuid(): Uuid {
   return parseUuid(uuidString);
 }
 
-
 /**
  * Returns the raw string agent ID of the current agent.
  */

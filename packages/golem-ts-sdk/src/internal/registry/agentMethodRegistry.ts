@@ -40,9 +40,7 @@ class AgentMethodRegistryImpl {
     }
   }
 
-  get(
-    agentClassName: string,
-  ): Map<string, AgentMethodMetadata> | undefined {
+  get(agentClassName: string): Map<string, AgentMethodMetadata> | undefined {
     return this.registry.get(agentClassName);
   }
 
@@ -54,11 +52,7 @@ class AgentMethodRegistryImpl {
     return classMeta?.get(agentMethodName)?.returnType;
   }
 
-  setPrompt(
-    agentClassName: string,
-    method: string,
-    prompt: string,
-  ): void {
+  setPrompt(agentClassName: string, method: string, prompt: string): void {
     this.ensureMeta(agentClassName, method);
     const classMeta = this.registry.get(agentClassName)!;
     classMeta.get(method)!.prompt = prompt;

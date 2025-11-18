@@ -15,7 +15,8 @@ export default [
                 sourceType: 'module',
             },
             globals: {
-              'console': 'readonly'
+              'console': 'readonly',
+              'crypto': 'readonly'
             }
         },
         plugins: { '@typescript-eslint': pluginTs },

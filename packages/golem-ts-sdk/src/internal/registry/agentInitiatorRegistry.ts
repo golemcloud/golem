@@ -54,4 +54,5 @@ class AgentInitiatorRegistryImpl {
   }
 }
 
-export const AgentInitiatorRegistry: AgentInitiatorRegistryImpl = new AgentInitiatorRegistryImpl();
+export const AgentInitiatorRegistry: AgentInitiatorRegistryImpl =
+  new AgentInitiatorRegistryImpl();
