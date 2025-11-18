@@ -23,18 +23,35 @@ export function trimQuotes(s: string): string {
   return s;
 }
 
+const KEBAB_CHECK_REGEX = /^[a-z]+(-[a-z]+)*$/;
 
 export function isKebabCase(str: string): boolean {
-  return /^[a-z]+(-[a-z]+)*$/.test(str);
+  return KEBAB_CHECK_REGEX.test(str);
+}
+
+const TO_KEBAB_SOURCE_REGEX = /([a-z])([A-Z])/g;
+const TO_KEBAB_TARGET_REGEX = /[\s_]+/g;
+
+function toKebab(str: string): string {
+  return str
+    .replace(TO_KEBAB_SOURCE_REGEX, '$1-$2')
+    .replace(TO_KEBAB_TARGET_REGEX, '-')
+    .toLowerCase();
 }
 
 export function convertTypeNameToKebab(typeName: string): string {
-  return typeName
-  .replace(/([a-z])([A-Z])/g, '$1-$2')
-  .replace(/[\s_]+/g, '-')
-  .toLowerCase();
+  return toKebab(typeName);
 }
 
 export function convertOptionalTypeNameToKebab(typeName: string | undefined): string | undefined {
   return typeName ? convertTypeNameToKebab(typeName) : undefined;
 }
+
+export function convertAgentMethodNameToKebab(methodName: string): string {
+  return toKebab(methodName)
+}
+
+export function convertVariantTypeNameToKebab(typeName: string): string{
+  return toKebab(typeName)
+}
+

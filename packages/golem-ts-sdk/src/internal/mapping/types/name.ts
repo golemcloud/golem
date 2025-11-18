@@ -13,6 +13,8 @@
 // limitations under the License.
 
 
+import { convertVariantTypeNameToKebab } from './stringFormat';
+
 let variantNameGlobalIdx = 0;
 
 export function generateVariantCaseName(variantName: string | undefined, termIdx: number): string {
@@ -23,13 +25,5 @@ export function generateVariantCaseName(variantName: string | undefined, termIdx
   }
 
   const kebabCasedVariantName = convertVariantTypeNameToKebab(variantName);
-
   return `${kebabCasedVariantName}${termIdx}`
-}
-
-export function convertVariantTypeNameToKebab(typeName: string): string{
-  return typeName
-    .replace(/([a-z])([A-Z])/g, '$1-$2')
-    .replace(/[\s_]+/g, '-')
-    .toLowerCase();
 }

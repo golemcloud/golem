@@ -39,7 +39,7 @@ import {
   tuple,
 } from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
-import { convertVariantTypeNameToKebab } from './mapping/types/name';
+import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
 
 export function getConstructorDataSchema(
   agentClassName: string,

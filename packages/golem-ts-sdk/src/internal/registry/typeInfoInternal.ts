@@ -15,6 +15,7 @@
 import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 import { AnalysedType } from '../mapping/types/AnalysedType';
 import { Type } from '@golemcloud/golem-ts-types-core';
+import { ParameterDetail } from '../mapping/values/dataValue';
 
 // For all types except unstructured-*, `AnalysedType` has the max details.
 // There is no AnalysedType for unstructured-text/binary
@@ -24,6 +25,6 @@ export type TypeInfoInternal =
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
   | {
       tag: 'multimodal';
-      types: [string, TypeInfoInternal][];
+      types: ParameterDetail[];
       tsType: Type.Type;
     };

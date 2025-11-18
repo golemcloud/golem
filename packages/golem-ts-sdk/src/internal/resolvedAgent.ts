@@ -92,25 +92,15 @@ export class ResolvedAgent {
     methodName: string,
     methodArgs: DataValue,
   ): Promise<Result<DataValue, AgentError>> {
-    const agentMethod = (this.agentInstance as any)[methodName];
-
-    if (!agentMethod) {
-      return {
-        tag: 'err',
-        val: invalidMethod(
-          `Method ${methodName} not found on agent ${this.agentClassName.value}`,
-        ),
-      };
+    const methodInfoResult = this.getCachedMethodInfo(methodName);
+    if (methodInfoResult.tag == 'err') {
+      return methodInfoResult;
     }
-
-    const methodInfo = this.getCachedMethodInfo(methodName);
-    if (methodInfo.tag == 'err') {
-      return methodInfo;
-    }
+    const methodInfo = methodInfoResult.val;
 
     const deserializedArgs: Either.Either<any[], string> = deserializeDataValue(
       methodArgs,
-      methodInfo.val.paramTypes,
+      methodInfo.paramTypes,
     );
 
     if (Either.isLeft(deserializedArgs)) {
@@ -122,15 +112,15 @@ export class ResolvedAgent {
       };
     }
 
-    const methodResult = await agentMethod.apply(
+    const methodResult = await methodInfo.method.apply(
       this.agentInstance,
       deserializedArgs.val,
     );
 
-    // Converting the result from method back to data-value
+    // Converting the result from the method back to data-value
     const dataValueEither = serializeToDataValue(
       methodResult,
-      methodInfo.val.returnType,
+      methodInfo.returnType,
     );
 
     if (Either.isLeft(dataValueEither)) {
@@ -215,6 +205,17 @@ export class ResolvedAgent {
         val: cachedInfo,
       };
     } else {
+      const agentMethod = (this.agentInstance as any)[methodName];
+
+      if (!agentMethod) {
+        return {
+          tag: 'err',
+          val: invalidMethod(
+            `Method ${methodName} not found on agent ${this.agentClassName.value}`,
+          ),
+        };
+      }
+
       const parameterMetadata = this.getMethodParameterMetadata(methodName);
       if (parameterMetadata.tag == 'err') {
         return parameterMetadata;
@@ -256,6 +257,7 @@ export class ResolvedAgent {
       const methodInfo = {
         paramTypes,
         returnType,
+        method: agentMethod,
       };
       this.cachedMethodInfo.set(methodName, methodInfo);
 
@@ -270,4 +272,5 @@ export class ResolvedAgent {
 type CachedMethodInfo = {
   paramTypes: ParameterDetail[];
   returnType: TypeInfoInternal;
+  method: any;
 };
