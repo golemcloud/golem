@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, is_constructor_method, DefaultOrMultimodal, FunctionInputInfo,
-    FunctionOutputInfo, FutureOrImmediate,
+    get_function_kind, has_async_trait_attribute, is_constructor_method, DefaultOrMultimodal,
+    FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -26,6 +26,17 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Ok(b) => b,
         Err(e) => return e.to_compile_error().into(),
     };
+
+    let has_async_trait_attribute = has_async_trait_attribute(&impl_block);
+
+    if has_async_trait_attribute {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "#[async_trait] cannot be used along with #[agent_implementation]. #[agent_implementation] automatically handles async methods. Please remove it",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
 
