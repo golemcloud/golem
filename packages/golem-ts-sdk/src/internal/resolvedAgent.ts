@@ -93,7 +93,7 @@ export class ResolvedAgent {
     methodArgs: DataValue,
   ): Promise<Result<DataValue, AgentError>> {
     const methodInfoResult = this.getCachedMethodInfo(methodName);
-    if (methodInfoResult.tag == 'err') {
+    if (methodInfoResult.tag === 'err') {
       return methodInfoResult;
     }
     const methodInfo = methodInfoResult.val;
@@ -217,7 +217,7 @@ export class ResolvedAgent {
       }
 
       const parameterMetadata = this.getMethodParameterMetadata(methodName);
-      if (parameterMetadata.tag == 'err') {
+      if (parameterMetadata.tag === 'err') {
         return parameterMetadata;
       }
 
@@ -232,13 +232,13 @@ export class ResolvedAgent {
           };
         }
         paramTypes.push({
-          parameterName: paramName,
-          parameterTypeInfo: paramMeta.typeInfo,
+          name: paramName,
+          type: paramMeta.typeInfo,
         });
       }
 
       const methodMetadata = this.getMethodMetadata();
-      if (methodMetadata.tag == 'err') {
+      if (methodMetadata.tag === 'err') {
         return methodMetadata;
       }
 

@@ -46,6 +46,7 @@ import {
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
 import {
+  createSingleElementTupleDataValue,
   deserializeDataValue,
   ParameterDetail,
 } from './mapping/values/dataValue';
@@ -159,7 +160,7 @@ class WasmRpxProxyHandlerShared {
     phantomId?: Uuid,
   ): Either.Either<AgentId, string> {
     const registeredAgentTypeOpt = this.getRegisteredAgentType();
-    if (registeredAgentTypeOpt.tag == 'left') {
+    if (registeredAgentTypeOpt.tag === 'left') {
       return registeredAgentTypeOpt;
     }
     const registeredAgentType = registeredAgentTypeOpt.val;
@@ -435,13 +436,15 @@ function convertToValue(
       const values: Value.Value[] = [];
 
       if (Array.isArray(arg)) {
-        for (const elem of arg) {
-          const index = types.findIndex((type) => {
-            switch (type.type.tag) {
-              case 'analysed':
-                return matchesType(elem, type.type.val);
+        // Pre-compute type matchers to avoid redundant type checking per element
+        const typeMatchers = types.map((paramDetail) => {
+          const type = paramDetail.type;
+          switch (type.tag) {
+            case 'analysed':
+              return (elem: any) => matchesType(elem, type.val);
 
-              case 'unstructured-binary':
+            case 'unstructured-binary':
+              return (elem: any) => {
                 const isObjectBinary =
                   typeof elem === 'object' && elem !== null;
                 const keysBinary = Object.keys(elem);
@@ -450,8 +453,10 @@ function convertToValue(
                   keysBinary.includes('tag') &&
                   (elem['tag'] === 'url' || elem['tag'] === 'inline')
                 );
+              };
 
-              case 'unstructured-text':
+            case 'unstructured-text':
+              return (elem: any) => {
                 const isObject = typeof elem === 'object' && elem !== null;
                 const keys = Object.keys(elem);
                 return (
@@ -459,11 +464,15 @@ function convertToValue(
                   keys.includes('tag') &&
                   (elem['tag'] === 'url' || elem['tag'] === 'inline')
                 );
+              };
 
-              case 'multimodal':
-                throw new Error(`Nested multimodal types are not supported`);
-            }
-          });
+            case 'multimodal':
+              throw new Error(`Nested multimodal types are not supported`);
+          }
+        });
+
+        for (const elem of arg) {
+          const index = typeMatchers.findIndex((matcher) => matcher(elem));
 
           const result = convertToValue(arg[index], types[index].type);
 
@@ -523,15 +532,10 @@ function deserializeRpcResult(
 ): any {
   switch (typeInfoInternal.tag) {
     case 'analysed':
-      const dataValue: DataValue = {
-        tag: 'tuple',
-        val: [
-          {
-            tag: 'component-model',
-            val: Value.toWitValue(rpcResult),
-          },
-        ],
-      };
+      const dataValue = createSingleElementTupleDataValue({
+        tag: 'component-model',
+        val: Value.toWitValue(rpcResult),
+      });
 
       const result = Either.map(
         deserializeDataValue(dataValue, [
@@ -560,15 +564,10 @@ function deserializeRpcResult(
         );
       }
 
-      const dataValueText: DataValue = {
-        tag: 'tuple',
-        val: [
-          {
-            tag: 'unstructured-text',
-            val: textReferenceEither.val,
-          },
-        ],
-      };
+      const dataValueText = createSingleElementTupleDataValue({
+        tag: 'unstructured-text',
+        val: textReferenceEither.val,
+      });
 
       const textResult = Either.map(
         deserializeDataValue(dataValueText, [
@@ -597,25 +596,18 @@ function deserializeRpcResult(
         );
       }
 
-      const dataValueBinary: DataValue = {
-        tag: 'tuple',
-        val: [
-          {
-            tag: 'unstructured-binary',
-            val: binaryReferenceEither.val,
-          },
-        ],
-      };
-
-      const paramInfo = [
-        {
-          parameterName: 'return-value',
-          parameterTypeInfo: typeInfoInternal,
-        },
-      ];
+      const dataValueBinary = createSingleElementTupleDataValue({
+        tag: 'unstructured-binary',
+        val: binaryReferenceEither.val,
+      });
 
       const binaryResult = Either.map(
-        deserializeDataValue(dataValueBinary, paramInfo),
+        deserializeDataValue(dataValueBinary, [
+          {
+            name: 'return-value',
+            type: typeInfoInternal,
+          },
+        ]),
         (values) => values[0],
       );
 

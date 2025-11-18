@@ -384,3 +384,12 @@ function serializeMultimodalToDataValue(
     );
   }
 }
+
+export function createSingleElementTupleDataValue(
+  elementValue: ElementValue,
+): DataValue {
+  return {
+    tag: 'tuple',
+    val: [elementValue],
+  };
+}
