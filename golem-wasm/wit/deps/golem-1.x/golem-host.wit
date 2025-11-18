@@ -316,7 +316,7 @@ interface host {
     /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
     /// both sides. The newly created agent continues running from the same point, but the return value is
     /// going to be different in this agent and the forked agent.
-    fork: func(new-name: string) -> fork-result;
+    fork: func() -> fork-result;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
