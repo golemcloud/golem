@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::MultimodalSchema;
+use crate::agentic::{MultimodalSchema, Schema, UnstructuredBinary, UnstructuredText};
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
 use golem_wasm::{Value, WitValue};
+use golem_rust_macro::MultimodalSchema;
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -170,6 +171,83 @@ impl<T: MultimodalSchema> Multimodal<T> {
                 Ok(Multimodal { items })
             }
             _ => Err("Expected List value for Multimodal".to_string()),
+        }
+    }
+}
+
+pub type MultimodalSimple = Multimodal<MultimodalSimpleInput>;
+
+pub enum MultimodalSimpleInput {
+    Text(UnstructuredText),
+    Binary(UnstructuredBinary<String>)
+}
+
+impl MultimodalSchema for MultimodalSimpleInput {
+    fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
+        vec![
+            (
+                "Text".to_string(),
+                <UnstructuredText>::get_type(),
+            ),
+            (
+                "Binary".to_string(),
+                UnstructuredBinary::<String>::get_type(),
+            ),
+        ]
+    }
+
+    fn get_name(&self) -> String {
+        match self {
+            MultimodalSimpleInput::Text(_) => "Text".to_string(),
+            MultimodalSimpleInput::Binary(_) => "Binary".to_string(),
+        }
+    }
+
+    fn to_element_value(self) -> Result<(String, ElementValue), String>
+    where
+        Self: Sized
+    {
+        match self {
+            MultimodalSimpleInput::Text(text) => {
+                let elem_value = text.to_element_value()?;
+                Ok(("Text".to_string(), elem_value))
+            }
+            MultimodalSimpleInput::Binary(binary) => {
+                let elem_value = binary.to_element_value()?;
+                Ok(("Binary".to_string(), elem_value))
+            }
+        }
+    }
+
+    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
+    where
+        Self: Sized
+    {
+        let (name, value) = elem;
+        
+        
+        match name.as_str() {
+            "Text" => {
+                let schema = <UnstructuredText>::get_type();
+                let text = UnstructuredText::from_element_value(value, schema)?;
+                Ok(MultimodalSimpleInput::Text(text))
+            }
+            "Binary" => {
+                let schema = <UnstructuredBinary<String>>::get_type();
+                let binary = UnstructuredBinary::<String>::from_element_value(value, schema)?;
+                Ok(MultimodalSimpleInput::Binary(binary))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
+        }
+    }
+
+    fn to_wit_value(self) -> Result<WitValue, String>
+    where
+        Self: Sized
+    {
+        match self {
+            MultimodalSimpleInput::Text(text) => text.to_wit_value(),
+            MultimodalSimpleInput::Binary(binary) => binary.to_wit_value(),
         }
     }
 }

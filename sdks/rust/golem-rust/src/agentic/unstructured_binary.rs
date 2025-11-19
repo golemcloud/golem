@@ -116,7 +116,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
                     _ => return Err("Expected String for mime type".into()),
                 };
 
-                let mime_type = T::from_mime_type(mime_code)
+                let mime_type = T::from_string(mime_code)
                     .ok_or_else(|| format!("Failed to convert mime type '{}'", mime_code))?;
 
                 Ok(UnstructuredBinary::Inline {
@@ -138,11 +138,25 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
 pub trait AllowedMimeTypes {
     fn all() -> &'static [&'static str];
 
-    fn from_mime_type(mime_type: &str) -> Option<Self>
+    fn from_string(mime_type: &str) -> Option<Self>
     where
         Self: Sized;
 
-    fn to_string(&self) -> &'static str;
+    fn to_string(&self) -> String;
+}
+
+impl AllowedMimeTypes for String {
+    fn all() -> &'static [&'static str] {
+        &["*"] // in the schema, it would imply you can pass any mime type
+    }
+
+    fn from_string(mime_type: &str) -> Option<Self> {
+        Some(mime_type.to_string())
+    }
+
+    fn to_string(&self) -> String {
+        self.clone()
+    }
 }
 
 impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
@@ -207,7 +221,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                         ));
                     }
 
-                    let mime_type = T::from_mime_type(&mime_type).ok_or_else(|| {
+                    let mime_type = T::from_string(&mime_type).ok_or_else(|| {
                         format!(
                             "Failed to convert mime type '{}' to AllowedMimeType",
                             mime_type
