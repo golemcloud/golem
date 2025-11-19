@@ -125,6 +125,10 @@ mod tests {
         ) -> UnstructuredBinary<MyMimeType> {
             input
         }
+
+        async fn load_snapshot(&self, bytes: Vec<u8>) -> Result<(), String> {
+            Ok(())
+        }
     }
 
     // Test: #[agent_definition(mode = "ephemeral")]

@@ -82,7 +82,7 @@ fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
 }
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
     let agent_mode = parse_agent_mode(attrs);
 
     let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
@@ -112,6 +112,12 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 });
             };
 
+            let load_snapshot_item = get_load_snapshot_item();
+            let save_snapshot_item = get_save_snapshot_item();
+
+            item_trait.items.push(load_snapshot_item);
+            item_trait.items.push(save_snapshot_item);
+
             let result = quote! {
                 #item_trait
                 #register_fn
@@ -122,6 +128,22 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         }
 
         Err(invalid_trait_error) => invalid_trait_error,
+    }
+}
+
+fn get_load_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn load_snapshot(&self, bytes: Vec<u8>) -> Result<(), String> {
+            Err("load_snapshot not implemented".to_string())
+        }
+    }
+}
+
+fn get_save_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Err("save_snapshot not implemented".to_string())
+        }
     }
 }
 
