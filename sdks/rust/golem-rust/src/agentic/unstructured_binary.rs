@@ -186,7 +186,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                     BinarySource {
                         data,
                         binary_type: BinaryType {
-                            mime_type: mime_type.to_string(),
+                            mime_type
                         },
                     },
                 )))

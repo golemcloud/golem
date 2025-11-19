@@ -69,7 +69,7 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
             fn to_string(&self) -> String {
                 match self {
                     #(
-                        Self::#variant_idents => #mime_strs.clone(),
+                        Self::#variant_idents => #mime_strs.to_string(),
                     )*
                 }
             }
