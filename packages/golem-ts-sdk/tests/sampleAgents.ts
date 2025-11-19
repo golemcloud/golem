@@ -43,6 +43,7 @@ import {
   InterfaceWithUnionWithUndefined4,
   InterfaceWithOption,
 } from './testTypes';
+import { describe } from 'vitest';
 
 @agent()
 export class FooAgent extends BaseAgent {

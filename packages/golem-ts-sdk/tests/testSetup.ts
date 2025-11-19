@@ -12,32 +12,49 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { vi } from 'vitest';
+import * as Option from '../src/newTypes/option';
+import { DataValue, RegisteredAgentType, Uuid } from 'golem:agent/host';
+import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
+import { AgentClassName } from '../src';
+import { AgentId } from 'golem:rpc/types@0.2.2';
 
-// Global mocks which will be used within decorators,
-// These host functionalities shouldn't run when decorators run.
-// For example, getSelfMetadata is used in some decorators, however,
-// it executes only when `initiate` is called.
-// Also, these mocks are just place-holders. We can override the behavior
-// per tests by spyOn.
-vi.mock('golem:api/host@1.3.0', () => ({
-  getSelfMetadata: () => ({
-    workerId: {
-      componentId: {
-        uuid: {
-          highBits: 0n,
-          lowBits: 0n,
+vi.mock('golem:agent/host', () => ({
+  getAgentType: (agentTypeName: string): RegisteredAgentType | undefined => {
+    if (agentTypeName == 'FooAgent') {
+      return {
+        agentType: Option.getOrThrowWith(
+          AgentTypeRegistry.get(new AgentClassName('FooAgent')),
+          () => new Error('Missing FooAgent'),
+        ),
+        implementedBy: {
+          uuid: {
+            lowBits: BigInt(0),
+            highBits: BigInt(0),
+          },
         },
-      },
-      workerName: 'override-if-needed',
-    },
-    args: [],
-    env: [],
-    wasiConfigVars: [],
-    status: 'running',
-    componentVersion: 0n,
-    retryCount: 0n,
-  }),
+      };
+    } else {
+      return undefined;
+    }
+  },
+  makeAgentId: (
+    agentTypeName: string,
+    input: DataValue,
+    phantomId: Uuid | undefined,
+  ): string => {
+    // Not a correct implementation, but good enough for some tests
+    let phantomPostfix;
+    if (phantomId) {
+      phantomPostfix = `[$phantomId]`;
+    } else {
+      phantomPostfix = '';
+    }
+    return `${agentTypeName}(${JSON.stringify(input)})$phantomPostfix`;
+  },
+}));
+
+vi.mock('golem:rpc/types@0.2.2', () => ({
+  WasmRpc: vi.fn().mockImplementation((_: AgentId) => ({})),
 }));
 
 await import('./agentsInit');

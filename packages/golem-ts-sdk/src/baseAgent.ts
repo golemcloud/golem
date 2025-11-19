@@ -18,6 +18,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentClassName } from './newTypes/agentClassName';
 import { Datetime } from 'golem:rpc/types@0.2.2';
+import { Uuid } from 'golem:agent/host';
 
 /**
  * BaseAgent is the foundational class for defining agent implementations.
@@ -55,6 +56,14 @@ export class BaseAgent {
       `AgentId is not available for \`${this.constructor.name}\`. ` +
         `Ensure the class is decorated with @agent()`,
     );
+  }
+
+  /**
+   * Returns this agent's phantom ID, if any
+   */
+  phantomId(): Uuid | undefined {
+    const [_typeName, _params, phantomId] = this.getId().parsed();
+    return phantomId;
   }
 
   /**
@@ -131,6 +140,15 @@ export class BaseAgent {
    *
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
+    this: T,
+    ...args: ConstructorParameters<T>
+  ): WithRemoteMethods<InstanceType<T>> {
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
+  }
+
+  static phantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): WithRemoteMethods<InstanceType<T>> {
