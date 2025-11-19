@@ -44,7 +44,6 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
-use golem_service_base::headers::TraceContextHeaders;
 use golem_service_base::custom_api::compiled_gateway_binding::{
     FileServerBindingCompiled, GatewayBindingCompiled, HttpHandlerBindingCompiled,
     IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
@@ -52,6 +51,7 @@ use golem_service_base::custom_api::compiled_gateway_binding::{
 };
 use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
 use golem_service_base::custom_api::security_scheme::SecuritySchemeWithProviderMetadata;
+use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm::analysis::analysed_type::record;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
