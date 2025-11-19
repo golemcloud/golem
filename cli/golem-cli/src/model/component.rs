@@ -35,8 +35,9 @@ use golem_wasm::analysis::{
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -266,6 +267,14 @@ impl ComponentView {
             env: value.env,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ComponentDeployProperties {
+    pub linked_wasm_path: PathBuf,
+    pub files: Vec<crate::model::app::InitialComponentFile>,
+    pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+    pub env: HashMap<String, String>,
 }
 
 impl TrimDateTime for ComponentView {

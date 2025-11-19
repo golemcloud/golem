@@ -34,15 +34,16 @@ use colored::Colorize;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
     ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
-    ApplicationClientLive, ComponentClientLive, EnvironmentClientLive, GrantClientLive,
-    HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive, TokenClientLive,
-    WorkerClientLive,
+    ApplicationClientLive, ComponentClientLive, DeploymentClientLive, EnvironmentClientLive,
+    GrantClientLive, HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive,
+    TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ContextCloud, Security};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::diff::Deployment;
 use golem_common::model::environment::EnvironmentName;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
@@ -701,6 +702,7 @@ pub struct GolemClients {
     pub application: ApplicationClientLive,
     pub component: ComponentClientLive,
     pub component_healthcheck: HealthCheckClientLive,
+    pub deployment: DeploymentClientLive,
     pub environment: EnvironmentClientLive,
     pub grant: GrantClientLive,
     pub limits: LimitsClientLive,
@@ -802,6 +804,9 @@ impl GolemClients {
             },
             component_healthcheck: HealthCheckClientLive {
                 context: registry_healthcheck_context(),
+            },
+            deployment: DeploymentClientLive {
+                context: registry_context(),
             },
             environment: EnvironmentClientLive {
                 context: registry_context(),

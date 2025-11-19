@@ -18,6 +18,7 @@ use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
     BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
+use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
@@ -25,20 +26,23 @@ use crate::log::{log_action, logln, LogColorize, LogIndent};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app::{DependencyType, InitialComponentFile};
 use crate::model::component::{
-    Component, ComponentNameMatchKind, ComponentSelection, ComponentVersionSelection,
-    SelectedComponents,
+    Component, ComponentDeployProperties, ComponentNameMatchKind, ComponentSelection,
+    ComponentVersionSelection, SelectedComponents,
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as AnyhowContext};
+use futures_util::StreamExt;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+    dynamic_linking_to_diffable, DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::diff;
+use golem_common::model::diff::HashOf;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
 use itertools::Itertools;
@@ -1150,15 +1154,54 @@ impl ComponentCommandHandler {
         todo!()
     }
 
-    // TODO: atomic
-    /*
-    // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
-    async fn manifest_diffable_component(
+    pub async fn all_deployable_components(
+        &self,
+    ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
+        let component_names = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx.some_or_err()?.deployable_component_names()
+        };
+
+        let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
+        for component_name in component_names {
+            let properties = self.component_deploy_properties(&component_name).await?;
+            components.insert(component_name, properties);
+        }
+
+        Ok(components)
+    }
+
+    pub async fn component_deploy_properties(
+        &self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<ComponentDeployProperties> {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
+
+        let component = app_ctx.application.component(component_name);
+        let linked_wasm_path = component.final_linked_wasm();
+        if !component.component_type().is_deployable() {
+            bail!("Component {component_name} is not deployable");
+        }
+        let files = component.files().clone();
+        let env = resolve_env_vars(component_name, component.env())?;
+        let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
+
+        Ok(ComponentDeployProperties {
+            linked_wasm_path,
+            files,
+            dynamic_linking,
+            env,
+        })
+    }
+
+    pub async fn diffable_local_component(
         &self,
         component_name: &ComponentName,
         properties: &ComponentDeployProperties,
-    ) -> anyhow::Result<DiffableComponent> {
-        let component_hash = {
+    ) -> anyhow::Result<diff::Component> {
+        // TODO: atomic: cache it with a TaskResultMarker?
+        let component_binary_hash = {
             log_action(
                 "Calculating hash",
                 format!(
@@ -1171,254 +1214,50 @@ impl ComponentCommandHandler {
             component_hasher
                 .update_reader(&file)
                 .context("Failed to hash component")?;
-            component_hasher.finalize().to_hex().to_string()
+            component_hasher.finalize()
         };
 
-        let files: BTreeMap<String, DiffableComponentFile> = {
+        // TODO: atomic: cache it with a TaskResultMarker (handling local vs http)?
+        let files: BTreeMap<String, HashOf<diff::ComponentFile>> = {
             IfsFileManager::new(self.ctx.file_download_client().clone())
                 .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
                 .await?
                 .into_iter()
                 .map(|file_hash| {
                     (
-                        file_hash.target.path.to_rel_string(),
-                        DiffableComponentFile {
-                            hash: file_hash.hash_hex,
+                        file_hash.target.path.to_abs_string(),
+                        diff::ComponentFile {
+                            hash: file_hash.hash.into(),
                             permissions: file_hash.target.permissions,
-                        },
+                        }
+                        .into(),
                     )
                 })
                 .collect()
         };
 
-        DiffableComponent::from_manifest(
-            self.ctx.show_sensitive(),
-            component_name,
-            component_hash,
-            files,
-            properties.dynamic_linking.as_ref(),
-            properties.env.as_ref(),
-        )
+        Ok(diff::Component {
+            metadata: diff::ComponentMetadata {
+                version: None, // TODO: atomic
+                env: properties
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                dynamic_linking_wasm_rpc: properties
+                    .dynamic_linking
+                    .as_ref()
+                    .map(|dynamic_linking| dynamic_linking_to_diffable(dynamic_linking))
+                    .unwrap_or_default(),
+            }
+            .into(),
+            wasm_hash: component_binary_hash.into(),
+            files_by_path: files,
+            plugins_by_priority: Default::default(), // TODO: atomic: plugins
+        })
     }
-
-    // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
-    async fn server_diffable_component(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component: &Component,
-    ) -> anyhow::Result<DiffableComponent> {
-        let component_hash = self
-            .server_component_hash(
-                project,
-                &component.component_name,
-                ComponentId(component.versioned_component_id.component_id),
-                component.versioned_component_id.version,
-            )
-            .await?;
-
-        let files: BTreeMap<String, DiffableComponentFile> = {
-            if component.files.is_empty() {
-                BTreeMap::new()
-            } else {
-                log_action(
-                    "Calculating hashes",
-                    format!(
-                        "for server IFS files, component: {}",
-                        &component.component_name.0.log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
-
-                let mut files = BTreeMap::new();
-                for file in &component.files {
-                    let target_path = file.path.to_rel_string();
-
-                    let hash = self
-                        .server_ifs_file_hash(
-                            project,
-                            &component.component_name,
-                            ComponentId(component.versioned_component_id.component_id),
-                            component.versioned_component_id.version,
-                            &target_path,
-                        )
-                        .await?;
-                    files.insert(
-                        target_path,
-                        DiffableComponentFile {
-                            hash,
-                            permissions: file.permissions,
-                        },
-                    );
-                }
-
-                files
-            }
-        };
-
-        DiffableComponent::from_server(self.ctx.show_sensitive(), component, component_hash, files)
-    }
-
-    async fn server_component_hash(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component_name: &ComponentName,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-    ) -> anyhow::Result<String> {
-        let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
-
-        let hash_result = |component_hash| GetServerComponentHash {
-            project_id: project.map(|p| &p.project_id),
-            component_name,
-            component_version,
-            component_hash,
-        };
-
-        let hash = TaskResultMarker::get_hash(&task_result_marker_dir, hash_result(None))?;
-
-        match hash {
-            Some(hash) => {
-                debug!(
-                    component_name = component_name.0,
-                    component_id = ?component_id.0,
-                    component_version,
-                    hash,
-                    "Found cached hash for server component"
-                );
-                Ok(hash)
-            }
-            None => {
-                log_action(
-                    "Calculating hash",
-                    format!(
-                        "for server component {}@{}",
-                        component_name.0.log_color_highlight(),
-                        component_version.to_string().log_color_highlight()
-                    ),
-                );
-
-                // TODO: streaming
-                let clients = self.ctx.golem_clients().await?;
-
-                let component_bytes = clients
-                    .component
-                    .download_component(&component_id.0, Some(component_version))
-                    .await?;
-
-                let mut component_hasher = blake3::Hasher::new();
-                component_hasher.update(&component_bytes);
-                let hash = component_hasher.finalize().to_hex().to_string();
-
-                TaskResultMarker::new(&task_result_marker_dir, hash_result(Some(&hash)))?
-                    .success()?;
-
-                Ok(hash)
-            }
-        }
-    }
-
-    async fn server_ifs_file_hash(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component_name: &ComponentName,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        target_path: &str,
-    ) -> anyhow::Result<String> {
-        let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
-
-        let hash_result = |file_hash| GetServerIfsFileHash {
-            project_id: project.map(|p| &p.project_id),
-            component_name,
-            component_version,
-            target_path,
-            file_hash,
-        };
-
-        let hash = TaskResultMarker::get_hash(&task_result_marker_dir, hash_result(None))?;
-
-        match hash {
-            Some(hash) => {
-                debug!(
-                    component_name = component_name.0,
-                    component_id = ?component_id.0,
-                    component_version,
-                    hash,
-                    "Found cached hash for server IFS file"
-                );
-                Ok(hash)
-            }
-            None => {
-                log_action(
-                    "Calculating hash",
-                    format!(
-                        "for server IFS file {}@{} - {}",
-                        component_name.0.log_color_highlight(),
-                        component_version.to_string().log_color_highlight(),
-                        target_path.log_color_highlight()
-                    ),
-                );
-
-                // TODO: streaming
-                let clients = self.ctx.golem_clients().await?;
-
-                let component_bytes = clients
-                    .component
-                    .download_component_file(
-                        &component_id.0,
-                        &component_version.to_string(),
-                        target_path,
-                    )
-                    .await?;
-
-                let mut component_hasher = blake3::Hasher::new();
-                component_hasher.update(&component_bytes);
-                let hash = component_hasher.finalize().to_hex().to_string();
-
-                TaskResultMarker::new(&task_result_marker_dir, hash_result(Some(&hash)))?
-                    .success()?;
-
-                Ok(hash)
-            }
-        }
-    }
-    */
 }
 
-// TODO: atomic
-#[allow(unused)]
-struct ComponentDeployProperties {
-    linked_wasm_path: PathBuf,
-    files: Vec<InitialComponentFile>,
-    dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-    env: HashMap<String, String>,
-}
-
-// TODO: atomic
-#[allow(unused)]
-fn component_deploy_properties(
-    app_ctx: &mut ApplicationContext,
-    component_name: &ComponentName,
-) -> anyhow::Result<ComponentDeployProperties> {
-    let component = app_ctx.application.component(component_name);
-    let linked_wasm_path = component.final_linked_wasm();
-    if !component.component_type().is_deployable() {
-        bail!("Component {component_name} is not deployable");
-    }
-    let files = component.files().clone();
-    let env = resolve_env_vars(component_name, component.env())?;
-    let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
-
-    Ok(ComponentDeployProperties {
-        linked_wasm_path,
-        files,
-        dynamic_linking,
-        env,
-    })
-}
-
-// TODO: atomic
-#[allow(unused)]
 fn app_component_dynamic_linking(
     app_ctx: &mut ApplicationContext,
     component_name: &ComponentName,

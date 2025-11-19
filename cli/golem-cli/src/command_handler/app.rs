@@ -39,9 +39,13 @@ use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
+use golem_common::model::diff;
+use golem_common::model::diff::{Diffable, HashOf, Hashable, SerializeMode};
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName, Template, TemplateName};
 use itertools::Itertools;
+use std::collections::BTreeMap;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -451,11 +455,138 @@ impl AppCommandHandler {
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        let _environment = self
+        let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
+
+        self.build(
+            vec![],
+            Some(BuildArgs {
+                step: vec![],
+                force_build: force_build.clone(),
+            }),
+            &ApplicationComponentSelectMode::All,
+        )
+        .await?;
+
+        let selected_component_names = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .selected_component_names()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        if deploy_args.reset {
+            // TODO: atomic: delete env
+        }
+
+        let components = self
+            .ctx
+            .component_handler()
+            .all_deployable_components()
+            .await?;
+
+        let remote_deployment_hash = environment
+            .remote_environment
+            .current_deployment
+            .as_ref()
+            .map(|d| d.hash);
+
+        let mut diffable_local_deployment = {
+            let diffable_components = {
+                let mut diffable_components = BTreeMap::<String, HashOf<diff::Component>>::new();
+                for (component_name, component_deploy_properties) in &components {
+                    let diffable_component = self
+                        .ctx
+                        .component_handler()
+                        .diffable_local_component(component_name, component_deploy_properties)
+                        .await?;
+                    diffable_components.insert(component_name.0.clone(), diffable_component.into());
+                }
+                diffable_components
+            };
+
+            diff::Deployment {
+                components: diffable_components,
+                http_api_definitions: Default::default(), // TODO: atomic,
+                http_api_deployments: Default::default(), // TODO: atomic
+            }
+        };
+
+        let local_deployment_hash = diffable_local_deployment.hash();
+
+        if Some(local_deployment_hash) == remote_deployment_hash {
+            log_action(
+                "Skipping",
+                format!(
+                    "deployment, no changes detected, deployment hash: {}",
+                    local_deployment_hash.to_string().log_color_highlight()
+                ),
+            );
+            // TODO: atomic: if there is a deployment, show details (version, revision...)
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let server_deployment = match &environment.remote_environment.current_deployment {
+            Some(current_deployment) => Some(
+                clients
+                    .environment
+                    .get_environment_deployed_deployment_plan(
+                        &environment.environment_id.0,
+                        current_deployment.revision.0,
+                    )
+                    .await?,
+            ),
+            None => None,
+        };
+        let diffable_server_deployment = server_deployment.as_ref().map(|d| d.to_diffable());
+
+        let server_staged_deployment = clients
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await?;
+        let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+
+        let diff = diffable_server_deployment
+            .as_ref()
+            .and_then(|d| d.diff_with_local(&diffable_local_deployment));
+        let diff_stage =
+            diffable_server_staged_deployment.diff_with_local(&diffable_local_deployment);
+
+        if diff.is_some() {
+            if let Some(diffable_server_deployment) = &diffable_server_deployment {
+                log_action("Diffing", "with current deployment");
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                diffable_server_deployment.unified_yaml_diff_with_local(
+                    &diffable_local_deployment,
+                    SerializeMode::ValueIfAvailable,
+                );
+            }
+        }
+
+        if diff_stage.is_some() {
+            log_action("Diffing", "with staging area");
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            diffable_server_staged_deployment.unified_yaml_diff_with_local(
+                &diffable_local_deployment,
+                SerializeMode::ValueIfAvailable,
+            );
+        }
+
+        if let Some(diff) = diff {
+            self.ctx.log_handler().log_serializable(&diff.components)
+        }
+        if let Some(diff_stage) = &diff_stage {
+            self.ctx
+                .log_handler()
+                .log_serializable(&diff_stage.components)
+        }
 
         // TODO: atomic
         todo!()
