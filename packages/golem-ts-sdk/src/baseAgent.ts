@@ -148,7 +148,9 @@ export class BaseAgent {
     );
   }
 
-  static phantom<T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent>(
+  static phantom<
+    T extends new (phantomId: Uuid | undefined, ...args: any[]) => BaseAgent,
+  >(
     this: T,
     ...args: ConstructorParameters<T>
   ): WithRemoteMethods<InstanceType<T>> {
