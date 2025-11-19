@@ -160,7 +160,7 @@ impl Benchmark for DurabilityOverhead {
                     invoke_and_await(
                         &deps_clone,
                         worker_id,
-                        "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
+                        "benchmark:agent-rust/benchmark-agent.{echo}",
                         vec!["test".into_value_and_type()],
                     )
                     .await
