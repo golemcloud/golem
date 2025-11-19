@@ -403,7 +403,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         "rust:agent/foo-agent.{fun-multi-modal-basic}",
         &[r#"[text(url("foo"))]"#],
     )
-        .await;
+    .await;
 
     run_and_assert(
         &ctx,
