@@ -12,20 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_execution::gateway_session::{
+use crate::gateway_execution::gateway_session_store::{
     DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
 };
-use crate::gateway_security::{
-    IdentityProvider, IdentityProviderError, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{IdentityProvider, IdentityProviderError};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
+use golem_service_base::worker_api::security_scheme::SecuritySchemeWithProviderMetadata;
 use openidconnect::core::CoreTokenResponse;
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::collections::HashMap;
 use std::sync::Arc;
-
-pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
 #[async_trait]
 pub trait AuthCallBackBindingHandler: Send + Sync {
@@ -33,12 +30,10 @@ pub trait AuthCallBackBindingHandler: Send + Sync {
         &self,
         query_params: &HashMap<String, String>,
         security_scheme: &SecuritySchemeWithProviderMetadata,
-        gateway_session_store: &GatewaySessionStore,
-        identity_provider: &Arc<dyn IdentityProvider>,
-    ) -> AuthCallBackResult;
+    ) -> Result<AuthenticationSuccess, AuthorisationError>;
 }
 
-pub struct AuthorisationSuccess {
+pub struct AuthenticationSuccess {
     pub token_response: CoreTokenResponse,
     pub target_path: String,
     pub id_token: Option<String>,
@@ -117,17 +112,30 @@ impl SafeDisplay for AuthorisationError {
     }
 }
 
-pub struct DefaultAuthCallBack;
+pub struct DefaultAuthCallBackBindingHandler {
+    gateway_session_store: Arc<dyn GatewaySessionStore>,
+    identity_provider: Arc<dyn IdentityProvider>,
+}
+
+impl DefaultAuthCallBackBindingHandler {
+    pub fn new(
+        gateway_session_store: Arc<dyn GatewaySessionStore>,
+        identity_provider: Arc<dyn IdentityProvider>,
+    ) -> Self {
+        Self {
+            gateway_session_store,
+            identity_provider,
+        }
+    }
+}
 
 #[async_trait]
-impl AuthCallBackBindingHandler for DefaultAuthCallBack {
+impl AuthCallBackBindingHandler for DefaultAuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
         query_params: &HashMap<String, String>,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
-        session_store: &GatewaySessionStore,
-        identity_provider: &Arc<dyn IdentityProvider>,
-    ) -> Result<AuthorisationSuccess, AuthorisationError> {
+    ) -> Result<AuthenticationSuccess, AuthorisationError> {
         let code = query_params
             .get("code")
             .map(|c| AuthorizationCode::new(c.to_string()));
@@ -136,7 +144,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
         let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
-        let target_path = session_store
+        let target_path = self
+            .gateway_session_store
             .get(
                 &SessionId(state.clone()),
                 &DataKey("redirect_url".to_string()),
@@ -148,12 +157,14 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 "Invalid redirect url (target url of the protected resource)".to_string(),
             ))?;
 
-        let open_id_client = identity_provider
+        let open_id_client = self
+            .identity_provider
             .get_client(&security_scheme_with_metadata.security_scheme)
             .await
             .map_err(AuthorisationError::IdentityProviderError)?;
 
-        let token_response = identity_provider
+        let token_response = self
+            .identity_provider
             .exchange_code_for_tokens(&open_id_client, &authorisation_code)
             .await
             .map_err(AuthorisationError::FailedCodeExchange)?;
@@ -165,7 +176,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .map(|x| x.to_string());
 
         // access token in session store
-        let _ = session_store
+        self.gateway_session_store
             .insert(
                 SessionId(state.clone()),
                 DataKey::access_token(),
@@ -176,7 +187,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
 
         if let Some(id_token) = &id_token {
             // id token in session store
-            let _ = session_store
+            self.gateway_session_store
                 .insert(
                     SessionId(state.clone()),
                     DataKey::id_token(),
@@ -186,7 +197,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 .map_err(AuthorisationError::SessionError)?;
         }
 
-        Ok(AuthorisationSuccess {
+        Ok(AuthenticationSuccess {
             token_response,
             target_path,
             id_token,

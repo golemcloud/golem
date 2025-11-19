@@ -1081,7 +1081,7 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
-                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
+                        worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())),
                         environment_id: Some(environment_id.clone().into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }

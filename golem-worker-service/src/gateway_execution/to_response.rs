@@ -12,31 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth_call_back_binding_handler::{AuthorisationError, AuthorisationSuccess};
+use super::auth_call_back_binding_handler::{AuthenticationSuccess, AuthorisationError};
 use super::file_server_binding_handler::FileServerBindingSuccess;
 use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingSuccess};
-use super::swagger_binding_handler::{SwaggerBindingError, SwaggerBindingSuccess};
-use super::RibInputTypeMismatch;
+use super::swagger_binding_handler::{SwaggerBindingError, SwaggerHtml};
+use super::{RibInputTypeMismatch, WorkerRequestExecutorError};
 use crate::api::common::ApiEndpointError;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingError;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::gateway_session_store::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::HttpCors as CorsPreflight;
-use crate::gateway_rib_interpreter::RibRuntimeError;
 use async_trait::async_trait;
+use golem_service_base::worker_api::HttpCors;
 use http::header::*;
 use http::StatusCode;
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait ToHttpResponse {
     async fn to_response(
         self,
         request: &RichRequest,
-        session_store: &GatewaySessionStore,
+        session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response;
 }
 
@@ -45,7 +45,7 @@ impl<T: ToHttpResponse + Send, E: ToHttpResponse + Send> ToHttpResponse for Resu
     async fn to_response(
         self,
         request: &RichRequest,
-        session_store: &GatewaySessionStore,
+        session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         match self {
             Ok(t) => t.to_response(request, session_store).await,
@@ -60,7 +60,7 @@ pub enum GatewayHttpError {
     BadRequest(String),
     InternalError(String),
     RibInputTypeMismatch(RibInputTypeMismatch),
-    EvaluationError(RibRuntimeError),
+    EvaluationError(WorkerRequestExecutorError),
     RibInterpretPureError(String),
     HttpHandlerBindingError(HttpHandlerBindingError),
     FileServerBindingError(FileServerBindingError),
@@ -72,7 +72,7 @@ impl ToHttpResponse for GatewayHttpError {
     async fn to_response(
         self,
         request_details: &RichRequest,
-        session_store: &GatewaySessionStore,
+        session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         match self {
             GatewayHttpError::BadRequest(e) => poem::Response::builder()
@@ -110,7 +110,7 @@ impl ToHttpResponse for FileServerBindingSuccess {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         Body::from_bytes_stream(self.data)
             .with_content_type(self.binding_details.content_type.to_string())
@@ -124,7 +124,7 @@ impl ToHttpResponse for FileServerBindingError {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         match self {
             FileServerBindingError::InternalError(e) => poem::Response::builder()
@@ -150,7 +150,7 @@ impl ToHttpResponse for HttpHandlerBindingSuccess {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         self.response
     }
@@ -161,7 +161,7 @@ impl ToHttpResponse for HttpHandlerBindingError {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         match self {
             HttpHandlerBindingError::InternalError(e) => poem::Response::builder()
@@ -178,42 +178,43 @@ impl ToHttpResponse for HttpHandlerBindingError {
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
 #[async_trait]
-impl ToHttpResponse for CorsPreflight {
+impl ToHttpResponse for HttpCors {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 
+        // TODO: should not unwrap here
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_ORIGIN,
-            self.get_allow_origin().clone().parse().unwrap(),
+            self.allow_origin.clone().parse().unwrap(),
         );
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_METHODS,
-            self.get_allow_methods().clone().parse().unwrap(),
+            self.allow_methods.clone().parse().unwrap(),
         );
         response.headers_mut().insert(
             ACCESS_CONTROL_ALLOW_HEADERS,
-            self.get_allow_headers().clone().parse().unwrap(),
+            self.allow_headers.clone().parse().unwrap(),
         );
 
-        if let Some(expose_headers) = &self.get_expose_headers() {
+        if let Some(expose_headers) = &self.expose_headers {
             response.headers_mut().insert(
                 ACCESS_CONTROL_EXPOSE_HEADERS,
                 expose_headers.clone().parse().unwrap(),
             );
         }
 
-        if let Some(allow_credentials) = self.get_allow_credentials() {
+        if let Some(allow_credentials) = self.allow_credentials {
             response.headers_mut().insert(
                 ACCESS_CONTROL_ALLOW_CREDENTIALS,
                 allow_credentials.to_string().parse().unwrap(),
             );
         }
 
-        if let Some(max_age) = self.get_max_age() {
+        if let Some(max_age) = self.max_age {
             response
                 .headers_mut()
                 .insert(ACCESS_CONTROL_MAX_AGE, max_age.to_string().parse().unwrap());
@@ -228,9 +229,9 @@ impl ToHttpResponse for RibResult {
     async fn to_response(
         self,
         request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
-        match internal::IntermediateHttpResponse::from(&self) {
+        match internal::IntermediateRibResultHttpResponse::from(&self) {
             Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
             Err(e) => e.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
         }
@@ -238,11 +239,11 @@ impl ToHttpResponse for RibResult {
 }
 
 #[async_trait]
-impl ToHttpResponse for AuthorisationSuccess {
+impl ToHttpResponse for AuthenticationSuccess {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         let access_token = self.access_token;
         let id_token = self.id_token;
@@ -278,22 +279,22 @@ impl ToHttpResponse for AuthorisationError {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         self.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED)
     }
 }
 
 #[async_trait]
-impl ToHttpResponse for SwaggerBindingSuccess {
+impl ToHttpResponse for SwaggerHtml {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         poem::Response::builder()
             .content_type("text/html")
-            .body(Body::from_string(self.html_content))
+            .body(Body::from_string(self.0))
     }
 }
 
@@ -302,7 +303,7 @@ impl ToHttpResponse for SwaggerBindingError {
     async fn to_response(
         self,
         _request_details: &RichRequest,
-        _session_store: &GatewaySessionStore,
+        _session_store: &Arc<dyn GatewaySessionStore>,
     ) -> poem::Response {
         self.into()
     }
@@ -313,46 +314,47 @@ mod internal {
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
     use crate::gateway_execution::request::RichRequest;
-    use crate::gateway_rib_interpreter::RibRuntimeError;
     use http::StatusCode;
 
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
+    use crate::gateway_execution::WorkerRequestExecutorError;
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm::ValueAndType;
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
     #[derive(Debug)]
-    pub(crate) struct IntermediateHttpResponse {
+    pub(crate) struct IntermediateRibResultHttpResponse {
         body: Option<ValueAndType>,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
 
-    impl IntermediateHttpResponse {
+    impl IntermediateRibResultHttpResponse {
         pub(crate) fn from(
             evaluation_result: &RibResult,
-        ) -> Result<IntermediateHttpResponse, RibRuntimeError> {
+        ) -> Result<IntermediateRibResultHttpResponse, WorkerRequestExecutorError> {
             match evaluation_result {
                 RibResult::Val(rib_result) => {
-                    let status = get_status_code_or_ok(rib_result).map_err(RibRuntimeError)?;
+                    let status =
+                        get_status_code_or_ok(rib_result).map_err(WorkerRequestExecutorError)?;
 
-                    let headers =
-                        get_response_headers_or_default(rib_result).map_err(RibRuntimeError)?;
+                    let headers = get_response_headers_or_default(rib_result)
+                        .map_err(WorkerRequestExecutorError)?;
 
                     let body = rib_result
                         .get_optional(&Path::from_key("body"))
                         .unwrap_or(rib_result.clone());
 
-                    Ok(IntermediateHttpResponse {
+                    Ok(IntermediateRibResultHttpResponse {
                         body: Some(body),
                         status,
                         headers,
                     })
                 }
-                RibResult::Unit => Ok(IntermediateHttpResponse {
+                RibResult::Unit => Ok(IntermediateRibResultHttpResponse {
                     body: None,
                     status: StatusCode::default(),
                     headers: ResolvedResponseHeaders::default(),
@@ -412,8 +414,8 @@ mod test {
     use std::sync::Arc;
     use test_r::test;
 
-    use crate::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySession, GatewaySessionError, SessionId,
+    use crate::gateway_execution::gateway_session_store::{
+        DataKey, DataValue, GatewaySessionError, GatewaySessionStore, SessionId,
     };
     use crate::gateway_execution::request::RichRequest;
     use crate::gateway_execution::to_response::ToHttpResponse;
@@ -462,7 +464,7 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
-        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(TestSessionStore);
+        let session_store: Arc<dyn GatewaySessionStore> = Arc::new(TestSessionStore);
 
         let http_response: poem::Response = evaluation_result
             .to_response(&test_request(), &session_store)
@@ -490,7 +492,7 @@ mod test {
     async fn test_evaluation_result_to_response_with_no_http_specifics() {
         let evaluation_result: RibResult = RibResult::Val("Healthy".into_value_and_type());
 
-        let session_store: Arc<dyn GatewaySession + Send + Sync> = Arc::new(TestSessionStore);
+        let session_store: Arc<dyn GatewaySessionStore> = Arc::new(TestSessionStore);
 
         let http_response: poem::Response = evaluation_result
             .to_response(&test_request(), &session_store)
@@ -518,7 +520,7 @@ mod test {
     struct TestSessionStore;
 
     #[async_trait]
-    impl GatewaySession for TestSessionStore {
+    impl GatewaySessionStore for TestSessionStore {
         async fn insert(
             &self,
             _session_id: SessionId,

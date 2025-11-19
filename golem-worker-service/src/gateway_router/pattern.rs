@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::worker_api::path_pattern::PathPattern;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouterPattern {
     Literal(LiteralPattern),
@@ -48,8 +50,6 @@ impl RouterPattern {
         }
     }
 }
-
-use crate::gateway_api_definition::http::PathPattern;
 
 impl From<PathPattern> for RouterPattern {
     fn from(path: PathPattern) -> Self {

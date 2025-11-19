@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
@@ -47,6 +47,13 @@ pub trait ComponentService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
 
+    async fn get_revision(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ComponentDto, ComponentServiceError>;
+
     async fn get_all_versions(
         &self,
         component_id: &ComponentId,
@@ -73,6 +80,21 @@ impl ComponentService for RemoteComponentService {
     ) -> Result<ComponentDto, ComponentServiceError> {
         self.client
             .get_latest_component_metadata(component_id, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
+                other => other.into(),
+            })
+    }
+
+    async fn get_revision(
+        &self,
+        component_id: &ComponentId,
+        component_revision: ComponentRevision,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ComponentDto, ComponentServiceError> {
+        self.client
+            .get_component_metadata(component_id, component_revision, auth_ctx)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,

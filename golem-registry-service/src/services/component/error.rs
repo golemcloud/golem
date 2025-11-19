@@ -48,8 +48,6 @@ pub enum ComponentError {
         "The component name {actual} did not match the component's root package name: {expected}"
     )]
     InvalidComponentName { expected: String, actual: String },
-    #[error(transparent)]
-    LimitExceeded(LimitExceededError),
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
@@ -84,6 +82,8 @@ pub enum ComponentError {
     },
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
+    LimitExceeded(#[from] LimitExceededError),
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
