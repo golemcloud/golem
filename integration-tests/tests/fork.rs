@@ -709,6 +709,9 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("golem-rust-tests").store().await;
 
+    let (fork_phantom_id_tx, fork_phantom_id_rx) = tokio::sync::oneshot::channel::<String>();
+    let fork_phantom_id_tx = Arc::new(Mutex::new(Some(fork_phantom_id_tx)));
+
     let (port_tx, port_rx) = tokio::sync::oneshot::channel::<u16>();
     let http_server = tokio::spawn(
         async move {
@@ -720,9 +723,17 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
                     }),
                 )
                 .route(
-                    "/fork-test/step2/:name/:fork/:input",
-                    get(move |args: Path<(String, String, String)>| async move {
-                        Json(format!("{}-{}-{}", args.0 .0, args.0 .1, args.0 .2))
+                    "/fork-test/step2/:name/:fork/:phantom_id",
+                    get(move |args: Path<(String, String, String)>| {
+                        let fork_phantom_id_tx = fork_phantom_id_tx.clone();
+                        async move {
+                            if let Some(fork_phantom_id_tx) =
+                                fork_phantom_id_tx.lock().unwrap().take()
+                            {
+                                fork_phantom_id_tx.send(args.2.clone()).unwrap();
+                            }
+                            Json(format!("{}-{}-{}", args.0 .0, args.0 .1, args.0 .2))
+                        }
                     }),
                 );
 
@@ -760,9 +771,11 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .await
         .unwrap();
 
+    let forked_phantom_id = fork_phantom_id_rx.await.unwrap();
+
     let target_worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "forked-worker".to_string(),
+        worker_name: format!("source-worker-{forked_phantom_id}"),
     };
     let target_result = admin
         .invoke_and_await_with_key(
@@ -778,14 +791,15 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     assert_eq!(
         source_result,
-        vec![Value::String(
-            "source-worker-hello::source-worker-original-hello".to_string()
-        )]
+        vec![Value::String(format!(
+            "source-worker-hello::source-worker-original-{forked_phantom_id}"
+        ))]
     );
     assert_eq!(
         target_result,
-        vec![Value::String(
-            "source-worker-hello::forked-worker-forked-hello".to_string()
-        )]
+        vec![Value::String(format!(
+            "source-worker-hello::{}-forked-{forked_phantom_id}",
+            target_worker_id.worker_name
+        ))]
     );
 }
