@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { AgentId, Datetime, WasmRpc } from 'golem:rpc/types@0.2.2';
+import * as wasmRpc from 'golem:rpc/types@0.2.2';
 import * as WitValue from './mapping/values/WitValue';
 import * as Option from '../newTypes/option';
 import * as Either from '../newTypes/either';
@@ -25,6 +25,7 @@ import {
 } from 'golem:agent/host';
 import { AgentClassName } from '../newTypes/agentClassName';
 import {
+  AgentType,
   BinaryReference,
   DataValue,
   ElementValue,
@@ -52,9 +53,11 @@ import {
 } from './mapping/values/dataValue';
 import { randomUuid } from '../host/hostapi';
 import { convertAgentMethodNameToKebab } from './mapping/types/stringFormat';
+import { AgentId } from '../agentId';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
+  agentType: AgentType,
   ctor: T,
 ) {
   const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
@@ -64,20 +67,24 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
     );
   }
   const metadata = metadataOpt.val;
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName);
+  const shared = new WasmRpxProxyHandlerShared(
+    metadata,
+    agentClassName,
+    agentType,
+  );
 
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const agentId = shared.constructAgentId(args);
+    const witAgentId = shared.constructAgentId(args);
 
-    return new Proxy(instance, new WasmRpcProxyHandler(shared, agentId));
+    return new Proxy(instance, new WasmRpcProxyHandler(shared, witAgentId));
   };
 }
 
 export function getPhantomRemoteClient<
   T extends new (phantomId: Uuid | undefined, ...args: any[]) => any,
->(agentClassName: AgentClassName, ctor: T) {
+>(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
   const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
   if (Option.isNone(metadataOpt)) {
     throw new Error(
@@ -85,15 +92,19 @@ export function getPhantomRemoteClient<
     );
   }
   const metadata = metadataOpt.val;
-  const shared = new WasmRpxProxyHandlerShared(metadata, agentClassName);
+  const shared = new WasmRpxProxyHandlerShared(
+    metadata,
+    agentClassName,
+    agentType,
+  );
 
   return (phantomId: Uuid | undefined, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
     const finalPhantomId = phantomId ?? randomUuid();
-    const agentId = shared.constructAgentId(args, finalPhantomId);
+    const witAgentId = shared.constructAgentId(args, finalPhantomId);
 
-    return new Proxy(instance, new WasmRpcProxyHandler(shared, agentId));
+    return new Proxy(instance, new WasmRpcProxyHandler(shared, witAgentId));
   };
 }
 
@@ -113,14 +124,20 @@ type CachedMethodInfo = {
 class WasmRpxProxyHandlerShared {
   readonly metadata: ClassMetadata;
   readonly agentClassName: AgentClassName;
+  readonly agentType: AgentType;
 
   cachedRegisteredAgentType?: RegisteredAgentType = undefined;
   readonly constructorParamTypes: TypeInfoInternal[];
   readonly cachedMethodInfo: Map<string, CachedMethodInfo> = new Map();
 
-  constructor(metadata: ClassMetadata, agentClassName: AgentClassName) {
+  constructor(
+    metadata: ClassMetadata,
+    agentClassName: AgentClassName,
+    agentType: AgentType,
+  ) {
     this.metadata = metadata;
     this.agentClassName = agentClassName;
+    this.agentType = agentType;
 
     const constructorParamMeta = AgentConstructorParamRegistry.get(
       agentClassName.value,
@@ -143,7 +160,7 @@ class WasmRpxProxyHandlerShared {
     }
   }
 
-  constructAgentId(args: any[], phantomId?: Uuid): AgentId {
+  constructAgentId(args: any[], phantomId?: Uuid): wasmRpc.AgentId {
     const registeredAgentType = this.getRegisteredAgentType();
 
     const elementValues: ElementValue[] = [];
@@ -292,18 +309,28 @@ class WasmRpxProxyHandlerShared {
 class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpxProxyHandlerShared;
   private readonly agentId: AgentId;
-  private readonly wasmRpc: WasmRpc;
+  private readonly witAgentId: wasmRpc.AgentId;
+  private readonly wasmRpc: wasmRpc.WasmRpc;
 
   private readonly methodProxyCache = new Map<
     string,
     RemoteMethod<any[], any>
   >();
 
-  constructor(shared: WasmRpxProxyHandlerShared, agentId: AgentId) {
-    this.shared = shared;
-    this.agentId = agentId;
+  private readonly getIdMethod: () => AgentId = () => this.agentId;
+  private readonly phantomIdMethod: () => Uuid | undefined = () => {
+    const [_typeName, _params, phantomId] = this.agentId.parsed();
+    return phantomId;
+  };
+  private readonly getAgentTypeMethod: () => AgentType = () =>
+    this.shared.agentType;
 
-    this.wasmRpc = new WasmRpc(agentId);
+  constructor(shared: WasmRpxProxyHandlerShared, witAgentId: wasmRpc.AgentId) {
+    this.shared = shared;
+    this.agentId = new AgentId(witAgentId.agentId);
+    this.witAgentId = witAgentId;
+
+    this.wasmRpc = new wasmRpc.WasmRpc(witAgentId);
   }
 
   get(target: any, prop: string | symbol) {
@@ -311,13 +338,31 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     const propString = prop.toString();
 
     if (typeof val === 'function') {
-      const methodProxy = this.methodProxyCache.get(propString);
-      if (methodProxy) {
-        return methodProxy;
-      } else {
-        const methodProxy = this.createMethodProxy(propString);
-        this.methodProxyCache.set(propString, methodProxy);
-        return methodProxy;
+      switch (propString) {
+        case 'getId': {
+          return this.getIdMethod;
+        }
+        case 'phantomId': {
+          return this.phantomIdMethod;
+        }
+        case 'getAgentType': {
+          return this.getAgentTypeMethod;
+        }
+        case 'loadSnapshot': {
+          throw new Error('Cannot call loadSnapshot on a remote client');
+        }
+        case 'saveSnapshot': {
+          throw new Error('Cannot call saveSnapshot on a remote client');
+        }
+        default:
+          const methodProxy = this.methodProxyCache.get(propString);
+          if (methodProxy) {
+            return methodProxy;
+          } else {
+            const methodProxy = this.createMethodProxy(propString);
+            this.methodProxyCache.set(propString, methodProxy);
+            return methodProxy;
+          }
       }
     }
     return undefined;
@@ -325,7 +370,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   private createMethodProxy(prop: string): RemoteMethod<any[], any> {
     const methodInfo = this.shared.getMethodInfo(prop);
-    const agentId = this.agentId;
+    const agentId = this.witAgentId;
     const wasmRpc = this.wasmRpc;
 
     async function invokeAndAwait(...fnArgs: any[]) {
@@ -365,7 +410,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       wasmRpc.invoke(methodInfo.witFunctionName, parameterWitValues);
     }
 
-    function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
+    function invokeSchedule(ts: wasmRpc.Datetime, ...fnArgs: any[]) {
       const parameterWitValues = serializeArgs(methodInfo.params, fnArgs);
       wasmRpc.scheduleInvocation(
         ts,
@@ -377,7 +422,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
 
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
-    methodFn.schedule = (ts: Datetime, ...args: any[]) =>
+    methodFn.schedule = (ts: wasmRpc.Datetime, ...args: any[]) =>
       invokeSchedule(ts, ...args);
 
     return methodFn as RemoteMethod<any[], any>;

@@ -38,6 +38,7 @@ import {
   invalidType,
 } from './agentError';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { Uuid } from 'golem:agent/host';
 
 /**
  * An AgentInternal is an internal interface that represents the basic usage of an agent
@@ -70,6 +71,11 @@ export class ResolvedAgent {
 
   getId(): AgentId {
     return this.uniqueAgentId;
+  }
+
+  phantomId(): Uuid | undefined {
+    const [_typeName, _params, phantomId] = this.uniqueAgentId.parsed();
+    return phantomId;
   }
 
   getParameters(): DataValue {

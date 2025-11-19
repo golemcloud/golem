@@ -23,6 +23,12 @@ import {
 import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './sampleAgents';
+import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
+import { toWitValue, Value } from '../src/internal/mapping/values/Value';
+import { ResolvedAgent } from '../src/internal/resolvedAgent';
+import process from 'node:process';
+import { Uuid } from 'golem:agent/host';
+import { AgentClassName, AgentId } from '../src';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -749,6 +755,54 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     expect(ephemeralAgent.mode).toEqual('ephemeral');
+  });
+});
+
+describe('Annotated agent class', () => {
+  it('has get method', () => {
+    expect(FooAgent.get).toBeDefined();
+    expect(FooAgent.get).toBeTypeOf('function');
+  });
+  it('has phantom method', () => {
+    expect(FooAgent.phantom).toBeDefined();
+    expect(FooAgent.phantom).toBeTypeOf('function');
+  });
+  it("can return it's phantomId", () => {
+    const initiator = Option.getOrThrowWith(
+      AgentInitiatorRegistry.lookup('FooAgent'),
+      () => new Error('FooAgent not found in AgentInitiatorRegistry'),
+    );
+    const value: Value = { kind: 'string', value: 'hello' };
+
+    const uuid: Uuid = {
+      highBits: BigInt(1234),
+      lowBits: BigInt(5678),
+    };
+
+    process.env.GOLEM_AGENT_ID = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    const fooResult = initiator.initiate({
+      tag: 'tuple',
+      val: [{ tag: 'component-model', val: toWitValue(value) }],
+    });
+    expect(fooResult.tag).toEqual('ok');
+    const foo = fooResult.val as ResolvedAgent;
+    expect(foo.phantomId()).toEqual(uuid);
+  });
+  it('get is implemented by the decorator', async () => {
+    const agentType = Option.getOrThrowWith(
+      AgentTypeRegistry.get(new AgentClassName('FooAgent')),
+      () => new Error('FooAgent not found in AgentTypeRegistry'),
+    );
+
+    const client = FooAgent.get('example');
+    expect(client).toBeDefined();
+
+    // NOTE: this agent id is not a valid agent-id syntax, just the one the mocked makeAgentId produces.
+    expect((await client.getId()).value).toEqual(
+      'FooAgent({"tag":"tuple","val":[{"tag":"component-model","val":{"nodes":[{"tag":"prim-string","val":"example"}]}}]})',
+    );
+    expect(await client.phantomId()).toBeUndefined();
+    expect(await client.getAgentType()).toEqual(agentType);
   });
 });
 

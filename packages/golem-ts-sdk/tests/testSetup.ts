@@ -45,11 +45,27 @@ vi.mock('golem:agent/host', () => ({
     // Not a correct implementation, but good enough for some tests
     let phantomPostfix;
     if (phantomId) {
-      phantomPostfix = `[$phantomId]`;
+      phantomPostfix = `[${phantomId.highBits}-${phantomId.lowBits}]`;
     } else {
       phantomPostfix = '';
     }
-    return `${agentTypeName}(${JSON.stringify(input)})$phantomPostfix`;
+    return `${agentTypeName}(${JSON.stringify(input)})${phantomPostfix}`;
+  },
+  parseAgentId(agentId: string): [string, DataValue, Uuid | undefined] {
+    const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?/);
+    if (!match) {
+      throw new Error(`Invalid agent ID: ${agentId}`);
+    }
+    const [, typeName, inputJson, maybePhantomId, hiBits, loBits] = match;
+    const input = JSON.parse(inputJson);
+    let phantomId: Uuid | undefined = undefined;
+    if (maybePhantomId) {
+      phantomId = {
+        highBits: BigInt(hiBits),
+        lowBits: BigInt(loBits),
+      };
+    }
+    return [typeName, input, phantomId];
   },
 }));
 

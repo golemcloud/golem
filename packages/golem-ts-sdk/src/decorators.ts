@@ -267,8 +267,12 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(agentClassName, ctor);
-    (ctor as any).phantom = getPhantomRemoteClient(agentClassName, ctor);
+    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).phantom = getPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+    );
 
     AgentInitiatorRegistry.register(agentTypeName, {
       initiate: (constructorInput: DataValue) => {
