@@ -139,14 +139,8 @@ class WasmRpxProxyHandlerShared {
     this.agentClassName = agentClassName;
     this.agentType = agentType;
 
-    const constructorParamMeta = AgentConstructorParamRegistry.get(
-      agentClassName.value,
-    );
-    if (!constructorParamMeta) {
-      throw new Error(
-        `No constructor parameter metadata found for ${agentClassName.value}`,
-      );
-    }
+    const constructorParamMeta =
+      AgentConstructorParamRegistry.get(agentClassName.value) ?? new Map();
 
     this.constructorParamTypes = [];
     for (const arg of metadata.constructorArgs) {

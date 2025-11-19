@@ -14,13 +14,18 @@
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
-import { expect } from 'vitest';
+import { describe, expect } from 'vitest';
 import {
   BarAgentClassName,
   FooAgentClassName,
   EphemeralAgentClassName,
 } from './testUtils';
-import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
+import {
+  AgentType,
+  DataSchema,
+  DataValue,
+  ElementSchema,
+} from 'golem:agent/common';
 import * as util from 'node:util';
 import { FooAgent } from './sampleAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
@@ -758,7 +763,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 });
 
-describe('Annotated agent class', () => {
+describe('Annotated FooAgent class', () => {
   it('has get method', () => {
     expect(FooAgent.get).toBeDefined();
     expect(FooAgent.get).toBeTypeOf('function');
@@ -803,6 +808,49 @@ describe('Annotated agent class', () => {
     );
     expect(await client.phantomId()).toBeUndefined();
     expect(await client.getAgentType()).toEqual(agentType);
+  });
+});
+
+describe('Annotated SingletonAgent class', () => {
+  it('can be constructed', async () => {
+    const initiator = Option.getOrThrowWith(
+      AgentInitiatorRegistry.lookup('SingletonAgent'),
+      () => new Error('SingletonAgent not found in AgentInitiatorRegistry'),
+    );
+
+    const params: DataValue = {
+      tag: 'tuple',
+      val: [],
+    };
+
+    process.env.GOLEM_AGENT_ID = `singleton-agent(${JSON.stringify(params)})`;
+    const singleton = initiator.initiate(params);
+    expect(singleton.tag).toEqual('ok');
+    const foo = singleton.val as ResolvedAgent;
+    expect(foo.phantomId()).toBeUndefined();
+
+    const result = await foo.invoke('test', {
+      tag: 'tuple',
+      val: [],
+    });
+
+    expect(result.tag).toEqual('ok');
+    expect(result.val).toEqual({
+      tag: 'tuple',
+      val: [
+        {
+          tag: 'component-model',
+          val: {
+            nodes: [
+              {
+                tag: 'prim-string',
+                val: 'test',
+              },
+            ],
+          },
+        },
+      ],
+    });
   });
 });
 

@@ -460,3 +460,14 @@ class InternalClass {
     return array[Symbol.iterator]();
   }
 }
+
+@agent()
+class SingletonAgent extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  test(): string {
+    return 'test';
+  }
+}
