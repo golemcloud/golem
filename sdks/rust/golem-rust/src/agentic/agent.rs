@@ -25,5 +25,6 @@ pub trait Agent {
     fn get_definition(&self) -> AgentType;
 
     async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String>;
+
     async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
 }

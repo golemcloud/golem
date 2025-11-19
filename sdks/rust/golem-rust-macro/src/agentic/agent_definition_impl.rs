@@ -133,7 +133,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
 fn get_load_snapshot_item() -> syn::TraitItem {
     syn::parse_quote! {
-        async fn load_snapshot(&self, bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
             Err("load_snapshot not implemented".to_string())
         }
     }

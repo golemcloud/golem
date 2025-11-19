@@ -20,7 +20,6 @@ use crate::{
 };
 
 use crate::agentic::agent_registry;
-use crate::bindings::golem::agent::host::make_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 
@@ -85,12 +84,15 @@ impl LoadSnapshotGuest for Component {
 impl SaveSnapshotGuest for Component {
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {
-
             // TODO; just referring to TS, verify
             let agent_id_bytes = resolved_agent.agent_id.agent_id.as_bytes();
 
-            let agent_snapshot =
-                resolved_agent.agent.borrow().save_snapshot_base().await.expect("Failed to save agent snapshot");
+            let agent_snapshot = resolved_agent
+                .agent
+                .borrow()
+                .save_snapshot_base()
+                .await
+                .expect("Failed to save agent snapshot");
 
             let total_length = 1 + 4 + agent_id_bytes.len() + agent_snapshot.len();
 
@@ -100,7 +102,6 @@ impl SaveSnapshotGuest for Component {
 
             full_snapshot.extend_from_slice(&(agent_id_bytes.len() as u32).to_be_bytes());
 
-
             full_snapshot.extend_from_slice(agent_id_bytes);
 
             full_snapshot.extend_from_slice(&agent_snapshot);
@@ -108,7 +109,6 @@ impl SaveSnapshotGuest for Component {
             full_snapshot
         })
     }
-
 }
 
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);

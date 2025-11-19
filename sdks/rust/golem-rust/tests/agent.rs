@@ -126,8 +126,12 @@ mod tests {
             input
         }
 
-        async fn load_snapshot(&self, bytes: Vec<u8>) -> Result<(), String> {
+        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
             Ok(())
+        }
+
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Ok(vec![])
         }
     }
 
