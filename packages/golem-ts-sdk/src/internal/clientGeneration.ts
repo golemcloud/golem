@@ -228,15 +228,10 @@ class WasmRpxProxyHandlerShared {
 
       const paramNames = Array.from(methodParams.keys());
 
-      const paramTypeMap = AgentMethodParamRegistry.get(
-        this.agentClassName.value,
-      )?.get(methodName);
-
-      if (!paramTypeMap) {
-        throw new Error(
-          `No parameter metadata found for method ${methodName} in agent class ${this.agentClassName.value}`,
-        );
-      }
+      const paramTypeMap =
+        AgentMethodParamRegistry.get(this.agentClassName.value)?.get(
+          methodName,
+        ) ?? new Map();
 
       const params = [];
       for (const paramName of paramNames) {
