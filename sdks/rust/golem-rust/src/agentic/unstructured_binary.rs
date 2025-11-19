@@ -185,9 +185,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                 Ok(ElementValue::UnstructuredBinary(BinaryReference::Inline(
                     BinarySource {
                         data,
-                        binary_type: BinaryType {
-                            mime_type
-                        },
+                        binary_type: BinaryType { mime_type },
                     },
                 )))
             }

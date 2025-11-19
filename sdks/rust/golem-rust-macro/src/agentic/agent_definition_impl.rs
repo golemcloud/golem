@@ -14,7 +14,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemTrait};
+use syn::ItemTrait;
 
 use crate::agentic::helpers::{
     extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,

@@ -24,7 +24,7 @@ impl FunctionInputInfo {
 
         if typed_params.len() == 1 {
             let only_param = &typed_params[0];
-            
+
             if is_multimodal_type(&only_param.ty) {
                 return FunctionInputInfo {
                     input_shape: DefaultOrMultimodal::Multimodal,
@@ -186,7 +186,7 @@ pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {
-            return seg.ident == "Multimodal" || seg.ident ==  "MultimodalBasic";
+            return seg.ident == "Multimodal" || seg.ident == "MultimodalBasic";
         }
     }
     false

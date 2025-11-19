@@ -240,16 +240,13 @@ impl Multimodal<MultimodalBasicType> {
 
 pub enum MultimodalBasicType {
     Text(UnstructuredText),
-    Binary(UnstructuredBinary<String>)
+    Binary(UnstructuredBinary<String>),
 }
 
 impl MultimodalSchema for MultimodalBasicType {
     fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
         vec![
-            (
-                "Text".to_string(),
-                <UnstructuredText>::get_type(),
-            ),
+            ("Text".to_string(), <UnstructuredText>::get_type()),
             (
                 "Binary".to_string(),
                 UnstructuredBinary::<String>::get_type(),
@@ -266,7 +263,7 @@ impl MultimodalSchema for MultimodalBasicType {
 
     fn to_element_value(self) -> Result<(String, ElementValue), String>
     where
-        Self: Sized
+        Self: Sized,
     {
         match self {
             MultimodalBasicType::Text(text) => {
@@ -282,11 +279,10 @@ impl MultimodalSchema for MultimodalBasicType {
 
     fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
     where
-        Self: Sized
+        Self: Sized,
     {
         let (name, value) = elem;
-        
-        
+
         match name.as_str() {
             "Text" => {
                 let schema = <UnstructuredText>::get_type();
@@ -304,7 +300,7 @@ impl MultimodalSchema for MultimodalBasicType {
 
     fn to_wit_value(self) -> Result<WitValue, String>
     where
-        Self: Sized
+        Self: Sized,
     {
         match self {
             MultimodalBasicType::Text(text) => text.to_wit_value(),
