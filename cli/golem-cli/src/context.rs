@@ -21,7 +21,10 @@ use crate::config::{AuthenticationConfig, BUILTIN_LOCAL_URL, CLOUD_URL};
 use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
-use crate::model::app::{AppBuildStep, ApplicationSourceMode, ComponentPresetName};
+use crate::model::app::{
+    AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
+    WithSource,
+};
 use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
@@ -139,22 +142,23 @@ impl Context {
         }
 
         let app_source_mode = preloaded_app.source_mode;
-        let manifest_environments = preloaded_app.environments;
+        let application_name_and_environments = preloaded_app.application_name_and_environments;
 
         let manifest_environment: Option<SelectedManifestEnvironment> = match &environment_reference
         {
             Some(environment_reference) => {
                 match environment_reference {
                     EnvironmentReference::Environment { environment_name } => {
-                        match &manifest_environments {
-                            Some(environments) => match environments.get(environment_name) {
-                                Some(environment) => {
-                                    Some(SelectedManifestEnvironment {
-                                        application_name: ApplicationName("TODO".to_string()), // TODO: atomic: load with envs
-                                        environment_name: environment_name.clone(),
-                                        environment: environment.clone(),
-                                    })
-                                }
+                        match &application_name_and_environments {
+                            Some(ApplicationNameAndEnvironments {
+                                application_name,
+                                environments,
+                            }) => match environments.get(environment_name) {
+                                Some(environment) => Some(SelectedManifestEnvironment {
+                                    application_name: application_name.value.clone(),
+                                    environment_name: environment_name.clone(),
+                                    environment: environment.clone(),
+                                }),
                                 None => {
                                     bail!(ContextInitHintError::EnvironmentNotFound {
                                         requested_environment_name: environment_name.clone(),
@@ -186,13 +190,16 @@ impl Context {
                     }
                 }
             }
-            None => match &manifest_environments {
-                Some(environments) => environments
+            None => match &application_name_and_environments {
+                Some(ApplicationNameAndEnvironments {
+                    application_name,
+                    environments,
+                }) => environments
                     .iter()
                     .find(|(_, env)| env.default == Some(Marker))
                     .map(
                         |(environment_name, environment)| SelectedManifestEnvironment {
-                            application_name: ApplicationName("TODO".to_string()), // TODO: atomic: load with envs
+                            application_name: application_name.value.clone(),
                             environment_name: environment_name.clone(),
                             environment: environment.clone(),
                         },
@@ -266,28 +273,30 @@ impl Context {
         let app_context_config = {
             manifest_environment
                 .as_ref()
-                .zip(manifest_environments)
-                .map(|(selected_environment, environments)| {
-                    ApplicationContextConfig::new(
-                        &global_flags,
-                        environments,
-                        ComponentPresetSelector {
-                            environment: selected_environment.environment_name.clone(),
-                            presets: {
-                                let mut presets = selected_environment
-                                    .environment
-                                    .component_presets
-                                    .clone()
-                                    .into_vec()
-                                    .into_iter()
-                                    .map(ComponentPresetName)
-                                    .collect::<Vec<_>>();
-                                presets.extend(global_flags.preset.iter().cloned());
-                                presets
+                .zip(application_name_and_environments)
+                .map(
+                    |(selected_environment, application_name_and_environments)| {
+                        ApplicationContextConfig::new(
+                            &global_flags,
+                            application_name_and_environments,
+                            ComponentPresetSelector {
+                                environment: selected_environment.environment_name.clone(),
+                                presets: {
+                                    let mut presets = selected_environment
+                                        .environment
+                                        .component_presets
+                                        .clone()
+                                        .into_vec()
+                                        .into_iter()
+                                        .map(ComponentPresetName)
+                                        .collect::<Vec<_>>();
+                                    presets.extend(global_flags.preset.iter().cloned());
+                                    presets
+                                },
                             },
-                        },
-                    )
-                })
+                        )
+                    },
+                )
         };
 
         let template_sdk_overrides = SdkOverrides {
@@ -847,6 +856,7 @@ impl GolemClients {
 struct ApplicationContextConfig {
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
+    application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
     component_presets: ComponentPresetSelector,
     golem_rust_override: RustDependencyOverride,
@@ -858,13 +868,14 @@ struct ApplicationContextConfig {
 impl ApplicationContextConfig {
     pub fn new(
         global_flags: &GolemCliGlobalFlags,
-        environments: BTreeMap<EnvironmentName, Environment>,
+        application_name_and_environments: ApplicationNameAndEnvironments,
         component_presets: ComponentPresetSelector,
     ) -> Self {
         Self {
             app_manifest_path: global_flags.app_manifest_path.clone(),
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,
-            environments,
+            application_name: application_name_and_environments.application_name,
+            environments: application_name_and_environments.environments,
             component_presets,
             golem_rust_override: RustDependencyOverride {
                 path_override: global_flags.golem_rust_path.clone(),
@@ -977,6 +988,7 @@ impl ApplicationContextState {
                     .take()
                     .expect("ApplicationContextState.app_source_mode is not set"),
                 app_config,
+                config.application_name.clone(),
                 config.environments.clone(),
                 config.component_presets.clone(),
                 file_download_client.clone(),

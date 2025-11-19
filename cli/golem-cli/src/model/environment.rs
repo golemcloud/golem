@@ -16,9 +16,7 @@ use crate::log::LogColorize;
 use crate::model::app_raw::Environment;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::environment::{
-    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName,
-};
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use indoc::formatdoc;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
