@@ -55,7 +55,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_version: component_revision.0,
+                component_revision: component_revision.0,
                 args,
                 env: env.into_iter().collect(),
                 created_by: created_by.into(),
@@ -181,7 +181,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version: target_revision.0,
+                target_revision: target_revision.0,
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
@@ -191,7 +191,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version: target_revision.0,
+                target_revision: target_revision.0,
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
@@ -201,7 +201,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version: target_revision.0,
+                target_revision: target_revision.0,
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {

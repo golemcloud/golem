@@ -50,7 +50,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
+    CachableComponent, ComponentFilePath, ComponentRevision, PluginPriority,
 };
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -530,7 +530,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &ComponentDto,
+        component_metadata: &CachableComponent,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -699,7 +699,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &ComponentDto {
+    fn component_metadata(&self) -> &CachableComponent {
         self.durable_ctx.component_metadata()
     }
 

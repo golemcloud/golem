@@ -281,6 +281,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-dropper"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d901072ae4dcdca2201b98beb02d31fb4b6b2472fbd0e870b12ec15b8b35b2d2"
+dependencies = [
+ "async-dropper-derive",
+ "async-dropper-simple",
+ "async-trait",
+ "futures",
+ "tokio",
+]
+
+[[package]]
+name = "async-dropper-derive"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a35cf17a37761f1c88b8e770b5956820fe84c12854165b6f930c604ea186e47e"
+dependencies = [
+ "async-trait",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.109",
+ "tokio",
+]
+
+[[package]]
 name = "async-dropper-simple"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1081,6 +1107,21 @@ dependencies = [
  "sync_wrapper 1.0.2",
  "tower-layer",
  "tower-service",
+]
+
+[[package]]
+name = "axum-jrpc"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4d43309d9b4aa9a30523ea666138c5eca3af65d226c766c02c3042da63a08a2"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "cfg-if",
+ "mime",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4297,6 +4338,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-debugging-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-dropper",
+ "async-dropper-simple",
+ "async-trait",
+ "axum-jrpc",
+ "bytes 1.10.1",
+ "desert_rust",
+ "futures",
+ "gethostname",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-rib",
+ "golem-service-base",
+ "golem-test-framework",
+ "golem-wasm",
+ "golem-worker-executor",
+ "golem-worker-executor-test-utils",
+ "humansize",
+ "log",
+ "poem",
+ "poem-openapi",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.25.0",
+ "tokio-util",
+ "tonic 0.14.2",
+ "tonic-tracing-opentelemetry",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 source = "git+https://github.com/golemcloud/golem-openapi-client-generator.git?branch=atomic-deployment-fixes#64018ca64c798839b6018c6bf4923c0277301826"
@@ -4693,6 +4780,7 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",
+ "golem-worker-executor-test-utils",
  "heck 0.5.0",
  "hex",
  "http 1.3.1",
@@ -4740,6 +4828,38 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "zstd",
+]
+
+[[package]]
+name = "golem-worker-executor-test-utils"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "applying",
+ "async-lock",
+ "async-trait",
+ "blake3",
+ "bytes 1.10.1",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "golem-test-framework",
+ "golem-wasm",
+ "golem-worker-executor",
+ "prometheus",
+ "regex",
+ "scc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "tokio",
+ "tonic 0.14.2",
+ "tracing",
+ "uuid",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-http",
 ]
 
 [[package]]

@@ -265,7 +265,6 @@ CREATE TABLE component_revisions
     created_by                   UUID      NOT NULL,
     deleted                      BOOLEAN   NOT NULL,
 
-    component_type               INTEGER   NOT NULL,
     size                         INTEGER   NOT NULL,
     metadata                     BYTEA     NOT NULL,
     original_env                 JSONB     NOT NULL,

@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use axum::extract::Path;
 use axum::routing::{delete, get, post};
@@ -26,6 +25,9 @@ use golem_test_framework::dsl::{
     worker_error_message, worker_error_underlying_error, TestDsl,
 };
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};

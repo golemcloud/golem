@@ -26,8 +26,6 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
-[features]
-
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true }
@@ -104,6 +102,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
 axum = { workspace = true }

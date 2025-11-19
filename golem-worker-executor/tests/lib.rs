@@ -12,24 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::common::component_writer::FileSystemComponentWriter;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_test_framework::components::redis::spawned::SpawnedRedis;
-use golem_test_framework::components::redis::Redis;
-use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
-use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
-use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
+use golem_worker_executor_test_utils::{LastUniqueId, WorkerExecutorTestDependencies};
+use std::fmt::Debug;
+use std::path::Path;
 use std::sync::atomic::AtomicU16;
-use std::sync::Arc;
-use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
-use tracing::Level;
-
-mod common;
 
 pub mod agent;
 pub mod api;
@@ -72,64 +61,6 @@ tag_suite!(rust_rpc_stubless, group2);
 
 tag_suite!(rdbms_service, rdbms_service);
 
-#[derive(Clone)]
-pub struct WorkerExecutorTestDependencies {
-    redis: Arc<dyn Redis>,
-    redis_monitor: Arc<dyn RedisMonitor>,
-    component_writer: Arc<FileSystemComponentWriter>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
-    component_directory: PathBuf,
-    component_temp_directory: Arc<TempDir>,
-    component_service_directory: PathBuf,
-}
-
-impl Debug for WorkerExecutorTestDependencies {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WorkerExecutorTestDependencies")
-    }
-}
-
-impl WorkerExecutorTestDependencies {
-    pub async fn new() -> Self {
-        let redis: Arc<dyn Redis> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
-            Level::INFO,
-            Level::ERROR,
-        ));
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::TRACE,
-            Level::ERROR,
-        ));
-
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(Path::new("data/blobs"))
-                .await
-                .unwrap(),
-        );
-
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let component_directory = Path::new("../test-components").to_path_buf();
-        let component_service_directory = Path::new("data/components");
-
-        let component_writer: Arc<FileSystemComponentWriter> =
-            Arc::new(FileSystemComponentWriter::new(component_service_directory).await);
-
-        Self {
-            redis,
-            redis_monitor,
-            component_directory,
-            component_service_directory: component_service_directory.to_path_buf(),
-            component_writer,
-            initial_component_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Tracing;
 
@@ -145,11 +76,6 @@ pub fn tracing() -> Tracing {
 #[test_dep]
 pub async fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
     WorkerExecutorTestDependencies::new().await
-}
-
-#[derive(Debug)]
-pub struct LastUniqueId {
-    pub id: AtomicU16,
 }
 
 #[test_dep]

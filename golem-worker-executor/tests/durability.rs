@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use axum::extract::Query;
 use axum::response::Response;
 use axum::routing::get;
@@ -23,6 +22,9 @@ use futures::{stream, StreamExt};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;

@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::{assert, check};
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -31,6 +30,9 @@ use golem_test_framework::dsl::{
 };
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::{HeaderMap, StatusCode};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1686,7 +1688,7 @@ async fn sleep_and_awaiting_parallel_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
@@ -1744,7 +1746,7 @@ async fn sleep_below_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
@@ -1796,7 +1798,7 @@ async fn sleep_above_threshold_between_http_responses(
     debug!("duration: {:?}", duration);
 
     info!("Restarting worker...");
-    let executor = crate::common::start(deps, &context).await?;
+    let executor = golem_worker_executor_test_utils::start(deps, &context).await?;
     info!("Worker restarted");
 
     let healthcheck_result = executor
