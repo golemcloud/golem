@@ -63,7 +63,7 @@ pub fn get_remote_client(
 
                     }
 
-                    pub fn phantom(#(#constructor_param_defs), *, phantom_id: Option<golem_rust::Uuid>) -> #remote_client_type_name {
+                    pub fn phantom(phantom_id: Option<golem_rust::Uuid>, #(#constructor_param_defs), *) -> #remote_client_type_name {
                         let agent_type =
                            golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
