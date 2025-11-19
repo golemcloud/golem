@@ -15,7 +15,6 @@
 use crate::agentic::{MultimodalSchema, Schema, UnstructuredBinary, UnstructuredText};
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
 use golem_wasm::{Value, WitValue};
-use golem_rust_macro::MultimodalSchema;
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -59,6 +58,37 @@ pub struct Multimodal<T> {
 }
 
 impl<T: MultimodalSchema> Multimodal<T> {
+    /// Create a Multimodal input data for agent functions.
+    /// Note that you cannot mix a multimodal input with other input types
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use golem_rust::agentic::{Multimodal};
+    /// use golem_rust::MultimodalSchema;
+    ///
+    /// // Create a multimodal dataset with text and image inputs
+    /// let multimodal_data = Multimodal::new([
+    ///     Input::Text("foo".to_string()),
+    ///     Input::Image(vec![1, 2, 3])
+    /// ]);
+    ///
+    /// #[derive(MultimodalSchema)]
+    /// enum Input {
+    ///     Text(String),
+    ///     Image(Vec<u8>),
+    /// }
+    ///
+    /// // Function that shows how an agent might receive multimodal input
+    /// fn my_agent_method(input: Multimodal<Input>) {
+    ///     // handle the multimodal input here
+    /// }
+    ///
+    /// my_agent_method(multimodal_data);
+    /// ```
+    ///
+    /// If you need a predefined basic multimodal type with text and binary data, you can use `MultimodalBasic` .
+    ///
     pub fn new<I>(items: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -175,14 +205,45 @@ impl<T: MultimodalSchema> Multimodal<T> {
     }
 }
 
-pub type MultimodalSimple = Multimodal<MultimodalSimpleInput>;
+pub type MultimodalBasic = Multimodal<MultimodalBasicType>;
 
-pub enum MultimodalSimpleInput {
+impl Multimodal<MultimodalBasicType> {
+    /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
+    ///
+    /// # Example
+    /// ```
+    /// use golem_rust::agentic::{Multimodal, MultimodalBasicType, UnstructuredText, UnstructuredBinary, MultimodalBasic};
+    /// use golem_rust::MultimodalSchema;
+    ///
+    /// // Create a multimodal dataset with text and binary inputs
+    /// let multimodal_data = Multimodal::new_basic([
+    ///     MultimodalBasicType::Text(UnstructuredText::from_inline_any("foo".to_string())),
+    ///     MultimodalBasicType::Binary(UnstructuredBinary::from_inline(vec![1, 2, 3], "image/png".to_string()))
+    /// ]);
+    ///
+    /// // Function that shows how an agent might receive multimodal input
+    /// fn my_agent_method(input: MultimodalBasic) {
+    ///     // handle the multimodal input here
+    /// }
+    ///
+    /// my_agent_method(multimodal_data);
+    /// ```
+    pub fn new_basic<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = MultimodalBasicType>,
+    {
+        Self {
+            items: items.into_iter().collect(),
+        }
+    }
+}
+
+pub enum MultimodalBasicType {
     Text(UnstructuredText),
     Binary(UnstructuredBinary<String>)
 }
 
-impl MultimodalSchema for MultimodalSimpleInput {
+impl MultimodalSchema for MultimodalBasicType {
     fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
         vec![
             (
@@ -198,8 +259,8 @@ impl MultimodalSchema for MultimodalSimpleInput {
 
     fn get_name(&self) -> String {
         match self {
-            MultimodalSimpleInput::Text(_) => "Text".to_string(),
-            MultimodalSimpleInput::Binary(_) => "Binary".to_string(),
+            MultimodalBasicType::Text(_) => "Text".to_string(),
+            MultimodalBasicType::Binary(_) => "Binary".to_string(),
         }
     }
 
@@ -208,11 +269,11 @@ impl MultimodalSchema for MultimodalSimpleInput {
         Self: Sized
     {
         match self {
-            MultimodalSimpleInput::Text(text) => {
+            MultimodalBasicType::Text(text) => {
                 let elem_value = text.to_element_value()?;
                 Ok(("Text".to_string(), elem_value))
             }
-            MultimodalSimpleInput::Binary(binary) => {
+            MultimodalBasicType::Binary(binary) => {
                 let elem_value = binary.to_element_value()?;
                 Ok(("Binary".to_string(), elem_value))
             }
@@ -230,12 +291,12 @@ impl MultimodalSchema for MultimodalSimpleInput {
             "Text" => {
                 let schema = <UnstructuredText>::get_type();
                 let text = UnstructuredText::from_element_value(value, schema)?;
-                Ok(MultimodalSimpleInput::Text(text))
+                Ok(MultimodalBasicType::Text(text))
             }
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
                 let binary = UnstructuredBinary::<String>::from_element_value(value, schema)?;
-                Ok(MultimodalSimpleInput::Binary(binary))
+                Ok(MultimodalBasicType::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
         }
@@ -246,8 +307,8 @@ impl MultimodalSchema for MultimodalSimpleInput {
         Self: Sized
     {
         match self {
-            MultimodalSimpleInput::Text(text) => text.to_wit_value(),
-            MultimodalSimpleInput::Binary(binary) => binary.to_wit_value(),
+            MultimodalBasicType::Text(text) => text.to_wit_value(),
+            MultimodalBasicType::Binary(binary) => binary.to_wit_value(),
         }
     }
 }

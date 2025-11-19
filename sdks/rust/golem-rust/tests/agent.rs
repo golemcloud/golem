@@ -17,7 +17,7 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::{Multimodal, UnstructuredBinary, UnstructuredText};
+    use golem_rust::agentic::{MultimodalBasic, Multimodal, UnstructuredBinary, UnstructuredText};
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
@@ -35,6 +35,8 @@ mod tests {
         fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         fn echo_option(&self, option: Option<String>) -> Option<String>;
         fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage>;
+        fn echo_multimodal_basic(&self, input: MultimodalBasic) -> MultimodalBasic;
+
         fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
         fn echo_unstructured_text_lc(
             &self,
@@ -100,6 +102,10 @@ mod tests {
         }
 
         fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage> {
+            input
+        }
+
+        fn echo_multimodal_basic(&self, input: MultimodalBasic) -> MultimodalBasic {
             input
         }
 
@@ -216,6 +222,7 @@ mod tests {
         async fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         async fn echo_option(&self, option: Option<String>) -> Option<String>;
         async fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage>;
+        async fn echo_multimodal_basic(&self, input: MultimodalBasic) -> MultimodalBasic;
         async fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
         async fn echo_unstructured_text_lc(
             &self,
@@ -264,6 +271,10 @@ mod tests {
         }
 
         async fn echo_multimodal(&self, input: Multimodal<TextOrImage>) -> Multimodal<TextOrImage> {
+            input
+        }
+
+        async fn echo_multimodal_basic(&self, input: MultimodalBasic) -> MultimodalBasic {
             input
         }
 

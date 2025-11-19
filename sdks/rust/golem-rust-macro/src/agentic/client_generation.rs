@@ -179,10 +179,19 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                             }
                         }
                         DefaultOrMultimodal::Multimodal => {
-                            let inner_type = extract_inner_type_if_multimodal(ty).expect("Expected multimodal return type to have inner type");
+                            let inner_type = extract_inner_type_if_multimodal(ty);
 
-                            quote! {
-                                golem_rust::agentic::Multimodal::<#inner_type>::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
+                            match inner_type {
+                                Some(inner_type) => {
+                                    quote! {
+                                        golem_rust::agentic::Multimodal::<#inner_type>::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
+                                    }
+                                }
+                                None => {
+                                    quote! {
+                                        golem_rust::agentic::MultimodalBasic::from_wit_value(wit_value).expect("Failed to deserialize rpc result to multimodal return type")
+                                    }
+                                }
                             }
                         }
                     }

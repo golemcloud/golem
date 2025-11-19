@@ -14,7 +14,7 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemTrait, Type};
+use syn::{ItemTrait};
 
 use crate::agentic::helpers::{
     extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
@@ -213,13 +213,22 @@ fn get_agent_type_with_remote_client(
                         if let syn::FnArg::Typed(pat_type) = input {
                             let ty = &pat_type.ty;
 
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
+                            let inner_type = extract_inner_type_if_multimodal(ty);
 
-                            input_parameters.push(quote! {
-                                golem_rust::agentic::Multimodal::<#inner_type>::get_schema()
-                            });
+                            match inner_type {
+                                Some(inner_type) => {
+                                    input_parameters.push(quote! {
+                                        golem_rust::agentic::Multimodal::<#inner_type>::get_schema()
+                                    });
+                                }
+                                None => {
+                                    input_parameters.push(quote! {
+                                        golem_rust::agentic::Multimodal::<golem_rust::agentic::MultimodalBasicType>::get_schema()
+                                    });
+                                }
+                            }
+
+
                         }
                     }
                 }
@@ -244,12 +253,20 @@ fn get_agent_type_with_remote_client(
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
                         syn::ReturnType::Type(_, ty) => {
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
-                            output_parameters.push(quote! {
-                                <#inner_type as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
-                            });
+                            let inner_type = extract_inner_type_if_multimodal(ty);
+
+                            match inner_type {
+                                Some(inner_type) => {
+                                    output_parameters.push(quote! {
+                                        <#inner_type as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
+                                    });
+                                }
+                                None => {
+                                    output_parameters.push(quote! {
+                                        <golem_rust::agentic::MultimodalBasicType as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
+                                    });
+                                }
+                            }
                         }
                     };
                 }
