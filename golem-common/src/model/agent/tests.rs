@@ -321,7 +321,9 @@ fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str)
 }
 
 fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
-    let id2 = AgentId::parse(agent_id_str, TestAgentTypes::new()).err().unwrap();
+    let id2 = AgentId::parse(agent_id_str, TestAgentTypes::new())
+        .err()
+        .unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 

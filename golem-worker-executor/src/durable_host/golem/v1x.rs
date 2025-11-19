@@ -41,13 +41,13 @@ use golem_common::model::oplog::host_functions::{
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemApiAgentId, HostRequestGolemApiComponentSlug,
-    HostRequestGolemApiComponentSlugAndAgentName,
-    HostRequestGolemApiForkAgent, HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent,
-    HostRequestGolemApiUpdateAgent, HostRequestNoInput, HostResponseGolemApiAgentId,
-    HostResponseGolemApiAgentMetadata, HostResponseGolemApiComponentId, HostResponseGolemApiFork,
-    HostResponseGolemApiIdempotencyKey, HostResponseGolemApiPromiseCompletion,
-    HostResponseGolemApiPromiseId, HostResponseGolemApiPromiseResult,
-    HostResponseGolemApiSelfAgentMetadata, HostResponseGolemApiUnit, OplogEntry,
+    HostRequestGolemApiComponentSlugAndAgentName, HostRequestGolemApiForkAgent,
+    HostRequestGolemApiPromiseId, HostRequestGolemApiRevertAgent, HostRequestGolemApiUpdateAgent,
+    HostRequestNoInput, HostResponseGolemApiAgentId, HostResponseGolemApiAgentMetadata,
+    HostResponseGolemApiComponentId, HostResponseGolemApiFork, HostResponseGolemApiIdempotencyKey,
+    HostResponseGolemApiPromiseCompletion, HostResponseGolemApiPromiseId,
+    HostResponseGolemApiPromiseResult, HostResponseGolemApiSelfAgentMetadata,
+    HostResponseGolemApiUnit, OplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
@@ -821,7 +821,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     &self.owned_worker_id,
                     &target_agent_id,
                     oplog_index_cut_off,
-                    forked_phantom_id.clone()
+                    forked_phantom_id,
                 )
                 .await
                 .map(|_| golem_common::model::ForkResult::Original)
