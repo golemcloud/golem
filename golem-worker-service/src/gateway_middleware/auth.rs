@@ -20,7 +20,7 @@ use crate::gateway_execution::gateway_session_store::{
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_security::{IdentityProvider, OpenIdClient};
 use golem_common::SafeDisplay;
-use golem_service_base::worker_api::security_scheme::SecuritySchemeWithProviderMetadata;
+use golem_service_base::custom_api::security_scheme::SecuritySchemeWithProviderMetadata;
 use http::StatusCode;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims, CoreIdTokenVerifier};
 use openidconnect::{ClaimsVerificationError, Nonce};

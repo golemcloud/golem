@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::worker_api::path_pattern::PathPattern;
+use golem_service_base::custom_api::path_pattern::PathPattern;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouterPattern {

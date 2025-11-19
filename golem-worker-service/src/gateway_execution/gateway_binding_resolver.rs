@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_router::{build_router, RouteEntry, RouterPattern};
-use golem_service_base::worker_api::compiled_http_api_definition::CompiledHttpApiDefinition;
+use golem_service_base::custom_api::compiled_http_api_definition::CompiledHttpApiDefinition;
 
 pub struct ResolvedRouteEntry {
     pub path_segments: Vec<String>,

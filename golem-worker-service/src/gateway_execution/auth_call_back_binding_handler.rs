@@ -18,7 +18,7 @@ use crate::gateway_execution::gateway_session_store::{
 use crate::gateway_security::{IdentityProvider, IdentityProviderError};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use golem_service_base::worker_api::security_scheme::SecuritySchemeWithProviderMetadata;
+use golem_service_base::custom_api::security_scheme::SecuritySchemeWithProviderMetadata;
 use openidconnect::core::CoreTokenResponse;
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse};
 use std::collections::HashMap;

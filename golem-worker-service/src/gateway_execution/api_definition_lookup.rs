@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use golem_common::model::api_deployment::ApiSiteString;
 use golem_common::SafeDisplay;
-use golem_service_base::worker_api::compiled_http_api_definition::CompiledHttpApiDefinition;
+use golem_service_base::custom_api::compiled_http_api_definition::CompiledHttpApiDefinition;
 
 #[async_trait]
 pub trait HttpApiDefinitionsLookup: Send + Sync {

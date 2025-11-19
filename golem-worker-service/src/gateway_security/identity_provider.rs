@@ -15,9 +15,9 @@
 use crate::gateway_security::open_id_client::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use golem_service_base::worker_api::identity_provider_metadata::GolemIdentityProviderMetadata;
-use golem_service_base::worker_api::security_scheme::Provider;
-use golem_service_base::worker_api::security_scheme::SecurityScheme;
+use golem_service_base::custom_api::identity_provider_metadata::GolemIdentityProviderMetadata;
+use golem_service_base::custom_api::security_scheme::Provider;
+use golem_service_base::custom_api::security_scheme::SecurityScheme;
 use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,

@@ -23,7 +23,7 @@ use crate::gateway_execution::gateway_session_store::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
 use async_trait::async_trait;
-use golem_service_base::worker_api::HttpCors;
+use golem_service_base::custom_api::HttpCors;
 use http::header::*;
 use http::StatusCode;
 use poem::Body;

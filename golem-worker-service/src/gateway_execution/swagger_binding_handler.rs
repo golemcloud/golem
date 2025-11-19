@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::worker_api::compiled_gateway_binding::SwaggerUiBinding;
+use golem_service_base::custom_api::compiled_gateway_binding::SwaggerUiBinding;
 use http::StatusCode;
 use indexmap::IndexMap;
 use openapiv3;

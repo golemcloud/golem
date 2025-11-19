@@ -22,7 +22,7 @@ use crate::gateway_execution::gateway_session_store::{GatewaySessionStore, Sessi
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_security::IdentityProvider;
 use golem_common::SafeDisplay;
-use golem_service_base::worker_api::http_middlewares::{HttpMiddleware, HttpMiddlewares};
+use golem_service_base::custom_api::http_middlewares::{HttpMiddleware, HttpMiddlewares};
 use std::sync::Arc;
 
 pub enum MiddlewareSuccess {

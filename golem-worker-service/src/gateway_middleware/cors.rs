@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_execution::request::RichRequest;
-use golem_service_base::worker_api::HttpCors;
+use golem_service_base::custom_api::HttpCors;
 use http::{HeaderValue, Method};
 
 #[derive(Debug)]

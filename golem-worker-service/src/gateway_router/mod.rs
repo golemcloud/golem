@@ -19,10 +19,10 @@ pub mod tree;
 pub use core::*;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::worker_api::compiled_gateway_binding::GatewayBindingCompiled;
-use golem_service_base::worker_api::compiled_http_api_definition::CompiledRoute;
-use golem_service_base::worker_api::http_middlewares::HttpMiddlewares;
-use golem_service_base::worker_api::path_pattern::{PathPattern, QueryInfo, VarInfo};
+use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
+use golem_service_base::custom_api::compiled_http_api_definition::CompiledRoute;
+use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
+use golem_service_base::custom_api::path_pattern::{PathPattern, QueryInfo, VarInfo};
 pub use pattern::*;
 
 #[derive(Debug, Clone)]
