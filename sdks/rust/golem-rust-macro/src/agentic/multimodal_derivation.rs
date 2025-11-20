@@ -32,8 +32,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     let mut get_type_pairs = Vec::new();
     let mut serialize_match_arms = Vec::new();
     let mut get_name_match_arms = Vec::new();
-    let mut deserialize_match_arms = Vec::new();
-    let mut wit_value_match_arms = Vec::new();
+    let mut from_element_value_match_arms = Vec::new();
+    let mut to_wit_value_match_arms = Vec::new();
+    let mut from_wit_value_match_arms = Vec::new();
 
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
@@ -54,7 +55,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     }
                 });
 
-                wit_value_match_arms.push(quote! {
+                to_wit_value_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
                         <#field_type as golem_rust::agentic::Schema>::to_wit_value(inner)
                     }
@@ -64,9 +65,16 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     #enum_name::#variant_ident(_) => #variant_name.to_string()
                 });
 
-                deserialize_match_arms.push(quote! {
+                from_element_value_match_arms.push(quote! {
                     #variant_name => {
                         let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(elem.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        Ok(#enum_name::#variant_ident(val))
+                    }
+                });
+
+                from_wit_value_match_arms.push(quote! {
+                    #variant_name => {
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_wit_value(wit_value.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });
@@ -105,7 +113,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
             fn to_wit_value(self) -> Result<golem_rust::wasm_rpc::WitValue, String> {
                 match self {
-                    #(#wit_value_match_arms),*
+                    #(#to_wit_value_match_arms),*
                 }
             }
 
@@ -113,7 +121,16 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 let (name, elem) = elem;
 
                  match name.as_str() {
-                    #(#deserialize_match_arms),*,
+                    #(#from_element_value_match_arms),*,
+                    _ => return Err(format!("Unknown modality: {}", name))
+                 }
+            }
+
+            fn from_wit_value(wit_value: (String, golem_rust::wasm_rpc::WitValue)) -> Result<Self, String> {
+                let (name, wit_value) = wit_value;
+
+                 match name.as_str() {
+                    #(#from_wit_value_match_arms),*,
                     _ => return Err(format!("Unknown modality: {}", name))
                  }
             }

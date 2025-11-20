@@ -237,4 +237,14 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
             }
         }
     }
+
+    fn from_wit_value(
+        wit_value: golem_wasm::WitValue,
+        _schema: ElementSchema,
+    ) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        UnstructuredBinary::from_wit_value(wit_value)
+    }
 }

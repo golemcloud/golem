@@ -187,9 +187,9 @@ impl<T: MultimodalSchema> Multimodal<T> {
 
                         let wit_value = WitValue::from(*case_value);
 
-                        let item = <T as MultimodalSchema>::from_element_value((
+                        let item = <T as MultimodalSchema>::from_wit_value((
                             modality_name.to_string(),
-                            ElementValue::ComponentModel(wit_value.clone()),
+                            wit_value,
                         ))?;
 
                         items.push(item);
@@ -292,6 +292,25 @@ impl MultimodalSchema for MultimodalBasicType {
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
                 let binary = UnstructuredBinary::<String>::from_element_value(value, schema)?;
+                Ok(MultimodalBasicType::Binary(binary))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
+        }
+    }
+
+    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let (name, value) = wit_value;
+
+        match name.as_str() {
+            "Text" => {
+                let text = UnstructuredText::from_wit_value(value)?;
+                Ok(MultimodalBasicType::Text(text))
+            }
+            "Binary" => {
+                let binary = UnstructuredBinary::<String>::from_wit_value(value)?;
                 Ok(MultimodalBasicType::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),

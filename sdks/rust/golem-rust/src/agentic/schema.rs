@@ -27,6 +27,10 @@ pub trait Schema {
     where
         Self: Sized;
 
+    fn from_wit_value(wit_value: WitValue, schema: ElementSchema) -> Result<Self, String>
+    where
+        Self: Sized;
+
     fn to_wit_value(self) -> Result<WitValue, String>
     where
         Self: Sized,
@@ -89,6 +93,8 @@ pub trait Schema {
     }
 }
 
+// Handles the component model types via the IntoValue and FromValueAndType traits
+// This doesn't cover UnstructuredText, UnstructuredBinary
 impl<T: IntoValue + FromValueAndType> Schema for T {
     fn get_type() -> ElementSchema {
         ElementSchema::ComponentModel(T::get_type())
@@ -101,24 +107,21 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
 
     fn from_element_value(value: ElementValue, schema: ElementSchema) -> Result<Self, String> {
         match value {
-            ElementValue::ComponentModel(wit_value) => {
-                let value_and_type = ValueAndType {
-                    value: wit_value,
-                    typ: match schema {
-                        ElementSchema::ComponentModel(wit_type) => wit_type,
-                        _ => {
-                            return Err(format!(
-                                "Expected ComponentModel schema, got: {:?}",
-                                schema
-                            ))
-                        }
-                    },
-                };
-
-                T::from_value_and_type(value_and_type)
-            }
+            ElementValue::ComponentModel(wit_value) => T::from_wit_value(wit_value, schema),
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
+    }
+
+    fn from_wit_value(wit_value: WitValue, schema: ElementSchema) -> Result<Self, String> {
+        let value_and_type = ValueAndType {
+            value: wit_value,
+            typ: match schema {
+                ElementSchema::ComponentModel(wit_type) => wit_type,
+                _ => return Err(format!("Expected ComponentModel schema, got: {:?}", schema)),
+            },
+        };
+
+        T::from_value_and_type(value_and_type)
     }
 }
 
@@ -132,6 +135,10 @@ pub trait MultimodalSchema {
         Self: Sized;
 
     fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
+    where
+        Self: Sized;
+
+    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
     where
         Self: Sized;
 

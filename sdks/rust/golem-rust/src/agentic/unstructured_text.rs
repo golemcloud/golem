@@ -240,6 +240,13 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         }
     }
 
+    fn from_wit_value(wit_value: WitValue, _schema: ElementSchema) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        UnstructuredText::from_wit_value(wit_value)
+    }
+
     fn from_element_value(value: ElementValue, _schema: ElementSchema) -> Result<Self, String>
     where
         Self: Sized,
