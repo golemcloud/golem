@@ -46,12 +46,14 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 let field_type = &fields.unnamed[0].ty;
 
                 get_type_pairs.push(quote! {
-                    (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::get_type())
+                    (#variant_name.to_string(),  <#field_type as golem_rust::agentic::Schema>::get_type().get_element_schema().expect("multimodal types cannot be nested"))
                 });
 
                 serialize_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)?)
+                        let value_type = <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)?;
+                        let element_value = value_type.get_element_value().ok_or_else(|| "multimodal types cannot be nested".to_string())?;
+                        (#variant_name.to_string(), element_value)
                     }
                 });
 
@@ -67,7 +69,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 from_element_value_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(elem.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(golem_rust::agentic::ValueType::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });

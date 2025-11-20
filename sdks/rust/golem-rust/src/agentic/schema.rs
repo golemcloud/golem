@@ -64,7 +64,7 @@ impl ValueType {
             ValueType::Multimodal(_) => None,
         }
     }
-    
+
     pub fn get_multimodal_value(self) -> Option<Vec<(String, ElementValue)>> {
         match self {
             ValueType::Default(_) => None,

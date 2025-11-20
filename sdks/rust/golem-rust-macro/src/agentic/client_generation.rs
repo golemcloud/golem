@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{DefaultOrMultimodal, FunctionOutputInfo};
+use crate::agentic::helpers::FunctionOutputInfo;
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;

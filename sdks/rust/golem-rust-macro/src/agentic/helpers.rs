@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use syn::{GenericArgument, PathArguments, ReturnType, Type};
+use syn::{ReturnType, Type};
 
 pub struct FunctionOutputInfo {
     pub future_or_immediate: Asyncness,
@@ -43,13 +43,6 @@ pub enum Asyncness {
     Immediate,
 }
 
-// DefaultOrMultimodal refers to the type of input parameters (not each parameter individually) or output parameter type
-// Default refers all types that can be part of DataValue::Tuple
-pub enum DefaultOrMultimodal {
-    Default,
-    Multimodal,
-}
-
 pub fn is_constructor_method(sig: &syn::Signature) -> bool {
     match &sig.output {
         ReturnType::Type(_, ty) => match &**ty {
@@ -66,33 +59,6 @@ pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
     } else {
         Asyncness::Immediate
     }
-}
-
-pub fn skip_self_parameters(sig: &syn::Signature) -> Vec<&syn::PatType> {
-    sig.inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pat_ty) => Some(pat_ty),
-            _ => None,
-        })
-        .collect()
-}
-
-fn extract_inner_type_if_future(ty: &Type) -> Option<&Type> {
-    if let Type::Path(type_path) = ty {
-        if let Some(seg) = type_path.path.segments.last() {
-            if seg.ident == "impl" || seg.ident == "Future" {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    for arg in &args.args {
-                        if let GenericArgument::Type(inner_ty) = arg {
-                            return Some(inner_ty);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 pub fn has_async_trait_attribute(impl_block: &syn::ItemImpl) -> bool {

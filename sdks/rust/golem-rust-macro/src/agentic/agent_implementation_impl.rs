@@ -17,8 +17,7 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_async_trait_attribute, is_constructor_method, Asyncness,
-    FunctionOutputInfo,
+    get_asyncness, has_async_trait_attribute, is_constructor_method, Asyncness, FunctionOutputInfo,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -256,42 +255,43 @@ fn generate_method_param_extraction(
     let extraction: Vec<proc_macro2::TokenStream> = param_idents.iter().enumerate().map(|(i, ident)| {
         let ident_result = format_ident!("{}_result", ident);
         quote! {
-                    let #ident_result = match &input {
-                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                          let value = values.get(#i);
+           let #ident_result = match &input {
+               golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                 let value = values.get(#i);
 
-                          let element_value_result =  match value {
-                            Some(v) => Ok(v.clone()),
-                            None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
-                          };
+                 let element_value_result =  match value {
+                   Some(v) => Ok(v.clone()),
+                   None => Err(golem_rust::agentic::invalid_input_error(format!("Missing arguments in method {}", #method_name))),
+                 };
 
-                          let element_value = element_value_result?;
+                 let element_value = element_value_result?;
 
-                          let element_schema = golem_rust::agentic::get_method_parameter_type(
-                            &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
-                            #method_name,
-                            #i,
-                          ).ok_or_else(|| {
-                            golem_rust::agentic::custom_error(format!(
-                                "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
-                                #agent_type_name, #method_name, #i
-                            ))
-                          })?;
-                          let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Default(element_value), golem_rust::agentic::SchemaType::Default(element_schema)).map_err(|e| {
-                            golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
-                          })?;
-                          Ok(deserialized_value)
-                       },
-                       golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
-                            let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Multimodal(elements.clone()), golem_rust::agentic::SchemaType::Multimodal(vec![])).map_err(|e| {
-                            golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
-                          })?;
-                            Ok(deserialized_value)
+                 let element_schema = golem_rust::agentic::get_method_parameter_type(
+                   &golem_rust::agentic::AgentTypeName(#agent_type_name.to_string()),
+                   #method_name,
+                   #i,
+                 ).ok_or_else(|| {
+                   golem_rust::agentic::custom_error(format!(
+                       "Internal Error: Parameter schema not found for agent: {}, method: {}, parameter index: {}",
+                       #agent_type_name, #method_name, #i
+                   ))
+                 })?;
+                 let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Default(element_value), golem_rust::agentic::SchemaType::Default(element_schema)).map_err(|e| {
+                   golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
+                 })?;
+                 Ok(deserialized_value)
+              },
+              golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
+                   let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Multimodal(elements.clone()), golem_rust::agentic::SchemaType::Multimodal(vec![])).map_err(|e| {
+                   golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
+                 })?;
+                   Ok(deserialized_value)
 
-                       }
-                   };
-                   let #ident = #ident_result?;
-                }
+              }
+          };
+
+          let #ident = #ident_result?;
+        }
     }).collect();
 
     quote! {
@@ -374,7 +374,6 @@ fn generate_constructor_extraction(
         }
     }).collect::<Vec<_>>();
 
-    // For non multimodals, we have a call back to continue after extraction
     quote! {
         #(#extraction)*
         #call_back

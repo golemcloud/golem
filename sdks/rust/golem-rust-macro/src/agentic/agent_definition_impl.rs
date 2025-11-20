@@ -16,7 +16,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
 
-use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, FunctionOutputInfo};
+use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
 use crate::agentic::{
     async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
     no_constructor_method_error,
@@ -156,8 +156,6 @@ fn get_agent_type_with_remote_client(
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            let fn_output_info = FunctionOutputInfo::from_signature(&trait_fn.sig);
-
             if is_constructor_method(&trait_fn.sig) {
                 return None;
             }
@@ -282,14 +280,11 @@ fn get_agent_type_with_remote_client(
         let mut constructor_default_inputs = vec![];
     };
 
-    // It holds the name and type of the constructor parmeters with schema
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    // name and type of the constructor params
     let mut constructor_param_defs = vec![];
 
-    // just the parmaeter identities
-    let mut constructor_param_idents = vec![];
+    let mut constructor_param_names = vec![];
 
     if constructor_methods.is_empty() {
         return Err(no_constructor_method_error(item_trait).into());
@@ -310,7 +305,7 @@ fn get_agent_type_with_remote_client(
                             #param_ident: #ty
                         });
 
-                        constructor_param_idents.push(quote! {
+                        constructor_param_names.push(quote! {
                             #param_ident
                         });
 
@@ -355,7 +350,7 @@ fn get_agent_type_with_remote_client(
     };
 
     let remote_client =
-        get_remote_client(item_trait, constructor_param_defs, constructor_param_idents);
+        get_remote_client(item_trait, constructor_param_defs, constructor_param_names);
 
     let agent_constructor = quote! {
         {
