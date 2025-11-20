@@ -41,6 +41,7 @@ tags:
 - name: ProjectPolicy
   description: Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
 - name: RegistryService
+- name: Reports
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -6164,8 +6165,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - Account
-      - Token
+      - Reports
       responses:
         '200':
           description: ''
@@ -6223,8 +6223,7 @@ paths:
     get:
       tags:
       - RegistryService
-      - Account
-      - Token
+      - Reports
       responses:
         '200':
           description: ''

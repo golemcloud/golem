@@ -19,7 +19,6 @@ pub mod provisioner;
 
 use self::provisioner::DomainProvisioner;
 use super::environment::{EnvironmentError, EnvironmentService};
-use crate::repo::account::AccountRepo;
 use crate::repo::domain_registration::DomainRegistrationRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::domain_registration::{
