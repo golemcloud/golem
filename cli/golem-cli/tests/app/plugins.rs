@@ -323,3 +323,40 @@ impl TestPlugin {
         Ok(component.to_vec())
     }
 }
+
+#[test]
+async fn plugin_installation_test2(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let oplog_processor_component_path = "../test-components/oplog-processor.wasm";
+
+    let plugin_manifest_path = "plugin.yaml";
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("icon.svg")),
+        indoc! {r#"<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#},
+    ).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join(Path::new(plugin_manifest_path)),
+        formatdoc!(
+            "
+            name: oplog-processor-1
+            version: v1
+            description: Test plugin
+            type: transform
+            icon: icon.svg
+            homepage: none
+            specs:
+                type: OplogProcessor
+                component: {}
+            ",
+            oplog_processor_component_path
+        ),
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path])
+        .await;
+    assert!(outputs.success());
+}
