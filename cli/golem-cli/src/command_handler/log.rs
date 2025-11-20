@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::context::Context;
+use crate::model::format::Format;
 use crate::model::text::fmt::{to_colored_json, to_colored_yaml, NestedTextViewIndent, TextView};
-use crate::model::Format;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
@@ -33,11 +33,23 @@ impl LogHandler {
             Format::Json => {
                 println!("{}", serde_json::to_string(value).unwrap());
             }
-            Format::PrettyJson => {}
+            Format::PrettyJson => {
+                if self.ctx.should_colorize() {
+                    println!("{}", to_colored_json(value).unwrap());
+                } else {
+                    println!("{}", serde_json::to_string(value).unwrap());
+                }
+            }
             Format::Yaml => {
                 println!("---\n{}", serde_yaml::to_string(value).unwrap());
             }
-            Format::PrettyYaml => {}
+            Format::PrettyYaml => {
+                if self.ctx.should_colorize() {
+                    println!("---\n{}", to_colored_yaml(value).unwrap());
+                } else {
+                    println!("---\n{}", serde_yaml::to_string(value).unwrap());
+                }
+            }
             Format::Text => {
                 println!("{}", serde_json::to_string_pretty(value).unwrap());
             }

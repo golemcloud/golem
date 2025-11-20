@@ -15,10 +15,11 @@
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
+use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::types::{
     Enumeration, EnumerationType, Interval, TimeTz, ValuesRange,
 };
-use golem_common::model::{ComponentId, RdbmsPoolKey, TransactionId, WorkerId};
+use golem_common::model::{RdbmsPoolKey, TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};

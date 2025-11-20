@@ -90,7 +90,7 @@ pub fn try_deserialize_with_version<T: BinaryDeserializer>(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::ComponentId;
+    use crate::model::component::ComponentId;
     use desert_rust::BinaryCodec;
     use rand::distr::Alphanumeric;
     use rand::Rng;

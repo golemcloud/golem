@@ -12,32 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::sync::RwLock;
-use std::time::Instant;
-use test_r::{test, test_dep};
-
-use assert2::check;
-use nonempty_collections::nev;
-use tracing::{debug, info};
-use uuid::Uuid;
-
-use golem_common::config::RedisConfig;
-use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{LogLevel, WorkerError};
-use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AccountId, ComponentId, WorkerStatusRecord};
-use golem_common::redis::RedisPool;
-use golem_common::tracing::{init_tracing, TracingConfig};
-
 use super::*;
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
+use assert2::check;
+use golem_common::config::RedisConfig;
+use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentId;
+use golem_common::model::oplog::{LogLevel, WorkerError};
+use golem_common::model::regions::OplogRegion;
+use golem_common::model::WorkerStatusRecord;
+use golem_common::redis::RedisPool;
+use golem_common::tracing::{init_tracing, TracingConfig};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
+use nonempty_collections::nev;
+use std::collections::HashSet;
+use std::sync::RwLock;
+use std::time::Instant;
+use test_r::{test, test_dep};
+use tracing::{debug, info};
+use uuid::Uuid;
 
 struct Tracing;
 
@@ -75,21 +74,23 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -145,21 +146,23 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         10,
     ));
 
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -201,22 +204,24 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -250,7 +255,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, vec![1, 2, 3])
+        .create_snapshot_based_update_description(ComponentRevision(11), vec![1, 2, 3])
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -350,21 +355,23 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -403,7 +410,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .rounded();
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, large_payload4.clone())
+        .create_snapshot_based_update_description(ComponentRevision(11), large_payload4.clone())
         .await
         .unwrap();
     let entry4 = OplogEntry::PendingUpdate {
@@ -572,22 +579,24 @@ async fn multilayer_transfers_entries_after_limit_reached(
         10,
     ));
 
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -615,7 +624,11 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .open(
                 &owned_worker_id,
                 primary_oplog_service.get_last_index(&owned_worker_id).await,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -641,7 +654,11 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -704,22 +721,24 @@ async fn read_from_archive_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -749,7 +768,11 @@ async fn read_from_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -809,15 +832,13 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
@@ -826,14 +847,12 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             component_id: ComponentId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         },
-        component_version: 1,
+        component_revision: ComponentRevision(1),
         args: vec![],
         env: vec![],
         wasi_config_vars: BTreeMap::new(),
-        project_id: project_id.clone(),
-        created_by: AccountId {
-            value: "user1".to_string(),
-        },
+        environment_id: environment_id.clone(),
+        created_by: account_id.clone(),
         parent: None,
         component_size: 0,
         initial_total_linear_memory_size: 0,
@@ -845,7 +864,11 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .create(
             &owned_worker_id,
             create_entry.clone(),
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -956,15 +979,13 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         10,
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     info!("FIRST OPEN");
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
@@ -972,7 +993,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1003,7 +1028,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1025,7 +1054,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1047,7 +1080,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1080,7 +1117,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1102,7 +1143,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1124,7 +1169,11 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1240,22 +1289,24 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
     let oplog = oplog_service
         .open(
             &owned_worker_id,
             last_oplog_index,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1295,7 +1346,11 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1356,15 +1411,13 @@ async fn scheduled_archive_impl(use_blob: bool) {
         1000, // no transfer will occur by reaching limit in this test
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
     };
-    let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+    let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
 
     let timestamp = Timestamp::now_utc();
     let entries: Vec<OplogEntry> = (0..100)
@@ -1385,7 +1438,11 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1408,7 +1465,11 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1438,7 +1499,11 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1454,7 +1519,11 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            WorkerMetadata::default(
+                worker_id.clone(),
+                account_id.clone(),
+                environment_id.clone(),
+            ),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1497,10 +1566,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         1000, // no transfer will occur by reaching limit in this test
         10,
     ));
-    let account_id = AccountId {
-        value: "user1".to_string(),
-    };
-    let project_id = ProjectId::new_v4();
+    let account_id = AccountId::new_v4();
+    let environment_id = EnvironmentId::new_v4();
     let component_id = ComponentId::new_v4();
 
     // Adding some workers
@@ -1514,10 +1581,10 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             worker_id.clone(),
-            1,
+            ComponentRevision(1),
             Vec::new(),
             Vec::new(),
-            project_id.clone(),
+            environment_id.clone(),
             account_id.clone(),
             None,
             100,
@@ -1526,12 +1593,16 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             BTreeMap::new(),
         );
 
-        let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
         let oplog = oplog_service
             .create(
                 &owned_worker_id,
                 create_entry,
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                WorkerMetadata::default(
+                    worker_id.clone(),
+                    account_id.clone(),
+                    environment_id.clone(),
+                ),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1603,7 +1674,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     let page_size = 10;
     loop {
         let (new_cursor, ids) = oplog_service
-            .scan_for_component(&project_id, &component_id, cursor, page_size)
+            .scan_for_component(&environment_id, &component_id, cursor, page_size)
             .await
             .unwrap();
         debug!("Got {} elements, new cursor is {}", ids.len(), new_cursor);

@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
+use crate::model::component::{
+    ComponentFilePath, ComponentRevision, InitialComponentFile, InitialComponentFileKey,
+};
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, FilterComparator, IdempotencyKey, InitialComponentFile,
-    InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
-    RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
-    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
-    WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
+    ComponentFilePermissions, FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod,
+    PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator,
+    Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -28,7 +29,7 @@ use golem_api_grpc::proto::golem::shardmanager::{
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
 use std::ops::Add;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 impl From<Timestamp> for prost_types::Timestamp {
     fn from(value: Timestamp) -> Self {
@@ -171,18 +172,6 @@ impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::common::AccountId> for AccountId {
-    fn from(proto: golem_api_grpc::proto::golem::common::AccountId) -> Self {
-        Self { value: proto.name }
-    }
-}
-
-impl From<AccountId> for golem_api_grpc::proto::golem::common::AccountId {
-    fn from(value: AccountId) -> Self {
-        golem_api_grpc::proto::golem::common::AccountId { name: value.value }
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilter {
     type Error = String;
 
@@ -194,9 +183,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Name(filter) => Ok(
                     WorkerFilter::new_name(filter.comparator.try_into()?, filter.value),
                 ),
-                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => Ok(
-                    WorkerFilter::new_version(filter.comparator.try_into()?, filter.value),
-                ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(filter) => {
+                    Ok(WorkerFilter::new_version(
+                        filter.comparator.try_into()?,
+                        ComponentRevision(filter.value),
+                    ))
+                }
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Status(filter) => {
                     Ok(WorkerFilter::new_status(
                         filter.comparator.try_into()?,
@@ -270,7 +262,7 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Version(
                     golem_api_grpc::proto::golem::worker::WorkerVersionFilter {
                         comparator: comparator.into(),
-                        value,
+                        value: value.0,
                     },
                 )
             }
@@ -634,81 +626,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::InitialComponentFile>
             path,
             permissions,
         })
-    }
-}
-
-impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::FileSystemNode {
-    fn from(value: ComponentFileSystemNode) -> Self {
-        let last_modified = value
-            .last_modified
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        match value.details {
-            ComponentFileSystemNodeDetails::File { permissions, size } =>
-                golem_api_grpc::proto::golem::worker::FileSystemNode {
-                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
-                        golem_api_grpc::proto::golem::worker::FileFileSystemNode {
-                            name: value.name,
-                            last_modified,
-                            size,
-                            permissions:
-                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
-                        }
-                    ))
-                },
-            ComponentFileSystemNodeDetails::Directory =>
-                golem_api_grpc::proto::golem::worker::FileSystemNode {
-                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
-                        golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
-                            name: value.name,
-                            last_modified,
-                        }
-                    ))
-                }
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for ComponentFileSystemNode {
-    type Error = anyhow::Error;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::FileSystemNode,
-    ) -> Result<Self, Self::Error> {
-        match value.value {
-            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
-                golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
-                    name,
-                    last_modified,
-                },
-            )) => Ok(ComponentFileSystemNode {
-                name,
-                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
-                details: ComponentFileSystemNodeDetails::Directory,
-            }),
-            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
-                golem_api_grpc::proto::golem::worker::FileFileSystemNode {
-                    name,
-                    last_modified,
-                    size,
-                    permissions,
-                },
-            )) => Ok(ComponentFileSystemNode {
-                name,
-                last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
-                details: ComponentFileSystemNodeDetails::File {
-                    permissions:
-                        golem_api_grpc::proto::golem::component::ComponentFilePermissions::try_from(
-                            permissions,
-                        )?
-                        .into(),
-                    size,
-                },
-            }),
-            None => Err(anyhow::anyhow!("Missing value")),
-        }
     }
 }
 

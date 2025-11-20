@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package golem.registry;
+
+import "golem/common/account_id.proto";
+
+message FuelUsageUpdate {
+  golem.common.AccountId account_id = 1;
+  int64 value = 2;
+}

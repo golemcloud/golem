@@ -58,10 +58,12 @@ pub type Pollable = golem_wasm::wasi::io::poll::Pollable;
 // reexports so that we don't have to change version numbers everywhere
 pub use self::golem::api1_3_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
+use golem_common::model::account::AccountId;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
 use golem_wasm::analysis::analysed_type::r#enum;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, Value};
+use uuid::Uuid;
 
 impl IntoValue for golem_api_1_x::host::ForkResult {
     fn into_value(self) -> Value {
@@ -73,5 +75,27 @@ impl IntoValue for golem_api_1_x::host::ForkResult {
 
     fn get_type() -> AnalysedType {
         r#enum(&["original", "forked"])
+    }
+}
+
+impl From<AccountId> for golem_api_1_x::host::AccountId {
+    fn from(value: AccountId) -> Self {
+        let (high_bits, low_bits) = value.0.as_u64_pair();
+
+        Self {
+            uuid: golem_wasm::Uuid {
+                high_bits,
+                low_bits,
+            },
+        }
+    }
+}
+
+impl From<golem_api_1_x::host::AccountId> for AccountId {
+    fn from(value: golem_api_1_x::host::AccountId) -> Self {
+        let high_bits = value.uuid.high_bits;
+        let low_bits = value.uuid.low_bits;
+
+        Self(Uuid::from_u64_pair(high_bits, low_bits))
     }
 }

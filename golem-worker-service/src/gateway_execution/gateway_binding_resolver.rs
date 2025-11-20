@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
-use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_request::http_request::router;
-use crate::gateway_request::http_request::router::RouteEntry;
-use golem_common::model::auth::Namespace;
+use crate::gateway_router::{build_router, RouteEntry, RouterPattern};
+use golem_service_base::custom_api::compiled_http_api_definition::CompiledHttpApiDefinition;
 
 pub struct ResolvedRouteEntry {
     pub path_segments: Vec<String>,
-    pub route_entry: RouteEntry<Namespace>,
+    pub route_entry: RouteEntry,
 }
 
 pub async fn resolve_gateway_binding(
@@ -29,10 +26,14 @@ pub async fn resolve_gateway_binding(
 ) -> Option<ResolvedRouteEntry> {
     let compiled_routes = compiled_api_definitions
         .iter()
-        .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
+        .flat_map(|x| {
+            x.routes
+                .iter()
+                .map(|y| (x.account_id.clone(), x.environment_id.clone(), y.clone()))
+        })
         .collect::<Vec<_>>();
 
-    let router = router::build(compiled_routes);
+    let router = build_router(compiled_routes);
 
     let path_segments: Vec<&str> = RouterPattern::split(request.uri().path()).collect();
 

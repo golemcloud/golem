@@ -5,7 +5,6 @@
 
 witDeps:
 - wit/deps
-tempDir: target/golem-temp
 templates:
   rust:
     profiles:

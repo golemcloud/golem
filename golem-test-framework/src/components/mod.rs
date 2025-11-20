@@ -27,13 +27,13 @@ use tracing::{debug, info, trace};
 use tracing::{error, warn, Level};
 use url::Url;
 
-pub mod cloud_service;
+pub mod blob_storage;
 pub mod component_compilation_service;
-pub mod component_service;
 mod docker;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
+pub mod registry_service;
 pub mod service;
 pub mod shard_manager;
 pub mod worker_executor;
@@ -214,7 +214,7 @@ impl EnvVarBuilder {
                 h2=warn,\
                 hyper=warn,\
                 tower=warn,\
-                fred=error"
+                fred=warn"
             ),
         )
     }

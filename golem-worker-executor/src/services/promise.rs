@@ -329,7 +329,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                 .await?;
 
             let owned_worker_id = OwnedWorkerId {
-                project_id: component_metdata.owner.project_id,
+                environment_id: component_metdata.environment_id,
                 worker_id,
             };
 
@@ -350,7 +350,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             if should_activate {
                 Worker::get_or_create_running(
                     &self.services,
-                    &component_metdata.owner.account_id,
+                    &component_metdata.account_id,
                     &owned_worker_id,
                     None,
                     None,

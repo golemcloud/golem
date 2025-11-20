@@ -12,23 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+// use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
-use golem_service_base::clients::RemoteServiceConfig;
+use golem_service_base::clients::RegistryServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
-use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Write};
 use std::path::PathBuf;
 use std::time::Duration;
-use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {
@@ -36,17 +33,16 @@ pub struct WorkerServiceConfig {
     pub tracing: TracingConfig,
     pub gateway_session_storage: GatewaySessionStorageConfig,
     pub db: DbConfig,
-    pub component_service: ComponentServiceConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
-    pub api_definition: ApiDefinitionServiceConfig,
+    // pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
-    pub cloud_service: RemoteServiceConfig,
+    pub registry_service: RegistryServiceConfig,
     pub cors_origin_regex: String,
 }
 
@@ -70,12 +66,6 @@ impl SafeDisplay for WorkerServiceConfig {
         );
         let _ = writeln!(&mut result, "db:");
         let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
-        let _ = writeln!(&mut result, "component service:");
-        let _ = writeln!(
-            result,
-            "{}",
-            self.component_service.to_safe_string_indented()
-        );
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
         let _ = writeln!(
             &mut result,
@@ -102,11 +92,11 @@ impl SafeDisplay for WorkerServiceConfig {
             self.blob_storage.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "API definition service:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.api_definition.to_safe_string_indented()
-        );
+        // let _ = writeln!(
+        //     &mut result,
+        //     "{}",
+        //     self.api_definition.to_safe_string_indented()
+        // );
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "domain records:");
         let _ = writeln!(
@@ -114,11 +104,11 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.domain_records.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "cloud service:");
+        let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.cloud_service.to_safe_string_indented()
+            self.registry_service.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
 
@@ -133,9 +123,9 @@ impl Default for WorkerServiceConfig {
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "../data/golem_worker.sqlite".to_string(),
                 max_connections: 10,
+                foreign_keys: false,
             }),
             gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
-            component_service: ComponentServiceConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
             custom_request_port: 9006,
@@ -149,10 +139,10 @@ impl Default for WorkerServiceConfig {
                 max_jitter_factor: Some(0.15),
             },
             blob_storage: BlobStorageConfig::default(),
-            api_definition: ApiDefinitionServiceConfig::default(),
+            // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
-            cloud_service: RemoteServiceConfig::default(),
+            registry_service: RegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
@@ -213,60 +203,6 @@ impl Default for GatewaySessionStorageConfig {
 impl GatewaySessionStorageConfig {
     pub fn default_redis() -> Self {
         Self::Redis(RedisConfig::default())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ComponentServiceConfig {
-    pub host: String,
-    pub port: u16,
-    pub access_token: Uuid,
-    pub retries: RetryConfig,
-    pub connect_timeout: Duration,
-    pub cache_capacity: usize,
-}
-
-impl ComponentServiceConfig {
-    pub fn url(&self) -> Url {
-        Url::parse(&format!("http://{}:{}", self.host, self.port))
-            .expect("Failed to parse ComponentService URL")
-    }
-
-    pub fn uri(&self) -> Uri {
-        Uri::builder()
-            .scheme("http")
-            .authority(format!("{}:{}", self.host, self.port).as_str())
-            .path_and_query("/")
-            .build()
-            .expect("Failed to build ComponentService URI")
-    }
-}
-
-impl SafeDisplay for ComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "access token: ****");
-        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-        let _ = writeln!(&mut result, "cache capacity: {}", self.cache_capacity);
-        result
-    }
-}
-
-impl Default for ComponentServiceConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9090,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
-            retries: RetryConfig::max_attempts_3(),
-            connect_timeout: Duration::from_secs(10),
-            cache_capacity: 1000,
-        }
     }
 }
 

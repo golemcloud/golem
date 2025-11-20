@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::AppComponentName;
+use crate::model::app::ComponentName;
 use crate::model::component::Component;
 use crate::model::deploy_diff::DiffSerialize;
 use crate::model::text::component::is_sensitive_env_var_name;
-use crate::model::ComponentName;
-use golem_client::model::{DynamicLinkedInstance, DynamicLinking};
-use golem_common::model::ComponentFilePermissions;
+use golem_common::model::component::{ComponentFilePermissions, ComponentName, ComponentType};
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -61,7 +60,7 @@ impl DiffableComponent {
                     (
                         name.clone(),
                         match link {
-                            golem_common::model::component_metadata::DynamicLinkedInstance::WasmRpc(links) => links
+                            DynamicLinkedInstance::WasmRpc(links) => links
                                 .targets
                                 .iter()
                                 .map(|(resource, target)| {
@@ -78,20 +77,20 @@ impl DiffableComponent {
 
     pub fn from_manifest(
         show_sensitive: bool,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         component_hash: String,
         files: BTreeMap<String, DiffableComponentFile>,
-        dynamic_linking: Option<&DynamicLinking>,
+        dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
         env: Option<&HashMap<String, String>>,
     ) -> anyhow::Result<Self> {
         Ok(DiffableComponent {
-            component_name: component_name.as_str().into(),
+            component_name: ComponentName(component_name.as_str().to_string()),
             component_hash,
             files,
             dynamic_linking: dynamic_linking
                 .iter()
                 .flat_map(|dl| {
-                    dl.dynamic_linking.iter().map(|(name, instance)| {
+                    dl.iter().map(|(name, instance)| {
                         (
                             name.clone(),
                             match instance {

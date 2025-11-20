@@ -25,8 +25,7 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -40,16 +39,20 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{
+    CachableComponent, ComponentFilePath, ComponentRevision, PluginPriority,
+};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::wasmtime::ResourceStore;
 use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
@@ -135,10 +138,9 @@ pub trait WorkerCtx:
         worker_config: WorkerConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -170,7 +172,7 @@ pub trait WorkerCtx:
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component;
+    fn component_metadata(&self) -> &CachableComponent;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -322,16 +324,16 @@ pub trait UpdateManagement {
     /// Called when an update attempt has failed
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         details: Option<String>,
     );
 
     /// Called when an update attempt succeeded
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     );
 }
 
@@ -379,7 +381,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        project_id: &ProjectId,
+        account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -453,7 +455,7 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &CachableComponent,
     ) -> anyhow::Result<()>;
 }
 

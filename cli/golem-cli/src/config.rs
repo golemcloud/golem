@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Format;
+use crate::model::app_raw::{BuiltinServer, Server};
+use crate::model::format::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
-use golem_client::model::TokenSecret;
+use golem_client::model::TokenWithSecret;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,13 +30,10 @@ use url::Url;
 use uuid::Uuid;
 
 pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
-pub const DEFAULT_OSS_URL: &str = "http://localhost:9881";
+pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
 pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
-
-// TODO: review and separate model, config and serialization parts
-// TODO: when doing the serialization we can do a legacy migration
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -44,6 +42,7 @@ pub struct Config {
     pub default_profile: Option<ProfileName>,
 }
 
+// TODO: atomic: drop?
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
 
@@ -131,7 +130,7 @@ pub struct Profile {
 
 impl Profile {
     pub fn default_local_profile() -> Self {
-        let url = Url::parse(DEFAULT_OSS_URL).unwrap();
+        let url = Url::parse(BUILTIN_LOCAL_URL).unwrap();
         Self {
             custom_url: Some(url),
             custom_worker_url: None,
@@ -153,7 +152,7 @@ pub struct ProfileConfig {
 
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
-        config_dir.join("config-v2.json")
+        config_dir.join("config-v3.json")
     }
 
     pub fn default_profile_name(&self) -> ProfileName {
@@ -307,9 +306,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    pub component_url: Url,
+    pub registry_url: Url,
     pub worker_url: Url,
-    pub cloud_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
@@ -319,23 +317,68 @@ pub struct ClientConfig {
 impl From<&Profile> for ClientConfig {
     fn from(profile: &Profile) -> Self {
         let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
-        let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
-        let cloud_url = profile
-            .custom_cloud_url
-            .clone()
-            .unwrap_or_else(|| component_url.clone());
-
+        let registry_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
         let worker_url = profile
             .custom_worker_url
             .clone()
-            .unwrap_or_else(|| component_url.clone());
+            .unwrap_or_else(|| registry_url.clone());
 
         let allow_insecure = profile.allow_insecure;
 
         ClientConfig {
-            component_url,
+            registry_url,
             worker_url,
-            cloud_url,
+            service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
+            invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
+            health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
+            file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                allow_insecure,
+            ),
+        }
+    }
+}
+
+impl From<&Server> for ClientConfig {
+    fn from(server: &Server) -> Self {
+        struct BaseConfig {
+            registry_url: Url,
+            worker_url: Url,
+            allow_insecure: bool,
+        }
+
+        let BaseConfig {
+            registry_url,
+            worker_url,
+            allow_insecure,
+        } = match server {
+            Server::Builtin(builtin) => match builtin {
+                BuiltinServer::Local => {
+                    let local_url =
+                        Url::parse(BUILTIN_LOCAL_URL).expect("Failed to parse DEFAULT_OSS_URL");
+                    BaseConfig {
+                        registry_url: local_url.clone(),
+                        worker_url: local_url.clone(),
+                        allow_insecure: false,
+                    }
+                }
+                BuiltinServer::Cloud => {
+                    let cloud_url = Url::parse(CLOUD_URL).expect("Failed to parse CLOUD_URL");
+                    BaseConfig {
+                        registry_url: cloud_url.clone(),
+                        worker_url: cloud_url.clone(),
+                        allow_insecure: false,
+                    }
+                }
+            },
+            Server::Custom(_custom) => {
+                // TODO: atomic
+                todo!()
+            }
+        };
+
+        ClientConfig {
+            registry_url,
+            worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
             health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
@@ -433,6 +476,18 @@ impl AuthenticationConfig {
             secret: AuthSecret(token),
         })
     }
+
+    pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
+        Self::OAuth2(OAuth2AuthenticationConfig {
+            data: Some(OAuth2AuthenticationData {
+                id: token_with_secret.id.0,
+                account_id: token_with_secret.account_id.0,
+                created_at: token_with_secret.created_at,
+                expires_at: token_with_secret.expires_at,
+                secret: token_with_secret.secret.0.into(),
+            }),
+        })
+    }
 }
 
 impl Default for AuthenticationConfig {
@@ -451,7 +506,7 @@ pub struct OAuth2AuthenticationConfig {
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2AuthenticationData {
     pub id: Uuid,
-    pub account_id: String,
+    pub account_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub secret: AuthSecret,
@@ -466,6 +521,12 @@ pub struct StaticAuthenticationConfig {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct AuthSecret(pub Uuid);
 
+impl From<Uuid> for AuthSecret {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
+
 impl Display for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("*******")
@@ -475,11 +536,5 @@ impl Display for AuthSecret {
 impl Debug for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("AuthSecret").field(&"*******").finish()
-    }
-}
-
-impl From<AuthSecret> for TokenSecret {
-    fn from(value: AuthSecret) -> Self {
-        Self { value: value.0 }
     }
 }

@@ -49,8 +49,7 @@ use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -60,9 +59,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
-};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
@@ -81,7 +78,13 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{
+    CachableComponent, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
+    InitialComponentFile, PluginPriority,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -92,15 +95,16 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
+use golem_common::model::TransactionId;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentVersion, GetFileSystemNodeResult,
-    IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::{
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
@@ -151,7 +155,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
-        event_service: Arc<dyn WorkerEventService + Send + Sync>,
+        event_service: Arc<dyn WorkerEventService>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         invocation_queue: Weak<Worker<Ctx>>,
@@ -163,9 +167,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -197,7 +200,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.project_id,
+            &owned_worker_id.environment_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -265,7 +268,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
-                project_service,
                 worker_config.created_by.clone(),
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
@@ -346,7 +348,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    pub fn component_metadata(&self) -> &golem_service_base::model::Component {
+    pub fn component_metadata(&self) -> &CachableComponent {
         &self.state.component_metadata
     }
 
@@ -974,9 +976,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                 description: description @ UpdateDescription::SnapshotBased { .. },
                 ..
             }) => {
-                let target_version = *description.target_version();
+                let target_revision = *description.target_revision();
 
-                debug!("Finalizing snapshot update to version {target_version}");
+                debug!("Finalizing snapshot update to revision {target_revision}");
 
                 match store
                     .as_context_mut()
@@ -1072,7 +1074,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             store
                                 .as_context_mut()
                                 .data_mut()
-                                .on_worker_update_failed(target_version, Some(error))
+                                .on_worker_update_failed(target_revision, Some(error))
                                 .await;
                             Some(RetryDecision::Immediate)
                         } else {
@@ -1083,13 +1085,13 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .on_worker_update_succeeded(
-                                    target_version,
+                                    target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
                                             .installed_plugins
                                             .into_iter()
-                                            .map(|installation| installation.id),
+                                            .map(|installation| installation.priority),
                                     ),
                                 )
                                 .await;
@@ -1101,7 +1103,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .as_context_mut()
                             .data_mut()
                             .on_worker_update_failed(
-                                target_version,
+                                target_revision,
                                 Some("Failed to find snapshot data for update".to_string()),
                             )
                             .await;
@@ -1111,7 +1113,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .on_worker_update_failed(target_version, Some(error))
+                            .on_worker_update_failed(target_revision, Some(error))
                             .await;
                         Some(RetryDecision::Immediate)
                     }
@@ -1132,7 +1134,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
         for event in replay_events {
             match event {
-                ReplayEvent::UpdateReplayed { new_version } => {
+                ReplayEvent::UpdateReplayed {
+                    new_revision: new_version,
+                } => {
                     debug!("Updating worker state to component metadata version {new_version}");
                     self.update_state_to_new_component_version(new_version)
                         .await?;
@@ -1149,18 +1153,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
 
                     match pending_update.description {
-                        UpdateDescription::Automatic { target_version } => {
+                        UpdateDescription::Automatic { target_revision } => {
                             debug!("Finalizing pending automatic update");
 
                             if let Err(error) = self
-                                .update_state_to_new_component_version(target_version)
+                                .update_state_to_new_component_version(target_revision)
                                 .await
                             {
                                 let stringified_error =
                                     format!("Applying worker update failed: {error}");
 
                                 self.on_worker_update_failed(
-                                    target_version,
+                                    target_revision,
                                     Some(stringified_error),
                                 )
                                 .await;
@@ -1171,18 +1175,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let component_metadata = self.component_metadata().clone();
 
                             self.on_worker_update_succeeded(
-                                target_version,
+                                target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
                                         .installed_plugins
                                         .into_iter()
-                                        .map(|installation| installation.id),
+                                        .map(|installation| installation.priority),
                                 ),
                             )
                             .await;
 
-                            debug!("Finalizing automatic update to version {target_version}");
+                            debug!("Finalizing automatic update to revision {target_revision}");
                         }
                         _ => {
                             panic!("Expected automatic update description")
@@ -1197,11 +1201,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn update_state_to_new_component_version(
         &mut self,
-        new_version: ComponentVersion,
+        new_version: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.versioned_component_id.version {
+        if new_version <= current_metadata.revision {
             debug!("Update {new_version} was already applied, skipping");
             return Ok(());
         };
@@ -1215,7 +1219,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.project_id,
+            &self.owned_worker_id.environment_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -1570,28 +1574,28 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         details: Option<String>,
     ) {
-        let entry = OplogEntry::failed_update(target_version, details.clone());
+        let entry = OplogEntry::failed_update(target_revision, details.clone());
         self.public_state.worker().add_and_commit_oplog(entry).await;
 
         warn!(
             "Worker failed to update to {}: {}, update attempt aborted",
-            target_version,
+            target_revision,
             details.unwrap_or_else(|| "?".to_string())
         );
     }
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
-        info!("Worker update to {} finished successfully", target_version);
+        info!("Worker update to {} finished successfully", target_revision);
         let entry = OplogEntry::successful_update(
-            target_version,
+            target_revision,
             new_component_size,
             new_active_plugins.clone(),
         );
@@ -2120,7 +2124,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                             Ok(Self::finalize_pending_snapshot_update(instance, store).await)
                         }
-                        UpdateDescription::Automatic { target_version, .. } => {
+                        UpdateDescription::Automatic {
+                            target_revision, ..
+                        } => {
                             // snapshot update will be succeeded as part of the replay.
                             let result = Self::resume_replay(store, instance, false).await;
                             record_resume_worker(start.elapsed());
@@ -2147,7 +2153,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 .as_context_mut()
                                                 .data_mut()
                                                 .on_worker_update_failed(
-                                                    *target_version,
+                                                    *target_revision,
                                                     Some(format!(
                                                         "Automatic update failed: {error}"
                                                     )),
@@ -2188,11 +2194,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _project_id: &ProjectId,
-        _last_known_limits: &CurrentResourceLimits,
+        this: &T,
+        account_id: &AccountId,
+        last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        Ok(())
+        Ctx::record_last_known_limits(this, account_id, last_known_limits).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
@@ -2610,7 +2616,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
@@ -2630,7 +2636,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: golem_service_base::model::Component,
+    component_metadata: CachableComponent,
 
     total_linear_memory_size: u64,
 
@@ -2645,7 +2651,6 @@ struct PrivateDurableWorkerState {
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
-    project_service: Arc<dyn ProjectService>,
     shard_service: Arc<dyn ShardService>,
 
     /// The initial config vars that the worker was configured with
@@ -2690,20 +2695,19 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        plugins: Arc<dyn Plugins>,
+        plugin_service: Arc<dyn PluginsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: golem_service_base::model::Component,
+        component_metadata: CachableComponent,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
-        project_service: Arc<dyn ProjectService>,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -2733,7 +2737,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
-            plugins,
+            plugins: plugin_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,
@@ -2757,7 +2761,6 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
-            project_service,
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
@@ -2805,7 +2808,7 @@ impl PrivateDurableWorkerState {
                 when,
                 ScheduledAction::CompletePromise {
                     account_id: self.created_by.clone(),
-                    project_id: self.owned_worker_id.project_id(),
+                    environment_id: self.owned_worker_id.environment_id(),
                     promise_id,
                 },
             )
@@ -2837,7 +2840,7 @@ impl PrivateDurableWorkerState {
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.project_id,
+                &self.owned_worker_id.environment_id,
                 component_id,
                 filter,
                 cursor,
@@ -2892,14 +2895,8 @@ impl HasConfig for PrivateDurableWorkerState {
 }
 
 impl HasPlugins for PrivateDurableWorkerState {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
-    }
-}
-
-impl HasProjectService for PrivateDurableWorkerState {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
     }
 }
 
@@ -3033,7 +3030,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -3047,7 +3044,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3060,7 +3057,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -3073,7 +3070,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -3136,7 +3133,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -3153,7 +3150,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(project_id, &file.key, &path)
+                            .get_read_only_to(environment_id, &file.key, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -3191,7 +3188,7 @@ async fn update_filesystem(
                     }
 
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
@@ -3204,7 +3201,7 @@ async fn update_filesystem(
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }

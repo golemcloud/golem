@@ -23,6 +23,8 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
 use golem_common::model::oplog::host_functions::{
@@ -39,9 +41,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
@@ -1067,7 +1067,8 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
+    let remote_worker_id =
+        OwnedWorkerId::new(&ctx.owned_worker_id.environment_id, &remote_worker_id);
     let demand = ctx
         .rpc()
         .create_demand(

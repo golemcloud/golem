@@ -13,32 +13,13 @@
 // limitations under the License.
 
 use crate::model::agent::{AgentId, AgentTypeResolver};
+use crate::model::component::ComponentId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::newtype_uuid;
 use desert_rust::BinaryCodec;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-newtype_uuid!(
-    ComponentId,
-    golem_api_grpc::proto::golem::component::ComponentId
-);
-
-newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
-
-newtype_uuid!(PluginId, golem_api_grpc::proto::golem::component::PluginId);
-
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
-
-newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
-newtype_uuid!(ProjectGrantId);
-newtype_uuid!(ProjectPolicyId);
-newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
 #[derive(
     Clone,
@@ -114,8 +95,6 @@ impl golem_wasm::IntoValue for ShardId {
         golem_wasm::analysis::analysed_type::s64()
     }
 }
-
-pub type ComponentVersion = u64;
 
 static WORKER_ID_MAX_LENGTH: usize = 512;
 
@@ -301,6 +280,10 @@ impl OplogIndex {
 
     pub const fn from_u64(value: u64) -> OplogIndex {
         OplogIndex(value)
+    }
+
+    pub const fn as_u64(&self) -> u64 {
+        self.0
     }
 
     /// Gets the previous oplog index

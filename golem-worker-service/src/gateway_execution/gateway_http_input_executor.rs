@@ -12,42 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::auth_call_back_binding_handler::AuthorisationSuccess;
+use super::auth_call_back_binding_handler::AuthenticationSuccess;
 use super::file_server_binding_handler::{FileServerBindingError, FileServerBindingSuccess};
+use super::gateway_binding_resolver::resolve_gateway_binding;
 use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
 use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
 };
-use super::swagger_binding_handler::SwaggerBindingHandler;
+use super::swagger_binding_handler::handle_swagger_binding_request;
 use super::to_response::GatewayHttpResult;
-use super::WorkerDetails;
-use crate::gateway_api_deployment::ApiSiteString;
-use crate::gateway_binding::{
-    resolve_gateway_binding, FileServerBindingCompiled, GatewayBindingCompiled,
-    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, StaticBinding, WorkerBindingCompiled, WorkerNameCompiled,
-};
+use super::{GatewayWorkerRequestExecutor, WorkerDetails};
 use crate::gateway_execution::api_definition_lookup::{
     ApiDefinitionLookupError, HttpApiDefinitionsLookup,
 };
 use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_execution::gateway_session_store::GatewaySessionStore;
 use crate::gateway_execution::to_response::{GatewayHttpError, ToHttpResponse};
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
-use crate::gateway_middleware::{HttpMiddlewares, MiddlewareError, MiddlewareSuccess};
-use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
-use crate::gateway_security::{IdentityProvider, SecuritySchemeWithProviderMetadata};
+use crate::gateway_middleware::{
+    process_middleware_in, process_middleware_out, MiddlewareError, MiddlewareSuccess,
+};
+use crate::gateway_security::IdentityProvider;
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
-use crate::service::gateway::api_deployment::ApiDeploymentError;
-use async_trait::async_trait;
-use golem_common::model::auth::Namespace;
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::account::AccountId;
+use golem_common::model::api_deployment::ApiSiteString;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
+use golem_service_base::custom_api::compiled_gateway_binding::{
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpHandlerBindingCompiled,
+    IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
+    WorkerBindingCompiled, WorkerNameCompiled,
+};
+use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
+use golem_service_base::custom_api::security_scheme::SecuritySchemeWithProviderMetadata;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm::analysis::analysed_type::record;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};
@@ -62,54 +65,180 @@ use std::sync::Arc;
 use tracing::error;
 use uuid::Uuid;
 
-#[async_trait]
-pub trait GatewayHttpInputExecutor: Send + Sync {
-    async fn execute_http_request(&self, input: poem::Request) -> poem::Response;
+pub struct GatewayHttpInputExecutor {
+    gateway_worker_request_executor: Arc<GatewayWorkerRequestExecutor>,
+    file_server_binding_handler: Arc<FileServerBindingHandler>,
+    auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler>,
+    http_handler_binding_handler: Arc<HttpHandlerBindingHandler>,
+    api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
+    gateway_session_store: Arc<dyn GatewaySessionStore>,
+    identity_provider: Arc<dyn IdentityProvider>,
 }
 
-pub struct DefaultGatewayInputExecutor {
-    pub evaluator: Arc<dyn WorkerServiceRibInterpreter>,
-    pub file_server_binding_handler: Arc<dyn FileServerBindingHandler>,
-    pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler>,
-    pub http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler>,
-    pub swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
-    pub api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
-    pub gateway_session_store: GatewaySessionStore,
-    pub identity_provider: Arc<dyn IdentityProvider>,
-}
-
-impl DefaultGatewayInputExecutor {
+impl GatewayHttpInputExecutor {
     pub fn new(
-        evaluator: Arc<dyn WorkerServiceRibInterpreter>,
-        file_server_binding_handler: Arc<dyn FileServerBindingHandler>,
+        gateway_worker_request_executor: Arc<GatewayWorkerRequestExecutor>,
+        file_server_binding_handler: Arc<FileServerBindingHandler>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler>,
-        http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler>,
-        swagger_binding_handler: Arc<dyn SwaggerBindingHandler + Sync + Send>,
+        http_handler_binding_handler: Arc<HttpHandlerBindingHandler>,
         api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
-        gateway_session_store: GatewaySessionStore,
+        gateway_session_store: Arc<dyn GatewaySessionStore>,
         identity_provider: Arc<dyn IdentityProvider>,
     ) -> Self {
         Self {
-            evaluator,
+            gateway_worker_request_executor,
             file_server_binding_handler,
             auth_call_back_binding_handler,
             http_handler_binding_handler,
-            swagger_binding_handler,
             api_definition_lookup_service,
             gateway_session_store,
             identity_provider,
         }
     }
 
+    pub async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
+        let authority = match authority_from_request(&request) {
+            Ok(success) => success,
+            Err(err) => {
+                return poem::Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::from_string(err));
+            }
+        };
+
+        let possible_api_definitions = self
+            .api_definition_lookup_service
+            .get(&ApiSiteString(authority.clone()))
+            .await;
+
+        let possible_api_definitions = match possible_api_definitions {
+            Ok(api_defs) => api_defs,
+            Err(api_defs_lookup_error) => {
+                error!(
+                    "API request host: {} - error: {}",
+                    authority,
+                    api_defs_lookup_error.to_safe_string()
+                );
+
+                return api_defs_lookup_error
+                    .to_response_from_safe_display(get_status_code_from_api_lookup_error);
+            }
+        };
+
+        let resolved_route_entry = if let Some(resolved_route_entry) =
+            resolve_gateway_binding(possible_api_definitions, &request).await
+        {
+            resolved_route_entry
+        } else {
+            return poem::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from_string("Route not found".to_string()));
+        };
+
+        let SplitResolvedRouteEntryResult {
+            binding,
+            middlewares,
+            rich_request,
+            account_id,
+            environment_id,
+        } = split_resolved_route_entry(request, resolved_route_entry);
+
+        let mut rich_request = match self
+            .maybe_apply_middlewares_in(rich_request, &middlewares)
+            .await
+        {
+            Ok(req) => req,
+            Err(resp) => {
+                tracing::debug!("Middleware short-circuited the request handling");
+                return resp;
+            }
+        };
+
+        match binding {
+            GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+                cors_preflight
+                    .clone()
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await
+            }
+
+            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(
+                security_scheme_with_metadata,
+            )) => {
+                let result = self
+                    .handle_http_auth_callback_binding(
+                        &security_scheme_with_metadata,
+                        &rich_request,
+                    )
+                    .await;
+
+                result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await
+            }
+
+            GatewayBindingCompiled::Worker(resolved_worker_binding) => {
+                let result = self
+                    .handle_worker_binding(&mut rich_request, *resolved_worker_binding)
+                    .await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+
+            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
+                let result = self
+                    .handle_http_handler_binding(&mut rich_request, *http_handler_binding)
+                    .await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+
+            GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
+                let result = self
+                    .handle_file_server_binding(
+                        &mut rich_request,
+                        *resolved_file_server_binding,
+                        &account_id,
+                        &environment_id,
+                    )
+                    .await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+
+            GatewayBindingCompiled::SwaggerUi(swagger_binding) => {
+                let result = handle_swagger_binding_request(&authority, &swagger_binding).await;
+
+                let response = result
+                    .to_response(&rich_request, &self.gateway_session_store)
+                    .await;
+
+                maybe_apply_middlewares_out(response, &middlewares).await
+            }
+        }
+    }
+
     async fn handle_worker_binding(
         &self,
-        namespace: Namespace,
         request: &mut RichRequest,
         binding: WorkerBindingCompiled,
     ) -> GatewayHttpResult<RibResult> {
         let WorkerBindingCompiled {
             response_compiled,
             component_id,
+            component_revision,
             idempotency_key_compiled,
             invocation_context_compiled,
         } = binding;
@@ -120,22 +249,23 @@ impl DefaultGatewayInputExecutor {
                 None,
                 idempotency_key_compiled,
                 component_id,
+                component_revision,
                 invocation_context_compiled,
             )
             .await?;
 
-        self.execute_response_mapping_script(namespace, response_compiled, request, worker_detail)
+        self.execute_response_mapping_script(response_compiled, request, worker_detail)
             .await
     }
 
     async fn handle_http_handler_binding(
         &self,
-        namespace: &Namespace,
         request: &mut RichRequest,
         binding: HttpHandlerBindingCompiled,
     ) -> GatewayHttpResult<HttpHandlerBindingResult> {
         let HttpHandlerBindingCompiled {
             component_id,
+            component_revision,
             worker_name_compiled,
             idempotency_key_compiled,
             ..
@@ -147,6 +277,7 @@ impl DefaultGatewayInputExecutor {
                 worker_name_compiled,
                 idempotency_key_compiled,
                 component_id,
+                component_revision,
                 None,
             )
             .await?;
@@ -158,7 +289,7 @@ impl DefaultGatewayInputExecutor {
 
         let result = self
             .http_handler_binding_handler
-            .handle_http_handler_binding(namespace, &worker_detail, incoming_http_request)
+            .handle_http_handler_binding(&worker_detail, incoming_http_request)
             .await;
 
         match result {
@@ -171,26 +302,27 @@ impl DefaultGatewayInputExecutor {
 
     async fn handle_file_server_binding(
         &self,
-        namespace: Namespace,
         request: &mut RichRequest,
         binding: FileServerBindingCompiled,
+        account_id: &AccountId,
+        environment_id: &EnvironmentId,
     ) -> GatewayHttpResult<FileServerBindingSuccess> {
         let FileServerBindingCompiled {
-            component_id: version_component_id,
+            component_id,
+            component_revision,
             idempotency_key_compiled,
             response_compiled,
             worker_name_compiled,
             ..
         } = binding;
 
-        let component_id = version_component_id.component_id.clone();
-
         let worker_detail = self
             .get_worker_details(
                 request,
                 worker_name_compiled,
                 idempotency_key_compiled,
-                version_component_id,
+                component_id.clone(),
+                component_revision,
                 None,
             )
             .await?;
@@ -206,19 +338,15 @@ impl DefaultGatewayInputExecutor {
             .clone();
 
         let response_script_result = self
-            .execute_response_mapping_script(
-                namespace.clone(),
-                response_compiled,
-                request,
-                worker_detail,
-            )
+            .execute_response_mapping_script(response_compiled, request, worker_detail)
             .await?;
 
         self.file_server_binding_handler
             .handle_file_server_binding_result(
-                namespace,
                 &worker_name,
                 &component_id,
+                environment_id,
+                account_id,
                 response_script_result,
             )
             .await
@@ -229,14 +357,9 @@ impl DefaultGatewayInputExecutor {
         &self,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         request: &RichRequest,
-    ) -> GatewayHttpResult<AuthorisationSuccess> {
+    ) -> GatewayHttpResult<AuthenticationSuccess> {
         self.auth_call_back_binding_handler
-            .handle_auth_call_back(
-                &request.query_params(),
-                security_scheme_with_metadata,
-                &self.gateway_session_store,
-                &self.identity_provider,
-            )
+            .handle_auth_call_back(&request.query_params(), security_scheme_with_metadata)
             .await
             .map_err(GatewayHttpError::AuthorisationError)
     }
@@ -359,7 +482,8 @@ impl DefaultGatewayInputExecutor {
         request: &mut RichRequest,
         worker_name_compiled: Option<WorkerNameCompiled>,
         idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
-        component_id: VersionedComponentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
         invocation_context_compiled: Option<InvocationContextCompiled>,
     ) -> GatewayHttpResult<WorkerDetails> {
         let worker_name = if let Some(worker_name_compiled) = worker_name_compiled {
@@ -443,8 +567,8 @@ impl DefaultGatewayInputExecutor {
         };
 
         Ok(WorkerDetails {
-            component_id: component_id.component_id,
-            component_version: component_id.version,
+            component_id,
+            component_revision,
             worker_name,
             idempotency_key,
             invocation_context,
@@ -453,7 +577,6 @@ impl DefaultGatewayInputExecutor {
 
     async fn execute_response_mapping_script(
         &self,
-        namespace: Namespace,
         compiled_response_mapping: ResponseMappingCompiled,
         request: &mut RichRequest,
         worker_detail: WorkerDetails,
@@ -472,13 +595,12 @@ impl DefaultGatewayInputExecutor {
 
         let rib_input = resolve_rib_input(request, &rib_input).await?;
 
-        self.evaluator
-            .evaluate(
+        self.gateway_worker_request_executor
+            .evaluate_rib(
                 idempotency_key,
                 invocation_context,
                 response_mapping_compiled,
                 rib_input,
-                namespace,
             )
             .await
             .map_err(GatewayHttpError::EvaluationError)
@@ -490,13 +612,13 @@ impl DefaultGatewayInputExecutor {
         middlewares: &Option<HttpMiddlewares>,
     ) -> Result<RichRequest, poem::Response> {
         if let Some(middlewares) = middlewares {
-            let input_middleware_result = middlewares
-                .process_middleware_in(
-                    &request,
-                    &self.gateway_session_store,
-                    &self.identity_provider,
-                )
-                .await;
+            let input_middleware_result = process_middleware_in(
+                middlewares,
+                &request,
+                &self.gateway_session_store,
+                &self.identity_provider,
+            )
+            .await;
 
             let input_middleware_result = match input_middleware_result {
                 Ok(MiddlewareSuccess::PassThrough {
@@ -538,146 +660,6 @@ impl DefaultGatewayInputExecutor {
             }
         } else {
             Ok(request)
-        }
-    }
-}
-
-#[async_trait]
-impl GatewayHttpInputExecutor for DefaultGatewayInputExecutor {
-    async fn execute_http_request(&self, request: poem::Request) -> poem::Response {
-        let authority = match authority_from_request(&request) {
-            Ok(success) => success,
-            Err(err) => {
-                return poem::Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string(err));
-            }
-        };
-
-        let possible_api_definitions = self
-            .api_definition_lookup_service
-            .get(&ApiSiteString(authority.clone()))
-            .await;
-
-        let possible_api_definitions = match possible_api_definitions {
-            Ok(api_defs) => api_defs,
-            Err(api_defs_lookup_error) => {
-                error!(
-                    "API request host: {} - error: {}",
-                    authority,
-                    api_defs_lookup_error.to_safe_string()
-                );
-
-                return api_defs_lookup_error
-                    .to_response_from_safe_display(get_status_code_from_api_lookup_error);
-            }
-        };
-
-        let resolved_route_entry = if let Some(resolved_route_entry) =
-            resolve_gateway_binding(possible_api_definitions, &request).await
-        {
-            resolved_route_entry
-        } else {
-            return poem::Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from_string("Route not found".to_string()));
-        };
-
-        let SplitResolvedRouteEntryResult {
-            namespace,
-            binding,
-            middlewares,
-            rich_request,
-        } = split_resolved_route_entry(request, resolved_route_entry);
-
-        let mut rich_request = match self
-            .maybe_apply_middlewares_in(rich_request, &middlewares)
-            .await
-        {
-            Ok(req) => req,
-            Err(resp) => {
-                tracing::debug!("Middleware short-circuited the request handling");
-                return resp;
-            }
-        };
-
-        match binding {
-            GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                cors_preflight
-                    .clone()
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await
-            }
-
-            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                let result = self
-                    .handle_http_auth_callback_binding(
-                        &auth_call_back.security_scheme_with_metadata,
-                        &rich_request,
-                    )
-                    .await;
-
-                result
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await
-            }
-
-            GatewayBindingCompiled::Worker(resolved_worker_binding) => {
-                let result = self
-                    .handle_worker_binding(namespace, &mut rich_request, *resolved_worker_binding)
-                    .await;
-
-                let response = result
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await;
-
-                maybe_apply_middlewares_out(response, &middlewares).await
-            }
-
-            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-                let result = self
-                    .handle_http_handler_binding(
-                        &namespace,
-                        &mut rich_request,
-                        *http_handler_binding,
-                    )
-                    .await;
-
-                let response = result
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await;
-
-                maybe_apply_middlewares_out(response, &middlewares).await
-            }
-
-            GatewayBindingCompiled::FileServer(resolved_file_server_binding) => {
-                let result = self
-                    .handle_file_server_binding(
-                        namespace,
-                        &mut rich_request,
-                        *resolved_file_server_binding,
-                    )
-                    .await;
-
-                let response = result
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await;
-
-                maybe_apply_middlewares_out(response, &middlewares).await
-            }
-
-            GatewayBindingCompiled::SwaggerUi(swagger_binding) => {
-                let result = self
-                    .swagger_binding_handler
-                    .handle_swagger_binding_request(&authority, &swagger_binding)
-                    .await;
-
-                let response = result
-                    .to_response(&rich_request, &self.gateway_session_store)
-                    .await;
-
-                maybe_apply_middlewares_out(response, &middlewares).await
-            }
         }
     }
 }
@@ -859,7 +841,7 @@ async fn maybe_apply_middlewares_out(
     middlewares: &Option<HttpMiddlewares>,
 ) -> poem::Response {
     if let Some(middlewares) = middlewares {
-        let result = middlewares.process_middleware_out(&mut response).await;
+        let result = process_middleware_out(middlewares, &mut response).await;
         match result {
             Ok(_) => response,
             Err(err) => {
@@ -883,28 +865,7 @@ fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue>
 
 fn get_status_code_from_api_lookup_error(error: &ApiDefinitionLookupError) -> StatusCode {
     match &error {
-        ApiDefinitionLookupError::ApiDeploymentError(err) => {
-            // In the context of APIDefinitionLookup (which occurs for an actual incoming request),
-            // we have a different set of http response status code
-            // for API deployment errors
-            match &err {
-                ApiDeploymentError::ApiDeploymentNotFound(_, _) => StatusCode::NOT_FOUND,
-
-                ApiDeploymentError::ApiDefinitionNotFound(_, _, _) => StatusCode::NOT_FOUND,
-
-                ApiDeploymentError::ApiDeploymentConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
-
-                ApiDeploymentError::ComponentConstraintCreateError(_) => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-
-                ApiDeploymentError::ApiDefinitionsConflict(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                ApiDeploymentError::InternalRepoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-                ApiDeploymentError::InternalConversionError { .. } => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }
-        }
+        ApiDefinitionLookupError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         ApiDefinitionLookupError::UnknownSite(_) => StatusCode::NOT_FOUND,
     }
 }

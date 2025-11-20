@@ -29,6 +29,7 @@ impl From<ProjectView> for Namespace {
     }
 }
 
+#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::ProjectView;
 

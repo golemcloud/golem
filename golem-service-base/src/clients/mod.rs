@@ -12,32 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod auth;
-pub mod limit;
-pub mod plugin;
-pub mod project;
+pub mod registry;
 
-use golem_common::config::{ConfigExample, HasConfigExamples};
-use golem_common::model::auth::TokenSecret;
-use golem_common::model::RetryConfig;
 use golem_common::SafeDisplay;
+use golem_common::config::{ConfigExample, HasConfigExamples};
+use golem_common::model::RetryConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use std::str::FromStr;
-use tonic::metadata::MetadataMap;
+use std::time::Duration;
 use url::Url;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RemoteServiceConfig {
+pub struct RegistryServiceConfig {
     pub host: String,
     pub port: u16,
-    pub access_token: Uuid,
     pub retries: RetryConfig,
+    pub max_message_size: usize,
+    #[serde(with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
-impl RemoteServiceConfig {
+impl RegistryServiceConfig {
     pub fn url(&self) -> Url {
         Url::parse(&format!("http://{}:{}", self.host, self.port))
             .expect("Failed to parse service URL")
@@ -53,7 +49,7 @@ impl RemoteServiceConfig {
     }
 }
 
-impl SafeDisplay for RemoteServiceConfig {
+impl SafeDisplay for RegistryServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
@@ -61,48 +57,26 @@ impl SafeDisplay for RemoteServiceConfig {
         let _ = writeln!(&mut result, "access_token: ****");
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
+        let _ = writeln!(&mut result, "connect_timeout: {:?}", self.connect_timeout);
         result
     }
 }
 
-impl Default for RemoteServiceConfig {
+impl Default for RegistryServiceConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            access_token: Uuid::parse_str("5c832d93-ff85-4a8f-9803-513950fdfdb1")
-                .expect("invalid UUID"),
             retries: RetryConfig::default(),
+            max_message_size: 50 * 1024 * 1024,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
 
-impl HasConfigExamples<RemoteServiceConfig> for RemoteServiceConfig {
-    fn examples() -> Vec<ConfigExample<RemoteServiceConfig>> {
+impl HasConfigExamples<RegistryServiceConfig> for RegistryServiceConfig {
+    fn examples() -> Vec<ConfigExample<RegistryServiceConfig>> {
         vec![]
-    }
-}
-
-pub fn authorised_request<T>(request: T, access_token: &Uuid) -> tonic::Request<T> {
-    let mut req = tonic::Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {access_token}").parse().unwrap(),
-    );
-    req
-}
-
-pub fn get_authorisation_token(metadata: MetadataMap) -> Option<TokenSecret> {
-    let auth = metadata
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.to_string());
-
-    match auth {
-        Some(a) if a.to_lowercase().starts_with("bearer ") => {
-            let t = &a[7..a.len()];
-            TokenSecret::from_str(t.trim()).ok()
-        }
-        _ => None,
     }
 }

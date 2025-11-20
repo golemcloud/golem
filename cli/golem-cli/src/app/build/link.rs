@@ -61,10 +61,9 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             });
         }
 
-        let component_wasm = ctx
-            .application
-            .component_wasm(component_name, ctx.build_profile());
-        let linked_wasm = ctx.application.component_temp_linked_wasm(component_name);
+        let component = ctx.application.component(component_name);
+        let component_wasm = component.wasm();
+        let linked_wasm = component.temp_linked_wasm();
 
         let task_result_marker = TaskResultMarker::new(
             &ctx.application.task_result_marker_dir(),
@@ -165,14 +164,8 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     );
                     let _indent = LogIndent::new();
 
-                    commands::composition::compose(
-                        ctx.application
-                            .component_wasm(component_name, ctx.build_profile())
-                            .as_path(),
-                        plugs,
-                        linked_wasm.as_path(),
-                    )
-                    .await
+                    commands::composition::compose(&component_wasm, plugs, linked_wasm.as_path())
+                        .await
                 }
             }
             .await,

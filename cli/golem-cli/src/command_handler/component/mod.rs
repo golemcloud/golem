@@ -12,63 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::task_result_marker::{
-    GetServerComponentHash, GetServerIfsFileHash, TaskResultMarker,
-};
 use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
-use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
-};
-use crate::model::app::{
-    AppComponentName, ApplicationComponentSelectMode, BuildProfileName, DynamicHelpSections,
-};
+use crate::log::{log_action, logln, LogColorize, LogIndent};
+use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::app::{DependencyType, InitialComponentFile};
-use crate::model::component::{Component, ComponentSelection, ComponentView};
-use crate::model::deploy::TryUpdateAllWorkersResult;
-use crate::model::deploy_diff::component::{DiffableComponent, DiffableComponentFile};
-use crate::model::text::component::{ComponentCreateView, ComponentGetView, ComponentUpdateView};
-use crate::model::text::fmt::{log_deploy_diff, log_error, log_text_view, log_warn};
-use crate::model::text::help::ComponentNameHelp;
-use crate::model::{
-    AccountDetails, AgentUpdateMode, ComponentName, ComponentNameMatchKind,
-    ComponentVersionSelection, ProjectRefAndId, ProjectReference, SelectedComponents,
+use crate::model::component::{
+    Component, ComponentNameMatchKind, ComponentSelection, ComponentVersionSelection,
+    SelectedComponents,
 };
+use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::text::fmt::log_error;
+use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
-use anyhow::{anyhow, bail, Context as AnyhowContext};
-use golem_client::api::ComponentClient;
-use golem_client::model::ComponentQuery;
-use golem_client::model::ComponentSearch as ComponentSearchCloud;
-use golem_client::model::ComponentSearchParameters as ComponentSearchParametersCloud;
-use golem_client::model::DynamicLinkedInstance as DynamicLinkedInstanceOss;
-use golem_client::model::DynamicLinkedWasmRpc as DynamicLinkedWasmRpcOss;
-use golem_client::model::DynamicLinking as DynamicLinkingOss;
-use golem_client::model::{AgentTypes, ComponentEnv as ComponentEnvCloud};
-use golem_common::model::agent::AgentType;
-use golem_common::model::component_metadata::WasmRpcTarget;
-use golem_common::model::ComponentId;
+use anyhow::{anyhow, bail};
+use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentName;
+use golem_common::model::component_metadata::{
+    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+};
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::fs::File;
-use tracing::debug;
 use url::Url;
 
 pub mod ifs;
-pub mod plugin;
-pub mod plugin_installation;
+// TODO: atomic: pub mod plugin;
+// TODO: atomic: pub mod plugin_installation;
 
 pub struct ComponentCommandHandler {
     ctx: Arc<Context>,
@@ -93,14 +74,6 @@ impl ComponentCommandHandler {
                 component_name,
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
-            ComponentSubcommand::Deploy {
-                component_name,
-                force_build,
-                deploy_args,
-            } => {
-                self.cmd_deploy(component_name, force_build, deploy_args)
-                    .await
-            }
             ComponentSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             ComponentSubcommand::AddDependency {
                 component_name,
@@ -138,14 +111,21 @@ impl ComponentCommandHandler {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
-            ComponentSubcommand::Plugin { subcommand } => {
+            ComponentSubcommand::Plugin { subcommand: _ } => {
+                // TODO: atomic
+                /*
                 self.ctx
                     .component_plugin_handler()
                     .handle_command(subcommand)
                     .await
+                */
+                todo!()
             }
             ComponentSubcommand::Diagnose { component_name } => {
                 self.cmd_diagnose(component_name).await
+            }
+            ComponentSubcommand::ManifestTrace { component_name } => {
+                self.cmd_manifest_trace(component_name).await
             }
         }
     }
@@ -195,7 +175,7 @@ impl ComponentCommandHandler {
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
 
-        let component_name = AppComponentName::from(component_package_name.to_string_with_colon());
+        let component_name = ComponentName(component_package_name.to_string_with_colon());
 
         if existing_component_names.contains(component_name.as_str()) {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -274,29 +254,6 @@ impl ComponentCommandHandler {
             .await
     }
 
-    async fn cmd_deploy(
-        &self,
-        component_name: ComponentOptionalComponentNames,
-        force_build: ForceBuildArg,
-        deploy_args: DeployArgs,
-    ) -> anyhow::Result<()> {
-        self.deploy(
-            self.ctx
-                .cloud_project_handler()
-                .opt_select_project(None)
-                .await?
-                .as_ref(),
-            component_name.component_name,
-            false,
-            Some(force_build),
-            &ApplicationComponentSelectMode::CurrentDir,
-            &deploy_args,
-        )
-        .await?;
-
-        Ok(())
-    }
-
     fn cmd_templates(&self, filter: Option<String>) {
         match filter {
             Some(filter) => {
@@ -321,7 +278,9 @@ impl ComponentCommandHandler {
         }
     }
 
-    async fn cmd_list(&self, component_name: Option<ComponentName>) -> anyhow::Result<()> {
+    async fn cmd_list(&self, _component_name: Option<ComponentName>) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let show_sensitive = self.ctx.show_sensitive();
 
         let selected_component_names = self
@@ -392,13 +351,17 @@ impl ComponentCommandHandler {
         self.ctx.log_handler().log_view(&component_views);
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_get(
         &self,
-        component_name: Option<ComponentName>,
-        version: Option<u64>,
+        _component_name: Option<ComponentName>,
+        _version: Option<u64>,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let selected_components = self
             .must_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
@@ -425,7 +388,7 @@ impl ComponentCommandHandler {
         for component_name in &selected_components.component_names {
             let component = self
                 .component(
-                    selected_components.project.as_ref(),
+                    selected_components.environment.as_ref(),
                     component_name.into(),
                     version.map(|version| version.into()),
                 )
@@ -501,29 +464,39 @@ impl ComponentCommandHandler {
         }
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_update_workers(
         &self,
-        component_name: Option<ComponentName>,
-        update_mode: AgentUpdateMode,
-        await_update: bool,
+        _component_name: Option<ComponentName>,
+        _update_mode: AgentUpdateMode,
+        _await_update: bool,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_redeploy_workers(
         &self,
-        component_name: Option<ComponentName>,
+        _component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_diagnose(
@@ -537,6 +510,32 @@ impl ComponentCommandHandler {
                 &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
+    }
+
+    // TODO: atomic: cleanup before release
+    async fn cmd_manifest_trace(
+        &self,
+        _component_names: ComponentOptionalComponentNames,
+    ) -> anyhow::Result<()> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        let component_names = app_ctx
+            .application
+            .component_names()
+            .cloned()
+            .collect::<Vec<_>>();
+        for component_name in component_names {
+            self.ctx.log_handler().log_serializable(
+                &app_ctx
+                    .application
+                    .component(&component_name)
+                    .layer_properties()
+                    .with_compacted_traces(),
+            )
+        }
+
+        Ok(())
     }
 
     async fn cmd_add_dependency(
@@ -553,8 +552,8 @@ impl ComponentCommandHandler {
             .ctx
             .interactive_handler()
             .create_component_dependency(
-                component_name.map(|cn| cn.0.into()),
-                target_component_name.map(|cn| cn.0.into()),
+                component_name,
+                target_component_name,
                 target_component_path,
                 target_component_url,
                 dependency_type,
@@ -590,289 +589,9 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn deploy(
-        &self,
-        project: Option<&ProjectRefAndId>,
-        component_names: Vec<ComponentName>,
-        skip_build: bool, // NOTE: this can be removed with atomic deployments
-        force_build: Option<ForceBuildArg>,
-        default_component_select_mode: &ApplicationComponentSelectMode,
-        deploy_args: &DeployArgs,
-    ) -> anyhow::Result<Vec<Component>> {
-        if !skip_build {
-            self.ctx
-                .app_handler()
-                .build(
-                    component_names,
-                    force_build.map(|force_build| BuildArgs {
-                        step: vec![],
-                        force_build,
-                    }),
-                    default_component_select_mode,
-                )
-                .await?;
-        }
-
-        let selected_component_names = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .selected_component_names()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let build_profile = self.ctx.build_profile().cloned();
-
-        let plugin_installation_handler = self.ctx.plugin_installation_handler();
-
-        let components = {
-            log_action("Deploying", "components");
-            let _indent = LogIndent::new();
-
-            let mut components = Vec::with_capacity(selected_component_names.len());
-            for component_name in &selected_component_names {
-                let app_ctx = self.ctx.app_context_lock().await;
-                if app_ctx
-                    .some_or_err()?
-                    .application
-                    .component_properties(component_name, build_profile.as_ref())
-                    .is_deployable()
-                {
-                    drop(app_ctx);
-
-                    let component = self
-                        .deploy_component(build_profile.as_ref(), project, component_name)
-                        .await?;
-                    let component = plugin_installation_handler
-                        .apply_plugin_installation_changes(
-                            component_name,
-                            build_profile.as_ref(),
-                            component,
-                        )
-                        .await?;
-                    components.push(component);
-                }
-            }
-
-            components
-        };
-
-        if let Some(update) = deploy_args.update_agents {
-            self.update_workers_by_components(&components, update, true)
-                .await?;
-        } else if deploy_args.redeploy_agents(self.ctx.deploy_args()) {
-            self.redeploy_workers_by_components(&components).await?;
-        } else if deploy_args.delete_agents(self.ctx.deploy_args()) {
-            self.delete_workers(&components).await?;
-        }
-
-        Ok(components)
-    }
-
-    async fn deploy_component(
-        &self,
-        build_profile: Option<&BuildProfileName>,
-        project: Option<&ProjectRefAndId>,
-        component_name: &AppComponentName,
-    ) -> anyhow::Result<Component> {
-        let server_component = self
-            .component(
-                project,
-                (&ComponentName::from(component_name.as_str())).into(),
-                None,
-            )
-            .await?;
-        let deploy_properties = {
-            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-            let app_ctx = app_ctx.some_or_err_mut()?;
-            component_deploy_properties(app_ctx, component_name, build_profile)?
-        };
-        let component_id = server_component
-            .as_ref()
-            .map(|c| c.versioned_component_id.component_id);
-
-        let manifest_diffable_component = self
-            .manifest_diffable_component(component_name, &deploy_properties)
-            .await?;
-
-        if let Some(server_component) = server_component {
-            let server_diffable_component = self
-                .server_diffable_component(project, &server_component)
-                .await?;
-
-            if server_diffable_component == manifest_diffable_component {
-                log_skipping_up_to_date(format!(
-                    "deploying component {}",
-                    component_name.as_str().log_color_highlight()
-                ));
-                return Ok(server_component);
-            } else {
-                log_warn_action(
-                    "Found",
-                    format!(
-                        "changes for component {}",
-                        component_name.as_str().log_color_highlight()
-                    ),
-                );
-
-                {
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    log_deploy_diff(&server_diffable_component, &manifest_diffable_component)?;
-                }
-            }
-        }
-
-        let linked_wasm = File::open(&deploy_properties.linked_wasm_path)
-            .await
-            .with_context(|| {
-                anyhow!(
-                    "Failed to open component linked WASM at {}",
-                    deploy_properties
-                        .linked_wasm_path
-                        .display()
-                        .to_string()
-                        .log_color_error_highlight()
-                )
-            })?;
-
-        let ifs_files = {
-            if !deploy_properties.files.is_empty() {
-                Some(
-                    IfsFileManager::new(self.ctx.file_download_client().clone())
-                        .build_files_archive(deploy_properties.files.as_slice())
-                        .await?,
-                )
-            } else {
-                None
-            }
-        };
-        let ifs_properties = ifs_files.as_ref().map(|f| &f.properties);
-        let ifs_archive = {
-            if let Some(files) = ifs_files.as_ref() {
-                Some(File::open(&files.archive_path).await.with_context(|| {
-                    anyhow!(
-                        "Failed to open IFS archive: {}",
-                        files.archive_path.display()
-                    )
-                })?)
-            } else {
-                None
-            }
-        };
-
-        let agent_types: Option<Vec<AgentType>> = {
-            let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-            let app_ctx = app_ctx.some_or_err_mut()?;
-            if app_ctx.wit.is_agent(component_name) {
-                let agent_types = app_ctx
-                    .wit
-                    .get_extracted_agent_types(component_name, &deploy_properties.linked_wasm_path)
-                    .await?;
-
-                debug!("Deploying agent type information for {component_name}: {agent_types:#?}");
-
-                Some(agent_types)
-            } else {
-                None
-            }
-        };
-
-        let component = match component_id {
-            Some(component_id) => {
-                log_action(
-                    "Updating",
-                    format!(
-                        "component {}",
-                        component_name.as_str().log_color_highlight()
-                    ),
-                );
-
-                let clients = self.ctx.golem_clients().await?;
-
-                let component = {
-                    let component = clients
-                        .component
-                        .update_component(
-                            &component_id,
-                            linked_wasm,
-                            ifs_properties,
-                            ifs_archive,
-                            deploy_properties.dynamic_linking.as_ref(),
-                            deploy_properties
-                                .env
-                                .map(|env| ComponentEnvCloud { key_values: env })
-                                .as_ref(),
-                            agent_types.map(|types| AgentTypes { types }).as_ref(),
-                        )
-                        .await
-                        .map_service_error()?;
-
-                    Component::from(component)
-                };
-
-                self.ctx.log_handler().log_view(&ComponentUpdateView(
-                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
-                ));
-                component
-            }
-            None => {
-                log_action(
-                    "Creating",
-                    format!(
-                        "component {}",
-                        component_name.as_str().log_color_highlight()
-                    ),
-                );
-                let clients = self.ctx.golem_clients().await?;
-
-                let component = {
-                    let component = clients
-                        .component
-                        .create_component(
-                            &ComponentQuery {
-                                project_id: project.map(|p| p.project_id.0),
-                                component_name: component_name.to_string(),
-                            },
-                            linked_wasm,
-                            ifs_properties,
-                            ifs_archive,
-                            deploy_properties.dynamic_linking.as_ref(),
-                            deploy_properties
-                                .env
-                                .map(|env| ComponentEnvCloud { key_values: env })
-                                .as_ref(),
-                            agent_types.map(|types| AgentTypes { types }).as_ref(),
-                        )
-                        .await
-                        .map_service_error()?;
-                    Component::from(component)
-                };
-
-                self.ctx.log_handler().log_view(&ComponentCreateView(
-                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
-                ));
-
-                component
-            }
-        };
-
-        // We save the recently deployed hashes, so we don't have to download them
-        TaskResultMarker::new(
-            &self.ctx.task_result_marker_dir().await?,
-            GetServerComponentHash {
-                project_id: project.map(|p| &p.project_id),
-                component_name: &manifest_diffable_component.component_name,
-                component_version: component.versioned_component_id.version,
-                component_hash: Some(&manifest_diffable_component.component_hash),
-            },
-        )?
-        .success()?;
-
-        Ok(component)
-    }
-
-    async fn components_for_deploy_args(
+    // TODO: atomic
+    /*
+    async fn components_for_update_or_redeploy(
         &self,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<Vec<Component>> {
@@ -884,7 +603,7 @@ impl ComponentCommandHandler {
         for component_name in &selected_component_names.component_names {
             match self
                 .component(
-                    selected_component_names.project.as_ref(),
+                    selected_component_names.environment.as_ref(),
                     component_name.into(),
                     None,
                 )
@@ -903,6 +622,7 @@ impl ComponentCommandHandler {
         }
         Ok(components)
     }
+    */
 
     pub async fn update_workers_by_components(
         &self,
@@ -924,9 +644,9 @@ impl ComponentCommandHandler {
                 .worker_handler()
                 .update_component_workers(
                     &component.component_name,
-                    component.versioned_component_id.component_id,
+                    &component.component_id,
                     update,
-                    component.versioned_component_id.version,
+                    component.revision,
                     await_updates,
                 )
                 .await?;
@@ -951,10 +671,7 @@ impl ComponentCommandHandler {
         for component in components {
             self.ctx
                 .worker_handler()
-                .redeploy_component_workers(
-                    &component.component_name,
-                    component.versioned_component_id.component_id,
-                )
+                .redeploy_component_workers(&component.component_name, &component.component_id)
                 .await?;
         }
 
@@ -984,7 +701,7 @@ impl ComponentCommandHandler {
                     .worker_handler()
                     .delete_component_workers(
                         &component.component_name,
-                        component.versioned_component_id.component_id,
+                        &component.component_id,
                         first_round,
                     )
                     .await?;
@@ -1017,9 +734,11 @@ impl ComponentCommandHandler {
 
     async fn select_components_by_app_dir_or_name_internal(
         &self,
-        component_name: Option<&ComponentName>,
-        allow_no_matches: bool,
+        _component_name: Option<&ComponentName>,
+        _allow_no_matches: bool,
     ) -> anyhow::Result<SelectedComponents> {
+        // TODO: atomic
+        /*
         fn empty_checked<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
             if value.is_empty() {
                 log_error(format!("Missing {name} part in component name!"));
@@ -1124,9 +843,11 @@ impl ComponentCommandHandler {
                         app_ctx
                             .selected_component_names()
                             .iter()
-                            .map(|cn| cn.as_str().into())
-                            .collect::<Vec<_>>()
+                            .map(|cn| ComponentName::try_from(cn.as_str()))
+                            .collect::<Result<Vec<_>, _>>()
                     })
+                    .transpose()
+                    .map_err(|err| anyhow!(err))?
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>()
@@ -1150,32 +871,26 @@ impl ComponentCommandHandler {
             project,
             component_names: selected_component_names,
         })
+         */
+        todo!()
     }
 
     pub async fn component_by_name_with_auto_deploy(
         &self,
-        project: Option<&ProjectRefAndId>,
-        component_match_kind: ComponentNameMatchKind,
-        component_name: &ComponentName,
-        component_version_selection: Option<ComponentVersionSelection<'_>>,
-        deploy_args: Option<&DeployArgs>,
+        _environment: Option<&ResolvedEnvironmentIdentity>,
+        _component_match_kind: ComponentNameMatchKind,
+        _component_name: &ComponentName,
+        _component_version_selection: Option<ComponentVersionSelection<'_>>,
+        _deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<Component> {
-        if deploy_args.is_some() || self.ctx.deploy_args().is_any_set() {
-            self.ctx
-                .component_handler()
-                .deploy(
-                    project,
-                    vec![component_name.clone()],
-                    false,
-                    None,
-                    &ApplicationComponentSelectMode::CurrentDir,
-                    &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
-                )
-                .await?;
-        }
-
+        // TODO: atomic
+        /*
         match self
-            .component(project, component_name.into(), component_version_selection)
+            .component(
+                environment,
+                component_name.into(),
+                component_version_selection,
+            )
             .await?
         {
             Some(component) => Ok(component),
@@ -1238,15 +953,19 @@ impl ComponentCommandHandler {
                 }
             }
         }
+        */
+        todo!()
     }
 
     // TODO: merge these 3 args into "component lookup" or "selection" struct
     pub async fn component(
         &self,
-        project: Option<&ProjectRefAndId>,
-        component_name_or_id: ComponentSelection<'_>,
-        component_version_selection: Option<ComponentVersionSelection<'_>>,
+        _environment: Option<&ResolvedEnvironmentIdentity>,
+        _component_name_or_id: ComponentSelection<'_>,
+        _component_version_selection: Option<ComponentVersionSelection<'_>>,
     ) -> anyhow::Result<Option<Component>> {
+        // TODO: atomic
+        /*
         let component = match component_name_or_id {
             ComponentSelection::Name(component_name) => {
                 self.latest_component_by_name(project, component_name)
@@ -1296,23 +1015,27 @@ impl ComponentCommandHandler {
             (Some(component), None) => Ok(Some(component)),
             (None, _) => Ok(None),
         }
+        */
+        todo!()
     }
 
     pub async fn component_id_by_name(
         &self,
-        project: Option<&ProjectRefAndId>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
     ) -> anyhow::Result<Option<ComponentId>> {
         Ok(self
-            .component(project, component_name.into(), None)
+            .component(environment, component_name.into(), None)
             .await?
-            .map(|c| ComponentId(c.versioned_component_id.component_id)))
+            .map(|c| ComponentId(c.component_id.0)))
     }
 
     pub async fn latest_component_by_id(
         &self,
-        component_id: uuid::Uuid,
+        _component_id: uuid::Uuid,
     ) -> anyhow::Result<Option<Component>> {
+        // TODO: atomic
+        /*
         let clients = self.ctx.golem_clients().await?;
 
         let result = clients
@@ -1323,23 +1046,31 @@ impl ComponentCommandHandler {
             .map(Component::from);
 
         Ok(result)
+         */
+        todo!()
     }
 
     pub async fn latest_component_version_by_id(
         &self,
-        component_id: uuid::Uuid,
+        _component_id: uuid::Uuid,
     ) -> anyhow::Result<Option<u64>> {
+        // TODO: atomic
+        /*
         Ok(self
             .latest_component_by_id(component_id)
             .await?
             .map(|component| component.versioned_component_id.version))
+        */
+        todo!()
     }
 
     pub async fn latest_component_by_name(
         &self,
-        project: Option<&ProjectRefAndId>,
-        component_name: &ComponentName,
+        _environment: &ResolvedEnvironmentIdentity,
+        _component_name: &ComponentName,
     ) -> anyhow::Result<Option<Component>> {
+        // TODO: atomic
+        /*
         let clients = self.ctx.golem_clients().await?;
 
         let result = clients
@@ -1361,11 +1092,13 @@ impl ComponentCommandHandler {
             .next();
 
         Ok(result)
+        */
+        todo!()
     }
 
     pub async fn latest_components_by_app(
         &self,
-        project: Option<&ProjectRefAndId>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -1373,11 +1106,12 @@ impl ComponentCommandHandler {
             app_ctx
                 .application
                 .component_names()
-                .map(|component_name| component_name.as_str().into())
-                .collect::<Vec<_>>()
+                .map(|component_name| ComponentName::try_from(component_name.as_str()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| anyhow!(err))?
         };
 
-        self.latest_components_by_name(project, component_names)
+        self.latest_components_by_name(environment, component_names)
             .await
     }
 
@@ -1385,9 +1119,11 @@ impl ComponentCommandHandler {
     //       ComponentName types without cloning
     pub async fn latest_components_by_name(
         &self,
-        project: Option<&ProjectRefAndId>,
-        component_names: Vec<ComponentName>,
+        _environment: Option<&ResolvedEnvironmentIdentity>,
+        _component_names: Vec<ComponentName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
+        // TODO: atomic
+        /*
         let clients = self.ctx.golem_clients().await?;
 
         let results = clients
@@ -1410,12 +1146,16 @@ impl ComponentCommandHandler {
             .collect();
 
         Ok(results)
+        */
+        todo!()
     }
 
+    // TODO: atomic
+    /*
     // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
     async fn manifest_diffable_component(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         properties: &ComponentDeployProperties,
     ) -> anyhow::Result<DiffableComponent> {
         let component_hash = {
@@ -1464,7 +1204,7 @@ impl ComponentCommandHandler {
     // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
     async fn server_diffable_component(
         &self,
-        project: Option<&ProjectRefAndId>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         component: &Component,
     ) -> anyhow::Result<DiffableComponent> {
         let component_hash = self
@@ -1520,10 +1260,10 @@ impl ComponentCommandHandler {
 
     async fn server_component_hash(
         &self,
-        project: Option<&ProjectRefAndId>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
 
@@ -1579,10 +1319,10 @@ impl ComponentCommandHandler {
 
     async fn server_ifs_file_hash(
         &self,
-        project: Option<&ProjectRefAndId>,
+        environment: Option<&ResolvedEnvironmentIdentity>,
         component_name: &ComponentName,
         component_id: ComponentId,
-        component_version: u64,
+        component_revision: ComponentRevision,
         target_path: &str,
     ) -> anyhow::Result<String> {
         let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
@@ -1642,33 +1382,31 @@ impl ComponentCommandHandler {
             }
         }
     }
+    */
 }
 
+// TODO: atomic
+#[allow(unused)]
 struct ComponentDeployProperties {
     linked_wasm_path: PathBuf,
     files: Vec<InitialComponentFile>,
-    dynamic_linking: Option<DynamicLinkingOss>,
-    env: Option<HashMap<String, String>>,
+    dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
+    env: HashMap<String, String>,
 }
 
+// TODO: atomic
+#[allow(unused)]
 fn component_deploy_properties(
     app_ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
-    build_profile: Option<&BuildProfileName>,
+    component_name: &ComponentName,
 ) -> anyhow::Result<ComponentDeployProperties> {
-    let linked_wasm_path = app_ctx
-        .application
-        .component_linked_wasm(component_name, build_profile);
-    let component_properties = app_ctx
-        .application
-        .component_properties(component_name, build_profile);
-    if !component_properties.component_type().is_deployable() {
-        return Err(anyhow!("Component {component_name} is not deployable"));
+    let component = app_ctx.application.component(component_name);
+    let linked_wasm_path = component.final_linked_wasm();
+    if !component.component_type().is_deployable() {
+        bail!("Component {component_name} is not deployable");
     }
-    let files = component_properties.files.clone();
-    let env = (!component_properties.env.is_empty())
-        .then(|| resolve_env_vars(component_name, &component_properties.env))
-        .transpose()?;
+    let files = component.files().clone();
+    let env = resolve_env_vars(component_name, component.env())?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1679,10 +1417,12 @@ fn component_deploy_properties(
     })
 }
 
+// TODO: atomic
+#[allow(unused)]
 fn app_component_dynamic_linking(
     app_ctx: &mut ApplicationContext,
-    component_name: &AppComponentName,
-) -> anyhow::Result<Option<DynamicLinkingOss>> {
+    component_name: &ComponentName,
+) -> anyhow::Result<Option<HashMap<String, DynamicLinkedInstance>>> {
     let mut mapping = Vec::new();
 
     let wasm_rpc_deps = app_ctx
@@ -1700,11 +1440,11 @@ fn app_component_dynamic_linking(
     if mapping.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(DynamicLinkingOss {
-            dynamic_linking: HashMap::from_iter(mapping.into_iter().map(|stub_interfaces| {
+        Ok(Some(HashMap::from_iter(mapping.into_iter().map(
+            |stub_interfaces| {
                 (
                     stub_interfaces.stub_interface_name,
-                    DynamicLinkedInstanceOss::WasmRpc(DynamicLinkedWasmRpcOss {
+                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
                         targets: HashMap::from_iter(
                             stub_interfaces
                                 .exported_interfaces_per_stub_resource
@@ -1724,14 +1464,14 @@ fn app_component_dynamic_linking(
                         ),
                     }),
                 )
-            })),
-        }))
+            },
+        ))))
     }
 }
 
 fn resolve_env_vars(
-    component_name: &AppComponentName,
-    env: &HashMap<String, String>,
+    component_name: &ComponentName,
+    env: &BTreeMap<String, String>,
 ) -> anyhow::Result<HashMap<String, String>> {
     let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
 

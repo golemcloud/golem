@@ -19,3 +19,4 @@ templates/**/*.wasm
 bindings.rs
 wit-generated
 wit/deps
+golem-temp/**
