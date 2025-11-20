@@ -183,7 +183,7 @@ fn build_match_arms(
             let post_method_param_extraction_logic = match fn_output_info.future_or_immediate {
                 Asyncness::Future if !fn_output_info.is_unit => quote! {
                     let result = self.#ident(#(#param_idents),*).await;
-                    <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                    <_ as golem_rust::agentic::Schema>::to_structured_value(result).map_err(|e| {
                         golem_rust::agentic::custom_error(format!(
                             "Failed serializing return value for method {}: {}",
                             #method_name, e
@@ -206,7 +206,7 @@ fn build_match_arms(
                 },
                 Asyncness::Immediate if !fn_output_info.is_unit => quote! {
                     let result = self.#ident(#(#param_idents),*);
-                    <_ as golem_rust::agentic::Schema>::to_element_value(result).map_err(|e| {
+                    <_ as golem_rust::agentic::Schema>::to_structured_value(result).map_err(|e| {
                         golem_rust::agentic::custom_error(format!(
                             "Failed serializing return value for method {}: {}",
                             #method_name, e
@@ -276,13 +276,13 @@ fn generate_method_param_extraction(
                        #agent_type_name, #method_name, #i
                    ))
                  })?;
-                 let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
+                 let deserialized_value = golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
                  })?;
                  Ok(deserialized_value)
               },
               golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
-                   let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Multimodal(elements.clone()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
+                   let deserialized_value = golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Multimodal(elements.clone()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
                  })?;
                    Ok(deserialized_value)
@@ -360,7 +360,7 @@ fn generate_constructor_extraction(
                         ))
                     })?;
 
-                    golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
+                    golem_rust::agentic::Schema::from_structured_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
                         golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #i, e))
                     })
                 },

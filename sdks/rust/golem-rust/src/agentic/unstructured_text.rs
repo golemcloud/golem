@@ -14,8 +14,7 @@
 
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
-    BinaryReference, ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource,
-    TextType, WitValue,
+    ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType, WitValue,
 };
 use golem_wasm::Value;
 
@@ -250,7 +249,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         UnstructuredText::from_wit_value(wit_value)
     }
 
-    fn from_unstructured_value(
+    fn from_structured_value(
         value: StructuredValue,
         _schema: StructuredSchema,
     ) -> Result<Self, String>

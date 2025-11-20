@@ -38,7 +38,7 @@ pub fn get_remote_client(
                 let agent_type =
                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
-                 let mut value_types = vec![#(golem_rust::agentic::Schema::to_element_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+                 let mut value_types = vec![#(golem_rust::agentic::Schema::to_structured_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
 
                  let data_value = match &value_types[0] {
                     golem_rust::agentic::StructuredValue::Default(_) => {

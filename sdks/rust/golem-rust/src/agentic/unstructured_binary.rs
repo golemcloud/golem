@@ -15,7 +15,7 @@
 use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ElementSchema, ElementValue,
-    TextReference, WitValue,
+    WitValue,
 };
 use golem_wasm::Value;
 
@@ -198,7 +198,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         }
     }
 
-    fn from_unstructured_value(
+    fn from_structured_value(
         value: StructuredValue,
         _schema: StructuredSchema,
     ) -> Result<Self, String>

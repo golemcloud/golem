@@ -51,7 +51,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 serialize_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        let value_type = <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)?;
+                        let value_type = <#field_type as golem_rust::agentic::Schema>::to_structured_value(inner)?;
                         let element_value = value_type.get_element_value().ok_or_else(|| "multimodal types cannot be nested".to_string())?;
                         (#variant_name.to_string(), element_value)
                     }
@@ -69,7 +69,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 from_element_value_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(golem_rust::agentic::StructuredValue::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_structured_value(golem_rust::agentic::StructuredValue::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });

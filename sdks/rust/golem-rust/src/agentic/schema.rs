@@ -22,7 +22,7 @@ use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 pub trait Schema {
     fn get_type() -> StructuredSchema;
     fn to_structured_value(self) -> Result<StructuredValue, String>;
-    fn from_unstructured_value(
+    fn from_structured_value(
         value: StructuredValue,
         schema: StructuredSchema,
     ) -> Result<Self, String>
@@ -89,7 +89,7 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
         )))
     }
 
-    fn from_unstructured_value(
+    fn from_structured_value(
         value: StructuredValue,
         schema: StructuredSchema,
     ) -> Result<Self, String> {

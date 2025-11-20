@@ -218,9 +218,9 @@ impl<T: MultimodalSchema> Schema for Multimodal<T> {
         Ok(StructuredValue::Multimodal(data_value))
     }
 
-    fn from_unstructured_value(
+    fn from_structured_value(
         value: StructuredValue,
-        schema: StructuredSchema,
+        _schema: StructuredSchema,
     ) -> Result<Self, String>
     where
         Self: Sized,
@@ -347,7 +347,7 @@ impl MultimodalSchema for MultimodalBasicType {
         match name.as_str() {
             "Text" => {
                 let schema = <UnstructuredText>::get_type();
-                let text = UnstructuredText::from_unstructured_value(
+                let text = UnstructuredText::from_structured_value(
                     StructuredValue::Default(value),
                     schema,
                 )?;
@@ -355,7 +355,7 @@ impl MultimodalSchema for MultimodalBasicType {
             }
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
-                let binary = UnstructuredBinary::<String>::from_unstructured_value(
+                let binary = UnstructuredBinary::<String>::from_structured_value(
                     StructuredValue::Default(value),
                     schema,
                 )?;
