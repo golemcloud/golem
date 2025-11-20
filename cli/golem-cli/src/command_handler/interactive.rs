@@ -52,16 +52,6 @@ impl InteractiveHandler {
         Self { ctx }
     }
 
-    // NOTE: static because local server hook has limited access to state
-    pub fn confirm_auto_start_local_server(yes: bool) -> anyhow::Result<bool> {
-        confirm(
-            yes,
-            true,
-            "Do you want to use the local server for the current session?",
-            Some("Tip: you can also use the 'golem server run' command in another terminal to keep the local server running for local development!"),
-        )
-    }
-
     // NOTE: static because happens during context construction
     pub fn confirm_manifest_profile_warning(yes: bool) -> anyhow::Result<bool> {
         confirm(
@@ -251,7 +241,7 @@ impl InteractiveHandler {
             })
             .prompt()?;
 
-        let component_service_url = CustomType::<Url>::new("Component service URL:").prompt()?;
+        let registry_service_url = CustomType::<Url>::new("Registry service URL:").prompt()?;
 
         let worker_service_url = CustomType::<OptionalUrl>::new(
             "Worker service URL (empty to use component service url):",
@@ -283,8 +273,7 @@ impl InteractiveHandler {
         };
 
         let profile = Profile {
-            custom_url: Some(component_service_url),
-            custom_cloud_url: cloud_service_url,
+            custom_url: Some(registry_service_url),
             custom_worker_url: worker_service_url,
             allow_insecure: false,
             config: ProfileConfig { default_format },

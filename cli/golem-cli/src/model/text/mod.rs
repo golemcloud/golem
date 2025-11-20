@@ -28,3 +28,4 @@ pub mod profile;
 pub mod template;
 pub mod token;
 pub mod worker;
+pub mod server;

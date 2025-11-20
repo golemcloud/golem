@@ -299,6 +299,26 @@ impl ErrorHandler {
 
                 Ok(())
             }
+            ContextInitHintError::ProfileNotFound {
+                profile_name,
+                available_profile_names,
+            } => {
+                log_error(format!(
+                    "Profile '{}' not found!",
+                    profile_name.0.log_color_highlight()
+                ));
+
+                logln(
+                    "Available profile names:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
+                for environment_name in available_profile_names {
+                    logln(format!("- {}", environment_name.0));
+                }
+
+                Ok(())
+            }
         }
     }
 }

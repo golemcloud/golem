@@ -17,7 +17,10 @@ use crate::auth::{Auth, Authentication};
 use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
-use crate::config::{AuthenticationConfig, BUILTIN_LOCAL_URL, CLOUD_URL};
+use crate::config::{
+    ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
+    AuthenticationSource, Config, NamedProfile, Profile, BUILTIN_LOCAL_URL, CLOUD_URL,
+};
 use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
@@ -29,6 +32,7 @@ use crate::model::app::{ApplicationConfig, ComponentPresetSelector};
 use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
+use crate::model::text::server::ToFormattedServerContext;
 use crate::model::{AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
@@ -68,11 +72,7 @@ pub struct Context {
     format: Format,
     help_mode: bool,
     deploy_args: DeployArgs,
-    // TODO: atomic:
-    /*
-    profile_name: ProfileName,
-    profile: Profile,
-    */
+    profile: NamedProfile,
     environment_reference: Option<EnvironmentReference>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     app_context_config: Option<ApplicationContextConfig>,
@@ -94,9 +94,7 @@ pub struct Context {
     templates: std::sync::OnceLock<
         BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
     >,
-    selected_profile_and_environment_logging: std::sync::OnceLock<()>,
-    http_api_reset: tokio::sync::OnceCell<()>,
-    http_deployment_reset: tokio::sync::OnceCell<()>,
+    selected_context_logging: std::sync::OnceLock<()>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -180,14 +178,8 @@ impl Context {
                             }
                         }
                     }
-                    EnvironmentReference::ApplicationEnvironment { .. } => {
-                        // TODO: atomic
-                        todo!()
-                    }
-                    EnvironmentReference::AccountApplicationEnvironment { .. } => {
-                        // TODO: atomic
-                        todo!()
-                    }
+                    EnvironmentReference::ApplicationEnvironment { .. } => None,
+                    EnvironmentReference::AccountApplicationEnvironment { .. } => None,
                 }
             }
             None => match &application_name_and_environments {
@@ -207,6 +199,16 @@ impl Context {
                 None => None,
             },
         };
+
+        let use_cloud_profile_for_env = manifest_environment
+            .as_ref()
+            .map(|env| match &env.environment.server {
+                Some(Server::Builtin(BuiltinServer::Cloud)) => true,
+                _ => false,
+            })
+            .unwrap_or_default();
+
+        let profile = Self::load_profile(&global_flags, use_cloud_profile_for_env)?;
 
         let mut yes = global_flags.yes;
         let mut deploy_args = DeployArgs::none();
@@ -240,7 +242,7 @@ impl Context {
                 .as_ref()
                 .and_then(|env| env.environment.cli.as_ref())
                 .and_then(|cli| cli.format))
-            .unwrap_or_default();
+            .unwrap_or(profile.profile.config.default_format);
 
         let log_output = log_output_for_help.unwrap_or_else(|| {
             if enabled!(Level::ERROR) {
@@ -262,10 +264,7 @@ impl Context {
                 Some(server) => ClientConfig::from(server),
                 None => ClientConfig::from(&Server::Builtin(BuiltinServer::Local)),
             },
-            None => {
-                // TODO: atomic: fallback to default profiles or command line args
-                todo!()
-            }
+            None => ClientConfig::from(&profile.profile),
         };
         let file_download_client =
             new_reqwest_client(&client_config.file_download_http_client_config)?;
@@ -319,6 +318,7 @@ impl Context {
             format,
             help_mode: log_output_for_help.is_some(),
             deploy_args,
+            profile,
             app_context_config,
             http_batch_size: global_flags.http_batch_size.unwrap_or(50),
             auth_token_override: global_flags.auth_token,
@@ -335,9 +335,7 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             templates: std::sync::OnceLock::new(),
-            selected_profile_and_environment_logging: std::sync::OnceLock::new(),
-            http_api_reset: tokio::sync::OnceCell::new(),
-            http_deployment_reset: tokio::sync::OnceCell::new(),
+            selected_context_logging: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 app_source_mode,
@@ -396,22 +394,6 @@ impl Context {
         state.silent_init = true;
     }
 
-    pub fn profile_name(&self) -> &ProfileName {
-        self.log_context_selection_once();
-        // TODO: atomic: &self.profile_name
-        todo!()
-    }
-
-    pub fn available_profile_names(&self) -> &BTreeSet<ProfileName> {
-        // TODO: atomic: &self.available_profile_names
-        todo!()
-    }
-
-    pub fn application_name(&self) -> Option<ApplicationName> {
-        // TODO: atomic
-        todo!()
-    }
-
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
         self.log_context_selection_once();
         self.environment_reference.as_ref()
@@ -429,18 +411,10 @@ impl Context {
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
-                self.log_context_selection_once();
-
                 let clients = GolemClients::new(
-                    self.client_config.clone(),
+                    &self.client_config,
                     self.auth_token_override,
-                    // TODO: atomic
-                    /*
-                    &self.profile_name,
-                    &self.profile.auth,
-                    */
-                    todo!(),
-                    todo!(),
+                    &self.auth_config(),
                     self.config_dir(),
                 )
                 .await?;
@@ -468,6 +442,48 @@ impl Context {
 
     pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
         Ok(self.golem_clients().await?.auth_token().clone())
+    }
+
+    fn auth_config(&self) -> AuthenticationConfigWithSource {
+        match self.manifest_environment() {
+            Some(env) => match &env.environment.server {
+                Some(Server::Builtin(BuiltinServer::Local)) | None => {
+                    AuthenticationConfigWithSource {
+                        authentication: AuthenticationConfig::static_builtin_local(),
+                        source: AuthenticationSource::ApplicationEnvironment(
+                            ApplicationEnvironmentConfigId {
+                                application_name: env.application_name.clone(),
+                                environment_name: env.environment_name.clone(),
+                                server_url: BUILTIN_LOCAL_URL.parse().unwrap(),
+                            },
+                        ),
+                    }
+                }
+                Some(Server::Builtin(BuiltinServer::Cloud)) => {
+                    if !self.profile.name.is_builtin_cloud() {
+                        panic!("when using the builtin cloud environment, the selected profile must be the builtin cloud profile");
+                    }
+                    AuthenticationConfigWithSource {
+                        authentication: self.profile.profile.auth.clone(),
+                        source: AuthenticationSource::Profile(self.profile.name.clone()),
+                    }
+                }
+                Some(Server::Custom(server)) => AuthenticationConfigWithSource {
+                    authentication: Default::default(),
+                    source: AuthenticationSource::ApplicationEnvironment(
+                        ApplicationEnvironmentConfigId {
+                            application_name: env.application_name.clone(),
+                            environment_name: env.environment_name.clone(),
+                            server_url: server.url.clone(),
+                        },
+                    ),
+                },
+            },
+            _ => AuthenticationConfigWithSource {
+                authentication: self.profile.profile.auth.clone(),
+                source: AuthenticationSource::Profile(self.profile.name.clone()),
+            },
+        }
     }
 
     pub async fn app_context_lock(
@@ -581,6 +597,7 @@ impl Context {
         &self.template_group
     }
 
+    // TODO: atomic, if this is needed, find a better place for it (same for resolve_plugin_reference)
     pub async fn select_account_by_email_or_error(
         &self,
         _email: &str,
@@ -630,70 +647,98 @@ impl Context {
     }
 
     fn log_context_selection_once(&self) {
-        self.selected_profile_and_environment_logging
-            .get_or_init(|| {
-                if self.help_mode {
-                    return;
-                }
+        self.selected_context_logging.get_or_init(|| {
+            if self.help_mode {
+                return;
+            }
 
-                let (app, env, server): (String, String, String) = {
-                    if let Some(env) = &self.manifest_environment {
-                        let server = match &env.environment.server {
-                            Some(Server::Builtin(BuiltinServer::Local)) | None => {
-                                format!("local - builtin ({})", BUILTIN_LOCAL_URL.underline())
-                            }
-                            Some(Server::Builtin(BuiltinServer::Cloud)) => {
-                                format!("cloud - builtin ({})", CLOUD_URL.underline())
-                            }
-                            Some(Server::Custom(custom_server)) => {
-                                custom_server.url.as_str().underline().to_string()
-                            }
-                        };
-                        (
-                            env.application_name.0.clone(),
-                            env.environment_name.0.clone(),
-                            server,
-                        )
-                    } else if let Some(_environment_ref) = &self.environment_reference {
-                        // TODO: atomic: server from profile
-                        todo!()
-                    } else {
-                        // TODO: atomic: server from profile
-                        todo!()
+            let (app, env, server, profile): (String, String, String, Option<String>) = {
+                if let Some(env) = &self.manifest_environment {
+                    (
+                        env.application_name.0.clone(),
+                        env.environment_name.0.clone(),
+                        env.environment.to_formatted_server_context(),
+                        None,
+                    )
+                } else if let Some(environment_ref) = &self.environment_reference {
+                    match environment_ref {
+                        EnvironmentReference::Environment { environment_name } => (
+                            "-".to_string(),
+                            environment_name.0.clone(),
+                            self.profile.to_formatted_server_context(),
+                            Some(self.profile.name.0.clone()),
+                        ),
+                        EnvironmentReference::ApplicationEnvironment {
+                            application_name,
+                            environment_name,
+                        } => (
+                            application_name.0.clone(),
+                            environment_name.0.clone(),
+                            self.profile.to_formatted_server_context(),
+                            Some(self.profile.name.0.clone()),
+                        ),
+                        EnvironmentReference::AccountApplicationEnvironment {
+                            account_email,
+                            application_name,
+                            environment_name,
+                            ..
+                        } => (
+                            format!("{}/{}", account_email, application_name.0),
+                            environment_name.0.clone(),
+                            self.profile.to_formatted_server_context(),
+                            Some(self.profile.name.0.clone()),
+                        ),
                     }
-                };
+                } else {
+                    (
+                        "-".to_string(),
+                        "-".to_string(),
+                        self.profile.to_formatted_server_context(),
+                        Some(self.profile.name.0.clone()),
+                    )
+                }
+            };
 
-                let profile = "TODO"; // TODO: atomic
+            let opt_profile_formatted = profile
+                .map(|profile| format!(", profile: {}", profile.log_color_highlight()))
+                .unwrap_or_default();
 
-                log_action(
-                    "Selected",
-                    format!(
-                        "app: {}, environment: {}, server: {}, profile: {}",
-                        app.log_color_highlight(),
-                        env.log_color_highlight(),
-                        server.log_color_highlight(),
-                        profile.log_color_highlight()
-                    ),
-                );
+            log_action(
+                "Selected",
+                format!(
+                    "app: {app}, env: {env}, server: {server}{opt_profile_formatted}",
+                    app = app.log_color_highlight(),
+                    env = env.log_color_highlight(),
+                    server = server.log_color_highlight(),
+                ),
+            );
+        });
+    }
+
+    fn load_profile(
+        global_flags: &GolemCliGlobalFlags,
+        force_use_cloud_profile: bool,
+    ) -> anyhow::Result<NamedProfile> {
+        let profile_name = force_use_cloud_profile
+            .then(|| ProfileName::cloud())
+            .or_else(|| global_flags.profile.clone())
+            .or_else(|| global_flags.local.then(|| ProfileName::local()))
+            .or_else(|| global_flags.cloud.then(|| ProfileName::cloud()))
+            .unwrap_or_else(|| ProfileName::local());
+
+        let config = Config::from_dir(&global_flags.config_dir())?;
+
+        let Some(profile) = config.profiles.get(&profile_name) else {
+            bail!(ContextInitHintError::ProfileNotFound {
+                profile_name,
+                available_profile_names: config.profiles.keys().cloned().collect()
             });
-    }
+        };
 
-    pub async fn reset_http_api_definitions_once<F, Fut>(&self, f: F) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = anyhow::Result<()>>,
-    {
-        self.http_api_reset.get_or_try_init(f).await?;
-        Ok(())
-    }
-
-    pub async fn reset_http_deployments_once<F, Fut>(&self, f: F) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = anyhow::Result<()>>,
-    {
-        self.http_deployment_reset.get_or_try_init(f).await?;
-        Ok(())
+        Ok(NamedProfile {
+            name: profile_name,
+            profile: profile.clone(),
+        })
     }
 }
 
@@ -724,10 +769,9 @@ pub struct GolemClients {
 
 impl GolemClients {
     pub async fn new(
-        config: ClientConfig,
+        config: &ClientConfig,
         token_override: Option<Uuid>,
-        profile_name: &ProfileName,
-        auth_config: &AuthenticationConfig,
+        auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
         let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
@@ -744,7 +788,7 @@ impl GolemClients {
         });
 
         let authentication = auth
-            .authenticate(token_override, auth_config, config_dir, profile_name)
+            .authenticate(token_override, auth_config, config_dir)
             .await?;
 
         let security_token = Security::Bearer(authentication.0.secret.0.to_string());

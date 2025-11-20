@@ -35,7 +35,7 @@ use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::{ApplicationClient, EnvironmentClient};
-use golem_client::model::{ApplicationCreation, DeploymentCreation};
+use golem_client::model::ApplicationCreation;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -609,7 +609,8 @@ impl AppCommandHandler {
     pub async fn get_or_create_remote_application(
         &self,
     ) -> anyhow::Result<Option<golem_client::model::Application>> {
-        let Some(application_name) = self.ctx.application_name() else {
+        let Some(application_name) = self.ctx.manifest_environment().map(|e| &e.application_name)
+        else {
             return Ok(None);
         };
 
@@ -628,7 +629,7 @@ impl AppCommandHandler {
                     .create_application(
                         &account_id.0,
                         &ApplicationCreation {
-                            name: application_name,
+                            name: application_name.clone(),
                         },
                     )
                     .await?,

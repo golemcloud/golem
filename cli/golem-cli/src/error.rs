@@ -1,3 +1,4 @@
+use crate::config::ProfileName;
 use golem_common::model::environment::EnvironmentName;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
@@ -43,6 +44,10 @@ pub enum ContextInitHintError {
     EnvironmentNotFound {
         requested_environment_name: EnvironmentName,
         manifest_environment_names: Vec<EnvironmentName>,
+    },
+    ProfileNotFound {
+        profile_name: ProfileName,
+        available_profile_names: Vec<ProfileName>,
     },
 }
 

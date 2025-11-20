@@ -34,7 +34,7 @@ pub enum EnvironmentReference {
         account_email: String,
         application_name: ApplicationName,
         environment_name: EnvironmentName,
-        auto_create: bool,
+        auto_create: bool, // TODO: atomic: do we need this?
     },
 }
 

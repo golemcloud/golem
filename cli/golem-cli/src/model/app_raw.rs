@@ -1,3 +1,4 @@
+use crate::config::ApplicationEnvironmentConfigId;
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -199,7 +200,14 @@ pub struct CustomServer {
     pub url: Url,
     pub worker_url: Option<Url>,
     pub allow_insecure: Option<bool>,
-    // TODO: atomic: auth
+    pub auth: CustomServerAuth,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum CustomServerAuth {
+    OAuth2 { oauth2: Marker },
+    Static { static_token: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

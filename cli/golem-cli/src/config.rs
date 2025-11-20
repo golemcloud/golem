@@ -17,6 +17,8 @@ use crate::model::format::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
 use golem_client::model::TokenWithSecret;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -36,13 +38,16 @@ const PROFILE_NAME_CLOUD: &str = "cloud";
 pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub profiles: HashMap<ProfileName, Profile>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default_profile: Option<ProfileName>,
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub application_environments: HashMap<String, ApplicationEnvironmentConfig>,
 }
 
-// TODO: atomic: drop?
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct ProfileName(pub String);
 
@@ -86,27 +91,6 @@ impl From<String> for ProfileName {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct BuildProfileName(pub String);
-
-impl Display for BuildProfileName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<&str> for BuildProfileName {
-    fn from(name: &str) -> Self {
-        Self(name.to_string())
-    }
-}
-
-impl From<String> for BuildProfileName {
-    fn from(name: String) -> Self {
-        Self(name)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedProfile {
     pub name: ProfileName,
@@ -114,11 +98,10 @@ pub struct NamedProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub custom_url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub custom_cloud_url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub custom_worker_url: Option<Url>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
@@ -134,17 +117,15 @@ impl Profile {
         Self {
             custom_url: Some(url),
             custom_worker_url: None,
-            custom_cloud_url: None,
             allow_insecure: false,
             config: ProfileConfig::default(),
-            auth: AuthenticationConfig::Static(StaticAuthenticationConfig {
-                secret: AuthSecret(LOCAL_WELL_KNOWN_TOKEN),
-            }),
+            auth: AuthenticationConfig::static_builtin_local(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProfileConfig {
     #[serde(default)]
     pub default_format: Format,
@@ -152,7 +133,7 @@ pub struct ProfileConfig {
 
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
-        config_dir.join("config-v3.json")
+        config_dir.join("config-v4.json")
     }
 
     pub fn default_profile_name(&self) -> ProfileName {
@@ -182,36 +163,7 @@ impl Config {
             )
         })?;
 
-        // Detect if it was not yet migrated
-        if config.default_profile.is_none() {
-            // Drop old default profiles
-            config.profiles.remove(&ProfileName::from("default"));
-            config.profiles.remove(&ProfileName::from("cloud_default"));
-
-            // Rename profiles that are conflicting with the new ones
-            if let Some(profile) = config.profiles.remove(&ProfileName::from("local")) {
-                config
-                    .profiles
-                    .insert(ProfileName::from("local-migrated"), profile);
-            };
-            if let Some(profile) = config.profiles.remove(&ProfileName::from("cloud")) {
-                config
-                    .profiles
-                    .insert(ProfileName::from("cloud-migrated"), profile);
-            }
-
-            // Set default to local
-            config.default_profile = Some(ProfileName::from("local"));
-
-            // Save migrated config
-            config.store_file(config_dir).with_context(|| {
-                anyhow!(
-                    "Failed to save config after migration: {}",
-                    config_path.display()
-                )
-            })?;
-        }
-
+        // TODO: atomic: check and override urls, if necessary (and save)
         Ok(config.with_local_and_cloud_profiles())
     }
 
@@ -300,6 +252,28 @@ impl Config {
     pub fn delete_profile(name: &ProfileName, config_dir: &Path) -> anyhow::Result<()> {
         let mut config = Self::from_dir(config_dir)?;
         config.profiles.remove(name);
+        config.store_file(config_dir)
+    }
+
+    pub fn get_application_environment(
+        config_dir: &Path,
+        env_id: &ApplicationEnvironmentConfigId,
+    ) -> anyhow::Result<Option<ApplicationEnvironmentConfig>> {
+        let mut config = Self::from_dir(config_dir)?;
+        Ok(config
+            .application_environments
+            .remove(&env_id.to_hashed_key()))
+    }
+
+    pub fn set_application_environment(
+        env_id: &ApplicationEnvironmentConfigId,
+        app_env_config: ApplicationEnvironmentConfig,
+        config_dir: &Path,
+    ) -> anyhow::Result<()> {
+        let mut config = Self::from_dir(config_dir)?;
+        config
+            .application_environments
+            .insert(env_id.to_hashed_key(), app_env_config);
         config.store_file(config_dir)
     }
 }
@@ -477,15 +451,17 @@ impl AuthenticationConfig {
         })
     }
 
+    pub fn static_builtin_local() -> Self {
+        AuthenticationConfig::Static(StaticAuthenticationConfig {
+            secret: AuthSecret(LOCAL_WELL_KNOWN_TOKEN),
+        })
+    }
+
     pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
         Self::OAuth2(OAuth2AuthenticationConfig {
-            data: Some(OAuth2AuthenticationData {
-                id: token_with_secret.id.0,
-                account_id: token_with_secret.account_id.0,
-                created_at: token_with_secret.created_at,
-                expires_at: token_with_secret.expires_at,
-                secret: token_with_secret.secret.0.into(),
-            }),
+            data: Some(OAuth2AuthenticationData::from_token_with_secret(
+                token_with_secret,
+            )),
         })
     }
 }
@@ -502,6 +478,16 @@ pub struct OAuth2AuthenticationConfig {
     pub data: Option<OAuth2AuthenticationData>,
 }
 
+impl OAuth2AuthenticationConfig {
+    pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
+        Self {
+            data: Some(OAuth2AuthenticationData::from_token_with_secret(
+                token_with_secret,
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2AuthenticationData {
@@ -512,10 +498,64 @@ pub struct OAuth2AuthenticationData {
     pub secret: AuthSecret,
 }
 
+impl OAuth2AuthenticationData {
+    pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
+        Self {
+            id: token_with_secret.id.0,
+            account_id: token_with_secret.account_id.0,
+            created_at: token_with_secret.created_at,
+            expires_at: token_with_secret.expires_at,
+            secret: token_with_secret.secret.0.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StaticAuthenticationConfig {
     pub secret: AuthSecret,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationEnvironmentConfig {
+    pub auth: OAuth2AuthenticationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationEnvironmentConfigId {
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub server_url: Url,
+}
+
+impl ApplicationEnvironmentConfigId {
+    pub fn to_hashed_key(&self) -> String {
+        blake3::hash(serde_json::to_string(self).unwrap().as_bytes())
+            .to_hex()
+            .to_string()
+    }
+}
+
+impl Display for ApplicationEnvironmentConfigId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} - {} - {}",
+            self.application_name.0, self.environment_name.0, self.server_url
+        )
+    }
+}
+
+pub enum AuthenticationSource {
+    Profile(ProfileName),
+    ApplicationEnvironment(ApplicationEnvironmentConfigId),
+}
+
+pub struct AuthenticationConfigWithSource {
+    pub authentication: AuthenticationConfig,
+    pub source: AuthenticationSource,
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]

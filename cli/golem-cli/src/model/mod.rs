@@ -225,8 +225,6 @@ pub struct ProfileView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub url: Option<Url>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cloud_url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub worker_url: Option<Url>,
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub allow_insecure: bool,
@@ -248,7 +246,6 @@ impl ProfileView {
             is_active: &name == active,
             name,
             url: profile.custom_url,
-            cloud_url: profile.custom_cloud_url,
             worker_url: profile.custom_worker_url,
             allow_insecure: profile.allow_insecure,
             authenticated,

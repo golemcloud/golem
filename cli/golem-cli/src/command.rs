@@ -104,12 +104,12 @@ pub struct GolemCliGlobalFlags {
     )]
     pub environment: Option<EnvironmentReference>,
 
-    /// Select "local" environment from the manifest, or target the builtin local server
+    /// Select" local" environment from the manifest, or "local" profile
     #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
     )]
     pub local: bool,
 
-    /// Select "cloud" environment from the manifest, or target the cloud server
+    /// Select "cloud" environment from the manifest, or "cloud" profile
     #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
     )]
     pub cloud: bool,
@@ -1549,14 +1549,11 @@ pub mod profile {
             set_active: bool,
             /// URL of Golem Component service
             #[arg(long)]
-            component_url: Option<Url>,
+            url: Option<Url>,
             /// URL of Golem Worker service, if not provided defaults to component-url
             #[arg(long)]
             worker_url: Option<Url>,
             /// URL of Golem Cloud service, if not provided defaults to component-url
-            #[arg(long)]
-            cloud_url: Option<Url>,
-            /// Default output format
             #[arg(long, default_value_t = Format::Text)]
             default_format: Format,
             /// Token to use for authenticating against Golem. If not provided an OAuth2 flow will be performed when authentication is needed for the first time.
