@@ -45,7 +45,9 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
+use golem_wasm::{
+    parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
+};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -649,9 +651,14 @@ impl ElementValue {
             }
             ElementSchema::UnstructuredText(_) => {
                 if s.starts_with('"') && s.ends_with('"') {
+                    let string_value = parse_value_and_type(&str(), s)?;
+                    let data = match string_value.value {
+                        Value::String(data) => data,
+                        _ => unreachable!(),
+                    };
                     Ok(ElementValue::UnstructuredText(TextReference::Inline(
                         TextSource {
-                            data: s[1..s.len() - 1].to_string(),
+                            data,
                             text_type: None,
                         },
                     )))
@@ -659,10 +666,14 @@ impl ElementValue {
                     if let Some((prefix, rest)) = s.split_once(']') {
                         if rest.starts_with('"') && rest.ends_with('"') {
                             let language_code = &prefix[1..];
-                            let data = &rest[1..rest.len() - 1];
+                            let string_value = parse_value_and_type(&str(), rest)?;
+                            let data = match string_value.value {
+                                Value::String(data) => data,
+                                _ => unreachable!(),
+                            };
                             Ok(ElementValue::UnstructuredText(TextReference::Inline(
                                 TextSource {
-                                    data: data.to_string(),
+                                    data,
                                     text_type: Some(TextType {
                                         language_code: language_code.to_string(),
                                     }),
@@ -814,7 +825,9 @@ impl Display for TextReference {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TextReference::Url(url) => write!(f, "{url}"),
-            TextReference::Inline(text_source) => write!(f, "{text_source}"),
+            TextReference::Inline(text_source) => {
+                write!(f, "{text_source}")
+            }
         }
     }
 }
@@ -864,9 +877,11 @@ pub struct TextSource {
 
 impl Display for TextSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let encoded_data = print_value_and_type(&self.data.clone().into_value_and_type())
+            .unwrap_or_else(|_| self.data.clone());
         match &self.text_type {
-            None => write!(f, "\"{}\"", self.data),
-            Some(text_type) => write!(f, "[{}]\"{}\"", text_type.language_code, self.data),
+            None => write!(f, "{}", encoded_data),
+            Some(text_type) => write!(f, "[{}]{}", text_type.language_code, encoded_data),
         }
     }
 }
