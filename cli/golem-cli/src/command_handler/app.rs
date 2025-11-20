@@ -42,7 +42,9 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, HashOf, Hashable, SerializeMode};
 use golem_templates::add_component_by_template;
-use golem_templates::model::{GuestLanguage, PackageName, Template, TemplateName};
+use golem_templates::model::{
+    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
+};
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -165,6 +167,8 @@ impl AppCommandHandler {
             ),
         );
 
+        let application_name = TemplateApplicationName::from(application_name);
+
         if components.is_empty() {
             let common_templates = languages
                 .iter()
@@ -183,6 +187,7 @@ impl AppCommandHandler {
                         Some(common_template),
                         None,
                         &app_dir,
+                        &application_name,
                         &dummy_package_name,
                         Some(self.ctx.template_sdk_overrides()),
                     ) {
@@ -218,6 +223,7 @@ impl AppCommandHandler {
                     common_template,
                     Some(component_template),
                     &app_dir,
+                    &application_name,
                     component_package_name,
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
@@ -241,7 +247,10 @@ impl AppCommandHandler {
 
         log_action(
             "Created",
-            format!("application {}", application_name.log_color_highlight()),
+            format!(
+                "application {}",
+                application_name.as_str().log_color_highlight()
+            ),
         );
 
         logln("");
@@ -250,7 +259,7 @@ impl AppCommandHandler {
             logln(
                 format!(
                     "To add components to the application, switch to the {} directory, and use the `{}` command.",
-                    application_name.log_color_highlight(),
+                    application_name.as_str().log_color_highlight(),
                     "component new".log_color_highlight(),
                 )
             );
@@ -266,7 +275,7 @@ impl AppCommandHandler {
             logln(
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
-                    application_name.log_color_highlight(),
+                    application_name.as_str().log_color_highlight(),
                     "app build".log_color_highlight(),
                     "app deploy".log_color_highlight(),
                 )

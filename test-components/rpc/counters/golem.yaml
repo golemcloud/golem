@@ -5,4 +5,4 @@
 
 components:
   counters:
-    template: rust
+    templates: rust

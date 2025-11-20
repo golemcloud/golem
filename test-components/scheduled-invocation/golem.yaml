@@ -5,9 +5,9 @@
 
 witDeps:
 - wit/deps
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       release:
         build:
         - command: cargo component build --release
@@ -26,4 +26,3 @@ templates:
           - command: cp ../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm ../../{{ component_name | to_snake_case }}_stubless.wasm
         clean:
         - src/bindings.rs
-    defaultProfile: release

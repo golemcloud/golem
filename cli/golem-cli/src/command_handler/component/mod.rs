@@ -43,7 +43,9 @@ use golem_common::model::component_metadata::{
 use golem_common::model::diff;
 use golem_common::model::diff::HashOf;
 use golem_templates::add_component_by_template;
-use golem_templates::model::{GuestLanguage, PackageName};
+use golem_templates::model::{
+    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
+};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -144,14 +146,17 @@ impl ComponentCommandHandler {
         //   - checking that we are inside an application
         //   - switching to the root dir as a side effect
         //   - getting existing component names
-        let existing_component_names = {
+        let (existing_component_names, application_name) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
-            app_ctx
-                .application
-                .component_names()
-                .map(|name| name.to_string())
-                .collect::<HashSet<_>>()
+            (
+                app_ctx
+                    .application
+                    .component_names()
+                    .map(|name| name.to_string())
+                    .collect::<HashSet<_>>(),
+                app_ctx.application.application_name().clone(),
+            )
         };
 
         let Some((template, component_package_name)) = ({
@@ -197,10 +202,13 @@ impl ComponentCommandHandler {
         // Unloading app context, so we can reload after the new component is created
         self.ctx.unload_app_context().await;
 
+        let application_name = TemplateApplicationName::from(application_name.0);
+
         match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),
+            &application_name,
             &component_package_name,
             Some(self.ctx.template_sdk_overrides()),
         ) {

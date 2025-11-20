@@ -5,4 +5,4 @@
 
 components:
   ephemeral:
-    template: rust
+    templates: rust

@@ -8,5 +8,5 @@
 
 components:
   benchmark:direct-rust-rpc-child:
-    template: rust
+    templates: rust
 

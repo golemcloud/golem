@@ -5,9 +5,9 @@
 
 # See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
 
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
         build:
         - command: cargo component build
@@ -44,7 +44,6 @@ templates:
             - command: cp ../../golem-temp/components/custom_durability_release.wasm ../../../custom_durability.wasm
         clean:
         - src/bindings.rs
-    defaultProfile: debug
 customCommands:
   cargo-clean:
   - command: cargo clean

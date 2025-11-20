@@ -6,10 +6,11 @@
 witDeps:
 - wit/deps
 tempDir: target/golem-temp
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
+        default: true
         build:
         - command: cargo component build
           sources:
@@ -43,7 +44,6 @@ templates:
           - command: cp ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm ../..
         clean:
         - src/bindings.rs
-    defaultProfile: debug
 customCommands:
   update-wit-deps:
     - command: wit-deps -d wit-deps -m wit-deps/deps.toml -l wit-deps/deps.lock
