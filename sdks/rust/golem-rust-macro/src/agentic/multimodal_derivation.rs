@@ -69,7 +69,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
                 from_element_value_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(golem_rust::agentic::ValueType::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(golem_rust::agentic::StructuredValue::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });

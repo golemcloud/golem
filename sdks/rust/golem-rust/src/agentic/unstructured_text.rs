@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{Schema, SchemaType, ValueType};
+use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
     BinaryReference, ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource,
     TextType, WitValue,
@@ -200,7 +200,7 @@ impl AllowedLanguages for AnyLanguage {
 }
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
-    fn get_type() -> SchemaType {
+    fn get_type() -> StructuredSchema {
         let restrictions = if T::all().is_empty() {
             None
         } else {
@@ -214,12 +214,12 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             Some(restrictions)
         };
 
-        SchemaType::Default(ElementSchema::UnstructuredText(TextDescriptor {
+        StructuredSchema::Default(ElementSchema::UnstructuredText(TextDescriptor {
             restrictions,
         }))
     }
 
-    fn to_element_value(self) -> Result<ValueType, String> {
+    fn to_element_value(self) -> Result<StructuredValue, String> {
         match self {
             UnstructuredText::Text {
                 text,
@@ -229,7 +229,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                     language_code: code.to_language_code().to_string(),
                 });
 
-                Ok(ValueType::Default(ElementValue::UnstructuredText(
+                Ok(StructuredValue::Default(ElementValue::UnstructuredText(
                     TextReference::Inline(TextSource {
                         data: text,
                         text_type,
@@ -237,26 +237,26 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                 )))
             }
 
-            UnstructuredText::Url(url) => Ok(ValueType::Default(ElementValue::UnstructuredText(
-                TextReference::Url(url),
-            ))),
+            UnstructuredText::Url(url) => Ok(StructuredValue::Default(
+                ElementValue::UnstructuredText(TextReference::Url(url)),
+            )),
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, _schema: SchemaType) -> Result<Self, String>
+    fn from_wit_value(wit_value: WitValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
         UnstructuredText::from_wit_value(wit_value)
     }
 
-    fn from_element_value(value: ValueType, _schema: SchemaType) -> Result<Self, String>
+    fn from_element_value(value: StructuredValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
         let element_value = match value {
-            ValueType::Default(value) => Ok(value),
-            ValueType::Multimodal(_) => {
+            StructuredValue::Default(value) => Ok(value),
+            StructuredValue::Multimodal(_) => {
                 Err("input mismatch. expected default value, found multimodal".to_string())
             }
         }?;
@@ -304,8 +304,8 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         let value_type = self.to_element_value()?;
 
         let element_value_result = match value_type {
-            ValueType::Default(element_value) => Ok(element_value),
-            ValueType::Multimodal(_) => {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
                 Err("Expected element value but found multimodal".to_string())
             }
         };

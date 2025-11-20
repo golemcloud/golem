@@ -191,10 +191,10 @@ fn build_match_arms(
                     }).map(|value_type| {
 
                         match value_type {
-                            golem_rust::agentic::ValueType::Default(element_value) => {
+                            golem_rust::agentic::StructuredValue::Default(element_value) => {
                                  golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                             },
-                            golem_rust::agentic::ValueType::Multimodal(result) => {
+                            golem_rust::agentic::StructuredValue::Multimodal(result) => {
                                 golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(result)
                             }
                         }
@@ -213,10 +213,10 @@ fn build_match_arms(
                         ))
                     }).map(|value_type| {
                         match value_type {
-                            golem_rust::agentic::ValueType::Default(element_value) => {
+                            golem_rust::agentic::StructuredValue::Default(element_value) => {
                                  golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                             },
-                            golem_rust::agentic::ValueType::Multimodal(result) => {
+                            golem_rust::agentic::StructuredValue::Multimodal(result) => {
                                 golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(result)
                             }
                         }
@@ -276,13 +276,13 @@ fn generate_method_param_extraction(
                        #agent_type_name, #method_name, #i
                    ))
                  })?;
-                 let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Default(element_value), golem_rust::agentic::SchemaType::Default(element_schema)).map_err(|e| {
+                 let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
                  })?;
                  Ok(deserialized_value)
               },
               golem_rust::golem_agentic::golem::agent::common::DataValue::Multimodal(elements) => {
-                   let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Multimodal(elements.clone()), golem_rust::agentic::SchemaType::Multimodal(vec![])).map_err(|e| {
+                   let deserialized_value = golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Multimodal(elements.clone()), golem_rust::agentic::StructuredSchema::Multimodal(vec![])).map_err(|e| {
                    golem_rust::agentic::invalid_input_error(format!("Failed parsing arg {} for method {}: {}", #i, #method_name, e))
                  })?;
                    Ok(deserialized_value)
@@ -360,7 +360,7 @@ fn generate_constructor_extraction(
                         ))
                     })?;
 
-                    golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::ValueType::Default(element_value), golem_rust::agentic::SchemaType::Default(element_schema)).map_err(|e| {
+                    golem_rust::agentic::Schema::from_element_value(golem_rust::agentic::StructuredValue::Default(element_value), golem_rust::agentic::StructuredSchema::Default(element_schema)).map_err(|e| {
                         golem_rust::agentic::invalid_input_error(format!("Failed parsing constructor arg {}: {}", #i, e))
                     })
                 },

@@ -21,13 +21,13 @@ use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 use golem_wasm::Value;
 
 pub trait Schema {
-    fn get_type() -> SchemaType;
-    fn to_element_value(self) -> Result<ValueType, String>;
-    fn from_element_value(value: ValueType, schema: SchemaType) -> Result<Self, String>
+    fn get_type() -> StructuredSchema;
+    fn to_element_value(self) -> Result<StructuredValue, String>;
+    fn from_element_value(value: StructuredValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized;
 
-    fn from_wit_value(wit_value: WitValue, schema: SchemaType) -> Result<Self, String>
+    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized;
 
@@ -37,38 +37,38 @@ pub trait Schema {
 }
 
 #[derive(Debug)]
-pub enum SchemaType {
+pub enum StructuredSchema {
     Default(ElementSchema),
     Multimodal(Vec<(String, ElementSchema)>),
 }
 
-impl SchemaType {
+impl StructuredSchema {
     pub fn get_element_schema(self) -> Option<ElementSchema> {
         match self {
-            SchemaType::Default(element_schema) => Some(element_schema),
-            SchemaType::Multimodal(_) => None,
+            StructuredSchema::Default(element_schema) => Some(element_schema),
+            StructuredSchema::Multimodal(_) => None,
         }
     }
 }
 
 #[derive(Debug)]
-pub enum ValueType {
+pub enum StructuredValue {
     Default(ElementValue),
     Multimodal(Vec<(String, ElementValue)>),
 }
 
-impl ValueType {
+impl StructuredValue {
     pub fn get_element_value(self) -> Option<ElementValue> {
         match self {
-            ValueType::Default(element_value) => Some(element_value),
-            ValueType::Multimodal(_) => None,
+            StructuredValue::Default(element_value) => Some(element_value),
+            StructuredValue::Multimodal(_) => None,
         }
     }
 
     pub fn get_multimodal_value(self) -> Option<Vec<(String, ElementValue)>> {
         match self {
-            ValueType::Default(_) => None,
-            ValueType::Multimodal(multimodal_values) => Some(multimodal_values),
+            StructuredValue::Default(_) => None,
+            StructuredValue::Multimodal(multimodal_values) => Some(multimodal_values),
         }
     }
 }
@@ -76,29 +76,34 @@ impl ValueType {
 // Handles the component model types via the IntoValue and FromValueAndType traits
 // This doesn't cover UnstructuredText, UnstructuredBinary
 impl<T: IntoValue + FromValueAndType> Schema for T {
-    fn get_type() -> SchemaType {
-        SchemaType::Default(ElementSchema::ComponentModel(T::get_type()))
+    fn get_type() -> StructuredSchema {
+        StructuredSchema::Default(ElementSchema::ComponentModel(T::get_type()))
     }
 
-    fn to_element_value(self) -> Result<ValueType, String> {
+    fn to_element_value(self) -> Result<StructuredValue, String> {
         let wit_value = self.into_value();
-        Ok(ValueType::Default(ElementValue::ComponentModel(wit_value)))
+        Ok(StructuredValue::Default(ElementValue::ComponentModel(
+            wit_value,
+        )))
     }
 
-    fn from_element_value(value: ValueType, schema: SchemaType) -> Result<Self, String> {
+    fn from_element_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String> {
         match value {
-            ValueType::Default(ElementValue::ComponentModel(wit_value)) => {
+            StructuredValue::Default(ElementValue::ComponentModel(wit_value)) => {
                 T::from_wit_value(wit_value, schema)
             }
             _ => Err(format!("Expected ComponentModel value, got: {:?}", value)),
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, schema: SchemaType) -> Result<Self, String> {
+    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String> {
         let value_and_type = ValueAndType {
             value: wit_value,
             typ: match schema {
-                SchemaType::Default(ElementSchema::ComponentModel(wit_type)) => wit_type,
+                StructuredSchema::Default(ElementSchema::ComponentModel(wit_type)) => wit_type,
                 _ => return Err(format!("Expected ComponentModel schema, got: {:?}", schema)),
             },
         };
@@ -110,8 +115,8 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
         let value_out = self.to_element_value()?;
 
         let element_value_result = match value_out {
-            ValueType::Default(element_value) => Ok(element_value),
-            ValueType::Multimodal(_) => {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
                 Err("Expected element value but found multimodal".to_string())
             }
         };

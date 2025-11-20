@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{Schema, SchemaType, ValueType};
+use crate::agentic::{Schema, StructuredSchema, StructuredValue};
 use crate::golem_agentic::golem::agent::common::{
     BinaryDescriptor, BinaryReference, BinarySource, BinaryType, ElementSchema, ElementValue,
     TextReference, WitValue,
@@ -160,7 +160,7 @@ impl AllowedMimeTypes for String {
 }
 
 impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
-    fn get_type() -> SchemaType {
+    fn get_type() -> StructuredSchema {
         let restrictions = if T::all().is_empty() {
             None
         } else {
@@ -174,17 +174,17 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
             Some(restrictions)
         };
 
-        SchemaType::Default(ElementSchema::UnstructuredBinary(BinaryDescriptor {
+        StructuredSchema::Default(ElementSchema::UnstructuredBinary(BinaryDescriptor {
             restrictions,
         }))
     }
 
-    fn to_element_value(self) -> Result<ValueType, String> {
+    fn to_element_value(self) -> Result<StructuredValue, String> {
         match self {
             UnstructuredBinary::Inline { data, mime_type } => {
                 let mime_type = mime_type.to_string();
 
-                Ok(ValueType::Default(ElementValue::UnstructuredBinary(
+                Ok(StructuredValue::Default(ElementValue::UnstructuredBinary(
                     BinaryReference::Inline(BinarySource {
                         data,
                         binary_type: BinaryType { mime_type },
@@ -192,19 +192,19 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
                 )))
             }
 
-            UnstructuredBinary::Url(url) => Ok(ValueType::Default(
+            UnstructuredBinary::Url(url) => Ok(StructuredValue::Default(
                 ElementValue::UnstructuredBinary(BinaryReference::Url(url)),
             )),
         }
     }
 
-    fn from_element_value(value: ValueType, _schema: SchemaType) -> Result<Self, String>
+    fn from_element_value(value: StructuredValue, _schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
         let element_value = match value {
-            ValueType::Default(element_value) => Ok(element_value),
-            ValueType::Multimodal(_) => {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
                 Err("type mismatch. expected default value, found mulitmodal")
             }
         }?;
@@ -247,7 +247,10 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         }
     }
 
-    fn from_wit_value(wit_value: golem_wasm::WitValue, _schema: SchemaType) -> Result<Self, String>
+    fn from_wit_value(
+        wit_value: golem_wasm::WitValue,
+        _schema: StructuredSchema,
+    ) -> Result<Self, String>
     where
         Self: Sized,
     {
@@ -261,8 +264,8 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         let value_type = self.to_element_value()?;
 
         let element_value_result = match value_type {
-            ValueType::Default(element_value) => Ok(element_value),
-            ValueType::Multimodal(_) => {
+            StructuredValue::Default(element_value) => Ok(element_value),
+            StructuredValue::Multimodal(_) => {
                 Err("Expected element value but found multimodal".to_string())
             }
         };

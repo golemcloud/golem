@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::agentic::{
-    MultimodalSchema, Schema, SchemaType, UnstructuredBinary, UnstructuredText, ValueType,
+    MultimodalSchema, Schema, StructuredSchema, StructuredValue, UnstructuredBinary,
+    UnstructuredText,
 };
 use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
 use golem_wasm::{Value, WitValue};
@@ -208,32 +209,32 @@ impl<T: MultimodalSchema> Multimodal<T> {
 }
 
 impl<T: MultimodalSchema> Schema for Multimodal<T> {
-    fn get_type() -> SchemaType {
-        SchemaType::Multimodal(T::get_multimodal_schema())
+    fn get_type() -> StructuredSchema {
+        StructuredSchema::Multimodal(T::get_multimodal_schema())
     }
 
-    fn to_element_value(self) -> Result<ValueType, String> {
+    fn to_element_value(self) -> Result<StructuredValue, String> {
         let data_value = self.to_name_and_element_values()?;
-        Ok(ValueType::Multimodal(data_value))
+        Ok(StructuredValue::Multimodal(data_value))
     }
 
-    fn from_element_value(value: ValueType, schema: SchemaType) -> Result<Self, String>
+    fn from_element_value(value: StructuredValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
         match value {
-            ValueType::Multimodal(elements) => Self::from_element_values(elements),
-            _ => Err("Expected Multimodal ValueType".to_string()),
+            StructuredValue::Multimodal(elements) => Self::from_element_values(elements),
+            _ => Err("Expected Multimodal StructuredValue".to_string()),
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, schema: SchemaType) -> Result<Self, String>
+    fn from_wit_value(wit_value: WitValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized,
     {
         match schema {
-            SchemaType::Multimodal(_) => Self::from_wit_value(wit_value),
-            _ => Err("Expected Multimodal SchemaType".to_string()),
+            StructuredSchema::Multimodal(_) => Self::from_wit_value(wit_value),
+            _ => Err("Expected Multimodal StructuredSchema".to_string()),
         }
     }
 
@@ -343,13 +344,14 @@ impl MultimodalSchema for MultimodalBasicType {
         match name.as_str() {
             "Text" => {
                 let schema = <UnstructuredText>::get_type();
-                let text = UnstructuredText::from_element_value(ValueType::Default(value), schema)?;
+                let text =
+                    UnstructuredText::from_element_value(StructuredValue::Default(value), schema)?;
                 Ok(MultimodalBasicType::Text(text))
             }
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
                 let binary = UnstructuredBinary::<String>::from_element_value(
-                    ValueType::Default(value),
+                    StructuredValue::Default(value),
                     schema,
                 )?;
                 Ok(MultimodalBasicType::Binary(binary))

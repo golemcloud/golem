@@ -203,12 +203,12 @@ fn get_agent_type_with_remote_client(
                     };
                     let ty = &pat_type.ty;
                     input_schema_logic.push(quote! {
-                        let schema: golem_rust::agentic::SchemaType = <#ty as golem_rust::agentic::Schema>::get_type();
+                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
                         match schema {
-                            golem_rust::agentic::SchemaType::Default(element_schema) => {
+                            golem_rust::agentic::StructuredSchema::Default(element_schema) => {
                                 default_inputs.push((#param_name.to_string(), element_schema));
                             },
-                            golem_rust::agentic::SchemaType::Multimodal(name_and_types) => {
+                            golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                 multi_modal_inputs.extend(name_and_types);
                             }
                         }
@@ -225,10 +225,10 @@ fn get_agent_type_with_remote_client(
                         output_schema_logic.push(quote! {
                             let schema = <#ty as golem_rust::agentic::Schema>::get_type();
                             match schema {
-                                golem_rust::agentic::SchemaType::Default(element_schema) => {
+                                golem_rust::agentic::StructuredSchema::Default(element_schema) => {
                                     default_outputs.push(("return-value".to_string(), element_schema));
                                 },
-                                golem_rust::agentic::SchemaType::Multimodal(name_and_types) => {
+                                golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                                     multi_modal_outputs.extend(name_and_types)
                                 }
                             }
@@ -317,12 +317,12 @@ fn get_agent_type_with_remote_client(
                 let ty = &pat_type.ty;
                 constructor_parameters_with_schema.push(quote! {
 
-                    let schema: golem_rust::agentic::SchemaType = <#ty as golem_rust::agentic::Schema>::get_type();
+                    let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
                     match schema {
-                        golem_rust::agentic::SchemaType::Default(element_schema) => {
+                        golem_rust::agentic::StructuredSchema::Default(element_schema) => {
                             constructor_default_inputs.push((#param_name.to_string(), element_schema));
                         },
-                        golem_rust::agentic::SchemaType::Multimodal(name_and_types) => {
+                        golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
                             constructor_multi_modal_inputs.extend(name_and_types);
                         }
                     }
