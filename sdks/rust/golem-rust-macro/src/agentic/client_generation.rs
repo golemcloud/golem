@@ -26,7 +26,7 @@ pub fn get_remote_client(
     constructor_param_defs: Vec<proc_macro2::TokenStream>,
     constructor_param_idents: Vec<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
-    let remote_trait_name = format_ident!("{}Client", item_trait.ident);
+    let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
 
     let type_name = item_trait.ident.to_string();
     let method_impls = get_remote_method_impls(item_trait, type_name.to_string());
@@ -34,13 +34,13 @@ pub fn get_remote_client(
     match constructor_param_type {
         DefaultOrMultimodal::Default => {
             quote! {
-                pub struct #remote_trait_name {
+                pub struct #remote_client_type_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
                     wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
                 }
 
-                impl #remote_trait_name {
-                    pub fn get(#(#constructor_param_defs), *) -> #remote_trait_name {
+                impl #remote_client_type_name {
+                    pub fn get(#(#constructor_param_defs), *) -> #remote_client_type_name {
                         let agent_type =
                            golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
@@ -49,18 +49,74 @@ pub fn get_remote_client(
                          let data_value  = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values);
 
                          let agent_id_string =
-                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(#type_name, &data_value).expect("Internal Error: Failed to make agent id");
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                                #type_name,
+                                &data_value,
+                                None
+                           ).expect("Internal Error: Failed to make agent id");
 
                          let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
 
                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
 
-                         #remote_trait_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                         #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+
+                    }
+
+                    pub fn new_phantom(#(#constructor_param_defs), *) -> #remote_client_type_name {
+                        let agent_type =
+                           golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
+
+                         let element_values = vec![#(golem_rust::agentic::Schema::to_element_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+
+                         let data_value  = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values);
+
+                         let agent_id_string =
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                                #type_name,
+                                &data_value,
+                                Some(golem_rust::Uuid::new_v4().into())
+                           ).expect("Internal Error: Failed to make agent id");
+
+                         let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+
+                         let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+
+                         #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+
+                    }
+
+                    pub fn get_phantom(phantom_id: golem_rust::Uuid, #(#constructor_param_defs), *) -> #remote_client_type_name {
+                        let agent_type =
+                           golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
+
+                         let element_values = vec![#(golem_rust::agentic::Schema::to_element_value(#constructor_param_idents).expect("Failed to convert constructor parameter to ElementValue")),*];
+
+                         let data_value  = golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(element_values);
+
+                         let agent_id_string =
+                           golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                                #type_name,
+                                &data_value,
+                                Some(phantom_id.into())
+                           ).expect("Internal Error: Failed to make agent id");
+
+                         let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
+
+                         let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
+
+                         #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
 
                     }
 
                     pub fn get_agent_id(&self) -> String {
                         self.agent_id.agent_id.clone()
+                    }
+
+                    pub fn phantom_id(&self) -> Option<golem_rust::Uuid> {
+                        let (_, _, phantom_id) = golem_rust::golem_agentic::golem::agent::host::parse_agent_id(&self.agent_id.agent_id)
+                            .unwrap();
+                        phantom_id.map(|id| id.into())
                     }
 
                     #method_impls
@@ -72,13 +128,13 @@ pub fn get_remote_client(
             let constructor_param = &constructor_param_idents[0];
 
             quote! {
-                pub struct #remote_trait_name {
+                pub struct #remote_client_type_name {
                     agent_id: golem_rust::wasm_rpc::AgentId,
                     wasm_rpc: golem_rust::wasm_rpc::WasmRpc,
                 }
 
-                impl #remote_trait_name {
-                    pub fn get(#(#constructor_param_defs), *) -> #remote_trait_name {
+                impl #remote_client_type_name {
+                    pub fn get(#(#constructor_param_defs), *) -> #remote_client_type_name {
                         let agent_type =
                            golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
@@ -91,7 +147,7 @@ pub fn get_remote_client(
 
                          let wasm_rpc = golem_rust::wasm_rpc::WasmRpc::new(&agent_id);
 
-                         #remote_trait_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
+                         #remote_client_type_name { agent_id: agent_id, wasm_rpc: wasm_rpc }
                     }
 
                     pub fn get_agent_id(&self) -> String {

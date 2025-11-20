@@ -81,9 +81,9 @@ impl GuestCounter for Counter {
     }
 
     fn block_on_promise(&self, promise: PromiseId) {
-        println!("Awaiting promise ${promise:?}");
+        println!("Awaiting promise {promise:?}");
         bindings::golem::api::host::get_promise(&promise).subscribe().block();
-        println!("Promise ${promise:?} completed");
+        println!("Promise {promise:?} completed");
     }
 
     fn get_args(&self) -> Vec<String> {

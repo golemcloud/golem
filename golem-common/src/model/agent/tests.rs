@@ -29,6 +29,7 @@ use proptest::string::string_regex;
 use proptest::{prop_assert_eq, prop_oneof, proptest};
 use std::collections::HashMap;
 use test_r::test;
+use uuid::Uuid;
 
 #[test]
 fn agent_id_wave_normalization() {
@@ -163,7 +164,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters);
+        let id = AgentId::new("agent-6".to_string(), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -186,7 +187,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters);
+        let id = AgentId::new("agent-6".to_string(), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -309,18 +310,87 @@ fn invalid_text_url() {
     )
 }
 
+#[test]
+fn roundtrip_test_with_phantom_id() {
+    let phantom_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    roundtrip_test_with_id(
+        "agent-1",
+        DataValue::Tuple(ElementValues { elements: vec![] }),
+        Some(phantom_id),
+    )
+}
+
+#[test]
+fn roundtrip_test_phantom_id_complex() {
+    let phantom_id = Uuid::parse_str("f47ac10b-58cc-4372-a567-0e02b2c3d479").unwrap();
+    roundtrip_test_with_id(
+        "agent-3",
+        DataValue::Tuple(ElementValues {
+            elements: vec![
+                ElementValue::ComponentModel(12u32.into_value_and_type()),
+                ElementValue::ComponentModel(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::U32(1),
+                        Value::U32(2),
+                        Value::Flags(vec![true, false, true]),
+                    ]),
+                    record(vec![
+                        field("x", u32()),
+                        field("y", u32()),
+                        field("properties", flags(&["a", "b", "c"])),
+                    ]),
+                )),
+            ],
+        }),
+        Some(phantom_id),
+    )
+}
+
+#[test]
+fn invalid_phantom_id() {
+    failure_test_with_string(
+        "agent-1()[not-a-uuid]",
+        "Invalid UUID in phantom ID: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `n` at 1",
+    )
+}
+
+#[test]
+fn roundtrip_without_phantom_id_maintains_none() {
+    roundtrip_test_with_id(
+        "agent-1",
+        DataValue::Tuple(ElementValues { elements: vec![] }),
+        None,
+    )
+}
+
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = AgentId::new(agent_type.to_string(), parameters);
+    let id = AgentId::new(agent_type.to_string(), parameters, None);
     let s = id.to_string();
     println!("{s}");
     let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
+fn roundtrip_test_with_id(agent_type: &str, parameters: DataValue, phantom_id: Option<Uuid>) {
+    let id = AgentId::new(agent_type.to_string(), parameters, phantom_id);
+    let s = id.to_string();
+    println!("{s}");
+    let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+    assert_eq!(id, id2);
+    assert_eq!(id.phantom_id, phantom_id);
+}
+
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = AgentId::new(agent_type.to_string(), parameters);
+    let id = AgentId::new(agent_type.to_string(), parameters, None);
     let s = id.to_string();
     let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
+    assert_eq!(id2, expected_failure.to_string());
+}
+
+fn failure_test_with_string(agent_id_str: &str, expected_failure: &str) {
+    let id2 = AgentId::parse(agent_id_str, TestAgentTypes::new())
+        .err()
+        .unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 

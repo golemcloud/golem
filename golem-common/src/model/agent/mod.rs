@@ -49,9 +49,12 @@ use golem_wasm::{
     parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::sync::LazyLock;
+use uuid::Uuid;
 
 #[derive(
     Debug,
@@ -950,15 +953,17 @@ pub struct RegisteredAgentType {
 pub struct AgentId {
     pub agent_type: String,
     pub parameters: DataValue,
+    pub phantom_id: Option<Uuid>,
     wrapper_agent_type: String,
 }
 
 impl AgentId {
-    pub fn new(agent_type: String, parameters: DataValue) -> Self {
+    pub fn new(agent_type: String, parameters: DataValue, phantom_id: Option<Uuid>) -> Self {
         let wrapper_agent_type = agent_type.to_wit_naming();
         Self {
             agent_type,
             parameters,
+            phantom_id,
             wrapper_agent_type,
         }
     }
@@ -971,30 +976,36 @@ impl AgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
+        static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
+        });
+
         let s = s.as_ref();
 
-        if let Some((agent_type, param_list)) = s.split_once('(') {
-            if let Some(param_list) = param_list.strip_suffix(')') {
-                let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type)?;
-                let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
-                Ok((
-                    AgentId {
-                        agent_type: agent_type.type_name.clone(),
-                        wrapper_agent_type: agent_type.type_name.to_wit_naming(),
-                        parameters: value,
-                    },
-                    agent_type,
-                ))
-            } else {
-                Err(format!(
-                    "Unexpected agent-id format - missing closing ')', got: {s}"
-                ))
-            }
-        } else {
-            Err(format!(
-                "Unexpected agent-id format - must be 'agent-type(...)', got: {s}"
-            ))
-        }
+        let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
+            format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
+        })?;
+
+        let agent_type_name = captures.get(1).unwrap().as_str();
+        let param_list = captures.get(2).unwrap().as_str();
+        let phantom_id = captures
+            .get(3)
+            .map(|m| Uuid::parse_str(m.as_str()))
+            .transpose()
+            .map_err(|e| format!("Invalid UUID in phantom ID: {e}"))?;
+
+        let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type_name)?;
+        let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
+
+        Ok((
+            AgentId {
+                agent_type: agent_type.type_name.clone(),
+                wrapper_agent_type: agent_type.type_name.to_wit_naming(),
+                parameters: value,
+                phantom_id,
+            },
+            agent_type,
+        ))
     }
 
     pub fn wrapper_agent_type(&self) -> &str {
@@ -1009,7 +1020,11 @@ impl Display for AgentId {
             "{}({})",
             self.wrapper_agent_type,
             self.parameters.to_compact_string()
-        )
+        )?;
+        if let Some(phantom_id) = &self.phantom_id {
+            write!(f, "[{phantom_id}]")?;
+        }
+        Ok(())
     }
 }
 

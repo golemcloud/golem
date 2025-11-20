@@ -19,6 +19,8 @@ use std::str::FromStr;
 #[cfg(test)]
 test_r::enable!();
 
+pub use uuid::Uuid;
+
 pub mod bindings {
     use wit_bindgen::generate;
 
