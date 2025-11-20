@@ -23,8 +23,8 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{log_action, logln, LogColorize, LogIndent};
+use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::app::{DependencyType, InitialComponentFile};
 use crate::model::component::{
     Component, ComponentDeployProperties, ComponentNameMatchKind, ComponentSelection,
     ComponentVersionSelection, SelectedComponents,
@@ -35,7 +35,6 @@ use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
-use futures_util::StreamExt;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{

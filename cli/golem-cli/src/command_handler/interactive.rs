@@ -249,12 +249,6 @@ impl InteractiveHandler {
         .prompt()?
         .0;
 
-        let cloud_service_url = CustomType::<OptionalUrl>::new(
-            "Cloud service URL (empty to use component service url)",
-        )
-        .prompt()?
-        .0;
-
         let default_format =
             Select::new("Default output format:", Format::iter().collect::<Vec<_>>())
                 .with_starting_cursor(2)

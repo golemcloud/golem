@@ -45,7 +45,6 @@ use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName, Template, TemplateName};
 use itertools::Itertools;
 use std::collections::BTreeMap;
-use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -433,8 +432,8 @@ impl AppCommandHandler {
 
     async fn deploy_by_version(
         &self,
-        version: String,
-        deploy_args: DeployArgs,
+        _version: String,
+        _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         // TODO: atomic: missing client method
         todo!()
@@ -497,7 +496,7 @@ impl AppCommandHandler {
             .as_ref()
             .map(|d| d.hash);
 
-        let mut diffable_local_deployment = {
+        let diffable_local_deployment = {
             let diffable_components = {
                 let mut diffable_components = BTreeMap::<String, HashOf<diff::Component>>::new();
                 for (component_name, component_deploy_properties) in &components {

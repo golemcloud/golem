@@ -19,7 +19,7 @@ use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::{
     ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
-    AuthenticationSource, Config, NamedProfile, Profile, BUILTIN_LOCAL_URL, CLOUD_URL,
+    AuthenticationSource, Config, NamedProfile, BUILTIN_LOCAL_URL,
 };
 use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
@@ -37,7 +37,6 @@ use crate::model::{AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
-use colored::Colorize;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
     ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
@@ -45,19 +44,17 @@ use golem_client::api::{
     GrantClientLive, HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive,
     TokenClientLive, WorkerClientLive,
 };
-use golem_client::{Context as ContextCloud, Security};
+use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::diff::Deployment;
 use golem_common::model::environment::EnvironmentName;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::future::Future;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
@@ -780,7 +777,7 @@ impl GolemClients {
         let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
 
         let auth = Auth::new(LoginClientLive {
-            context: ContextCloud {
+            context: ClientContext {
                 client: service_http_client.clone(),
                 base_url: config.registry_url.clone(),
                 security_token: Security::Empty,
@@ -793,31 +790,31 @@ impl GolemClients {
 
         let security_token = Security::Bearer(authentication.0.secret.0.to_string());
 
-        let registry_context = || ContextCloud {
+        let registry_context = || ClientContext {
             client: service_http_client.clone(),
             base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
-        let registry_healthcheck_context = || ContextCloud {
+        let registry_healthcheck_context = || ClientContext {
             client: healthcheck_http_client,
             base_url: config.registry_url.clone(),
             security_token: Security::Empty,
         };
 
-        let worker_context = || ContextCloud {
+        let worker_context = || ClientContext {
             client: service_http_client.clone(),
             base_url: config.worker_url.clone(),
             security_token: security_token.clone(),
         };
 
-        let worker_invoke_context = || ContextCloud {
+        let worker_invoke_context = || ClientContext {
             client: invoke_http_client.clone(),
             base_url: config.worker_url.clone(),
             security_token: security_token.clone(),
         };
 
-        let login_context = || ContextCloud {
+        let login_context = || ClientContext {
             client: service_http_client.clone(),
             base_url: config.registry_url.clone(),
             security_token: security_token.clone(),

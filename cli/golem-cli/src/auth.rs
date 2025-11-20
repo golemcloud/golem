@@ -16,7 +16,7 @@ use crate::config::{
     ApplicationEnvironmentConfig, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
-use crate::config::{Config, ProfileName};
+use crate::config::{Config};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
 use anyhow::{anyhow, bail, Context};

@@ -156,7 +156,7 @@ impl Config {
             .with_context(|| anyhow!("Failed to open config file: {}", config_path.display()))?;
 
         let reader = BufReader::new(file);
-        let mut config: Config = serde_json::from_reader(reader).with_context(|| {
+        let config: Config = serde_json::from_reader(reader).with_context(|| {
             anyhow!(
                 "Failed to deserialize config file {}",
                 config_path.display(),
