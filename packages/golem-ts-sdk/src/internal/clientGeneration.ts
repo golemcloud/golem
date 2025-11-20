@@ -83,7 +83,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 }
 
 export function getPhantomRemoteClient<
-  T extends new (phantomId: Uuid | undefined, ...args: any[]) => any,
+  T extends new (phantomId: Uuid, ...args: any[]) => any,
 >(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
   const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
   if (Option.isNone(metadataOpt)) {
@@ -98,10 +98,35 @@ export function getPhantomRemoteClient<
     agentType,
   );
 
-  return (phantomId: Uuid | undefined, ...args: any[]) => {
+  return (finalPhantomId: Uuid, ...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const finalPhantomId = phantomId ?? randomUuid();
+    const witAgentId = shared.constructAgentId(args, finalPhantomId);
+
+    return new Proxy(instance, new WasmRpcProxyHandler(shared, witAgentId));
+  };
+}
+
+export function getNewPhantomRemoteClient<
+  T extends new (...args: any[]) => any,
+>(agentClassName: AgentClassName, agentType: AgentType, ctor: T) {
+  const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+  if (Option.isNone(metadataOpt)) {
+    throw new Error(
+      `Metadata for agent class ${ctor.name} not found. Make sure this agent class extends BaseAgent and is registered using @agent decorator`,
+    );
+  }
+  const metadata = metadataOpt.val;
+  const shared = new WasmRpxProxyHandlerShared(
+    metadata,
+    agentClassName,
+    agentType,
+  );
+
+  return (...args: any[]) => {
+    const instance = Object.create(ctor.prototype);
+
+    const finalPhantomId = randomUuid();
     const witAgentId = shared.constructAgentId(args, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, witAgentId));

@@ -16,6 +16,7 @@ import { AgentType, DataValue, AgentMode } from 'golem:agent/common';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import {
+  getNewPhantomRemoteClient,
   getPhantomRemoteClient,
   getRemoteClient,
 } from './internal/clientGeneration';
@@ -268,6 +269,12 @@ export function agent(options?: AgentDecoratorOptions) {
     }
 
     (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor);
+    (ctor as any).newPhantom = getNewPhantomRemoteClient(
+      agentClassName,
+      agentType,
+      ctor,
+    );
+
     (ctor as any).phantom = getPhantomRemoteClient(
       agentClassName,
       agentType,
