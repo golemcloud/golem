@@ -5,7 +5,7 @@ trait RustBenchmarkAgent {
     fn new(name: String) -> Self;
     fn echo(&mut self, message: String) -> String;
     fn large_input(&mut self, input: Vec<u8>) -> u32;
-    fn cpu_intensive(&mut self, length: u32) -> u32;
+    fn cpu_intensive(&mut self, length: f64) -> u32; // length is f64 to have the same interface as the TS agent
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32;
 }
 
@@ -27,8 +27,8 @@ impl RustBenchmarkAgent for RustBenchmarkAgentImpl {
         common_lib::large_input(input)
     }
 
-    fn cpu_intensive(&mut self, length: u32) -> u32 {
-        common_lib::cpu_intensive(length)
+    fn cpu_intensive(&mut self, length: f64) -> u32 {
+        common_lib::cpu_intensive(length as u32)
     }
 
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32 {
@@ -41,7 +41,7 @@ trait RustEphemeralBenchmarkAgent {
     fn new(name: String) -> Self;
     fn echo(&mut self, message: String) -> String;
     fn large_input(&mut self, input: Vec<u8>) -> u32;
-    fn cpu_intensive(&mut self, length: u32) -> u32;
+    fn cpu_intensive(&mut self, length: f64) -> u32;
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32;
 }
 
@@ -63,8 +63,8 @@ impl RustEphemeralBenchmarkAgent for RustEphemeralBenchmarkAgentImpl {
         common_lib::large_input(input)
     }
 
-    fn cpu_intensive(&mut self, length: u32) -> u32 {
-        common_lib::cpu_intensive(length)
+    fn cpu_intensive(&mut self, length: f64) -> u32 {
+        common_lib::cpu_intensive(length as u32)
     }
 
     fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32 {
@@ -77,7 +77,7 @@ trait RustRpcBenchmarkAgent {
     fn new(name: String) -> Self;
     async fn echo(&mut self, message: String) -> String;
     async fn large_input(&mut self, input: Vec<u8>) -> u32;
-    async fn cpu_intensive(&mut self, length: u32) -> u32;
+    async fn cpu_intensive(&mut self, length: f64) -> u32; // length is f64 to have the same interface as the TS agent
     async fn oplog_heavy(&mut self, length: u32, persistence_on: bool, commit: bool) -> u32;
 }
 
@@ -101,7 +101,7 @@ impl RustRpcBenchmarkAgent for RustRpcBenchmarkAgentImpl {
         client.large_input(input).await
     }
 
-    async fn cpu_intensive(&mut self, length: u32) -> u32 {
+    async fn cpu_intensive(&mut self, length: f64) -> u32 {
         let mut client = RustBenchmarkAgentClient::get(self.name.clone());
         client.cpu_intensive(length).await
     }
