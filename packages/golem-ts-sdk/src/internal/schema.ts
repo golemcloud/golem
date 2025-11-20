@@ -347,8 +347,7 @@ export function buildOutputSchema(
     multiModalTarget.name === 'Multimodal' &&
     multiModalTarget.kind === 'array'
   ) {
-    const multiModalDetails =
-      getMultimodalDetails(multiModalTarget.element);
+    const multiModalDetails = getMultimodalDetails(multiModalTarget.element);
 
     if (Either.isLeft(multiModalDetails)) {
       return Either.left(
@@ -464,11 +463,12 @@ export function buildOutputSchema(
 }
 
 function getMultimodalDetails(
-  type: Type.Type
+  type: Type.Type,
 ): Either.Either<[string, ElementSchema, TypeInfoInternal][], string> {
-
   const multimodalTypes =
-    type.kind === 'union' ? getTaggedUnion(type.unionTypes) : getTaggedUnion([type]);
+    type.kind === 'union'
+      ? getTaggedUnion(type.unionTypes)
+      : getTaggedUnion([type]);
 
   if (Either.isLeft(multimodalTypes)) {
     return Either.left(
@@ -487,8 +487,7 @@ function getMultimodalDetails(
   const taggedTypes = TaggedUnion.getTaggedTypes(taggedUnionOpt.val);
 
   return Either.all(
-    taggedTypes.map((taggedTypeMetadata ) => {
-
+    taggedTypes.map((taggedTypeMetadata) => {
       const paramTypeOpt = taggedTypeMetadata.valueType;
 
       if (Option.isNone(paramTypeOpt)) {

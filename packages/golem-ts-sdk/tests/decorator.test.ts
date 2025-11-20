@@ -137,7 +137,7 @@ describe('Agent decorator should register the agent class and its methods into A
     }
 
     expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
-
+    
     const expected = [
       [
         'text',
@@ -158,6 +158,18 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
       ],
+      [
+        'un-text',
+        { tag: 'unstructured-text', val: {} },
+      ],
+      [
+        'un-binary',
+        {
+          tag: 'unstructured-binary',
+          val: { restrictions: [{ mimeType: 'application/json' }] },
+        },
+      ]
+
     ];
 
     expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);

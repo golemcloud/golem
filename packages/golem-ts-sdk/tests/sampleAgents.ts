@@ -18,7 +18,8 @@ import {
   Multimodal,
   UnstructuredBinary,
   UnstructuredText,
-  Result, MultimodalBasic,
+  Result,
+  MultimodalBasic,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -434,12 +435,22 @@ class BarAgent extends BaseAgent {
   ): Promise<Multimodal<TextOrImage>> {
     return multimodalInput;
   }
+
+  // async fun24(
+  //   multimodalInput: Multimodal<TextOrImage>,
+  // ): Promise<Multimodal<TextOrImage>> {
+  //   return multimodalInput;
+  // }
 }
 
 export type Text = string;
 export type Image = Uint8Array;
 
-export type TextOrImage = {tag: 'text'; val: string } | { tag: 'image'; val:Uint8Array };
+export type TextOrImage =
+  | { tag: 'text'; val: string }
+  | { tag: 'image'; val: Uint8Array }
+  | { tag: 'un-text'; val: UnstructuredText }
+  | { tag: 'un-binary'; val: UnstructuredBinary<['application/json']> };
 
 @agent({ mode: 'ephemeral' })
 class EphemeralAgent extends BaseAgent {
