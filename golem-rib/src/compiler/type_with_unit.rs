@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{GetTypeHint, InferredType, InstanceType, TypeInternal};
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::analysed_type::{bool, field, record, str, tuple};
 use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 // An absence of analysed type is really `Unit`, however, we avoid
 // Option<AnalysedType> in favor of `AnalysedTypeWithUnit` for clarity.
 // and conversions such as what to print if its `unit` becomes more precise
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 pub enum AnalysedTypeWithUnit {
     Unit,
     Type(AnalysedType),

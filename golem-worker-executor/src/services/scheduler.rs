@@ -180,7 +180,7 @@ impl SchedulerServiceDefault {
                         }
                     }
                 }
-                .in_current_span(),
+                .instrument(span!(parent: None, Level::INFO, "Scheduler loop")),
             )
         };
         *svc.background_handle.lock().unwrap() = Some(background_handle);
@@ -460,8 +460,8 @@ mod tests {
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use async_trait::async_trait;
-    use bincode::Encode;
     use chrono::DateTime;
+    use desert_rust::BinarySerializer;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
@@ -504,7 +504,7 @@ mod tests {
         }
     }
 
-    fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
+    fn serialized_bytes<T: BinarySerializer>(entry: &T) -> Vec<u8> {
         golem_common::serialization::serialize(entry)
             .expect("failed to serialize entry")
             .to_vec()
@@ -529,6 +529,7 @@ mod tests {
             PrimaryOplogService::new(
                 Arc::new(InMemoryIndexedStorage::new()),
                 Arc::new(InMemoryBlobStorage::new()),
+                1,
                 1,
                 1024,
             )

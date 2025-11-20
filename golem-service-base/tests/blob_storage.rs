@@ -192,7 +192,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         self.storage
             .get_raw(target_label, op_label, namespace, path)
             .await
@@ -218,7 +218,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         path: &Path,
         start: u64,
         end: u64,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         self.storage
             .get_raw_slice(target_label, op_label, namespace, path, start, end)
             .await
@@ -242,7 +242,7 @@ impl BlobStorage for S3BlobStorageWithContainer {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
         self.storage
             .put_raw(target_label, op_label, namespace, path, data)
@@ -430,7 +430,7 @@ async fn get_put_get_root(
     let storage = test.get_blob_storage().await;
 
     let path = Path::new("test-path");
-    let data = Bytes::from("test-data");
+    let data = Bytes::from("test-data").to_vec();
 
     let result1 = storage
         .get_raw("get_put_get_root", "get-raw", namespace.clone(), path)
@@ -443,7 +443,7 @@ async fn get_put_get_root(
             "put-raw",
             namespace.clone(),
             path,
-            &data,
+            data.clone(),
         )
         .await
         .unwrap();
@@ -466,7 +466,7 @@ async fn get_put_get_new_dir(
     let storage = test.get_blob_storage().await;
 
     let path = Path::new("non-existing-dir/test-path");
-    let data = Bytes::from("test-data");
+    let data = Bytes::from("test-data").to_vec();
 
     let result1 = storage
         .get_raw("get_put_get_new_dir", "get-raw", namespace.clone(), path)
@@ -479,7 +479,7 @@ async fn get_put_get_new_dir(
             "put-raw",
             namespace.clone(),
             path,
-            &data,
+            data.clone(),
         )
         .await
         .unwrap();
@@ -650,7 +650,7 @@ async fn create_delete_exists_dir_and_file(
             "put-raw",
             namespace.clone(),
             &path.join("test-file"),
-            &Bytes::from("test-data"),
+            Bytes::from("test-data").to_vec(),
         )
         .await
         .unwrap();
@@ -716,7 +716,7 @@ async fn list_dir(
             "put-raw",
             namespace.clone(),
             &path.join("test-file1"),
-            &Bytes::from("test-data1"),
+            Bytes::from("test-data1").to_vec(),
         )
         .await
         .unwrap();
@@ -726,7 +726,7 @@ async fn list_dir(
             "put-raw",
             namespace.clone(),
             &path.join("test-file2"),
-            &Bytes::from("test-data2"),
+            Bytes::from("test-data2").to_vec(),
         )
         .await
         .unwrap();
@@ -775,7 +775,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file1"),
-            &Bytes::from("test-data1"),
+            Bytes::from("test-data1").to_vec(),
         )
         .await
         .unwrap();
@@ -785,7 +785,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file2"),
-            &Bytes::from("test-data2"),
+            Bytes::from("test-data2").to_vec(),
         )
         .await
         .unwrap();
@@ -795,7 +795,7 @@ async fn delete_many(
             "put-raw",
             namespace.clone(),
             &path.join("test-file3"),
-            &Bytes::from("test-data3"),
+            Bytes::from("test-data3").to_vec(),
         )
         .await
         .unwrap();
@@ -848,7 +848,7 @@ async fn list_dir_root(
             "put-raw",
             namespace.clone(),
             Path::new("test-file1"),
-            &Bytes::from("test-data1"),
+            Bytes::from("test-data1").to_vec(),
         )
         .await
         .unwrap();
@@ -858,7 +858,7 @@ async fn list_dir_root(
             "put-raw-2",
             namespace.clone(),
             Path::new("test-file2"),
-            &Bytes::from("test-data2"),
+            Bytes::from("test-data2").to_vec(),
         )
         .await
         .unwrap();
@@ -926,7 +926,7 @@ async fn list_dir_root_only_subdirs(
             "put-raw",
             namespace.clone(),
             Path::new("inner-dir1/test-file1"),
-            &Bytes::from("test-data1"),
+            Bytes::from("test-data1").to_vec(),
         )
         .await
         .unwrap();
@@ -936,7 +936,7 @@ async fn list_dir_root_only_subdirs(
             "put-raw-2",
             namespace.clone(),
             Path::new("inner-dir2/test-file2"),
-            &Bytes::from("test-data2"),
+            Bytes::from("test-data2").to_vec(),
         )
         .await
         .unwrap();
@@ -990,7 +990,7 @@ async fn list_dir_same_prefix(
             "put-raw",
             namespace.clone(),
             &path1.join("test-file1"),
-            &Bytes::from("test-data1"),
+            Bytes::from("test-data1").to_vec(),
         )
         .await
         .unwrap();
@@ -1000,7 +1000,7 @@ async fn list_dir_same_prefix(
             "put-raw",
             namespace.clone(),
             &path1.join("test-file2"),
-            &Bytes::from("test-data2"),
+            Bytes::from("test-data2").to_vec(),
         )
         .await
         .unwrap();

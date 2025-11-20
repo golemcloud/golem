@@ -20,8 +20,11 @@ use std::sync::Arc;
 
 use figment::providers::Serialized;
 use figment::Figment;
+use opentelemetry::global;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::{Protocol, WithExportConfig};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracer;
 use opentelemetry_sdk::Resource;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -476,11 +479,12 @@ pub mod filter {
     }
 }
 
-pub fn init_tracing<F>(config: &TracingConfig, make_filter: F)
+pub fn init_tracing<F>(config: &TracingConfig, make_filter: F) -> Option<SdkTracer>
 where
     F: Fn(Output) -> filter::Boxed,
 {
     let mut layers = Vec::new();
+    let mut result_tracer = None;
 
     if config.otlp.enabled {
         let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -502,8 +506,11 @@ where
             .with_batch_exporter(otlp_exporter)
             .build();
 
+        global::set_text_map_propagator(TraceContextPropagator::new());
+
         let tracer = tracer_provider.tracer(config.otlp.service_name.clone());
-        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+        let telemetry = tracing_opentelemetry::layer().with_tracer(tracer.clone());
+        result_tracer = Some(tracer);
 
         layers.push(telemetry.boxed());
     }
@@ -571,10 +578,12 @@ where
             "Tracing initialized"
         );
     }
+
+    result_tracer
 }
 
-pub fn init_tracing_with_default_env_filter(config: &TracingConfig) {
-    init_tracing(config, filter::for_all_outputs::DEFAULT_ENV);
+pub fn init_tracing_with_default_env_filter(config: &TracingConfig) -> Option<SdkTracer> {
+    init_tracing(config, filter::for_all_outputs::DEFAULT_ENV)
 }
 
 pub fn init_tracing_with_default_debug_env_filter(config: &TracingConfig) {

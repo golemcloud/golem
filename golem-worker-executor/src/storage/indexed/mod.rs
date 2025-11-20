@@ -16,9 +16,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bincode::{Decode, Encode};
-use bytes::Bytes;
-
+use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::serialization::{deserialize, serialize};
 
 pub mod memory;
@@ -35,7 +33,7 @@ pub type ScanCursor = u64;
 /// contiguous.
 ///
 #[async_trait]
-pub trait IndexedStorage: Debug {
+pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
     async fn number_of_replicas(
         &self,
@@ -83,8 +81,33 @@ pub trait IndexedStorage: Debug {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String>;
+
+    /// Appends multiple entries to the given key with the given id
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: Vec<(u64, Vec<u8>)>,
+    ) -> Result<(), String> {
+        for (id, value) in pairs {
+            self.append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace.clone(),
+                key,
+                id,
+                value,
+            )
+            .await?;
+        }
+        Ok(())
+    }
 
     /// Gets the number of entries in the index of the given key
     async fn length(
@@ -114,7 +137,7 @@ pub trait IndexedStorage: Debug {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String>;
+    ) -> Result<Vec<(u64, Vec<u8>)>, String>;
 
     /// Gets the first entry in the index of the given key
     async fn first(
@@ -124,7 +147,7 @@ pub trait IndexedStorage: Debug {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Gets the last entry in the index of the given key
     async fn last(
@@ -134,7 +157,7 @@ pub trait IndexedStorage: Debug {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry.
@@ -146,7 +169,7 @@ pub trait IndexedStorage: Debug {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, String>;
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
@@ -307,7 +330,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Appends an entry to the given key with the given id, serializing the value first
-    pub async fn append<V: Encode>(
+    pub async fn append<V: BinarySerializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -322,7 +345,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 id,
-                &serialize(value)?,
+                serialize(value)?,
             )
             .await
     }
@@ -333,7 +356,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-        value: &[u8],
+        value: Vec<u8>,
     ) -> Result<(), String> {
         self.storage
             .append(
@@ -348,8 +371,31 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .await
     }
 
+    /// Appends multiple entries to the given key with the given id, serializing the value first
+    pub async fn append_many<V: BinarySerializer>(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: &[(u64, &V)],
+    ) -> Result<(), String> {
+        let mut serialized_pairs = Vec::with_capacity(pairs.len());
+        for (id, value) in pairs {
+            serialized_pairs.push((*id, serialize(value)?));
+        }
+        self.storage
+            .append_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                serialized_pairs,
+            )
+            .await
+    }
+
     /// Reads a closed range of entries from the index of the given key, deserializing each entry
-    pub async fn read<V: Decode<()>>(
+    pub async fn read<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -382,7 +428,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         from: u64,
         count: u64,
-    ) -> Result<Vec<(u64, Bytes)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
         self.storage
             .read(
                 self.svc_name,
@@ -401,7 +447,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .first(
                 self.svc_name,
@@ -414,7 +460,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the first entry in the index of the given key, deserializing the value
-    pub async fn first<V: Decode<()>>(
+    pub async fn first<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -450,7 +496,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .last(
                 self.svc_name,
@@ -463,7 +509,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     }
 
     /// Gets the last entry in the index of the given key, deserializing the value
-    pub async fn last<V: Decode<()>>(
+    pub async fn last<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
@@ -501,7 +547,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Bytes)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, String> {
         self.storage
             .closest(
                 self.svc_name,
@@ -516,7 +562,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry, deserializing the value
-    pub async fn closest<V: Decode<()>>(
+    pub async fn closest<V: BinaryDeserializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,

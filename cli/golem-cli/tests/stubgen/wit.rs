@@ -16,11 +16,11 @@
 
 use test_r::test;
 
+use crate::stubgen::test_data_path;
 use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_client_wit_dir;
 use golem_cli::wasm_rpc_stubgen::stub::{RustDependencyOverride, StubConfig, StubDefinition};
-use std::path::Path;
 use tempfile::{tempdir, TempDir};
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};
 
@@ -40,7 +40,6 @@ fn all_wit_types() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;
@@ -145,7 +144,6 @@ fn many_ways_to_export() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let resolve = generate_client_wit_dir(&def).unwrap().resolve;
@@ -340,7 +338,7 @@ fn is_owned_by_interface(
 
 fn init_source(name: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
-    let source = Path::new("test-data/wit").join(name);
+    let source = test_data_path().join("wit").join(name);
 
     fs_extra::dir::copy(
         source,

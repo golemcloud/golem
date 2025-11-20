@@ -27,8 +27,8 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
-    ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor,
+    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
@@ -377,17 +377,20 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .into_admin_with_unique_project()
         .await;
 
-    let component_id = executor.component("counters").ephemeral().store().await;
+    let component_id = executor
+        .component("it_agent_counters_release")
+        .store()
+        .await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
-        worker_name: "test".to_string(),
+        worker_name: "ephemeral-counter(\"test\")".to_string(),
     };
 
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{inc-global-by}",
-            vec![2u64.into_value_and_type()],
+            "it:agent-counters/ephemeral-counter.{increment}",
+            vec![],
         )
         .await
         .unwrap();
@@ -395,7 +398,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let result = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{get-global-value}",
+            "it:agent-counters/ephemeral-counter.{increment}",
             vec![],
         )
         .await
@@ -403,7 +406,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
     drop(executor);
 
-    check!(result == vec![Value::U64(0)]);
+    assert_eq!(result, vec![Value::U32(1)]);
 }
 
 #[test]
@@ -568,7 +571,7 @@ async fn get_workers_from_worker(
                         typ: analysed_type::option(
                             type_resolve
                                 .analysed_type(&TypeName {
-                                    package: Some("golem:api@1.1.7".to_string()),
+                                    package: Some("golem:api@1.3.0".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
                                     name: Some("agent-any-filter".to_string()),
                                 })
@@ -3331,7 +3334,7 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
+    let expected_stderr = "error log message\n\nthread '<unnamed>' (1) panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
     check!(worker_error_logs(&result2.clone().err().unwrap())
         .unwrap()
@@ -3591,7 +3594,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-server-exports/server-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),
@@ -3605,7 +3607,6 @@ async fn scheduled_invocation_test(
                             interface_name: "it:scheduled-invocation-client-exports/client-api"
                                 .to_string(),
                             component_name: server_component_name.to_string(),
-                            component_type: ComponentType::Durable,
                         },
                     )]),
                 }),

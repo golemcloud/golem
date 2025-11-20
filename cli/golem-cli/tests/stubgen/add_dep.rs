@@ -16,6 +16,7 @@
 
 use test_r::test;
 
+use crate::stubgen::test_data_path;
 use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
@@ -165,7 +166,7 @@ fn many_ways_to_export_no_collision() {
     assert_has_same_wit_package(
         &PackageName::new("test", "sub", None),
         &dest_wit_root,
-        Path::new("test-data/wit/many-ways-to-export/deps/sub/sub.wit"),
+        &test_data_path().join("wit/many-ways-to-export/deps/sub/sub.wit"),
     );
 }
 
@@ -567,7 +568,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     let canonical_source = source.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
-        Path::new("test-data/wit").join(name),
+        test_data_path().join("wit").join(name),
         &canonical_source,
         &CopyOptions::new().content_only(true),
     )
@@ -588,7 +589,6 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -605,7 +605,6 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -616,7 +615,7 @@ fn init_caller(name: &str) -> TempDir {
         .disable_cleanup(true)
         .tempdir()
         .unwrap();
-    let source = Path::new("test-data/wit").join(name);
+    let source = test_data_path().join("wit").join(name);
 
     fs_extra::dir::copy(
         source,

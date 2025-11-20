@@ -12,36 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::{
-    get_bound_analysed_type, get_bound_value, AnalysedTypeMerger, RdbmsIntoValueAndType,
-};
 use bigdecimal::BigDecimal;
-use bincode::{Decode, Encode};
 use bit_vec::BitVec;
-use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm::{IntoValue, Value, ValueAndType};
-use golem_wasm_derive::IntoValue;
+use golem_common::model::oplog::payload::types::SerializableDbValue;
+use golem_common::model::oplog::types::{
+    Enumeration, EnumerationType, Interval, SerializableComposite, SerializableCompositeType,
+    SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
+    SerializableDbValueNode, SerializableDomain, SerializableDomainType, SerializableRange,
+    SerializableRangeType, TimeTz, ValuesRange,
+};
+use golem_wasm::NodeIndex;
 use itertools::Itertools;
 use mac_address::MacAddress;
-use serde::{Deserialize, Serialize};
+use std::collections::Bound;
 use std::fmt::{Debug, Display};
 use std::net::IpAddr;
-use std::ops::Bound;
 use uuid::Uuid;
 
 pub trait NamedType {
     fn name(&self) -> String;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, IntoValue)]
-pub struct EnumerationType {
-    pub name: String,
-}
-
-impl EnumerationType {
-    pub fn new(name: String) -> Self {
-        EnumerationType { name }
-    }
 }
 
 impl NamedType for EnumerationType {
@@ -50,13 +39,7 @@ impl NamedType for EnumerationType {
     }
 }
 
-impl Display for EnumerationType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompositeType {
     pub name: String,
     pub attributes: Vec<(String, DbColumnType)>,
@@ -65,19 +48,6 @@ pub struct CompositeType {
 impl CompositeType {
     pub fn new(name: String, attributes: Vec<(String, DbColumnType)>) -> Self {
         CompositeType { name, attributes }
-    }
-
-    fn get_analysed_type(attribute_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field(
-                "attributes",
-                analysed_type::list(analysed_type::tuple(vec![
-                    analysed_type::str(),
-                    attribute_type,
-                ])),
-            ),
-        ])
     }
 }
 
@@ -101,105 +71,15 @@ impl NamedType for CompositeType {
     }
 }
 
-impl RdbmsIntoValueAndType for CompositeType {
-    fn into_value_and_type(self) -> ValueAndType {
-        let mut vs = Vec::with_capacity(self.attributes.len());
-        let mut t: Option<AnalysedType> = None;
-        for (n, v) in self.attributes {
-            let v = v.into_value_and_type();
-            t = match t {
-                None => Some(v.typ),
-                Some(t) => Some(DbColumnType::merge_types(t, v.typ)),
-            };
-            vs.push(Value::Tuple(vec![n.into_value(), v.value]));
-        }
-        let typ = Self::get_analysed_type(t.unwrap_or(DbColumnType::get_base_type()));
-        let value = Value::Record(vec![self.name.into_value(), Value::List(vs)]);
-        ValueAndType::new(value, typ)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(DbColumnType::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for CompositeType {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        fn get_attribute_type(attributes_type: AnalysedType) -> Option<AnalysedType> {
-            if let AnalysedType::List(attrs) = attributes_type {
-                if let AnalysedType::Tuple(attr) = *attrs.inner {
-                    attr.items.get(1).cloned()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "attributes" {
-                        let f = get_attribute_type(fc.typ.clone());
-                        let s = get_attribute_type(sc.typ);
-                        let t = DbColumnType::merge_types_opt(f, s);
-
-                        if let Some(t) = t {
-                            fields.push(analysed_type::field(
-                                fc.name.as_str(),
-                                analysed_type::list(analysed_type::tuple(vec![
-                                    analysed_type::str(),
-                                    t,
-                                ])),
-                            ));
-                        } else {
-                            fields.push(fc);
-                        }
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DomainType {
     pub name: String,
-    pub base_type: Box<DbColumnType>,
+    pub base_type: DbColumnType,
 }
 
 impl DomainType {
     pub fn new(name: String, base_type: DbColumnType) -> Self {
-        DomainType {
-            name,
-            base_type: Box::new(base_type),
-        }
-    }
-
-    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", base_type),
-        ])
+        DomainType { name, base_type }
     }
 }
 
@@ -215,53 +95,7 @@ impl NamedType for DomainType {
     }
 }
 
-impl RdbmsIntoValueAndType for DomainType {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
-        let typ = Self::get_analysed_type(v.typ);
-        let value = Value::Record(vec![self.name.into_value(), v.value]);
-        ValueAndType::new(value, typ)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(DbColumnType::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for DomainType {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "base-type" {
-                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RangeType {
     pub name: String,
     pub base_type: Box<DbColumnType>,
@@ -273,13 +107,6 @@ impl RangeType {
             name,
             base_type: Box::new(base_type),
         }
-    }
-
-    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("base-type", base_type),
-        ])
     }
 }
 
@@ -295,199 +122,13 @@ impl NamedType for RangeType {
     }
 }
 
-impl RdbmsIntoValueAndType for RangeType {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.base_type);
-        let typ = Self::get_analysed_type(v.typ);
-        let value = Value::Record(vec![self.name.into_value(), v.value]);
-        ValueAndType::new(value, typ)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(DbColumnType::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for RangeType {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "base-type" {
-                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct ValuesRange<T> {
-    pub start: Bound<T>,
-    pub end: Bound<T>,
-}
-
-impl<T> ValuesRange<T> {
-    pub fn new(start: Bound<T>, end: Bound<T>) -> Self {
-        ValuesRange { start, end }
-    }
-
-    pub fn start_value(&self) -> Option<&T> {
-        match &self.start {
-            Bound::Included(v) => Some(v),
-            Bound::Excluded(v) => Some(v),
-            Bound::Unbounded => None,
-        }
-    }
-
-    pub fn end_value(&self) -> Option<&T> {
-        match &self.end {
-            Bound::Included(v) => Some(v),
-            Bound::Excluded(v) => Some(v),
-            Bound::Unbounded => None,
-        }
-    }
-
-    pub fn map<U>(self, f: impl Fn(T) -> U + Clone) -> ValuesRange<U> {
-        let start: Bound<U> = self.start.map(f.clone());
-        let end: Bound<U> = self.end.map(f.clone());
-        ValuesRange::new(start, end)
-    }
-
-    pub fn try_map<U>(
-        self,
-        f: impl Fn(T) -> Result<U, String> + Clone,
-    ) -> Result<ValuesRange<U>, String> {
-        fn to_bound<T, U>(
-            v: Bound<T>,
-            f: impl Fn(T) -> Result<U, String>,
-        ) -> Result<Bound<U>, String> {
-            match v {
-                Bound::Included(v) => Ok(Bound::Included(f(v)?)),
-                Bound::Excluded(v) => Ok(Bound::Excluded(f(v)?)),
-                Bound::Unbounded => Ok(Bound::Unbounded),
-            }
-        }
-        let start: Bound<U> = to_bound(self.start, f.clone())?;
-        let end: Bound<U> = to_bound(self.end, f.clone())?;
-
-        Ok(ValuesRange::new(start, end))
-    }
-
-    fn get_analysed_type(bound_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("start", bound_type.clone()),
-            analysed_type::field("end", bound_type.clone()),
-        ])
-    }
-}
-
-impl<T: Debug> Display for ValuesRange<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} {:?}", self.start, self.end)
-    }
-}
-
-impl<T: IntoValue> IntoValue for ValuesRange<T> {
-    fn into_value(self) -> Value {
-        Value::Record(vec![self.start.into_value(), self.end.into_value()])
-    }
-
-    fn get_type() -> AnalysedType {
-        Self::get_analysed_type(Bound::<T>::get_type())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
-pub struct Interval {
-    pub months: i32,
-    pub days: i32,
-    pub microseconds: i64,
-}
-
-impl Interval {
-    pub fn new(months: i32, days: i32, microseconds: i64) -> Self {
-        Interval {
-            months,
-            days,
-            microseconds,
-        }
-    }
-}
-
-impl Display for Interval {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}m {}d {}us", self.months, self.days, self.microseconds)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-pub struct TimeTz {
-    #[bincode(with_serde)]
-    pub time: chrono::NaiveTime,
-    pub offset: i32,
-}
-
-impl TimeTz {
-    pub fn new(time: chrono::NaiveTime, offset: chrono::FixedOffset) -> Self {
-        TimeTz {
-            time,
-            offset: offset.utc_minus_local(),
-        }
-    }
-}
-
-impl Display for TimeTz {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}{}", self.time, self.offset)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode, IntoValue)]
-pub struct Enumeration {
-    pub name: String,
-    pub value: String,
-}
-
-impl Enumeration {
-    pub fn new(name: String, value: String) -> Self {
-        Enumeration { name, value }
-    }
-}
-
 impl NamedType for Enumeration {
     fn name(&self) -> String {
         self.name.clone()
     }
 }
 
-impl Display for Enumeration {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.name, self.value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Composite {
     pub name: String,
     pub values: Vec<DbValue>,
@@ -496,13 +137,6 @@ pub struct Composite {
 impl Composite {
     pub fn new(name: String, values: Vec<DbValue>) -> Self {
         Composite { name, values }
-    }
-
-    fn get_analysed_type(values_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("values", values_type),
-        ])
     }
 }
 
@@ -523,70 +157,15 @@ impl NamedType for Composite {
     }
 }
 
-impl RdbmsIntoValueAndType for Composite {
-    fn into_value_and_type(self) -> ValueAndType {
-        let values = RdbmsIntoValueAndType::into_value_and_type(self.values);
-        let typ = Self::get_analysed_type(values.typ);
-        let value = Value::Record(vec![self.name.into_value(), values.value]);
-        ValueAndType::new(value, typ)
-    }
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(<Vec<DbValue>>::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for Composite {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "values" {
-                        let t = <Vec<DbValue>>::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Domain {
     pub name: String,
-    pub value: Box<DbValue>,
+    pub value: DbValue,
 }
 
 impl Domain {
     pub fn new(name: String, value: DbValue) -> Self {
-        Domain {
-            name,
-            value: Box::new(value),
-        }
-    }
-
-    fn get_analysed_type(value_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", value_type),
-        ])
+        Domain { name, value }
     }
 }
 
@@ -602,78 +181,15 @@ impl Display for Domain {
     }
 }
 
-impl RdbmsIntoValueAndType for Domain {
-    fn into_value_and_type(self) -> ValueAndType {
-        let v = RdbmsIntoValueAndType::into_value_and_type(*self.value);
-        let typ = Self::get_analysed_type(v.typ);
-        let value = Value::Record(vec![self.name.into_value(), v.value]);
-        ValueAndType::new(value, typ)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(DbColumnType::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for Domain {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "value" {
-                        let t = DbValue::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Range {
     pub name: String,
-    pub value: Box<ValuesRange<DbValue>>,
+    pub value: ValuesRange<DbValue>,
 }
 
 impl Range {
     pub fn new(name: String, value: ValuesRange<DbValue>) -> Self {
-        Range {
-            name,
-            value: Box::new(value),
-        }
-    }
-
-    fn get_value_analysed_type(base_type: AnalysedType) -> AnalysedType {
-        let base_type = get_bound_analysed_type(base_type);
-        ValuesRange::<DbValue>::get_analysed_type(base_type)
-    }
-
-    fn get_analysed_type(base_type: AnalysedType) -> AnalysedType {
-        let value_type = Self::get_value_analysed_type(base_type);
-
-        analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("value", value_type),
-        ])
+        Range { name, value }
     }
 }
 
@@ -689,97 +205,7 @@ impl Display for Range {
     }
 }
 
-impl RdbmsIntoValueAndType for Range {
-    fn into_value_and_type(self) -> ValueAndType {
-        let (value_start, typ_start) = get_bound_value(self.value.start);
-        let (value_end, typ_end) = get_bound_value(self.value.end);
-
-        let base_type =
-            DbValue::merge_types_opt(typ_start, typ_end).unwrap_or(DbValue::get_base_type());
-
-        let typ = Self::get_analysed_type(base_type);
-
-        let value = Value::Record(vec![
-            self.name.into_value(),
-            Value::Record(vec![value_start, value_end]),
-        ]);
-        ValueAndType::new(value, typ)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        Self::get_analysed_type(DbValue::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for Range {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        fn get_bound_type(base_type: AnalysedType) -> Option<AnalysedType> {
-            if let AnalysedType::Variant(cases) = base_type {
-                if cases.cases.len() == 3 {
-                    cases.cases[0].typ.clone().or(cases.cases[1].typ.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-
-        fn get_value_type(attributes_type: AnalysedType) -> Option<AnalysedType> {
-            if let AnalysedType::Record(fields) = attributes_type {
-                if fields.fields.len() == 2 {
-                    get_bound_type(fields.fields[0].typ.clone())
-                        .or(get_bound_type(fields.fields[1].typ.clone()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "value" {
-                        let f = get_value_type(fc.typ.clone());
-                        let s = get_value_type(sc.typ);
-                        let t = DbValue::merge_types_opt(f, s);
-
-                        if let Some(t) = t {
-                            fields.push(analysed_type::field(
-                                fc.name.as_str(),
-                                Range::get_value_analysed_type(t),
-                            ));
-                        } else {
-                            fields.push(fc);
-                        }
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnType {
     Character,
     Int2,
@@ -819,7 +245,7 @@ pub enum DbColumnType {
     Oid,
     Enumeration(EnumerationType),
     Composite(CompositeType),
-    Domain(DomainType),
+    Domain(Box<DomainType>),
     Array(Box<DbColumnType>),
     Range(RangeType),
     Null,
@@ -842,63 +268,6 @@ impl DbColumnType {
                 | DbColumnType::Array(_)
                 | DbColumnType::Range(_)
         )
-    }
-
-    fn get_analysed_type(
-        composite_type: Option<AnalysedType>,
-        domain_type: Option<AnalysedType>,
-        array_type: Option<AnalysedType>,
-        range_type: Option<AnalysedType>,
-    ) -> AnalysedType {
-        let composite_type = analysed_type::opt_case("composite", composite_type);
-        let domain_type = analysed_type::opt_case("domain", domain_type);
-        let array_type = analysed_type::opt_case("array", array_type);
-        let range_type = analysed_type::opt_case("range", range_type);
-
-        analysed_type::variant(vec![
-            analysed_type::unit_case("character"),
-            analysed_type::unit_case("int2"),
-            analysed_type::unit_case("int4"),
-            analysed_type::unit_case("int8"),
-            analysed_type::unit_case("float4"),
-            analysed_type::unit_case("float8"),
-            analysed_type::unit_case("numeric"),
-            analysed_type::unit_case("boolean"),
-            analysed_type::unit_case("text"),
-            analysed_type::unit_case("varchar"),
-            analysed_type::unit_case("bpchar"),
-            analysed_type::unit_case("timestamp"),
-            analysed_type::unit_case("timestamptz"),
-            analysed_type::unit_case("date"),
-            analysed_type::unit_case("time"),
-            analysed_type::unit_case("timetz"),
-            analysed_type::unit_case("interval"),
-            analysed_type::unit_case("bytea"),
-            analysed_type::unit_case("uuid"),
-            analysed_type::unit_case("xml"),
-            analysed_type::unit_case("json"),
-            analysed_type::unit_case("jsonb"),
-            analysed_type::unit_case("jsonpath"),
-            analysed_type::unit_case("inet"),
-            analysed_type::unit_case("cidr"),
-            analysed_type::unit_case("macaddr"),
-            analysed_type::unit_case("bit"),
-            analysed_type::unit_case("varbit"),
-            analysed_type::unit_case("int4range"),
-            analysed_type::unit_case("int8range"),
-            analysed_type::unit_case("numrange"),
-            analysed_type::unit_case("tsrange"),
-            analysed_type::unit_case("tstzrange"),
-            analysed_type::unit_case("daterange"),
-            analysed_type::unit_case("money"),
-            analysed_type::unit_case("oid"),
-            analysed_type::case("enumeration", EnumerationType::get_type()),
-            composite_type,
-            domain_type,
-            array_type,
-            range_type,
-            analysed_type::unit_case("null"),
-        ])
     }
 }
 
@@ -959,152 +328,7 @@ impl Display for DbColumnType {
     }
 }
 
-impl RdbmsIntoValueAndType for DbColumnType {
-    fn into_value_and_type(self) -> ValueAndType {
-        fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
-            let case_value = case_value.map(Box::new);
-            let v = Value::Variant {
-                case_idx,
-                case_value,
-            };
-            ValueAndType::new(v, DbColumnType::get_analysed_type(None, None, None, None))
-        }
-
-        match self {
-            DbColumnType::Character => get_variant(0, None),
-            DbColumnType::Int2 => get_variant(1, None),
-            DbColumnType::Int4 => get_variant(2, None),
-            DbColumnType::Int8 => get_variant(3, None),
-            DbColumnType::Float4 => get_variant(4, None),
-            DbColumnType::Float8 => get_variant(5, None),
-            DbColumnType::Numeric => get_variant(6, None),
-            DbColumnType::Boolean => get_variant(7, None),
-            DbColumnType::Text => get_variant(8, None),
-            DbColumnType::Varchar => get_variant(9, None),
-            DbColumnType::Bpchar => get_variant(10, None),
-            DbColumnType::Timestamp => get_variant(11, None),
-            DbColumnType::Timestamptz => get_variant(12, None),
-            DbColumnType::Date => get_variant(13, None),
-            DbColumnType::Time => get_variant(14, None),
-            DbColumnType::Timetz => get_variant(15, None),
-            DbColumnType::Interval => get_variant(16, None),
-            DbColumnType::Bytea => get_variant(17, None),
-            DbColumnType::Uuid => get_variant(18, None),
-            DbColumnType::Xml => get_variant(19, None),
-            DbColumnType::Json => get_variant(29, None),
-            DbColumnType::Jsonb => get_variant(21, None),
-            DbColumnType::Jsonpath => get_variant(22, None),
-            DbColumnType::Inet => get_variant(23, None),
-            DbColumnType::Cidr => get_variant(24, None),
-            DbColumnType::Macaddr => get_variant(25, None),
-            DbColumnType::Bit => get_variant(26, None),
-            DbColumnType::Varbit => get_variant(27, None),
-            DbColumnType::Int4range => get_variant(28, None),
-            DbColumnType::Int8range => get_variant(29, None),
-            DbColumnType::Numrange => get_variant(30, None),
-            DbColumnType::Tsrange => get_variant(31, None),
-            DbColumnType::Tstzrange => get_variant(32, None),
-            DbColumnType::Daterange => get_variant(33, None),
-            DbColumnType::Money => get_variant(34, None),
-            DbColumnType::Oid => get_variant(35, None),
-            DbColumnType::Enumeration(v) => get_variant(36, Some(v.into_value())),
-            DbColumnType::Composite(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 37,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbColumnType::get_analysed_type(Some(v.typ), None, None, None),
-                )
-            }
-            DbColumnType::Domain(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 38,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbColumnType::get_analysed_type(None, Some(v.typ), None, None),
-                )
-            }
-            DbColumnType::Array(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 39,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbColumnType::get_analysed_type(None, None, Some(v.typ), None),
-                )
-            }
-            DbColumnType::Range(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 40,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbColumnType::get_analysed_type(None, None, None, Some(v.typ)),
-                )
-            }
-            DbColumnType::Null => get_variant(41, None),
-        }
-    }
-
-    fn get_base_type() -> AnalysedType {
-        DbColumnType::get_analysed_type(None, None, None, None)
-    }
-}
-
-impl AnalysedTypeMerger for DbColumnType {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Variant(f), AnalysedType::Variant(s)) = (first.clone(), second) {
-            if f.cases.len() == s.cases.len() {
-                let mut cases = Vec::with_capacity(f.cases.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.cases.into_iter().zip(s.cases.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-
-                    if fc.name == "composite" {
-                        let t = CompositeType::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "range" {
-                        let t = RangeType::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "domain" {
-                        let t = DomainType::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "array" {
-                        let t = DbColumnType::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else {
-                        cases.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::variant(cases)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DbValue {
     Character(i8),
     Int2(i16),
@@ -1112,12 +336,12 @@ pub enum DbValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
-    Numeric(#[bincode(with_serde)] BigDecimal),
+    Numeric(BigDecimal),
     Boolean(bool),
-    Timestamp(#[bincode(with_serde)] chrono::NaiveDateTime),
-    Timestamptz(#[bincode(with_serde)] chrono::DateTime<chrono::Utc>),
-    Date(#[bincode(with_serde)] chrono::NaiveDate),
-    Time(#[bincode(with_serde)] chrono::NaiveTime),
+    Timestamp(chrono::NaiveDateTime),
+    Timestamptz(chrono::DateTime<chrono::Utc>),
+    Date(chrono::NaiveDate),
+    Time(chrono::NaiveTime),
     Timetz(TimeTz),
     Interval(Interval),
     Text(String),
@@ -1128,26 +352,243 @@ pub enum DbValue {
     Jsonb(String),
     Jsonpath(String),
     Xml(String),
-    Uuid(#[bincode(with_serde)] Uuid),
-    Inet(#[bincode(with_serde)] IpAddr),
-    Cidr(#[bincode(with_serde)] IpAddr),
-    Macaddr(#[bincode(with_serde)] MacAddress),
-    Bit(#[bincode(with_serde)] BitVec),
-    Varbit(#[bincode(with_serde)] BitVec),
+    Uuid(Uuid),
+    Inet(IpAddr),
+    Cidr(IpAddr),
+    Macaddr(MacAddress),
+    Bit(BitVec),
+    Varbit(BitVec),
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
-    Numrange(#[bincode(with_serde)] ValuesRange<BigDecimal>),
-    Tsrange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDateTime>),
-    Tstzrange(#[bincode(with_serde)] ValuesRange<chrono::DateTime<chrono::Utc>>),
-    Daterange(#[bincode(with_serde)] ValuesRange<chrono::NaiveDate>),
+    Numrange(ValuesRange<BigDecimal>),
+    Tsrange(ValuesRange<chrono::NaiveDateTime>),
+    Tstzrange(ValuesRange<chrono::DateTime<chrono::Utc>>),
+    Daterange(ValuesRange<chrono::NaiveDate>),
     Money(i64),
     Oid(u32),
     Enumeration(Enumeration),
     Composite(Composite),
-    Domain(Domain),
+    Domain(Box<Domain>),
     Array(Vec<DbValue>),
-    Range(Range),
+    Range(Box<Range>),
     Null,
+}
+
+impl From<DbValue> for SerializableDbValue {
+    fn from(value: DbValue) -> Self {
+        fn add_node(target: &mut SerializableDbValue, value: SerializableDbValueNode) -> NodeIndex {
+            target.nodes.push(value);
+            (target.nodes.len() - 1) as NodeIndex
+        }
+
+        fn add_db_value(target: &mut SerializableDbValue, value: DbValue) -> NodeIndex {
+            match value {
+                DbValue::Character(v) => add_node(target, SerializableDbValueNode::Tinyint(v)),
+                DbValue::Int2(v) => add_node(target, SerializableDbValueNode::Smallint(v)),
+                DbValue::Int4(v) => add_node(target, SerializableDbValueNode::Int(v)),
+                DbValue::Int8(v) => add_node(target, SerializableDbValueNode::Bigint(v)),
+                DbValue::Float4(v) => add_node(target, SerializableDbValueNode::Float(v)),
+                DbValue::Float8(v) => add_node(target, SerializableDbValueNode::Double(v)),
+                DbValue::Numeric(v) => add_node(target, SerializableDbValueNode::Decimal(v)),
+                DbValue::Boolean(v) => add_node(target, SerializableDbValueNode::Boolean(v)),
+                DbValue::Timestamp(v) => add_node(target, SerializableDbValueNode::Timestamp(v)),
+                DbValue::Timestamptz(v) => {
+                    add_node(target, SerializableDbValueNode::Timestamptz(v))
+                }
+                DbValue::Date(v) => add_node(target, SerializableDbValueNode::Date(v)),
+                DbValue::Time(v) => add_node(target, SerializableDbValueNode::Time(v)),
+                DbValue::Timetz(v) => add_node(target, SerializableDbValueNode::Timetz(v)),
+                DbValue::Interval(v) => add_node(target, SerializableDbValueNode::Interval(v)),
+                DbValue::Text(v) => add_node(target, SerializableDbValueNode::Text(v)),
+                DbValue::Varchar(v) => add_node(target, SerializableDbValueNode::Varchar(v)),
+                DbValue::Bpchar(v) => add_node(target, SerializableDbValueNode::Bpchar(v)),
+                DbValue::Bytea(v) => add_node(target, SerializableDbValueNode::Bytea(v)),
+                DbValue::Json(v) => add_node(target, SerializableDbValueNode::Json(v)),
+                DbValue::Jsonb(v) => add_node(target, SerializableDbValueNode::Jsonb(v)),
+                DbValue::Jsonpath(v) => add_node(target, SerializableDbValueNode::Jsonpath(v)),
+                DbValue::Xml(v) => add_node(target, SerializableDbValueNode::Xml(v)),
+                DbValue::Uuid(v) => add_node(target, SerializableDbValueNode::Uuid(v)),
+                DbValue::Inet(v) => add_node(target, SerializableDbValueNode::Inet(v.into())),
+                DbValue::Cidr(v) => add_node(target, SerializableDbValueNode::Cidr(v.into())),
+                DbValue::Macaddr(v) => add_node(target, SerializableDbValueNode::Macaddr(v.into())),
+                DbValue::Bit(v) => add_node(target, SerializableDbValueNode::Bit(v)),
+                DbValue::Varbit(v) => add_node(target, SerializableDbValueNode::Varbit(v)),
+                DbValue::Int4range(v) => add_node(target, SerializableDbValueNode::Int4range(v)),
+                DbValue::Int8range(v) => add_node(target, SerializableDbValueNode::Int8range(v)),
+                DbValue::Numrange(v) => add_node(target, SerializableDbValueNode::Numrange(v)),
+                DbValue::Tsrange(v) => add_node(target, SerializableDbValueNode::Tsrange(v)),
+                DbValue::Tstzrange(v) => add_node(target, SerializableDbValueNode::Tstzrange(v)),
+                DbValue::Daterange(v) => add_node(target, SerializableDbValueNode::Daterange(v)),
+                DbValue::Money(v) => add_node(target, SerializableDbValueNode::Money(v)),
+                DbValue::Oid(v) => add_node(target, SerializableDbValueNode::Oid(v)),
+                DbValue::Enumeration(v) => {
+                    add_node(target, SerializableDbValueNode::Enumeration(v))
+                }
+                DbValue::Composite(v) => {
+                    let mut indices = Vec::with_capacity(v.values.len());
+                    for value in v.values {
+                        indices.push(add_db_value(target, value));
+                    }
+                    add_node(
+                        target,
+                        SerializableDbValueNode::Composite(SerializableComposite {
+                            name: v.name,
+                            values: indices,
+                        }),
+                    )
+                }
+                DbValue::Domain(v) => {
+                    let index = add_db_value(target, v.value);
+                    add_node(
+                        target,
+                        SerializableDbValueNode::Domain(SerializableDomain {
+                            name: v.name,
+                            value: index,
+                        }),
+                    )
+                }
+                DbValue::Array(v) => {
+                    let mut indices = Vec::with_capacity(v.len());
+                    for value in v {
+                        indices.push(add_db_value(target, value));
+                    }
+                    add_node(target, SerializableDbValueNode::Array(indices))
+                }
+                DbValue::Range(v) => {
+                    let start = v.value.start.map(|x| add_db_value(target, x));
+                    let end = v.value.end.map(|x| add_db_value(target, x));
+                    add_node(
+                        target,
+                        SerializableDbValueNode::Range(SerializableRange {
+                            name: v.name,
+                            value: ValuesRange::new(start, end),
+                        }),
+                    )
+                }
+                DbValue::Null => add_node(target, SerializableDbValueNode::Null),
+            }
+        }
+
+        let mut result = SerializableDbValue { nodes: vec![] };
+        add_db_value(&mut result, value);
+        result
+    }
+}
+
+impl TryFrom<SerializableDbValue> for DbValue {
+    type Error = String;
+
+    fn try_from(value: SerializableDbValue) -> Result<Self, Self::Error> {
+        fn convert_node(
+            node: SerializableDbValueNode,
+            nodes: &mut Vec<Option<SerializableDbValueNode>>,
+        ) -> Result<DbValue, String> {
+            match node {
+                SerializableDbValueNode::Tinyint(v) => Ok(DbValue::Character(v)),
+                SerializableDbValueNode::Smallint(v) => Ok(DbValue::Int2(v)),
+                SerializableDbValueNode::Int(v) => Ok(DbValue::Int4(v)),
+                SerializableDbValueNode::Bigint(v) => Ok(DbValue::Int8(v)),
+                SerializableDbValueNode::Float(v) => Ok(DbValue::Float4(v)),
+                SerializableDbValueNode::Double(v) => Ok(DbValue::Float8(v)),
+                SerializableDbValueNode::Decimal(v) => Ok(DbValue::Numeric(v)),
+                SerializableDbValueNode::Boolean(v) => Ok(DbValue::Boolean(v)),
+                SerializableDbValueNode::Timestamp(v) => Ok(DbValue::Timestamp(v)),
+                SerializableDbValueNode::Timestamptz(v) => Ok(DbValue::Timestamptz(v)),
+                SerializableDbValueNode::Date(v) => Ok(DbValue::Date(v)),
+                SerializableDbValueNode::Time(v) => Ok(DbValue::Time(v)),
+                SerializableDbValueNode::Timetz(v) => Ok(DbValue::Timetz(v)),
+                SerializableDbValueNode::Interval(v) => Ok(DbValue::Interval(v)),
+                SerializableDbValueNode::Text(v) => Ok(DbValue::Text(v)),
+                SerializableDbValueNode::Varchar(v) => Ok(DbValue::Varchar(v)),
+                SerializableDbValueNode::Bpchar(v) => Ok(DbValue::Bpchar(v)),
+                SerializableDbValueNode::Bytea(v) => Ok(DbValue::Bytea(v)),
+                SerializableDbValueNode::Json(v) => Ok(DbValue::Json(v)),
+                SerializableDbValueNode::Jsonb(v) => Ok(DbValue::Jsonb(v)),
+                SerializableDbValueNode::Jsonpath(v) => Ok(DbValue::Jsonpath(v)),
+                SerializableDbValueNode::Xml(v) => Ok(DbValue::Xml(v)),
+                SerializableDbValueNode::Uuid(v) => Ok(DbValue::Uuid(v)),
+                SerializableDbValueNode::Inet(v) => Ok(DbValue::Inet(v.into())),
+                SerializableDbValueNode::Cidr(v) => Ok(DbValue::Cidr(v.into())),
+                SerializableDbValueNode::Macaddr(v) => Ok(DbValue::Macaddr(v.into())),
+                SerializableDbValueNode::Bit(v) => Ok(DbValue::Bit(v)),
+                SerializableDbValueNode::Varbit(v) => Ok(DbValue::Varbit(v)),
+                SerializableDbValueNode::Int4range(v) => Ok(DbValue::Int4range(v)),
+                SerializableDbValueNode::Int8range(v) => Ok(DbValue::Int8range(v)),
+                SerializableDbValueNode::Numrange(v) => Ok(DbValue::Numrange(v)),
+                SerializableDbValueNode::Tsrange(v) => Ok(DbValue::Tsrange(v)),
+                SerializableDbValueNode::Tstzrange(v) => Ok(DbValue::Tstzrange(v)),
+                SerializableDbValueNode::Daterange(v) => Ok(DbValue::Daterange(v)),
+                SerializableDbValueNode::Money(v) => Ok(DbValue::Money(v)),
+                SerializableDbValueNode::Oid(v) => Ok(DbValue::Oid(v)),
+                SerializableDbValueNode::Enumeration(v) => Ok(DbValue::Enumeration(v)),
+                SerializableDbValueNode::Composite(v) => {
+                    let mut values = Vec::with_capacity(v.values.len());
+                    for index in v.values {
+                        let node = nodes[index as usize].take().unwrap();
+                        values.push(convert_node(node, nodes)?);
+                    }
+                    Ok(DbValue::Composite(Composite {
+                        name: v.name,
+                        values,
+                    }))
+                }
+                SerializableDbValueNode::Domain(v) => {
+                    let node = nodes[v.value as usize].take().unwrap();
+                    let value = convert_node(node, nodes)?;
+                    Ok(DbValue::Domain(Box::new(Domain {
+                        name: v.name,
+                        value,
+                    })))
+                }
+                SerializableDbValueNode::Array(v) => {
+                    let mut values = Vec::with_capacity(v.len());
+                    for index in v {
+                        let node = nodes[index as usize].take().unwrap();
+                        values.push(convert_node(node, nodes)?);
+                    }
+                    Ok(DbValue::Array(values))
+                }
+                SerializableDbValueNode::Range(v) => {
+                    let start = transpose_bound(
+                        v.value
+                            .start
+                            .map(|x| convert_node(nodes[x as usize].take().unwrap(), nodes)),
+                    )?;
+                    let end = transpose_bound(
+                        v.value
+                            .end
+                            .map(|x| convert_node(nodes[x as usize].take().unwrap(), nodes)),
+                    )?;
+                    Ok(DbValue::Range(Box::new(Range {
+                        name: v.name,
+                        value: ValuesRange::new(start, end),
+                    })))
+                }
+                SerializableDbValueNode::Null => Ok(DbValue::Null),
+                _ => Err(format!(
+                    "Unsupported SerializableDbValueNode variant for PostgreSQL: {:?}",
+                    node
+                )),
+            }
+        }
+
+        if value.nodes.is_empty() {
+            return Err("Empty SerializableDbValue".to_string());
+        }
+
+        let len = value.nodes.len() - 1;
+        let mut nodes = value.nodes.into_iter().map(Some).collect::<Vec<_>>();
+        let last = nodes[len].take().unwrap();
+        convert_node(last, &mut nodes)
+    }
+}
+
+fn transpose_bound<T, E>(bound: Bound<Result<T, E>>) -> Result<Bound<T>, E> {
+    match bound {
+        Bound::Unbounded => Ok(Bound::Unbounded),
+        Bound::Included(v) => v.map(|v| Bound::Included(v)),
+        Bound::Excluded(v) => v.map(|v| Bound::Excluded(v)),
+    }
 }
 
 impl Display for DbValue {
@@ -1221,7 +662,7 @@ impl DbValue {
         )
     }
 
-    pub(crate) fn get_column_type(&self) -> DbColumnType {
+    pub fn get_column_type(&self) -> DbColumnType {
         match self {
             DbValue::Character(_) => DbColumnType::Character,
             DbValue::Int2(_) => DbColumnType::Int2,
@@ -1267,10 +708,10 @@ impl DbValue {
             }
             DbValue::Domain(v) => {
                 let t = v.value.get_column_type();
-                DbColumnType::Domain(DomainType::new(v.name.clone(), t))
+                DbColumnType::Domain(Box::new(DomainType::new(v.name.clone(), t)))
             }
             DbValue::Range(r) => {
-                let v = (*r.value).start_value().or((*r.value).end_value());
+                let v = r.value.start_value().or(r.value.end_value());
                 let t = v.map(|v| v.get_column_type()).unwrap_or(DbColumnType::Null);
                 DbColumnType::Range(RangeType::new(r.name.clone(), t))
             }
@@ -1283,7 +724,7 @@ impl DbValue {
                                 .iter()
                                 .map(|v| {
                                     if let DbValue::Range(v) = v {
-                                        (*v.value).start_value().or((*v.value).end_value())
+                                        v.value.start_value().or(v.value.end_value())
                                     } else {
                                         None
                                     }
@@ -1303,223 +744,279 @@ impl DbValue {
             DbValue::Null => DbColumnType::Null,
         }
     }
-
-    fn get_analysed_type(
-        composite_type: Option<AnalysedType>,
-        domain_type: Option<AnalysedType>,
-        array_type: Option<AnalysedType>,
-        range_type: Option<AnalysedType>,
-    ) -> AnalysedType {
-        let composite_type = analysed_type::opt_case("composite", composite_type);
-        let domain_type = analysed_type::opt_case("domain", domain_type);
-        let array_type = analysed_type::opt_case("array", array_type);
-        let range_type = analysed_type::opt_case("range", range_type);
-
-        analysed_type::variant(vec![
-            analysed_type::case("character", analysed_type::s8()),
-            analysed_type::case("int2", analysed_type::s16()),
-            analysed_type::case("int4", analysed_type::s32()),
-            analysed_type::case("int8", analysed_type::s64()),
-            analysed_type::case("float4", analysed_type::f32()),
-            analysed_type::case("float8", analysed_type::f64()),
-            analysed_type::case("numeric", analysed_type::str()),
-            analysed_type::case("boolean", analysed_type::bool()),
-            analysed_type::case("text", analysed_type::str()),
-            analysed_type::case("varchar", analysed_type::str()),
-            analysed_type::case("bpchar", analysed_type::str()),
-            analysed_type::case("timestamp", chrono::NaiveDateTime::get_type()),
-            analysed_type::case("timestamptz", chrono::DateTime::<chrono::Utc>::get_type()),
-            analysed_type::case("date", chrono::NaiveDate::get_type()),
-            analysed_type::case("time", chrono::NaiveTime::get_type()),
-            analysed_type::case("timetz", TimeTz::get_type()),
-            analysed_type::case("interval", Interval::get_type()),
-            analysed_type::case("bytea", analysed_type::list(analysed_type::u8())),
-            analysed_type::case("json", analysed_type::str()),
-            analysed_type::case("jsonb", analysed_type::str()),
-            analysed_type::case("jsonpath", analysed_type::str()),
-            analysed_type::case("xml", analysed_type::str()),
-            analysed_type::case(
-                "uuid",
-                analysed_type::record(vec![
-                    analysed_type::field("high-bits", analysed_type::u64()),
-                    analysed_type::field("low-bits", analysed_type::u64()),
-                ]),
-            ),
-            analysed_type::case("inet", IpAddr::get_base_type()),
-            analysed_type::case("cidr", IpAddr::get_base_type()),
-            analysed_type::case("macaddr", MacAddress::get_base_type()),
-            analysed_type::case("bit", analysed_type::list(analysed_type::bool())),
-            analysed_type::case("varbit", analysed_type::list(analysed_type::bool())),
-            analysed_type::case("int4range", ValuesRange::<i32>::get_type()),
-            analysed_type::case("int8range", ValuesRange::<i64>::get_type()),
-            analysed_type::case("numrange", ValuesRange::<String>::get_type()),
-            analysed_type::case("tsrange", ValuesRange::<String>::get_type()),
-            analysed_type::case("tstzrange", ValuesRange::<String>::get_type()),
-            analysed_type::case("daterange", ValuesRange::<String>::get_type()),
-            analysed_type::case("money", analysed_type::s64()),
-            analysed_type::case("oid", analysed_type::u32()),
-            analysed_type::case("enumeration", Enumeration::get_type()),
-            composite_type,
-            domain_type,
-            array_type,
-            range_type,
-            analysed_type::unit_case("null"),
-        ])
-    }
 }
 
-impl RdbmsIntoValueAndType for DbValue {
-    fn into_value_and_type(self) -> ValueAndType {
-        fn get_variant(case_idx: u32, case_value: Option<Value>) -> ValueAndType {
-            let case_value = case_value.map(Box::new);
-            let v = Value::Variant {
-                case_idx,
-                case_value,
-            };
-            ValueAndType::new(v, DbValue::get_analysed_type(None, None, None, None))
-        }
-
-        match self {
-            DbValue::Character(v) => get_variant(0, Some(v.into_value())),
-            DbValue::Int2(v) => get_variant(1, Some(v.into_value())),
-            DbValue::Int4(v) => get_variant(2, Some(v.into_value())),
-            DbValue::Int8(v) => get_variant(3, Some(v.into_value())),
-            DbValue::Float4(v) => get_variant(4, Some(v.into_value())),
-            DbValue::Float8(v) => get_variant(5, Some(v.into_value())),
-            DbValue::Numeric(v) => get_variant(6, Some(v.to_string().into_value())),
-            DbValue::Boolean(v) => get_variant(7, Some(v.into_value())),
-            DbValue::Text(v) => get_variant(8, Some(v.into_value())),
-            DbValue::Varchar(v) => get_variant(9, Some(v.into_value())),
-            DbValue::Bpchar(v) => get_variant(10, Some(v.into_value())),
-            DbValue::Timestamp(v) => get_variant(11, Some(v.into_value())),
-            DbValue::Timestamptz(v) => get_variant(12, Some(v.into_value())),
-            DbValue::Date(v) => get_variant(13, Some(v.into_value())),
-            DbValue::Time(v) => get_variant(14, Some(v.into_value())),
-            DbValue::Timetz(v) => get_variant(15, Some(v.into_value())),
-            DbValue::Interval(v) => get_variant(16, Some(v.into_value())),
-            DbValue::Bytea(v) => get_variant(17, Some(v.into_value())),
-            DbValue::Json(v) => get_variant(18, Some(v.into_value())),
-            DbValue::Jsonb(v) => get_variant(19, Some(v.into_value())),
-            DbValue::Jsonpath(v) => get_variant(20, Some(v.into_value())),
-            DbValue::Xml(v) => get_variant(21, Some(v.into_value())),
-            DbValue::Uuid(v) => {
-                let (h, l) = v.as_u64_pair();
-                let v = Value::Record(vec![Value::U64(h), Value::U64(l)]);
-                get_variant(22, Some(v))
-            }
-            DbValue::Inet(v) => get_variant(23, Some(v.into_value_and_type().value)),
-            DbValue::Cidr(v) => get_variant(24, Some(v.into_value_and_type().value)),
-            DbValue::Macaddr(v) => get_variant(25, Some(v.into_value_and_type().value)),
-            DbValue::Bit(v) => get_variant(26, Some(v.iter().collect::<Vec<bool>>().into_value())),
-            DbValue::Varbit(v) => {
-                get_variant(27, Some(v.iter().collect::<Vec<bool>>().into_value()))
-            }
-            DbValue::Int4range(v) => get_variant(28, Some(v.into_value())),
-            DbValue::Int8range(v) => get_variant(29, Some(v.into_value())),
-            DbValue::Numrange(v) => get_variant(30, Some(v.map(|v| v.to_string()).into_value())),
-            DbValue::Tsrange(v) => get_variant(31, Some(v.map(|v| v.to_string()).into_value())),
-            DbValue::Tstzrange(v) => get_variant(32, Some(v.map(|v| v.to_string()).into_value())),
-            DbValue::Daterange(v) => get_variant(33, Some(v.map(|v| v.to_string()).into_value())),
-            DbValue::Money(v) => get_variant(34, Some(v.into_value())),
-            DbValue::Oid(v) => get_variant(35, Some(v.into_value())),
-            DbValue::Enumeration(v) => get_variant(36, Some(v.into_value())),
-            DbValue::Composite(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 37,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbValue::get_analysed_type(Some(v.typ), None, None, None),
-                )
-            }
-            DbValue::Domain(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 38,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbValue::get_analysed_type(None, Some(v.typ), None, None),
-                )
-            }
-            DbValue::Array(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 39,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbValue::get_analysed_type(None, None, Some(v.typ), None),
-                )
-            }
-            DbValue::Range(v) => {
-                let v = v.into_value_and_type();
-                let value = Value::Variant {
-                    case_idx: 40,
-                    case_value: Some(Box::new(v.value)),
-                };
-                ValueAndType::new(
-                    value,
-                    DbValue::get_analysed_type(None, None, None, Some(v.typ)),
-                )
-            }
-            DbValue::Null => get_variant(41, None),
-        }
-    }
-
-    fn get_base_type() -> AnalysedType {
-        DbValue::get_analysed_type(None, None, None, None)
-    }
-}
-
-impl AnalysedTypeMerger for DbValue {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Variant(f), AnalysedType::Variant(s)) = (first.clone(), second) {
-            if f.cases.len() == s.cases.len() {
-                let mut cases = Vec::with_capacity(f.cases.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.cases.into_iter().zip(s.cases.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-
-                    if fc.name == "composite" {
-                        let t = Composite::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "range" {
-                        let t = Range::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "domain" {
-                        let t = Domain::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else if fc.name == "array" {
-                        let t = <Vec<DbValue>>::merge_types_opt(fc.typ, sc.typ);
-                        cases.push(analysed_type::opt_case(fc.name.as_str(), t));
-                    } else {
-                        cases.push(fc);
-                    }
+impl From<DbColumnType> for SerializableDbColumnType {
+    fn from(value: DbColumnType) -> Self {
+        fn build_serializable_db_column_type(
+            db_type: DbColumnType,
+            nodes: &mut Vec<SerializableDbColumnTypeNode>,
+        ) -> NodeIndex {
+            match db_type {
+                DbColumnType::Character => {
+                    nodes.push(SerializableDbColumnTypeNode::Character);
                 }
-                if ok {
-                    analysed_type::variant(cases)
-                } else {
-                    first
+                DbColumnType::Int2 => {
+                    nodes.push(SerializableDbColumnTypeNode::Smallint);
                 }
-            } else {
-                first
+                DbColumnType::Int4 => {
+                    nodes.push(SerializableDbColumnTypeNode::Int);
+                }
+                DbColumnType::Int8 => {
+                    nodes.push(SerializableDbColumnTypeNode::Bigint);
+                }
+                DbColumnType::Float4 => {
+                    nodes.push(SerializableDbColumnTypeNode::Float);
+                }
+                DbColumnType::Float8 => {
+                    nodes.push(SerializableDbColumnTypeNode::Double);
+                }
+                DbColumnType::Numeric => {
+                    nodes.push(SerializableDbColumnTypeNode::Decimal);
+                }
+                DbColumnType::Boolean => {
+                    nodes.push(SerializableDbColumnTypeNode::Boolean);
+                }
+                DbColumnType::Text => {
+                    nodes.push(SerializableDbColumnTypeNode::Text);
+                }
+                DbColumnType::Varchar => {
+                    nodes.push(SerializableDbColumnTypeNode::Varchar);
+                }
+                DbColumnType::Bpchar => {
+                    nodes.push(SerializableDbColumnTypeNode::Bpchar);
+                }
+                DbColumnType::Timestamp => {
+                    nodes.push(SerializableDbColumnTypeNode::Timestamp);
+                }
+                DbColumnType::Timestamptz => {
+                    nodes.push(SerializableDbColumnTypeNode::Timestamptz);
+                }
+                DbColumnType::Date => {
+                    nodes.push(SerializableDbColumnTypeNode::Date);
+                }
+                DbColumnType::Time => {
+                    nodes.push(SerializableDbColumnTypeNode::Time);
+                }
+                DbColumnType::Timetz => {
+                    nodes.push(SerializableDbColumnTypeNode::Timetz);
+                }
+                DbColumnType::Interval => {
+                    nodes.push(SerializableDbColumnTypeNode::Interval);
+                }
+                DbColumnType::Bytea => {
+                    nodes.push(SerializableDbColumnTypeNode::Bytea);
+                }
+                DbColumnType::Uuid => {
+                    nodes.push(SerializableDbColumnTypeNode::Uuid);
+                }
+                DbColumnType::Xml => {
+                    nodes.push(SerializableDbColumnTypeNode::Xml);
+                }
+                DbColumnType::Json => {
+                    nodes.push(SerializableDbColumnTypeNode::Json);
+                }
+                DbColumnType::Jsonb => {
+                    nodes.push(SerializableDbColumnTypeNode::Jsonb);
+                }
+                DbColumnType::Jsonpath => {
+                    nodes.push(SerializableDbColumnTypeNode::Jsonpath);
+                }
+                DbColumnType::Inet => {
+                    nodes.push(SerializableDbColumnTypeNode::Inet);
+                }
+                DbColumnType::Cidr => {
+                    nodes.push(SerializableDbColumnTypeNode::Cidr);
+                }
+                DbColumnType::Macaddr => {
+                    nodes.push(SerializableDbColumnTypeNode::Macaddr);
+                }
+                DbColumnType::Bit => {
+                    nodes.push(SerializableDbColumnTypeNode::Bit);
+                }
+                DbColumnType::Varbit => {
+                    nodes.push(SerializableDbColumnTypeNode::Varbit);
+                }
+                DbColumnType::Int4range => {
+                    nodes.push(SerializableDbColumnTypeNode::Int4range);
+                }
+                DbColumnType::Int8range => {
+                    nodes.push(SerializableDbColumnTypeNode::Int8range);
+                }
+                DbColumnType::Numrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Numrange);
+                }
+                DbColumnType::Tsrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Tsrange);
+                }
+                DbColumnType::Tstzrange => {
+                    nodes.push(SerializableDbColumnTypeNode::Tstzrange);
+                }
+                DbColumnType::Daterange => {
+                    nodes.push(SerializableDbColumnTypeNode::Daterange);
+                }
+                DbColumnType::Money => {
+                    nodes.push(SerializableDbColumnTypeNode::Money);
+                }
+                DbColumnType::Oid => {
+                    nodes.push(SerializableDbColumnTypeNode::Oid);
+                }
+                DbColumnType::Enumeration(enum_type) => {
+                    nodes.push(SerializableDbColumnTypeNode::Enumeration(enum_type));
+                }
+                DbColumnType::Composite(composite_type) => {
+                    let attributes: Vec<(String, NodeIndex)> = composite_type
+                        .attributes
+                        .into_iter()
+                        .map(|(name, attr_type)| {
+                            (
+                                name.clone(),
+                                build_serializable_db_column_type(attr_type, nodes),
+                            )
+                        })
+                        .collect();
+                    nodes.push(SerializableDbColumnTypeNode::Composite(
+                        SerializableCompositeType {
+                            name: composite_type.name.clone(),
+                            attributes,
+                        },
+                    ));
+                }
+                DbColumnType::Domain(domain_type) => {
+                    let node = SerializableDbColumnTypeNode::Domain(SerializableDomainType {
+                        name: domain_type.name,
+                        base_type: build_serializable_db_column_type(domain_type.base_type, nodes),
+                    });
+                    nodes.push(node);
+                }
+                DbColumnType::Array(element_type) => {
+                    let node = SerializableDbColumnTypeNode::Array(
+                        build_serializable_db_column_type(*element_type, nodes),
+                    );
+                    nodes.push(node);
+                }
+                DbColumnType::Range(range_type) => {
+                    let node = SerializableDbColumnTypeNode::Range(SerializableRangeType {
+                        name: range_type.name,
+                        base_type: build_serializable_db_column_type(*range_type.base_type, nodes),
+                    });
+                    nodes.push(node);
+                }
+                DbColumnType::Null => {
+                    nodes.push(SerializableDbColumnTypeNode::Null);
+                }
             }
-        } else {
-            first
+
+            (nodes.len() - 1) as NodeIndex
         }
+
+        let mut nodes = Vec::new();
+        build_serializable_db_column_type(value, &mut nodes);
+        SerializableDbColumnType { nodes }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode)]
+impl TryFrom<SerializableDbColumnType> for DbColumnType {
+    type Error = String;
+
+    fn try_from(value: SerializableDbColumnType) -> Result<Self, Self::Error> {
+        fn resolve_db_column_type(
+            nodes: &mut Vec<Option<SerializableDbColumnTypeNode>>,
+            index: NodeIndex,
+        ) -> Result<DbColumnType, String> {
+            let node = nodes[index as usize].take().unwrap();
+            match node {
+                SerializableDbColumnTypeNode::Character => Ok(DbColumnType::Character),
+                SerializableDbColumnTypeNode::Smallint => Ok(DbColumnType::Int2),
+                SerializableDbColumnTypeNode::Int => Ok(DbColumnType::Int4),
+                SerializableDbColumnTypeNode::Bigint => Ok(DbColumnType::Int8),
+                SerializableDbColumnTypeNode::Float => Ok(DbColumnType::Float4),
+                SerializableDbColumnTypeNode::Double => Ok(DbColumnType::Float8),
+                SerializableDbColumnTypeNode::Decimal => Ok(DbColumnType::Numeric),
+                SerializableDbColumnTypeNode::Boolean => Ok(DbColumnType::Boolean),
+                SerializableDbColumnTypeNode::Text => Ok(DbColumnType::Text),
+                SerializableDbColumnTypeNode::Varchar => Ok(DbColumnType::Varchar),
+                SerializableDbColumnTypeNode::Bpchar => Ok(DbColumnType::Bpchar),
+                SerializableDbColumnTypeNode::Timestamp => Ok(DbColumnType::Timestamp),
+                SerializableDbColumnTypeNode::Timestamptz => Ok(DbColumnType::Timestamptz),
+                SerializableDbColumnTypeNode::Date => Ok(DbColumnType::Date),
+                SerializableDbColumnTypeNode::Time => Ok(DbColumnType::Time),
+                SerializableDbColumnTypeNode::Timetz => Ok(DbColumnType::Timetz),
+                SerializableDbColumnTypeNode::Interval => Ok(DbColumnType::Interval),
+                SerializableDbColumnTypeNode::Bytea => Ok(DbColumnType::Bytea),
+                SerializableDbColumnTypeNode::Uuid => Ok(DbColumnType::Uuid),
+                SerializableDbColumnTypeNode::Xml => Ok(DbColumnType::Xml),
+                SerializableDbColumnTypeNode::Json => Ok(DbColumnType::Json),
+                SerializableDbColumnTypeNode::Jsonb => Ok(DbColumnType::Jsonb),
+                SerializableDbColumnTypeNode::Jsonpath => Ok(DbColumnType::Jsonpath),
+                SerializableDbColumnTypeNode::Inet => Ok(DbColumnType::Inet),
+                SerializableDbColumnTypeNode::Cidr => Ok(DbColumnType::Cidr),
+                SerializableDbColumnTypeNode::Macaddr => Ok(DbColumnType::Macaddr),
+                SerializableDbColumnTypeNode::Bit => Ok(DbColumnType::Bit),
+                SerializableDbColumnTypeNode::Varbit => Ok(DbColumnType::Varbit),
+                SerializableDbColumnTypeNode::Int4range => Ok(DbColumnType::Int4range),
+                SerializableDbColumnTypeNode::Int8range => Ok(DbColumnType::Int8range),
+                SerializableDbColumnTypeNode::Numrange => Ok(DbColumnType::Numrange),
+                SerializableDbColumnTypeNode::Tsrange => Ok(DbColumnType::Tsrange),
+                SerializableDbColumnTypeNode::Tstzrange => Ok(DbColumnType::Tstzrange),
+                SerializableDbColumnTypeNode::Daterange => Ok(DbColumnType::Daterange),
+                SerializableDbColumnTypeNode::Money => Ok(DbColumnType::Money),
+                SerializableDbColumnTypeNode::Oid => Ok(DbColumnType::Oid),
+                SerializableDbColumnTypeNode::Enumeration(enum_type) => {
+                    Ok(DbColumnType::Enumeration(enum_type.clone()))
+                }
+                SerializableDbColumnTypeNode::Composite(composite_type) => {
+                    let attributes: Result<Vec<(String, DbColumnType)>, String> = composite_type
+                        .attributes
+                        .into_iter()
+                        .map(|(name, attr_index)| {
+                            let attr_type = resolve_db_column_type(nodes, attr_index)?;
+                            Ok((name, attr_type))
+                        })
+                        .collect();
+                    let attributes = attributes?;
+                    Ok(DbColumnType::Composite(CompositeType::new(
+                        composite_type.name,
+                        attributes,
+                    )))
+                }
+                SerializableDbColumnTypeNode::Domain(domain_type) => {
+                    let base_type = resolve_db_column_type(nodes, domain_type.base_type)?;
+                    Ok(DbColumnType::Domain(Box::new(DomainType::new(
+                        domain_type.name,
+                        base_type,
+                    ))))
+                }
+                SerializableDbColumnTypeNode::Array(element_index) => {
+                    let element_type = resolve_db_column_type(nodes, element_index)?;
+                    Ok(DbColumnType::Array(Box::new(element_type)))
+                }
+                SerializableDbColumnTypeNode::Range(range_type) => {
+                    let base_type = resolve_db_column_type(nodes, range_type.base_type)?;
+                    Ok(DbColumnType::Range(RangeType::new(
+                        range_type.name.clone(),
+                        base_type,
+                    )))
+                }
+                SerializableDbColumnTypeNode::Null => Ok(DbColumnType::Null),
+                _ => Err(format!(
+                    "Unsupported SerializableDbColumnTypeNode variant: {:?}",
+                    node
+                )),
+            }
+        }
+
+        if value.nodes.is_empty() {
+            return Err("SerializableDbColumnType must have at least one node".to_string());
+        }
+
+        let last_idx = (value.nodes.len() - 1) as NodeIndex;
+        let mut nodes = value.nodes.into_iter().map(Some).collect::<Vec<_>>();
+        resolve_db_column_type(&mut nodes, last_idx)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
@@ -1527,346 +1024,40 @@ pub struct DbColumn {
     pub db_type_name: String,
 }
 
-impl DbColumn {
-    fn get_analysed_type(column_type: AnalysedType) -> AnalysedType {
-        analysed_type::record(vec![
-            analysed_type::field("ordinal", analysed_type::u64()),
-            analysed_type::field("name", analysed_type::str()),
-            analysed_type::field("db-type", column_type),
-            analysed_type::field("db-type-name", analysed_type::str()),
-        ])
-    }
-}
-
-impl RdbmsIntoValueAndType for DbColumn {
-    fn into_value_and_type(self) -> ValueAndType {
-        let db_type = RdbmsIntoValueAndType::into_value_and_type(self.db_type);
-        let t = DbColumn::get_analysed_type(db_type.typ);
-        let v = Value::Record(vec![
-            self.ordinal.into_value(),
-            self.name.into_value(),
-            db_type.value,
-            self.db_type_name.into_value(),
-        ]);
-        ValueAndType::new(v, t)
-    }
-
-    fn get_base_type() -> AnalysedType {
-        DbColumn::get_analysed_type(DbColumnType::get_base_type())
-    }
-}
-
-impl AnalysedTypeMerger for DbColumn {
-    fn merge_types(first: AnalysedType, second: AnalysedType) -> AnalysedType {
-        if let (AnalysedType::Record(f), AnalysedType::Record(s)) = (first.clone(), second) {
-            if f.fields.len() == s.fields.len() {
-                let mut fields = Vec::with_capacity(f.fields.len());
-                let mut ok = true;
-
-                for (fc, sc) in f.fields.into_iter().zip(s.fields.into_iter()) {
-                    if fc.name != sc.name {
-                        ok = false;
-                        break;
-                    }
-                    if fc.name == "db-type" {
-                        let t = DbColumnType::merge_types(fc.typ, sc.typ);
-                        fields.push(analysed_type::field(fc.name.as_str(), t));
-                    } else {
-                        fields.push(fc);
-                    }
-                }
-                if ok {
-                    analysed_type::record(fields)
-                } else {
-                    first
-                }
-            } else {
-                first
-            }
-        } else {
-            first
+impl From<DbColumn> for SerializableDbColumn {
+    fn from(value: DbColumn) -> Self {
+        Self {
+            ordinal: value.ordinal,
+            name: value.name,
+            db_type: value.db_type.into(),
+            db_type_name: value.db_type_name,
         }
+    }
+}
+
+impl TryFrom<SerializableDbColumn> for DbColumn {
+    type Error = String;
+
+    fn try_from(value: SerializableDbColumn) -> Result<Self, Self::Error> {
+        Ok(DbColumn {
+            ordinal: value.ordinal,
+            name: value.name,
+            db_type: value.db_type.try_into()?,
+            db_type_name: value.db_type_name,
+        })
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use crate::services::rdbms::postgres::{types as postgres_types, PostgresType};
-    use crate::services::rdbms::{AnalysedTypeMerger, DbResult, DbRow, RdbmsIntoValueAndType};
-    use assert2::check;
+    use crate::services::rdbms::postgres::types as postgres_types;
     use bigdecimal::BigDecimal;
-    use bincode::{Decode, Encode};
     use bit_vec::BitVec;
-    use golem_common::serialization::{serialize, try_deserialize};
     use mac_address::MacAddress;
     use serde_json::json;
     use std::collections::Bound;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use test_r::test;
     use uuid::Uuid;
-
-    fn check_bincode<T: Encode + Decode<()> + PartialEq>(value: T) {
-        let bin_value = serialize(&value).unwrap().to_vec();
-        let value2: Option<T> = try_deserialize(bin_value.as_slice()).ok().flatten();
-        check!(value2.unwrap() == value);
-    }
-
-    fn check_type_and_value<T: RdbmsIntoValueAndType>(value: T) {
-        let value_and_type = value.into_value_and_type();
-        let value_and_type_json = serde_json::to_string(&value_and_type);
-        check!(value_and_type_json.is_ok());
-    }
-
-    fn check_type_merge<T: RdbmsIntoValueAndType + AnalysedTypeMerger>(
-        value1: T,
-        value2: T,
-        expected: T,
-    ) {
-        let vt1 = value1.into_value_and_type();
-        let vt2 = value2.into_value_and_type();
-
-        let vt_merged = T::merge_types(vt1.typ, vt2.typ);
-        let vt_merged_json = serde_json::to_string(&vt_merged);
-
-        let vt_expected = expected.into_value_and_type();
-        let vt_expected_json = serde_json::to_string(&vt_expected);
-
-        check!(vt_merged == vt_expected.typ);
-        check!(vt_merged_json.is_ok());
-        check!(vt_expected_json.is_ok());
-    }
-
-    #[test]
-    fn test_db_value_analysed_type_merge() {
-        for (value1, value2, value) in get_test_db_values_values() {
-            check_type_merge(value1.clone(), value2.clone(), value.clone());
-            check_type_merge(value2.clone(), value1.clone(), value.clone());
-            check_type_merge(value1.clone(), value1.clone(), value1.clone());
-        }
-    }
-
-    #[test]
-    fn test_db_values_conversions() {
-        let values = get_test_db_values();
-
-        for value in values {
-            check_bincode(value.clone());
-            check_type_and_value(value);
-        }
-    }
-
-    #[test]
-    fn test_db_column_types_conversions() {
-        let values = get_test_db_column_types();
-
-        for value in values {
-            check_bincode(value.clone());
-            check_type_and_value(value);
-        }
-    }
-
-    #[test]
-    fn test_db_result_conversions() {
-        let value = DbResult::<PostgresType>::new(
-            get_test_db_columns(),
-            vec![DbRow {
-                values: get_test_db_values(),
-            }],
-        );
-
-        check_bincode(value.clone());
-        check_type_and_value(value);
-    }
-
-    #[test]
-    fn test_db_column_type_analysed_type_merge() {
-        for (value1, value2, value) in get_test_db_column_types_values() {
-            check_type_merge(value1.clone(), value2.clone(), value.clone());
-            check_type_merge(value2.clone(), value1.clone(), value.clone());
-            check_type_merge(value1.clone(), value1.clone(), value1.clone());
-        }
-    }
-
-    fn get_test_db_values_values() -> Vec<(
-        postgres_types::DbValue,
-        postgres_types::DbValue,
-        postgres_types::DbValue,
-    )> {
-        let mut values: Vec<(
-            postgres_types::DbValue,
-            postgres_types::DbValue,
-            postgres_types::DbValue,
-        )> = vec![];
-
-        let value1 = postgres_types::DbValue::Composite(postgres_types::Composite::new(
-            "ccc1".to_string(),
-            vec![
-                postgres_types::DbValue::Int2(3),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                    "ddd".to_string(),
-                    postgres_types::DbValue::Varchar("v31".to_string()),
-                )),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
-                    "a_custom_type_range".to_string(),
-                    postgres_types::ValuesRange::new(
-                        Bound::Included(postgres_types::DbValue::Composite(
-                            postgres_types::Composite::new(
-                                "a_custom_type".to_string(),
-                                vec![postgres_types::DbValue::Int4(22)],
-                            ),
-                        )),
-                        Bound::Unbounded,
-                    ),
-                )),
-            ],
-        ));
-
-        let value2 = postgres_types::DbValue::Composite(postgres_types::Composite::new(
-            "ccc2".to_string(),
-            vec![
-                postgres_types::DbValue::Varchar("v3".to_string()),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
-                    postgres_types::Domain::new(
-                        "ddd".to_string(),
-                        postgres_types::DbValue::Varchar("v31".to_string()),
-                    ),
-                )]),
-            ],
-        ));
-
-        let value = postgres_types::DbValue::Composite(postgres_types::Composite::new(
-            "ccc1".to_string(),
-            vec![
-                postgres_types::DbValue::Varchar("v3".to_string()),
-                postgres_types::DbValue::Int2(3),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
-                    "ddd".to_string(),
-                    postgres_types::DbValue::Varchar("v31".to_string()),
-                )),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
-                    postgres_types::Domain::new(
-                        "ddd".to_string(),
-                        postgres_types::DbValue::Varchar("v31".to_string()),
-                    ),
-                )]),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
-                    "a_custom_type_range".to_string(),
-                    postgres_types::ValuesRange::new(
-                        Bound::Included(postgres_types::DbValue::Composite(
-                            postgres_types::Composite::new(
-                                "a_custom_type".to_string(),
-                                vec![postgres_types::DbValue::Int4(22)],
-                            ),
-                        )),
-                        Bound::Unbounded,
-                    ),
-                )),
-            ],
-        ));
-
-        values.push((value1.clone(), value2.clone(), value.clone()));
-
-        let value1 = postgres_types::DbValue::Array(vec![value1]);
-        let value2 = postgres_types::DbValue::Array(vec![value2]);
-        let value = postgres_types::DbValue::Array(vec![value]);
-
-        values.push((value1.clone(), value2.clone(), value.clone()));
-
-        values
-    }
-
-    fn get_test_db_column_types_values() -> Vec<(
-        postgres_types::DbColumnType,
-        postgres_types::DbColumnType,
-        postgres_types::DbColumnType,
-    )> {
-        let mut values: Vec<(
-            postgres_types::DbColumnType,
-            postgres_types::DbColumnType,
-            postgres_types::DbColumnType,
-        )> = vec![];
-
-        let value1 = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
-            "item1".to_string(),
-            vec![
-                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
-                ("name".to_string(), postgres_types::DbColumnType::Text),
-                (
-                    "tags".to_string(),
-                    postgres_types::DbColumnType::Text.into_array(),
-                ),
-                (
-                    "supplier_id".to_string(),
-                    postgres_types::DbColumnType::Int4,
-                ),
-            ],
-        ));
-
-        let value2 = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
-            "item2".to_string(),
-            vec![
-                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
-                ("name".to_string(), postgres_types::DbColumnType::Text),
-                (
-                    "interval".to_string(),
-                    postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
-                        "float4range".to_string(),
-                        postgres_types::DbColumnType::Float4,
-                    )),
-                ),
-            ],
-        ));
-
-        let expected = postgres_types::DbColumnType::Composite(postgres_types::CompositeType::new(
-            "item3".to_string(),
-            vec![
-                ("product_id".to_string(), postgres_types::DbColumnType::Uuid),
-                ("name".to_string(), postgres_types::DbColumnType::Text),
-                (
-                    "supplier_id".to_string(),
-                    postgres_types::DbColumnType::Int4,
-                ),
-                ("price".to_string(), postgres_types::DbColumnType::Numeric),
-                (
-                    "tags".to_string(),
-                    postgres_types::DbColumnType::Text.into_array(),
-                ),
-                (
-                    "interval".to_string(),
-                    postgres_types::DbColumnType::Range(postgres_types::RangeType::new(
-                        "float4range".to_string(),
-                        postgres_types::DbColumnType::Float4,
-                    )),
-                ),
-            ],
-        ));
-
-        values.push((value1.clone(), value2.clone(), expected.clone()));
-
-        values.push((
-            value1.into_array(),
-            value2.into_array(),
-            expected.into_array(),
-        ));
-
-        values
-    }
-
-    pub(crate) fn get_test_db_columns() -> Vec<postgres_types::DbColumn> {
-        let types = get_test_db_column_types();
-        let mut columns: Vec<postgres_types::DbColumn> = Vec::with_capacity(types.len());
-
-        for (i, ct) in types.iter().enumerate() {
-            let c = postgres_types::DbColumn {
-                ordinal: i as u64,
-                name: format!("column-{i}"),
-                db_type: ct.clone(),
-                db_type_name: ct.to_string(),
-            };
-            columns.push(c);
-        }
-        columns
-    }
 
     pub(crate) fn get_test_db_column_types() -> Vec<postgres_types::DbColumnType> {
         let mut values: Vec<postgres_types::DbColumnType> = vec![];
@@ -1898,10 +1089,11 @@ pub mod tests {
         values.push(value.clone());
         values.push(value.clone().into_array());
 
-        let value = postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
-            "posint8".to_string(),
-            postgres_types::DbColumnType::Int8,
-        ));
+        let value =
+            postgres_types::DbColumnType::Domain(Box::new(postgres_types::DomainType::new(
+                "posint8".to_string(),
+                postgres_types::DbColumnType::Int8,
+            )));
 
         values.push(value.clone());
         values.push(value.clone().into_array());
@@ -2103,14 +1295,14 @@ pub mod tests {
                 )),
             ]),
             postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                     "posint8".to_string(),
                     postgres_types::DbValue::Int8(1),
-                )),
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                ))),
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                     "posint8".to_string(),
                     postgres_types::DbValue::Int8(2),
-                )),
+                ))),
             ]),
             postgres_types::DbValue::Array(vec![
                 postgres_types::DbValue::Composite(postgres_types::Composite::new(
@@ -2119,10 +1311,10 @@ pub mod tests {
                         postgres_types::DbValue::Varchar("v1".to_string()),
                         postgres_types::DbValue::Int2(1),
                         postgres_types::DbValue::Array(vec![postgres_types::DbValue::Domain(
-                            postgres_types::Domain::new(
+                            Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v11".to_string()),
-                            ),
+                            )),
                         )]),
                     ],
                 )),
@@ -2132,14 +1324,14 @@ pub mod tests {
                         postgres_types::DbValue::Varchar("v2".to_string()),
                         postgres_types::DbValue::Int2(2),
                         postgres_types::DbValue::Array(vec![
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v21".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                            ))),
+                            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v22".to_string()),
-                            )),
+                            ))),
                         ]),
                     ],
                 )),
@@ -2149,54 +1341,54 @@ pub mod tests {
                         postgres_types::DbValue::Varchar("v3".to_string()),
                         postgres_types::DbValue::Int2(3),
                         postgres_types::DbValue::Array(vec![
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v31".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                            ))),
+                            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v32".to_string()),
-                            )),
-                            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+                            ))),
+                            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                                 "ddd".to_string(),
                                 postgres_types::DbValue::Varchar("v33".to_string()),
-                            )),
+                            ))),
                         ]),
                     ],
                 )),
             ]),
             postgres_types::DbValue::Array(vec![
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     "float4range".to_string(),
                     postgres_types::ValuesRange::new(Bound::Unbounded, Bound::Unbounded),
-                )),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                ))),
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     "float4range".to_string(),
                     postgres_types::ValuesRange::new(
                         Bound::Unbounded,
                         Bound::Excluded(postgres_types::DbValue::Float4(6.55)),
                     ),
-                )),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                ))),
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     "float4range".to_string(),
                     postgres_types::ValuesRange::new(
                         Bound::Included(postgres_types::DbValue::Float4(2.23)),
                         Bound::Excluded(postgres_types::DbValue::Float4(4.55)),
                     ),
-                )),
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                ))),
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     "float4range".to_string(),
                     postgres_types::ValuesRange::new(
                         Bound::Included(postgres_types::DbValue::Float4(1.23)),
                         Bound::Unbounded,
                     ),
-                )),
+                ))),
             ]),
-            postgres_types::DbValue::Domain(postgres_types::Domain::new(
+            postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
                 "ddd".to_string(),
                 postgres_types::DbValue::Varchar("tag2".to_string()),
-            )),
-            postgres_types::DbValue::Range(postgres_types::Range::new(
+            ))),
+            postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                 "a_custom_type_range".to_string(),
                 postgres_types::ValuesRange::new(
                     Bound::Included(postgres_types::DbValue::Composite(
@@ -2207,7 +1399,107 @@ pub mod tests {
                     )),
                     Bound::Unbounded,
                 ),
-            )),
+            ))),
         ]
+    }
+
+    mod roundtrip_tests {
+        use super::super::*;
+        use golem_common::model::oplog::payload::types::SerializableDbValue;
+        use test_r::test;
+
+        #[test]
+        fn test_dbvalue_roundtrip_simple_types() {
+            let test_values = vec![
+                DbValue::Int4(42),
+                DbValue::Text("hello".to_string()),
+                DbValue::Boolean(true),
+                DbValue::Null,
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for {:?}",
+                    original
+                );
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_arrays() {
+            let test_values = vec![
+                DbValue::Array(vec![DbValue::Int4(1), DbValue::Int4(2), DbValue::Int4(3)]),
+                DbValue::Array(vec![
+                    DbValue::Text("a".to_string()),
+                    DbValue::Text("b".to_string()),
+                ]),
+                DbValue::Array(vec![]),
+            ];
+
+            for original in test_values {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+                assert_eq!(original, deserialized, "roundtrip failed for array");
+            }
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_composite() {
+            let original = DbValue::Composite(Composite::new(
+                "test_composite".to_string(),
+                vec![DbValue::Int4(42), DbValue::Text("hello".to_string())],
+            ));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for composite");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_domain() {
+            let original = DbValue::Domain(Box::new(Domain::new(
+                "my_domain".to_string(),
+                DbValue::Int8(100),
+            )));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for domain");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_range() {
+            let original = DbValue::Range(Box::new(Range::new(
+                "int4range".to_string(),
+                ValuesRange::new(
+                    std::collections::Bound::Included(DbValue::Int4(1)),
+                    std::collections::Bound::Excluded(DbValue::Int4(10)),
+                ),
+            )));
+
+            let serialized: SerializableDbValue = original.clone().into();
+            let deserialized: DbValue = serialized.try_into().expect("deserialization failed");
+            assert_eq!(original, deserialized, "roundtrip failed for range");
+        }
+
+        #[test]
+        fn test_dbvalue_roundtrip_all_test_values() {
+            let test_values = super::get_test_db_values();
+
+            for (idx, original) in test_values.into_iter().enumerate() {
+                let serialized: SerializableDbValue = original.clone().into();
+                let deserialized: DbValue = serialized
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("deserialization failed for test value {}", idx));
+                assert_eq!(
+                    original, deserialized,
+                    "roundtrip failed for test value {} at index {}",
+                    idx, idx
+                );
+            }
+        }
     }
 }

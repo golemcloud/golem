@@ -124,7 +124,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -132,7 +132,7 @@ impl BlobStorage for FileSystemBlobStorage {
             let data = async_fs::read(&full_path)
                 .await
                 .map_err(|err| format!("Failed to read file from {full_path:?}: {err}"))?;
-            Ok(Some(Bytes::from(data)))
+            Ok(Some(data))
         } else {
             Ok(None)
         }
@@ -191,7 +191,7 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-        data: &[u8],
+        data: Vec<u8>,
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;

@@ -34,8 +34,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::model::auth::{Namespace, TokenSecret};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
+use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{
     ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,
     IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, WorkerFilter, WorkerId,
@@ -45,7 +46,6 @@ use golem_service_base::clients::limit::LimitService;
 use golem_service_base::clients::project::ProjectService;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm::analysis::AnalysedFunctionResult;
@@ -56,6 +56,7 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -312,7 +313,7 @@ pub struct TypedResult {
 
 #[derive(Clone)]
 pub struct WorkerServiceDefault {
-    worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
+    worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<OtelGrpcService<Channel>>>,
     // NOTE: unlike other retries, reaching max_attempts for the worker executor
     //       (with retryable errors) does not end the retry loop,
     //       rather it emits a warn log and resets the retry state.
@@ -325,7 +326,9 @@ pub struct WorkerServiceDefault {
 
 impl WorkerServiceDefault {
     pub fn new(
-        worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
+        worker_executor_clients: MultiTargetGrpcClient<
+            WorkerExecutorClient<OtelGrpcService<Channel>>,
+        >,
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
@@ -483,7 +486,9 @@ impl HasRoutingTableService for WorkerServiceDefault {
 }
 
 impl HasWorkerExecutorClients for WorkerServiceDefault {
-    fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>> {
+    fn worker_executor_clients(
+        &self,
+    ) -> &MultiTargetGrpcClient<WorkerExecutorClient<OtelGrpcService<Channel>>> {
         &self.worker_executor_clients
     }
 

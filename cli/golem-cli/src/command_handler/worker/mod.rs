@@ -60,7 +60,7 @@ use golem_client::model::{
 };
 use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
 use golem_common::model::agent::AgentId;
-use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::OptionallyValueAndTypeJson;

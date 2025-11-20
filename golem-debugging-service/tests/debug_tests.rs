@@ -1,8 +1,8 @@
 use crate::debug_mode::debug_worker_executor::{DebugWorkerExecutorClient, UntypedJrpcMessage};
 use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::*;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::{ExportedFunctionCompletedParameters, PublicOplogEntry};
+use golem_common::model::oplog::public_oplog_entry::ExportedFunctionCompletedParams;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::{Timestamp, WorkerId};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_service_base::model::PublicOplogEntryWithIndex;
@@ -652,7 +652,7 @@ async fn test_playback_with_overrides(
     let new_checkout_result = new_shopping_cart_checkout_result();
 
     let public_oplog_entry =
-        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
+        PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
             timestamp: Timestamp::now_utc(),
             response: Some(new_checkout_result),
             consumed_fuel: 0,

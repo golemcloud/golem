@@ -116,7 +116,7 @@ impl<'de> Deserialize<'de> for ValueAndType {
 mod tests {
     use test_r::test;
 
-    use crate::analysis::analysed_type::{result_err, result_ok, str, tuple};
+    use crate::analysis::analysed_type::{result_err, result_ok, str, tuple, unit_result};
     use crate::{IntoValueAndType, Value, ValueAndType};
 
     use serde_json::json;
@@ -196,6 +196,52 @@ mod tests {
                     ]
                 },
                 "value": [{ "err": null }]
+            })
+        );
+
+        let tav2: ValueAndType = serde_json::from_value(json).unwrap();
+        assert_eq!(vnt, tav2);
+    }
+
+    #[test]
+    fn result_ok_unit() {
+        let vnt = ValueAndType {
+            typ: result_err(str()),
+            value: Value::Result(Ok(None)),
+        };
+        let json = serde_json::to_value(&vnt).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "typ": {
+                    "type": "Result",
+                    "err": { "type": "Str" },
+                    "ok": null
+                },
+                "value": { "ok": null }
+            })
+        );
+
+        let tav2: ValueAndType = serde_json::from_value(json).unwrap();
+        assert_eq!(vnt, tav2);
+    }
+
+    #[test]
+    fn result_unit() {
+        let vnt = ValueAndType {
+            typ: unit_result(),
+            value: Value::Result(Ok(None)),
+        };
+        let json = serde_json::to_value(&vnt).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "typ": {
+                    "type": "Result",
+                    "err": null,
+                    "ok": null
+                },
+                "value": { "ok": null }
             })
         );
 

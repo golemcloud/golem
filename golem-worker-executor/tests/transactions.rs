@@ -286,7 +286,7 @@ async fn set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
     let result2_err = result2.err().unwrap();
     assert_eq!(
         worker_error_message(&result2_err),
@@ -295,7 +295,7 @@ async fn set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -566,7 +566,7 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result1_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result1_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
     let result2_err = result2.err().unwrap();
     assert_eq!(
         worker_error_message(&result2_err),
@@ -575,7 +575,7 @@ async fn golem_rust_set_retry_policy(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' (1) panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -934,14 +934,13 @@ async fn idempotency_keys_in_ephemeral_workers(
         .await;
 
     let component_id = executor
-        .component("runtime-service")
-        .ephemeral()
+        .component("it_agent_counters_release")
         .store()
         .await;
 
-    let target_worker_id = WorkerId {
+    let worker_id = WorkerId {
         component_id,
-        worker_name: "ephemeral".to_string(),
+        worker_name: "host-function-tests(\"idempotency_keys_in_ephemeral_workers\")".to_string(),
     };
 
     let idempotency_key1 = IdempotencyKey::fresh();
@@ -949,52 +948,52 @@ async fn idempotency_keys_in_ephemeral_workers(
 
     let result11 = executor
         .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{generate-idempotency-keys}",
+            &worker_id,
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await
         .unwrap();
     let result21 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key1,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await
         .unwrap();
     let result31 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key2,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await
         .unwrap();
     let result12 = executor
         .invoke_and_await(
-            &target_worker_id,
-            "golem:it/api.{generate-idempotency-keys}",
+            &worker_id,
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await
         .unwrap();
     let result22 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key1,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await
         .unwrap();
     let result32 = executor
         .invoke_and_await_with_key(
-            &target_worker_id,
+            &worker_id,
             &idempotency_key2,
-            "golem:it/api.{generate-idempotency-keys}",
+            "it:agent-counters/host-function-tests.{generate-idempotency-keys}",
             vec![],
         )
         .await

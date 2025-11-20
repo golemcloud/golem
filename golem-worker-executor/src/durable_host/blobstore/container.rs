@@ -12,14 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::host_functions::{
+    BlobstoreContainerClear, BlobstoreContainerDeleteObject, BlobstoreContainerDeleteObjects,
+    BlobstoreContainerGetData, BlobstoreContainerHasObject, BlobstoreContainerListObject,
+    BlobstoreContainerObjectInfo, BlobstoreContainerWriteData,
+};
+use golem_common::model::oplog::{
+    DurableFunctionType, HostRequestBlobStoreContainer, HostRequestBlobStoreContainerAndObject,
+    HostRequestBlobStoreContainerAndObjects, HostRequestBlobStoreGetData,
+    HostRequestBlobStoreWriteData, HostResponseBlobStoreContains, HostResponseBlobStoreGetData,
+    HostResponseBlobStoreListObjects, HostResponseBlobStoreObjectMetadata,
+    HostResponseBlobStoreUnit,
+};
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::preview2::wasi::blobstore::container::{
     Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue,
@@ -64,13 +74,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Result<Resource<IncomingValue>, Error>> {
-        let durability = Durability::<Vec<u8>, SerializableError>::new(
-            self,
-            "golem blobstore::container",
-            "get_data",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<BlobstoreContainerGetData>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -84,15 +90,26 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .get_data(project_id, container_name.clone(), name.clone(), start, end)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
+            let result = HostResponseBlobStoreGetData { result };
             durability
-                .persist(self, (container_name, name, start, end), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreGetData {
+                        container: container_name,
+                        object: name,
+                        begin: start,
+                        end,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
-        match result {
+        }?;
+        match result.result {
             Ok(get_data) => {
                 let incoming_value = self
                     .as_wasi_view()
@@ -100,7 +117,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     .push(IncomingValueEntry::new(get_data))?;
                 Ok(Ok(incoming_value))
             }
-            Err(e) => Ok(Err(format!("{e:?}"))),
+            Err(err) => Ok(Err(err)),
         }
     }
 
@@ -110,13 +127,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
         data: Resource<OutgoingValue>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "golem blobstore::container",
-            "write_data",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<BlobstoreContainerWriteData>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -131,37 +144,39 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .map(|outgoing_value_entry| outgoing_value_entry.body.read().unwrap().clone())?;
 
         let result = if durability.is_live() {
-            let len = data.len() as u64;
+            let length = data.len() as u64;
             let result = self
                 .state
                 .blob_store_service
                 .write_data(project_id, container_name.clone(), name.clone(), data)
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
+            let result = HostResponseBlobStoreUnit { result };
             durability
-                .persist(self, (container_name, name, len), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreWriteData {
+                        container: container_name,
+                        object: name,
+                        length,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
-
-        match result {
-            Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{e:?}"))),
-        }
+        }?;
+        Ok(result.result)
     }
 
     async fn list_objects(
         &mut self,
         container: Resource<Container>,
     ) -> anyhow::Result<Result<Resource<StreamObjectNames>, Error>> {
-        let durability = Durability::<Vec<String>, SerializableError>::new(
-            self,
-            "golem blobstore::container",
-            "list_object",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<BlobstoreContainerListObject>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -175,14 +190,24 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .list_objects(project_id, container_name.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, container_name, result).await
+            let result = HostResponseBlobStoreListObjects { result };
+            durability
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainer {
+                        container: container_name,
+                    },
+                    result,
+                )
+                .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(list_objects) => {
                 let stream_object_names = self
                     .as_wasi_view()
@@ -190,7 +215,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     .push(StreamObjectNamesEntry::new(list_objects))?;
                 Ok(Ok(stream_object_names))
             }
-            Err(e) => Ok(Err(format!("{e:?}"))),
+            Err(err) => Ok(Err(err)),
         }
     }
 
@@ -199,10 +224,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<(), SerializableError>::new(
+        let durability = Durability::<BlobstoreContainerDeleteObject>::new(
             self,
-            "golem blobstore::container",
-            "delete_object",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -219,10 +242,19 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .delete_object(project_id, container_name.clone(), name.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
+            let result = HostResponseBlobStoreUnit { result };
             durability
-                .persist(self, (container_name, name), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainerAndObject {
+                        container: container_name,
+                        object: name,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
@@ -239,10 +271,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<(), SerializableError>::new(
+        let durability = Durability::<BlobstoreContainerDeleteObjects>::new(
             self,
-            "golem blobstore::container",
-            "delete_objects",
             DurableFunctionType::WriteRemote,
         )
         .await?;
@@ -259,19 +289,26 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .delete_objects(project_id, container_name.clone(), names.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
+            let result = HostResponseBlobStoreUnit { result };
+
             durability
-                .persist(self, (container_name, names), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainerAndObjects {
+                        container: container_name,
+                        objects: names,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
-            Ok(_) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("{e:?}"))),
-        }
+        Ok(result.result)
     }
 
     async fn has_object(
@@ -279,13 +316,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         container: Resource<Container>,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let durability = Durability::<bool, SerializableError>::new(
-            self,
-            "golem blobstore::container",
-            "has_object",
-            DurableFunctionType::ReadRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<BlobstoreContainerHasObject>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -299,19 +332,26 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .has_object(project_id, container_name.clone(), name.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
             durability.try_trigger_retry(self, &result).await?;
+            let result = HostResponseBlobStoreContains { result };
+
             durability
-                .persist(self, (container_name, name), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainerAndObject {
+                        container: container_name,
+                        object: name,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
-            Ok(has_object) => Ok(Ok(has_object)),
-            Err(e) => Ok(Err(format!("{e:?}"))),
-        }
+        Ok(result.result)
     }
 
     async fn object_info(
@@ -320,13 +360,8 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata, Error>> {
         let durability =
-            Durability::<crate::services::blob_store::ObjectMetadata, SerializableError>::new(
-                self,
-                "golem blobstore::container",
-                "object_info",
-                DurableFunctionType::ReadRemote,
-            )
-            .await?;
+            Durability::<BlobstoreContainerObjectInfo>::new(self, DurableFunctionType::ReadRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -340,16 +375,28 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .object_info(project_id, container_name.clone(), name.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
+
             durability.try_trigger_retry(self, &result).await?;
+
+            let result = HostResponseBlobStoreObjectMetadata { result };
+
             durability
-                .persist(self, (container_name, name), result)
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainerAndObject {
+                        container: container_name,
+                        object: name,
+                    },
+                    result,
+                )
                 .await
         } else {
             durability.replay(self).await
-        };
+        }?;
 
-        match result {
+        match result.result {
             Ok(object_info) => {
                 let object_info = ObjectMetadata {
                     name: object_info.name,
@@ -359,18 +406,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 };
                 Ok(Ok(object_info))
             }
-            Err(e) => Ok(Err(format!("{e:?}"))),
+            Err(err) => Ok(Err(err)),
         }
     }
 
     async fn clear(&mut self, container: Resource<Container>) -> anyhow::Result<Result<(), Error>> {
-        let durability = Durability::<(), SerializableError>::new(
-            self,
-            "golem blobstore::container",
-            "clear",
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
+        let durability =
+            Durability::<BlobstoreContainerClear>::new(self, DurableFunctionType::WriteRemote)
+                .await?;
 
         let project_id = self.state.owned_worker_id.project_id();
         let container_name = self
@@ -379,19 +422,32 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
 
-        if durability.is_live() {
+        let result = if durability.is_live() {
             let result = self
                 .state
                 .blob_store_service
                 .clear(project_id, container_name.clone())
-                .await;
+                .await
+                .map_err(|err| err.to_string());
+
             durability.try_trigger_retry(self, &result).await?;
-            durability.persist(self, container_name, result).await
+
+            let result = HostResponseBlobStoreUnit { result };
+
+            durability
+                .persist(
+                    self,
+                    HostRequestBlobStoreContainer {
+                        container: container_name,
+                    },
+                    result,
+                )
+                .await
         } else {
             durability.replay(self).await
         }?;
 
-        Ok(Ok(()))
+        Ok(result.result)
     }
 
     async fn drop(&mut self, container: Resource<Container>) -> anyhow::Result<()> {

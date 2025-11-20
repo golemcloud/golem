@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
-    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+    AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+    NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case, variant,
+    case, chr, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case,
+    unit_result, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
@@ -91,6 +93,7 @@ pub fn single_agent_wrapper_types() -> Vec<AgentType> {
             },
         ],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
 
@@ -158,6 +161,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                 }),
             }],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "agent2".to_string(),
@@ -214,6 +218,7 @@ pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
                 }),
             }],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
     ];
 
@@ -279,6 +284,7 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
             },
         ],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
 
@@ -315,6 +321,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                 }),
             }],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
         AgentType {
             type_name: "weather-agent".to_string(),
@@ -365,6 +372,7 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
                 }),
             }],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         },
     ]
 }
@@ -410,6 +418,7 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
             }),
         }],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
 
@@ -445,6 +454,7 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
             }),
         }],
         dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }
 
@@ -496,5 +506,78 @@ pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
             }),
         }],
         dependencies: vec![],
+        mode: AgentMode::Durable,
+    }]
+}
+
+pub fn char_type() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent-using-char".to_string(),
+        description: "An example agent".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: chr(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "f1".to_string(),
+            description: "returns a random string".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: chr(),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+    }]
+}
+
+pub fn unit_result_type() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent-unit-result".to_string(),
+        description: "An example agent".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: unit_result(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "f1".to_string(),
+            description: "returns a random string".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "a".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: unit_result(),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
     }]
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm::IntoValue;
+use golem_wasm::{FromValue, IntoValue, Value};
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -77,6 +77,13 @@ impl IntoValue for WasiConfigVars {
     }
     fn into_value(self) -> golem_wasm::Value {
         BTreeMap::from(self).into_value()
+    }
+}
+
+impl FromValue for WasiConfigVars {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let value = BTreeMap::<String, String>::from_value(value)?;
+        Ok(value.into())
     }
 }
 

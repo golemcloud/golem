@@ -14,8 +14,8 @@
 
 use crate::error::ShardManagerError;
 use crate::rebalancing::Rebalance;
-use bincode::{Decode, Encode};
 use core::cmp::Ordering;
+use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::model::ShardId;
 use http::Uri;
@@ -30,8 +30,9 @@ use tonic::transport::Endpoint;
 use tracing::{error, warn};
 
 #[derive(
-    Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, BinaryCodec,
 )]
+#[desert(evolution())]
 pub struct Pod {
     host: String,
     ip: IpAddr,
@@ -363,7 +364,8 @@ impl Display for Unassignments {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Encode, Decode)]
+#[derive(Clone, Debug, Deserialize, Serialize, BinaryCodec)]
+#[desert(evolution())]
 pub struct ShardManagerState {
     pub number_of_shards: usize,
     pub shard_assignments: Vec<(Pod, Vec<ShardId>)>,

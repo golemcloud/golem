@@ -24,9 +24,9 @@ test_r::enable!();
 
 pub mod analysis;
 
-/// Implements bincode encoders and decoders for WitValue instances
+/// Implements desert encoders and decoders for WitValue instances
 #[cfg(feature = "host")]
-pub mod bincode;
+pub mod desert;
 
 /// A builder interface for WitValue instances
 #[cfg(any(feature = "host", feature = "stub"))]
@@ -76,6 +76,11 @@ pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 
 #[cfg(any(feature = "host", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
+
+#[cfg(feature = "derive")]
+pub mod derive {
+    pub use golem_wasm_derive::{FromValue, IntoValue};
+}
 
 #[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
@@ -211,31 +216,51 @@ impl PartialEq for Uri {
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "host", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
+#[cfg_attr(feature = "host", derive(desert_rust::BinaryCodec))]
 pub enum Value {
+    #[cfg_attr(feature = "host", desert(transparent))]
     Bool(bool),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U8(u8),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U16(u16),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U32(u32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     U64(u64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S8(i8),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S16(i16),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S32(i32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     S64(i64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     F32(f32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     F64(f64),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Char(char),
+    #[cfg_attr(feature = "host", desert(transparent))]
     String(String),
+    #[cfg_attr(feature = "host", desert(custom = crate::desert::VecValueWrapper))]
     List(Vec<Value>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Tuple(Vec<Value>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Record(Vec<Value>),
     Variant {
         case_idx: u32,
         case_value: Option<Box<Value>>,
     },
+    #[cfg_attr(feature = "host", desert(transparent))]
     Enum(u32),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Flags(Vec<bool>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Option(Option<Box<Value>>),
+    #[cfg_attr(feature = "host", desert(transparent))]
     Result(Result<Option<Box<Value>>, Option<Box<Value>>>),
     Handle {
         uri: String,

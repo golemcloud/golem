@@ -351,6 +351,18 @@ impl<
         snapshotted_pairs
     }
 
+    pub async fn keys(&self) -> Vec<K> {
+        let mut keys = vec![];
+        self.state
+            .items
+            .iter_async(|key, _| {
+                keys.push(key.clone());
+                true
+            })
+            .await;
+        keys
+    }
+
     pub async fn remove(&self, key: &K) {
         let removed = self.state.items.remove_async(key).await.is_some();
         if removed {

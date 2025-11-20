@@ -27,7 +27,7 @@ use colored::Colorize;
 use golem_client::model::Account;
 use golem_client::model::HttpApiDefinitionRequest;
 use golem_common::model::ComponentVersion;
-use golem_templates::model::{ComposableAppGroupName, GuestLanguage, PackageName};
+use golem_templates::model::{GuestLanguage, PackageName};
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
@@ -335,12 +335,12 @@ impl InteractiveHandler {
             match dependency_type {
                 DependencyType::DynamicWasmRpc | DependencyType::StaticWasmRpc => {
                     match component_type {
-                        AppComponentType::Durable | AppComponentType::Ephemeral => true,
+                        AppComponentType::Agent => true,
                         AppComponentType::Library => false,
                     }
                 }
                 DependencyType::Wasm => match component_type {
-                    AppComponentType::Durable | AppComponentType::Ephemeral => false,
+                    AppComponentType::Agent => false,
                     AppComponentType::Library => true,
                 },
             }
@@ -408,7 +408,7 @@ impl InteractiveHandler {
 
         let dependency_type = {
             let (offered_dependency_types, valid_dependency_types) = match component_type {
-                AppComponentType::Durable | AppComponentType::Ephemeral => (
+                AppComponentType::Agent => (
                     vec![DependencyType::DynamicWasmRpc, DependencyType::Wasm],
                     vec![
                         DependencyType::DynamicWasmRpc,
@@ -657,8 +657,13 @@ impl InteractiveHandler {
             .templates(self.ctx.dev_mode())
             .get(&language)
             .unwrap()
-            .get(&ComposableAppGroupName::default())
-            .unwrap()
+            .get(self.ctx.template_group())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Template group not found: {}",
+                    self.ctx.template_group().as_str().log_color_highlight()
+                )
+            })?
             .components
             .iter()
             .map(|(name, template)| TemplateOption {

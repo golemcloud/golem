@@ -18,7 +18,7 @@ use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::model::auth::{AuthCtx, Namespace, ProjectAction, TokenSecret};
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
-use golem_common::model::{AccountId, ComponentId, ComponentType, ProjectId, RetryConfig};
+use golem_common::model::{AccountId, ComponentId, ProjectId, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::db;
@@ -417,7 +417,6 @@ impl TestComponentService {
                 vec![],
             ),
             created_at: Utc::now(),
-            component_type: ComponentType::Durable,
             files: vec![],
             installed_plugins: vec![],
             env: HashMap::new(),
@@ -458,6 +457,10 @@ impl ComponentService for TestComponentService {
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component> {
         Ok(Self::test_component())
+    }
+
+    async fn get_latest_cached_by_id(&self, _component_id: &ComponentId) -> Option<Component> {
+        None
     }
 
     async fn get_latest_by_name(

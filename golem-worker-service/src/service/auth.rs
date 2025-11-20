@@ -30,6 +30,7 @@ use golem_service_base::clients::auth::AuthServiceError;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tracing::error;
 
 // A wrapper over base auth service to be used by worker-service as well as debug-service (both being directly user facing).
@@ -56,7 +57,7 @@ pub trait AuthService: Send + Sync {
 pub struct GrpcAuthService {
     common_auth: golem_service_base::clients::auth::AuthService,
     component_service_config: ComponentServiceConfig,
-    component_service_client: GrpcClient<ComponentServiceClient<Channel>>,
+    component_service_client: GrpcClient<ComponentServiceClient<OtelGrpcService<Channel>>>,
     component_project_cache: Cache<ComponentId, (), ProjectId, String>,
 }
 

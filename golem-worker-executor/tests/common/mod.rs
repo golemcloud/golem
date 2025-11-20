@@ -1,24 +1,23 @@
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
-use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
+    OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
 };
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
-    IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RdbmsPoolKey,
+    RetryConfig, TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -68,8 +67,7 @@ use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
-    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsPoolKey, RdbmsStatus,
-    RdbmsTransactionStatus, RdbmsType,
+    DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
@@ -571,12 +569,12 @@ impl UpdateManagement for TestWorkerCtx {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -685,6 +683,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn agent_id(&self) -> Option<AgentId> {
         self.durable_ctx.agent_id()
+    }
+
+    fn agent_mode(&self) -> AgentMode {
+        self.durable_ctx.agent_mode()
     }
 
     fn created_by(&self) -> &AccountId {
@@ -1185,9 +1187,9 @@ impl Oplog for TestOplog {
         self.oplog.add(entry).await
     }
 
-    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry).await?;
-        self.oplog.add_safe(entry).await
+        self.oplog.fallible_add(entry).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -1218,12 +1220,20 @@ impl Oplog for TestOplog {
         self.oplog.length().await
     }
 
-    async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String> {
-        self.oplog.upload_payload(data).await
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.oplog.upload_raw_payload(data).await
     }
 
-    async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
-        self.oplog.download_payload(payload).await
+    async fn download_raw_payload(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        self.oplog.download_raw_payload(payload_id, md5_hash).await
+    }
+
+    async fn switch_persistence_level(&self, mode: PersistenceLevel) {
+        self.oplog.switch_persistence_level(mode).await;
     }
 }
 
@@ -1282,7 +1292,7 @@ impl<T: RdbmsType> TestRdms<T> {
         &self,
         worker_id: &WorkerId,
         entry_name: &str,
-    ) -> Result<(), rdbms::Error> {
+    ) -> Result<(), rdbms::RdbmsError> {
         // FailRdbmsTx{times}On{entry}
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
@@ -1302,7 +1312,7 @@ impl<T: RdbmsType> TestRdms<T> {
                     self.additional_test_deps
                         .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string())
                         .await;
-                    Err(rdbms::Error::Other(format!(
+                    Err(rdbms::RdbmsError::Other(format!(
                         "worker {} failed on {} {} times",
                         worker_name,
                         entry_name,
@@ -1324,7 +1334,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         &self,
         address: &str,
         worker_id: &WorkerId,
-    ) -> Result<RdbmsPoolKey, rdbms::Error> {
+    ) -> Result<RdbmsPoolKey, rdbms::RdbmsError> {
         self.rdbms.create(address, worker_id).await
     }
 
@@ -1342,7 +1352,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<u64, rdbms::Error>
+    ) -> Result<u64, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1355,7 +1365,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::Error>
+    ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1370,7 +1380,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         statement: &str,
         params: Vec<T::DbValue>,
-    ) -> Result<DbResult<T>, rdbms::Error>
+    ) -> Result<DbResult<T>, rdbms::RdbmsError>
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
@@ -1381,7 +1391,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         &self,
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
-    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::Error> {
+    ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::RdbmsError> {
         self.check_rdbms_tx(worker_id, "BeginTransaction").await?;
         self.rdbms.begin_transaction(key, worker_id).await
     }
@@ -1391,7 +1401,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<RdbmsTransactionStatus, rdbms::Error> {
+    ) -> Result<RdbmsTransactionStatus, rdbms::RdbmsError> {
         let r = self
             .check_rdbms_tx(worker_id, "GetTransactionStatusNotFound")
             .await;
@@ -1409,7 +1419,7 @@ impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
-    ) -> Result<(), rdbms::Error> {
+    ) -> Result<(), rdbms::RdbmsError> {
         self.check_rdbms_tx(worker_id, "CleanupTransaction").await?;
         self.rdbms
             .cleanup_transaction(key, worker_id, transaction_id)

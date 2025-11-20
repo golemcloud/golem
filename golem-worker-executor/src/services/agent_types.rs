@@ -140,11 +140,12 @@ mod grpc {
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
+    use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
     use uuid::Uuid;
 
     #[derive(Clone)]
     pub struct AgentTypesServiceGrpc {
-        agent_types_client: GrpcClient<AgentTypesServiceClient<Channel>>,
+        agent_types_client: GrpcClient<AgentTypesServiceClient<OtelGrpcService<Channel>>>,
         access_token: Uuid,
     }
 
@@ -285,7 +286,7 @@ mod local {
             &self,
             owner_project: &ProjectId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
-            Ok(self
+            let result = self
                 .component_service
                 .all_cached_metadata()
                 .await
@@ -302,7 +303,8 @@ mod local {
                         })
                         .collect::<Vec<_>>()
                 })
-                .collect())
+                .collect();
+            Ok(result)
         }
 
         async fn get(

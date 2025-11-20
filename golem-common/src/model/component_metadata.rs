@@ -15,12 +15,8 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
-use crate::model::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
-use bincode::de::BorrowDecoder;
-use bincode::enc::Encoder;
-use bincode::error::{DecodeError, EncodeError};
-use bincode::{BorrowDecode, Decode, Encode};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -35,9 +31,11 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, BinaryCodec)]
+#[desert(evolution())]
 pub struct ComponentMetadata {
     data: Arc<ComponentMetadataInnerData>,
+    #[transient(Default::default())]
     cache: Arc<std::sync::Mutex<ComponentMetadataInnerCache>>,
 }
 
@@ -208,34 +206,6 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
     }
 }
 
-impl Encode for ComponentMetadata {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
-        self.data.encode(encoder)
-    }
-}
-
-impl<Context> Decode<Context> for ComponentMetadata {
-    fn decode<D: bincode::de::Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
-        let data = ComponentMetadataInnerData::decode(decoder)?;
-        Ok(Self {
-            data: Arc::new(data),
-            cache: Arc::default(),
-        })
-    }
-}
-
-impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
-    fn borrow_decode<D: BorrowDecoder<'de, Context = Context>>(
-        decoder: &mut D,
-    ) -> Result<Self, DecodeError> {
-        let data = ComponentMetadataInnerData::borrow_decode(decoder)?;
-        Ok(Self {
-            data: Arc::new(data),
-            cache: Arc::default(),
-        })
-    }
-}
-
 impl poem_openapi::types::Type for ComponentMetadata {
     const IS_REQUIRED: bool =
         <ComponentMetadataInnerData as poem_openapi::types::Type>::IS_REQUIRED;
@@ -320,7 +290,7 @@ impl poem_openapi::types::ToYAML for ComponentMetadata {
 }
 
 #[derive(
-    Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Clone, Default, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
 #[oai(rename = "ComponentMetadata", rename_all = "camelCase")]
 #[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
@@ -725,18 +695,18 @@ pub struct InvokableFunction {
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
+#[desert(evolution())]
 pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicLinkedWasmRpc {
@@ -753,14 +723,14 @@ impl DynamicLinkedWasmRpc {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WasmRpcTarget {
     pub interface_name: String,
     pub component_name: String,
-    pub component_type: ComponentType,
 }
 
 impl WasmRpcTarget {
@@ -771,11 +741,7 @@ impl WasmRpcTarget {
 
 impl Display for WasmRpcTarget {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}@{}({})",
-            self.interface_name, self.component_name, self.component_type
-        )
+        write!(f, "{}@{}", self.interface_name, self.component_name)
     }
 }
 
@@ -789,10 +755,10 @@ impl Display for WasmRpcTarget {
     PartialOrd,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerField {
@@ -810,10 +776,10 @@ pub struct ProducerField {
     PartialOrd,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct VersionedName {
@@ -831,10 +797,10 @@ pub struct VersionedName {
     PartialOrd,
     Serialize,
     Deserialize,
-    Encode,
-    Decode,
+    BinaryCodec,
     poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Producers {
@@ -842,8 +808,9 @@ pub struct Producers {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec, poem_openapi::Object,
 )]
+#[desert(evolution())]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
@@ -1389,9 +1356,6 @@ mod protobuf {
             Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: golem_api_grpc::proto::golem::component::ComponentType::from(
-                    value.component_type,
-                ) as i32,
             }
         }
     }
@@ -1405,7 +1369,6 @@ mod protobuf {
             Ok(Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: value.component_type.try_into()?,
             })
         }
     }

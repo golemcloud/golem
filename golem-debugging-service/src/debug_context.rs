@@ -16,11 +16,11 @@ use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
@@ -259,12 +259,12 @@ impl UpdateManagement for DebugContext {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
             .await
     }
 }
@@ -609,6 +609,10 @@ impl WorkerCtx for DebugContext {
 
     fn agent_id(&self) -> Option<AgentId> {
         self.durable_ctx.agent_id()
+    }
+
+    fn agent_mode(&self) -> AgentMode {
+        self.durable_ctx.agent_mode()
     }
 
     fn created_by(&self) -> &AccountId {

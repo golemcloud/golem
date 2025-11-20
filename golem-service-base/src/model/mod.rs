@@ -15,21 +15,18 @@
 pub mod auth;
 
 use applying::Apply;
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
-use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
-    WorkerId,
+    ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter, WorkerId,
 };
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::ValueAndType;
-use golem_wasm_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -368,7 +365,6 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,
@@ -394,12 +390,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .apply(SystemTime::try_from)
             .map_err(|_| "Failed to convert timestamp".to_string())?
             .into();
-
-        let component_type = value
-            .component_type
-            .ok_or("missing component_type")?
-            .try_into()
-            .map_err(|_| "Failed to convert component_type".to_string())?;
 
         let files = value
             .files
@@ -430,7 +420,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .ok_or("Missing metadata")?
                 .try_into()?,
             created_at,
-            component_type,
             files,
             installed_plugins,
             env: value.env,
@@ -448,7 +437,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             created_at: Some(SystemTime::from(value.created_at).into()),
-            component_type: Some(value.component_type as i32),
             files: value.files.into_iter().map(Into::into).collect(),
             installed_plugins: value
                 .installed_plugins
@@ -482,119 +470,6 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         Self {
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Union, IntoValue)]
-#[serde(rename_all = "camelCase")]
-#[oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")]
-pub enum RevertWorkerTarget {
-    RevertToOplogIndex(RevertToOplogIndex),
-    RevertLastInvocations(RevertLastInvocations),
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::common::RevertWorkerTarget> for RevertWorkerTarget {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::common::RevertWorkerTarget,
-    ) -> Result<Self, Self::Error> {
-        match value.target {
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target)) => {
-                Ok(RevertWorkerTarget::RevertToOplogIndex(target.into()))
-            }
-            Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target)) => {
-                Ok(RevertWorkerTarget::RevertLastInvocations(target.into()))
-            }
-            None => Err("Missing field: target".to_string()),
-        }
-    }
-}
-
-impl From<RevertWorkerTarget> for golem_api_grpc::proto::golem::common::RevertWorkerTarget {
-    fn from(value: RevertWorkerTarget) -> Self {
-        match value {
-            RevertWorkerTarget::RevertToOplogIndex(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertToOplogIndex(target.into())),
-            },
-            RevertWorkerTarget::RevertLastInvocations(target) => Self {
-                target: Some(golem_api_grpc::proto::golem::common::revert_worker_target::Target::RevertLastInvocations(target.into())),
-            },
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertToOplogIndex {
-    pub last_oplog_index: OplogIndex,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertToOplogIndex> for RevertToOplogIndex {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: OplogIndex::from_u64(value.last_oplog_index as u64),
-        }
-    }
-}
-
-impl From<RevertToOplogIndex> for golem_api_grpc::proto::golem::common::RevertToOplogIndex {
-    fn from(value: RevertToOplogIndex) -> Self {
-        Self {
-            last_oplog_index: u64::from(value.last_oplog_index) as i64,
-        }
-    }
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-    Encode,
-    Decode,
-    Serialize,
-    Deserialize,
-    Object,
-    IntoValue,
-)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct RevertLastInvocations {
-    pub number_of_invocations: u64,
-}
-
-impl From<golem_api_grpc::proto::golem::common::RevertLastInvocations> for RevertLastInvocations {
-    fn from(value: golem_api_grpc::proto::golem::common::RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as u64,
-        }
-    }
-}
-
-impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::RevertLastInvocations {
-    fn from(value: RevertLastInvocations) -> Self {
-        Self {
-            number_of_invocations: value.number_of_invocations as i64,
         }
     }
 }

@@ -124,12 +124,12 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
-        writeln!(result, "  import golem:api/save-snapshot@1.1.7;")?;
-        writeln!(result, "  import golem:api/load-snapshot@1.1.7;")?;
+        writeln!(result, "  import golem:api/save-snapshot@1.3.0;")?;
+        writeln!(result, "  import golem:api/load-snapshot@1.3.0;")?;
         writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
-        writeln!(result, "  export golem:api/save-snapshot@1.1.7;")?;
-        writeln!(result, "  export golem:api/load-snapshot@1.1.7;")?;
+        writeln!(result, "  export golem:api/save-snapshot@1.3.0;")?;
+        writeln!(result, "  export golem:api/load-snapshot@1.3.0;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
         }
@@ -763,8 +763,9 @@ mod tests {
     };
 
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
-        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+        NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
@@ -791,13 +792,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
             }
             "#
             ),
@@ -839,13 +840,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export agent1;
             }
             "#
@@ -942,6 +943,7 @@ mod tests {
                 },
             ],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
@@ -998,13 +1000,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export types;
               export agent1;
             }
@@ -1094,13 +1096,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export types;
               export agent1;
               export agent2;
@@ -1145,13 +1147,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export agent1;
             }
             "#
@@ -1218,13 +1220,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
             
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export types;
               export assistant-agent;
               export weather-agent;
@@ -1269,13 +1271,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
-              import golem:api/save-snapshot@1.1.7;
-              import golem:api/load-snapshot@1.1.7;
+              import golem:api/save-snapshot@1.3.0;
+              import golem:api/load-snapshot@1.3.0;
               import wasi:logging/logging;
 
               export golem:agent/guest;
-              export golem:api/save-snapshot@1.1.7;
-              export golem:api/load-snapshot@1.1.7;
+              export golem:api/save-snapshot@1.3.0;
+              export golem:api/load-snapshot@1.3.0;
               export agent1;
             }
             "#
@@ -1399,6 +1401,66 @@ mod tests {
                   get-definition: func() -> agent-type;
 
                   foo: func(input: list<foo-input>) -> list<foo-output>;
+                }
+            "#},
+        )
+    }
+
+    #[test]
+    pub fn char_type() {
+        let component_name = "test:agent".into();
+        let agent_types = test::char_type();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// An example agent
+                interface agent-using-char {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+
+                  /// Creates an example agent instance
+                  initialize: func(a: char);
+
+                  get-definition: func() -> agent-type;
+
+                  /// returns a random string
+                  f1: func() -> char;
+                }
+            "#},
+        )
+    }
+
+    #[test]
+    pub fn unit_result_type() {
+        let component_name = "test:agent".into();
+        let agent_types = test::unit_result_type();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// An example agent
+                interface agent-unit-result {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+
+                  /// Creates an example agent instance
+                  initialize: func(a: result);
+
+                  get-definition: func() -> agent-type;
+
+                  /// returns a random string
+                  f1: func() -> result;
                 }
             "#},
         )

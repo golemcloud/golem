@@ -16,7 +16,7 @@ harness = false
 golem-rib = { workspace = true }
 golem-wasm = { workspace = true }
 
-bincode = { workspace = true }
+desert_rust = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }

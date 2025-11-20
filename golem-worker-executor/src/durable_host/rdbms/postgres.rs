@@ -18,7 +18,8 @@ use crate::durable_host::rdbms::{
     db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
     db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
     db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
-    FromRdbmsValue, RdbmsConnection, RdbmsResultStreamEntry, RdbmsTransactionEntry,
+    FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
+    RdbmsTransactionEntry,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::rdbms::postgres::{
@@ -34,10 +35,22 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::workerctx::WorkerCtx;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
+use golem_common::model::oplog::host_functions::*;
 use std::ops::Bound;
 use std::str::FromStr;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
+
+impl RdbmsDurabilityPairs for PostgresType {
+    type ConnExecute = RdbmsPostgresDbConnectionExecute;
+    type ConnQuery = RdbmsPostgresDbConnectionQuery;
+    type ConnQueryStream = RdbmsPostgresDbConnectionQueryStream;
+    type TxnExecute = RdbmsPostgresDbTransactionExecute;
+    type TxnQuery = RdbmsPostgresDbTransactionQuery;
+    type TxnQueryStream = RdbmsPostgresDbTransactionQueryStream;
+    type StreamGetColumns = RdbmsPostgresDbResultStreamGetColumns;
+    type StreamGetNext = RdbmsPostgresDbResultStreamGetNext;
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -51,15 +64,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         open_db_connection(address, self).await
     }
 
-    async fn query_stream(
-        &mut self,
-        self_: Resource<PostgresDbConnection>,
-        statement: String,
-        params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
-        db_connection_durable_query_stream(statement, params, self, &self_).await
-    }
-
     async fn query(
         &mut self,
         self_: Resource<PostgresDbConnection>,
@@ -67,6 +71,15 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<DbResult, Error>> {
         db_connection_durable_query(statement, params, self, &self_).await
+    }
+
+    async fn query_stream(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultStreamEntry>, Error>> {
+        db_connection_durable_query_stream(statement, params, self, &self_).await
     }
 
     async fn execute(
@@ -271,23 +284,25 @@ impl<Ctx: WorkerCtx> HostLazyDbValue for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl From<crate::services::rdbms::Error> for Error {
-    fn from(value: crate::services::rdbms::Error) -> Self {
+impl From<crate::services::rdbms::RdbmsError> for Error {
+    fn from(value: crate::services::rdbms::RdbmsError) -> Self {
         match value {
-            crate::services::rdbms::Error::ConnectionFailure(v) => Self::ConnectionFailure(v),
-            crate::services::rdbms::Error::QueryParameterFailure(v) => {
+            crate::services::rdbms::RdbmsError::ConnectionFailure(v) => Self::ConnectionFailure(v),
+            crate::services::rdbms::RdbmsError::QueryParameterFailure(v) => {
                 Self::QueryParameterFailure(v)
             }
-            crate::services::rdbms::Error::QueryExecutionFailure(v) => {
+            crate::services::rdbms::RdbmsError::QueryExecutionFailure(v) => {
                 Self::QueryExecutionFailure(v)
             }
-            crate::services::rdbms::Error::QueryResponseFailure(v) => Self::QueryResponseFailure(v),
-            crate::services::rdbms::Error::Other(v) => Self::Other(v),
+            crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => {
+                Self::QueryResponseFailure(v)
+            }
+            crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
         }
     }
 }
 
-impl From<Interval> for postgres_types::Interval {
+impl From<Interval> for golem_common::model::oplog::payload::types::Interval {
     fn from(v: Interval) -> Self {
         Self {
             months: v.months,
@@ -297,7 +312,7 @@ impl From<Interval> for postgres_types::Interval {
     }
 }
 
-impl TryFrom<Timetz> for postgres_types::TimeTz {
+impl TryFrom<Timetz> for golem_common::model::oplog::payload::types::TimeTz {
     type Error = String;
 
     fn try_from(value: Timetz) -> Result<Self, Self::Error> {
@@ -311,15 +326,15 @@ impl TryFrom<Timetz> for postgres_types::TimeTz {
     }
 }
 
-impl From<postgres_types::TimeTz> for Timetz {
-    fn from(v: postgres_types::TimeTz) -> Self {
+impl From<golem_common::model::oplog::payload::types::TimeTz> for Timetz {
+    fn from(v: golem_common::model::oplog::payload::types::TimeTz) -> Self {
         let time = v.time.into();
         let offset = v.offset;
         Timetz { time, offset }
     }
 }
 
-impl From<Enumeration> for postgres_types::Enumeration {
+impl From<Enumeration> for golem_common::model::oplog::payload::types::Enumeration {
     fn from(v: Enumeration) -> Self {
         Self {
             name: v.name,
@@ -328,14 +343,8 @@ impl From<Enumeration> for postgres_types::Enumeration {
     }
 }
 
-impl From<EnumerationType> for postgres_types::EnumerationType {
-    fn from(v: EnumerationType) -> Self {
-        Self { name: v.name }
-    }
-}
-
-impl From<postgres_types::Interval> for Interval {
-    fn from(v: postgres_types::Interval) -> Self {
+impl From<golem_common::model::oplog::payload::types::Interval> for Interval {
+    fn from(v: golem_common::model::oplog::payload::types::Interval) -> Self {
         Self {
             months: v.months,
             days: v.days,
@@ -344,8 +353,8 @@ impl From<postgres_types::Interval> for Interval {
     }
 }
 
-impl From<postgres_types::Enumeration> for Enumeration {
-    fn from(v: postgres_types::Enumeration) -> Self {
+impl From<golem_common::model::oplog::payload::types::Enumeration> for Enumeration {
+    fn from(v: golem_common::model::oplog::payload::types::Enumeration) -> Self {
         Self {
             name: v.name,
             value: v.value,
@@ -353,13 +362,19 @@ impl From<postgres_types::Enumeration> for Enumeration {
     }
 }
 
-impl From<postgres_types::EnumerationType> for EnumerationType {
-    fn from(v: postgres_types::EnumerationType) -> Self {
+impl From<EnumerationType> for golem_common::model::oplog::payload::types::EnumerationType {
+    fn from(v: EnumerationType) -> Self {
         Self { name: v.name }
     }
 }
 
-impl From<Int4range> for postgres_types::ValuesRange<i32> {
+impl From<golem_common::model::oplog::payload::types::EnumerationType> for EnumerationType {
+    fn from(v: golem_common::model::oplog::payload::types::EnumerationType) -> Self {
+        Self { name: v.name }
+    }
+}
+
+impl From<Int4range> for golem_common::model::oplog::payload::types::ValuesRange<i32> {
     fn from(value: Int4range) -> Self {
         fn to_bounds(v: Int4bound) -> Bound<i32> {
             match v {
@@ -375,7 +390,7 @@ impl From<Int4range> for postgres_types::ValuesRange<i32> {
     }
 }
 
-impl From<Int8range> for postgres_types::ValuesRange<i64> {
+impl From<Int8range> for golem_common::model::oplog::payload::types::ValuesRange<i64> {
     fn from(value: Int8range) -> Self {
         fn to_bounds(v: Int8bound) -> Bound<i64> {
             match v {
@@ -391,7 +406,7 @@ impl From<Int8range> for postgres_types::ValuesRange<i64> {
     }
 }
 
-impl TryFrom<Numrange> for postgres_types::ValuesRange<BigDecimal> {
+impl TryFrom<Numrange> for golem_common::model::oplog::payload::types::ValuesRange<BigDecimal> {
     type Error = String;
 
     fn try_from(value: Numrange) -> Result<Self, Self::Error> {
@@ -413,7 +428,9 @@ impl TryFrom<Numrange> for postgres_types::ValuesRange<BigDecimal> {
     }
 }
 
-impl TryFrom<Daterange> for postgres_types::ValuesRange<chrono::NaiveDate> {
+impl TryFrom<Daterange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>
+{
     type Error = String;
 
     fn try_from(value: Daterange) -> Result<Self, Self::Error> {
@@ -431,7 +448,9 @@ impl TryFrom<Daterange> for postgres_types::ValuesRange<chrono::NaiveDate> {
     }
 }
 
-impl TryFrom<Tsrange> for postgres_types::ValuesRange<chrono::NaiveDateTime> {
+impl TryFrom<Tsrange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>
+{
     type Error = String;
 
     fn try_from(value: Tsrange) -> Result<Self, Self::Error> {
@@ -449,7 +468,9 @@ impl TryFrom<Tsrange> for postgres_types::ValuesRange<chrono::NaiveDateTime> {
     }
 }
 
-impl TryFrom<Tstzrange> for postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>> {
+impl TryFrom<Tstzrange>
+    for golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>
+{
     type Error = String;
 
     fn try_from(value: Tstzrange) -> Result<Self, Self::Error> {
@@ -467,8 +488,8 @@ impl TryFrom<Tstzrange> for postgres_types::ValuesRange<chrono::DateTime<chrono:
     }
 }
 
-impl From<postgres_types::ValuesRange<i32>> for Int4range {
-    fn from(value: postgres_types::ValuesRange<i32>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<i32>> for Int4range {
+    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<i32>) -> Self {
         fn to_bounds(v: Bound<i32>) -> Int4bound {
             match v {
                 Bound::Included(v) => Int4bound::Included(v),
@@ -483,8 +504,8 @@ impl From<postgres_types::ValuesRange<i32>> for Int4range {
     }
 }
 
-impl From<postgres_types::ValuesRange<i64>> for Int8range {
-    fn from(value: postgres_types::ValuesRange<i64>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<i64>> for Int8range {
+    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<i64>) -> Self {
         fn to_bounds(v: Bound<i64>) -> Int8bound {
             match v {
                 Bound::Included(v) => Int8bound::Included(v),
@@ -499,8 +520,8 @@ impl From<postgres_types::ValuesRange<i64>> for Int8range {
     }
 }
 
-impl From<postgres_types::ValuesRange<BigDecimal>> for Numrange {
-    fn from(value: postgres_types::ValuesRange<BigDecimal>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<BigDecimal>> for Numrange {
+    fn from(value: golem_common::model::oplog::payload::types::ValuesRange<BigDecimal>) -> Self {
         fn to_bounds(v: Bound<BigDecimal>) -> Numbound {
             match v {
                 Bound::Included(v) => Numbound::Included(v.to_string()),
@@ -515,8 +536,14 @@ impl From<postgres_types::ValuesRange<BigDecimal>> for Numrange {
     }
 }
 
-impl From<postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>>> for Tstzrange {
-    fn from(value: postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::DateTime<chrono::Utc>>>
+    for Tstzrange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<
+            chrono::DateTime<chrono::Utc>,
+        >,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::DateTime<chrono::Utc>>) -> Tstzbound {
             match v {
                 Bound::Included(v) => Tstzbound::Included(v.into()),
@@ -531,8 +558,12 @@ impl From<postgres_types::ValuesRange<chrono::DateTime<chrono::Utc>>> for Tstzra
     }
 }
 
-impl From<postgres_types::ValuesRange<chrono::NaiveDateTime>> for Tsrange {
-    fn from(value: postgres_types::ValuesRange<chrono::NaiveDateTime>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>>
+    for Tsrange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDateTime>,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDateTime>) -> Tsbound {
             match v {
                 Bound::Included(v) => Tsbound::Included(v.into()),
@@ -547,8 +578,12 @@ impl From<postgres_types::ValuesRange<chrono::NaiveDateTime>> for Tsrange {
     }
 }
 
-impl From<postgres_types::ValuesRange<chrono::NaiveDate>> for Daterange {
-    fn from(value: postgres_types::ValuesRange<chrono::NaiveDate>) -> Self {
+impl From<golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>>
+    for Daterange
+{
+    fn from(
+        value: golem_common::model::oplog::payload::types::ValuesRange<chrono::NaiveDate>,
+    ) -> Self {
         fn to_bounds(v: Bound<chrono::NaiveDate>) -> Datebound {
             match v {
                 Bound::Included(v) => Datebound::Included(v.into()),
@@ -958,7 +993,10 @@ fn to_db_value(
                 .value
                 .clone();
             DbValueWithResourceRep::new(
-                postgres_types::DbValue::Domain(postgres_types::Domain::new(v.name, value.value)),
+                postgres_types::DbValue::Domain(Box::new(postgres_types::Domain::new(
+                    v.name,
+                    value.value,
+                ))),
                 DbValueResourceRep::Domain(v.value.rep()),
             )
         }
@@ -967,10 +1005,13 @@ fn to_db_value(
             let (end_value, end_rep) = to_bound(v.value.end, resource_table)?;
 
             DbValueWithResourceRep::new(
-                postgres_types::DbValue::Range(postgres_types::Range::new(
+                postgres_types::DbValue::Range(Box::new(postgres_types::Range::new(
                     v.name,
-                    postgres_types::ValuesRange::new(start_value, end_value),
-                )),
+                    golem_common::model::oplog::payload::types::ValuesRange::new(
+                        start_value,
+                        end_value,
+                    ),
+                ))),
                 DbValueResourceRep::Range((start_rep, end_rep)),
             )
         }
@@ -1142,7 +1183,7 @@ fn from_db_value(
         }
         postgres_types::DbValue::Domain(v) => {
             let value = get_db_value_resource(
-                *v.value,
+                v.value,
                 value.resource_rep.get_domain_rep(),
                 resource_table,
             )?;
@@ -1395,7 +1436,7 @@ fn from_db_column_type(
         }
         postgres_types::DbColumnType::Domain(v) => {
             let value = get_db_column_type_resource(
-                *v.base_type,
+                v.base_type,
                 value.resource_rep.get_domain_rep(),
                 resource_table,
             )?;
@@ -1598,10 +1639,10 @@ fn to_db_column_type(
                 .value
                 .clone();
             DbColumnTypeWithResourceRep::new(
-                postgres_types::DbColumnType::Domain(postgres_types::DomainType::new(
+                postgres_types::DbColumnType::Domain(Box::new(postgres_types::DomainType::new(
                     v.name,
                     value.value,
-                )),
+                ))),
                 DbColumnTypeResourceRep::Domain(v.base_type.rep()),
             )
         }

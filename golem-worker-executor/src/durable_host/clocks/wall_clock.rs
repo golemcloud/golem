@@ -12,44 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::DurableFunctionType;
+use golem_common::model::oplog::types::SerializableDateTime;
+use golem_common::model::oplog::{
+    host_functions, DurableFunctionType, HostRequestNoInput, HostResponseWallClock,
+};
 use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
-        let durability = Durability::<SerializableDateTime, SerializableError>::new(
-            self,
-            "wall_clock",
-            "now",
-            DurableFunctionType::ReadLocal,
-        )
-        .await?;
+        let durability =
+            Durability::<host_functions::WallClockNow>::new(self, DurableFunctionType::ReadLocal)
+                .await?;
 
-        if durability.is_live() {
-            let result = Host::now(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = Host::now(&mut self.as_wasi_view()).await?;
+
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseWallClock {
+                        time: SerializableDateTime {
+                            seconds: result.seconds,
+                            nanoseconds: result.nanoseconds,
+                        },
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.time.into())
     }
 
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
-        let durability = Durability::<SerializableDateTime, SerializableError>::new(
+        let durability = Durability::<host_functions::WallClockResolution>::new(
             self,
-            "wall_clock",
-            "resolution",
             DurableFunctionType::ReadLocal,
         )
         .await?;
 
-        if durability.is_live() {
-            let result = Host::resolution(&mut self.as_wasi_view()).await;
-            durability.persist(self, (), result).await
+        let result = if durability.is_live() {
+            let result = Host::resolution(&mut self.as_wasi_view()).await?;
+            durability
+                .persist(
+                    self,
+                    HostRequestNoInput {},
+                    HostResponseWallClock {
+                        time: SerializableDateTime {
+                            seconds: result.seconds,
+                            nanoseconds: result.nanoseconds,
+                        },
+                    },
+                )
+                .await
         } else {
             durability.replay(self).await
-        }
+        }?;
+
+        Ok(result.time.into())
     }
 }

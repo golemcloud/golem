@@ -17,13 +17,13 @@ pub mod types;
 
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::{Rdbms, RdbmsType};
-use bincode::{Decode, Encode};
+use desert_rust::BinaryCodec;
 use std::fmt::Display;
 use std::sync::Arc;
 
 pub(crate) const POSTGRES: &str = "postgres";
 
-#[derive(Debug, Clone, Default, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, Default, PartialEq, BinaryCodec)]
 pub struct PostgresType;
 
 impl PostgresType {
@@ -35,6 +35,18 @@ impl PostgresType {
 impl RdbmsType for PostgresType {
     type DbColumn = types::DbColumn;
     type DbValue = types::DbValue;
+
+    fn durability_connection_interface() -> &'static str {
+        "rdbms::postgres::db-connection"
+    }
+
+    fn durability_transaction_interface() -> &'static str {
+        "rdbms::postgres::db-transaction"
+    }
+
+    fn durability_result_stream_interface() -> &'static str {
+        "rdbms::postgres::db-result-stream"
+    }
 }
 
 impl Display for PostgresType {

@@ -32,11 +32,11 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-bincode = { workspace = true }
 bitflags = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+desert_rust = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
 headers = { workspace = true }
@@ -71,6 +71,7 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
+tonic-tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

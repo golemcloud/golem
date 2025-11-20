@@ -15,9 +15,10 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
-use golem_common::model::public_oplog::PublicOplogEntry;
-use golem_common::model::OplogIndex;
-use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{
+    OplogIndex, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
+};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
@@ -252,7 +253,6 @@ async fn revert_failed_worker_to_invoke_of_failed_inocation(
 
     let revert_target = {
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
-        tracing::warn!("oplog: {oplog:?}");
         oplog
             .iter()
             .rfind(|op| matches!(op.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))

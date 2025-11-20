@@ -53,7 +53,6 @@ async fn all_wit_types() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -378,7 +377,6 @@ async fn resource() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -412,6 +410,9 @@ async fn circular_resources() {
     let source = test_data_path().join("wit/circular-resources");
     let source_wit_root = tempdir().unwrap();
 
+    println!("source: {:?}", source);
+    println!("source_wit_root: {:?}", source_wit_root);
+
     fs_extra::dir::copy(
         source,
         source_wit_root.path(),
@@ -431,7 +432,6 @@ async fn circular_resources() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:main"),
-        is_ephemeral: false,
     })
     .unwrap();
 
@@ -492,7 +492,6 @@ async fn inline_resources() {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:main"),
-        is_ephemeral: false,
     })
     .unwrap();
 

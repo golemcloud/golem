@@ -30,12 +30,10 @@ mod logging;
 mod random;
 pub mod rdbms;
 mod replay_state;
-pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
 use self::golem::v1x::GetPromiseResultEntry;
-use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
@@ -83,23 +81,23 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
-    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry, OplogIndex,
+    PersistenceLevel, TimestampedUpdateDescription, UpdateDescription, WorkerError,
+    WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    ComponentFileSystemNodeDetails, ComponentId, ComponentVersion, GetFileSystemNodeResult,
+    IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -163,7 +161,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -344,6 +342,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.agent_id.clone()
     }
 
+    pub fn agent_mode(&self) -> AgentMode {
+        self.execution_status.read().unwrap().agent_mode()
+    }
+
     pub fn component_metadata(&self) -> &golem_service_base::model::Component {
         &self.state.component_metadata
     }
@@ -402,7 +404,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // let current_size = self.update_worker_status();
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::grow_memory(delta))
+                .add_to_oplog(OplogEntry::grow_memory(delta))
                 .await;
 
             self.public_state.worker().increase_memory(delta).await?;
@@ -847,7 +849,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -874,7 +876,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -901,7 +903,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::committed_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -928,7 +930,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .add_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .fallible_add(OplogEntry::rolled_back_remote_transaction(begin_index))
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
 
@@ -981,7 +983,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .data_mut()
                     .get_public_state()
                     .oplog()
-                    .get_upload_description_payload(&description)
+                    .get_upload_description_payload(description)
                     .await
                 {
                     Ok(Some(data)) => {
@@ -1081,7 +1083,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .on_worker_update_succeeded(
-                                    &description,
+                                    target_version,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
@@ -1169,7 +1171,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let component_metadata = self.component_metadata().clone();
 
                             self.on_worker_update_succeeded(
-                                &pending_update.description,
+                                target_version,
                                 component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
@@ -1289,25 +1291,27 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { .. } => {
+            ExecutionStatus::Running { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
-                await_interruption, ..
+                agent_mode,
+                await_interruption,
+                ..
             } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
                 await_interruption.send(()).ok();
             }
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1319,16 +1323,16 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let current_execution_status = execution_status.clone();
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended { .. } => {
+            ExecutionStatus::Suspended { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1344,11 +1348,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
-                .iter()
-                .map(|value| value.clone().into())
-                .collect();
-
             let stack = self.get_current_invocation_context().await;
 
             self.public_state
@@ -1356,7 +1355,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .oplog()
                 .add_exported_function_invoked(
                     full_function_name.to_string(),
-                    &proto_function_input,
+                    function_input,
                     self.get_current_idempotency_key().await.ok_or(anyhow!(
                         "No active invocation key is associated with the worker"
                     ))?,
@@ -1586,11 +1585,10 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_succeeded(
         &self,
-        update: &UpdateDescription,
+        target_version: ComponentVersion,
         new_component_size: u64,
         new_active_plugins: HashSet<PluginInstallationId>,
     ) {
-        let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
         let entry = OplogEntry::successful_update(
             target_version,
@@ -1684,13 +1682,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if is_live {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::start_span(
-                    span.start().unwrap_or(Timestamp::now_utc()),
-                    span.span_id().clone(),
-                    Some(parent.clone()),
-                    span.linked_context().map(|link| link.span_id().clone()),
-                    HashMap::from_iter(initial_attributes.iter().cloned()),
-                ))
+                .add_to_oplog(OplogEntry::StartSpan {
+                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
+                    span_id: span.span_id().clone(),
+                    parent_id: Some(parent.clone()),
+                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
+                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()),
+                })
                 .await;
         }
 
@@ -1720,7 +1718,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         if self.is_live() {
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))
+                .add_to_oplog(OplogEntry::finish_span(span_id.clone()))
                 .await;
         } else {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
@@ -1820,14 +1818,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .set_replay_target(new_target);
         }
 
-        let (component_type, is_agent) = {
+        let (agent_mode, is_agent) = {
             let component = store.as_context().data().component_metadata();
-            (component.component_type, component.metadata.is_agent())
+            (
+                store.as_context().data().agent_mode(),
+                component.metadata.is_agent(),
+            )
         };
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                    (component_type == ComponentType::Durable || // durable components are fully replayed
+                    (agent_mode == AgentMode::Durable || // durable components are fully replayed
                         (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
@@ -2068,13 +2069,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        let prepare_result = if store
-            .as_context()
-            .data()
-            .component_metadata()
-            .component_type
-            == ComponentType::Ephemeral
-        {
+        let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
             // We have to replay the initialize call for agents:
@@ -2597,7 +2592,7 @@ struct HttpRequestState {
     /// The BeginRemoteWrite entry's index
     pub begin_index: OplogIndex,
     /// Information about the request to be included in the oplog
-    pub request: SerializableHttpRequest,
+    pub request: HostRequestHttpRequest,
     /// SpanId
     pub span_id: SpanId,
 }
@@ -3266,7 +3261,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {

@@ -7,7 +7,6 @@ import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/component/agent.proto";
 import public "golem/component/component.proto";
-import public "golem/component/component_type.proto";
 import public "golem/component/dynamic_linked_instance.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
@@ -88,7 +87,6 @@ message CreateComponentRequest {
 message CreateComponentRequestHeader {
   golem.common.ProjectId projectId = 1;
   string componentName = 2;
-  optional ComponentType componentType = 3;
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
@@ -163,7 +161,6 @@ message UpdateComponentRequest {
 
 message UpdateComponentRequestHeader {
   golem.component.ComponentId componentId = 1;
-  optional ComponentType componentType = 2;
   // Whether to update the files or not. If false, the files field will be ignored and file from the previous version will be used.
   bool updateFiles = 3;
   // All files need to be uploaded to the blob storage before providing them here

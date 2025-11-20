@@ -27,14 +27,14 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
     GetFileSystemNodeResult, OplogIndex,
 };
 use golem_common::model::{
-    ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::RwLock;
-use tracing::{debug, span, warn, Instrument, Level};
+use tracing::{debug, span, warn, Instrument, Level, Span};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store};
 
@@ -353,10 +353,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         match message {
             QueuedWorkerInvocation::External {
                 invocation,
+                span,
                 canceled,
             } => {
                 if !canceled {
-                    self.external_invocation(invocation).await
+                    self.external_invocation(invocation, &span).await
                 } else {
                     CommandOutcome::Continue
                 }
@@ -379,7 +380,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process an external queued worker invocation - this is either an exported function invocation
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
-    async fn external_invocation(&mut self, inner: TimestampedWorkerInvocation) -> CommandOutcome {
+    async fn external_invocation(
+        &mut self,
+        inner: TimestampedWorkerInvocation,
+        invocation_span: &Span,
+    ) -> CommandOutcome {
         match inner.invocation {
             WorkerInvocation::ExportedFunction {
                 idempotency_key,
@@ -398,6 +403,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         idempotency_key,
                         full_function_name,
                         function_input,
+                        invocation_span,
                     )
                     .await
                 } else {
@@ -418,8 +424,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         full_function_name: String,
         function_input: Vec<Value>,
+        invocation_span: &Span,
     ) -> CommandOutcome {
         let span = span!(
+            parent: invocation_span,
             Level::INFO,
             "invocation",
             worker_id = %self.owned_worker_id.worker_id,
@@ -641,8 +649,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     )
                     .await?;
 
-                if self.store.data().component_metadata().component_type == ComponentType::Ephemeral
-                {
+                if self.parent.agent_mode() == AgentMode::Ephemeral {
                     // For ephemeral agents, we allow running the 'initialize' call and one another
                     if self.store.data().component_metadata().metadata.is_agent()
                         && full_function_name == "golem:agent/guest.{initialize}"
@@ -745,7 +752,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .data()
                                 .get_public_state()
                                 .oplog()
-                                .create_snapshot_based_update_description(target_version, &bytes)
+                                .create_snapshot_based_update_description(target_version, bytes)
                                 .await
                             {
                                 Ok(update_description) => {

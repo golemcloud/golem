@@ -150,16 +150,6 @@ paths:
         required: true
         deprecated: false
         explode: true
-      - name: component_type
-        schema:
-          $ref: '#/components/schemas/ComponentType'
-        in: query
-        description: |-
-          Type of the new version of the component - if not specified, the type of the previous version
-          is used.
-        required: false
-        deprecated: false
-        explode: true
       requestBody:
         content:
           application/octet-stream:
@@ -236,8 +226,6 @@ paths:
               required:
               - component
               properties:
-                componentType:
-                  $ref: '#/components/schemas/ComponentType'
                 component:
                   type: string
                   format: binary
@@ -322,8 +310,6 @@ paths:
                 component:
                   type: string
                   format: binary
-                componentType:
-                  $ref: '#/components/schemas/ComponentType'
                 filesPermissions:
                   $ref: '#/components/schemas/ComponentFilePathWithPermissionsList'
                 files:
@@ -1755,6 +1741,11 @@ components:
           $ref: '#/components/schemas/DataSchema'
         outputSchema:
           $ref: '#/components/schemas/DataSchema'
+    AgentMode:
+      type: string
+      enum:
+      - Durable
+      - Ephemeral
     AgentType:
       type: object
       title: AgentType
@@ -1764,6 +1755,7 @@ components:
       - constructor
       - methods
       - dependencies
+      - mode
       properties:
         typeName:
           type: string
@@ -1779,6 +1771,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentDependency'
+        mode:
+          $ref: '#/components/schemas/AgentMode'
     AgentTypes:
       type: object
       title: AgentTypes
@@ -2234,7 +2228,6 @@ components:
       - accountId
       - projectId
       - createdAt
-      - componentType
       - files
       - installedPlugins
       - env
@@ -2256,8 +2249,6 @@ components:
         createdAt:
           type: string
           format: date-time
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
         files:
           type: array
           items:
@@ -2412,11 +2403,6 @@ components:
           type: string
         transformUrl:
           type: string
-    ComponentType:
-      type: string
-      enum:
-      - Durable
-      - Ephemeral
     DataSchema:
       type: object
       oneOf:
@@ -3264,14 +3250,11 @@ components:
       required:
       - interfaceName
       - componentName
-      - componentType
       properties:
         interfaceName:
           type: string
         componentName:
           type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
   securitySchemes:
     Cookie:
       type: apiKey
