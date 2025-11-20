@@ -137,7 +137,7 @@ describe('Agent decorator should register the agent class and its methods into A
     }
 
     expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
-    
+
     const expected = [
       [
         'text',
