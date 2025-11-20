@@ -17,15 +17,13 @@ pub mod account_tokens;
 pub mod accounts;
 pub mod api_definitions;
 pub mod api_deployments;
-pub mod api_domains;
 pub mod applications;
 pub mod certificates;
 pub mod components;
 pub mod environment_api_definitions;
 pub mod environment_api_deployments;
-pub mod environment_api_domains;
 pub mod environment_certificates;
-pub mod environment_components;
+pub mod domain_registrations;
 pub mod environment_plugin_grants;
 pub mod environment_security_schemes;
 pub mod environment_shares;
@@ -42,15 +40,12 @@ use self::account_tokens::AccountTokensApi;
 use self::accounts::AccountsApi;
 use self::api_definitions::ApiDefinitionsApi;
 use self::api_deployments::ApiDeploymentsApi;
-use self::api_domains::ApiDomainsApi;
 use self::applications::ApplicationsApi;
 use self::certificates::CertificatesApi;
 use self::components::ComponentsApi;
 use self::environment_api_definitions::EnvironmentApiDefinitionsApi;
 use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
-use self::environment_api_domains::EnvironmentApiDomainsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
-use self::environment_components::EnvironmentComponentsApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
 use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
 use self::environment_shares::EnvironmentSharesApi;
@@ -64,27 +59,26 @@ use self::tokens::TokensApi;
 use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
+use self::domain_registrations::DomainRegistrationsApi;
 
 pub type Apis = (
     HealthcheckApi,
     (AccountApplicationsApi, AccountTokensApi, AccountsApi),
     ApiDefinitionsApi,
     ApiDeploymentsApi,
-    ApiDomainsApi,
     ApplicationsApi,
     CertificatesApi,
     ComponentsApi,
+    DomainRegistrationsApi,
     (
         EnvironmentApiDefinitionsApi,
         EnvironmentApiDeploymentsApi,
-        EnvironmentApiDomainsApi,
         EnvironmentCertificatesApi,
-        EnvironmentComponentsApi,
+        EnvironmentPluginGrantsApi,
         EnvironmentsApi,
         EnvironmentSecuritySchemesApi,
+        EnvironmentSharesApi,
     ),
-    EnvironmentPluginGrantsApi,
-    EnvironmentSharesApi,
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -114,7 +108,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             ),
             ApiDefinitionsApi::new(services.auth_service.clone()),
             ApiDeploymentsApi::new(services.auth_service.clone()),
-            ApiDomainsApi::new(services.auth_service.clone()),
             ApplicationsApi::new(
                 services.application_service.clone(),
                 services.environment_service.clone(),
@@ -126,32 +119,25 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.component_write_service.clone(),
                 services.auth_service.clone(),
             ),
+            DomainRegistrationsApi::new(services.domain_registration_service.clone(), services.auth_service.clone()),
             (
                 EnvironmentApiDefinitionsApi::new(services.auth_service.clone()),
                 EnvironmentApiDeploymentsApi::new(services.auth_service.clone()),
-                EnvironmentApiDomainsApi::new(services.auth_service.clone()),
                 EnvironmentCertificatesApi::new(services.auth_service.clone()),
-                EnvironmentComponentsApi::new(
-                    services.component_service.clone(),
-                    services.component_write_service.clone(),
+                EnvironmentPluginGrantsApi::new(
+                    services.environment_plugin_grant_service.clone(),
                     services.auth_service.clone(),
                 ),
                 EnvironmentsApi::new(
                     services.environment_service.clone(),
-                    services.environment_share_service.clone(),
-                    services.environment_plugin_grant_service.clone(),
                     services.deployment_service.clone(),
                     services.auth_service.clone(),
                 ),
                 EnvironmentSecuritySchemesApi::new(services.auth_service.clone()),
-            ),
-            EnvironmentPluginGrantsApi::new(
-                services.environment_plugin_grant_service.clone(),
-                services.auth_service.clone(),
-            ),
-            EnvironmentSharesApi::new(
-                services.environment_share_service.clone(),
-                services.auth_service.clone(),
+                EnvironmentSharesApi::new(
+                    services.environment_share_service.clone(),
+                    services.auth_service.clone(),
+                ),
             ),
             LoginApi::new(
                 services.login_system.clone(),

@@ -711,3 +711,26 @@ CREATE UNIQUE INDEX environment_plugin_grants_environment_plugin_uk
 
 CREATE INDEX environment_plugin_grants_environment_id_idx ON environment_plugin_grants (environment_id);
 CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grants (plugin_id);
+
+CREATE TABLE domain_registrations
+(
+    domain_registration_id   UUID      NOT NULL,
+    environment_id              UUID      NOT NULL,
+    domain                   TEXT      NOT NULL,
+
+    created_at                  TIMESTAMP NOT NULL,
+    created_by                  UUID      NOT NULL,
+    deleted_at                  TIMESTAMP,
+    deleted_by                  UUID,
+
+    CONSTRAINT domain_registrations_pk
+        PRIMARY KEY (domain_registration_id),
+    CONSTRAINT domain_registrations_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE UNIQUE INDEX domain_registrations_domain_uk
+    ON domain_registrations (domain)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX domain_registrations_environment_id_idx ON environments (environment_id);

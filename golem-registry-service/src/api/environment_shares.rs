@@ -16,7 +16,7 @@ use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, EnvironmentShareUpdate,
+    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -27,6 +27,10 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
+use golem_common::api::Page;
+use golem_common::model::environment::EnvironmentId;
+use uuid::Uuid;
+use golem_common::model::account::AccountId;
 
 pub struct EnvironmentSharesApi {
     environment_share_service: Arc<EnvironmentShareService>,
@@ -34,7 +38,7 @@ pub struct EnvironmentSharesApi {
 }
 
 #[OpenApi(
-    prefix_path = "/v1/environment-shares",
+    prefix_path = "/v1",
     tag = ApiTags::RegistryService,
     tag = ApiTags::EnvironmentShares
 )]
@@ -49,9 +53,91 @@ impl EnvironmentSharesApi {
         }
     }
 
+    /// Create a new environment share
+    #[oai(
+        path = "/envs/:environment_id/shares",
+        method = "post",
+        operation_id = "create_environment_share",
+        tag = ApiTags::Environment
+    )]
+    async fn create_environment_share(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: Json<EnvironmentShareCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentShare>> {
+        let record = recorded_http_api_request!(
+            "create_environment_share",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_environment_share_internal(environment_id.0, payload.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_environment_share_internal(
+        &self,
+        environment_id: EnvironmentId,
+        payload: EnvironmentShareCreation,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentShare>> {
+        let result = self
+            .environment_share_service
+            .create(environment_id, payload, &auth)
+            .await?;
+
+        Ok(Json(result))
+    }
+
+    /// Get all shares of the environment
+    #[oai(
+        path = "/envs/:environment_id/shares",
+        method = "get",
+        operation_id = "get_environment_shares",
+        tag = ApiTags::Environment
+    )]
+    async fn get_environment_shares(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<EnvironmentShare>>> {
+        let record = recorded_http_api_request!(
+            "get_environment_shares",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_environment_shares_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_environment_shares_internal(
+        &self,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<EnvironmentShare>>> {
+        let result = self
+            .environment_share_service
+            .get_shares_in_environment(environment_id, &auth)
+            .await?;
+
+        Ok(Json(Page { values: result }))
+    }
+
     /// Get environment share by id.
     #[oai(
-        path = "/:environment_share_id",
+        path = "/environment-shares/:environment_share_id",
         method = "get",
         operation_id = "get_environment_share"
     )]
@@ -89,7 +175,7 @@ impl EnvironmentSharesApi {
 
     /// Update environment share
     #[oai(
-        path = "/:environment_share_id",
+        path = "/environment-shares/:environment_share_id",
         method = "patch",
         operation_id = "update_environment_share"
     )]
@@ -129,7 +215,7 @@ impl EnvironmentSharesApi {
 
     /// Delete environment share
     #[oai(
-        path = "/:environment_share_id",
+        path = "/environment-shares/:environment_share_id",
         method = "delete",
         operation_id = "delete_environment_share"
     )]

@@ -64,6 +64,8 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
+use crate::services::domain_registration::DomainRegistrationService;
+use crate::repo::domain_registration::{DbDomainRegistrationRepo, DomainRegistrationRepo};
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -78,6 +80,7 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployment_service: Arc<DeploymentService>,
+    pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
@@ -93,6 +96,7 @@ struct Repos {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
+    domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     plan_repo: Arc<dyn PlanRepo>,
     token_repo: Arc<dyn TokenRepo>,
@@ -223,6 +227,14 @@ impl Services {
             component_service.clone(),
         ));
 
+        let domain_provisioner = crate::services::domain_registration::provisioner::configured(&config.environment, &config.workspace, &config.domain_provisioner).await?;
+
+        let domain_registration_service = Arc::new(DomainRegistrationService::new(
+            repos.domain_registration_repo.clone(),
+            environment_service.clone(),
+            domain_provisioner.clone()
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -233,6 +245,7 @@ impl Services {
             component_service,
             component_write_service,
             deployment_service,
+            domain_registration_service,
             environment_plugin_grant_service,
             environment_service,
             environment_share_service,
@@ -272,6 +285,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
+            let domain_registration_repo = Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -288,6 +302,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plugin_repo,
                 environment_plugin_grant_repo,
                 deployment_repo,
+                domain_registration_repo
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -313,6 +328,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
+            let domain_registration_repo = Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -329,6 +345,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plugin_repo,
                 environment_plugin_grant_repo,
                 deployment_repo,
+                domain_registration_repo
             })
         }
     }

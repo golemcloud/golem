@@ -16,7 +16,7 @@ use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantId,
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -28,6 +28,8 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::api::Page;
 
 pub struct EnvironmentPluginGrantsApi {
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
@@ -35,7 +37,7 @@ pub struct EnvironmentPluginGrantsApi {
 }
 
 #[OpenApi(
-    prefix_path = "/v1/environment-plugins",
+    prefix_path = "/v1",
     tag = ApiTags::RegistryService,
     tag = ApiTags::EnvironmentPluginGrants
 )]
@@ -50,9 +52,90 @@ impl EnvironmentPluginGrantsApi {
         }
     }
 
+    /// Create a new environment plugin grant
+    #[oai(
+        path = "/envs/:environment_id/plugins",
+        method = "post",
+        operation_id = "create_environment_plugin_grant",
+        tag = ApiTags::Environment
+    )]
+    pub async fn create_environment_plugin_grant(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        data: Json<EnvironmentPluginGrantCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+        let record = recorded_http_api_request!(
+            "create_environment_plugin_grant",
+            environment_id = environment_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_environment_plugin_grant_internal(environment_id.0, data.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_environment_plugin_grant_internal(
+        &self,
+        environment_id: EnvironmentId,
+        data: EnvironmentPluginGrantCreation,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<EnvironmentPluginGrant>> {
+        let grant = self
+            .environment_plugin_grant_service
+            .create(environment_id, data, &auth)
+            .await?;
+        Ok(Json(grant))
+    }
+
+    /// List all environment plugin grants in the environment
+    #[oai(
+        path = "/envs/:environment_id/plugins",
+        method = "get",
+        operation_id = "list_environment_plugin_grants",
+        tag = ApiTags::Environment
+    )]
+    pub async fn list_environment_plugin_grants(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+        let record = recorded_http_api_request!(
+            "list_environment_plugin_grants_internal",
+            environment_id = environment_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_environment_plugin_grants_internal(environment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_environment_plugin_grants_internal(
+        &self,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<EnvironmentPluginGrant>>> {
+        let grants = self
+            .environment_plugin_grant_service
+            .list_in_environment(&environment_id, &auth)
+            .await?;
+
+        Ok(Json(Page { values: grants }))
+    }
+
     /// Get environment grant by id
     #[oai(
-        path = "/:environment_plugin_grant_id",
+        path = "/environment-plugins/:environment_plugin_grant_id",
         method = "get",
         operation_id = "get_environment_plugin_grant",
         tag = ApiTags::EnvironmentPluginGrants
@@ -92,7 +175,7 @@ impl EnvironmentPluginGrantsApi {
 
     /// Get environment grant by id
     #[oai(
-        path = "/:environment_plugin_grant_id",
+        path = "/environment-plugins/:environment_plugin_grant_id",
         method = "delete",
         operation_id = "delete_environment_plugin_grant",
         tag = ApiTags::EnvironmentPluginGrants

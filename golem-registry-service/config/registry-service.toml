@@ -57,6 +57,11 @@ database = "golem_service.db"
 foreign_keys = false
 max_connections = 10
 
+[domain_provisioner]
+type = "NoOp"
+
+[domain_provisioner.config]
+
 [login]
 type = "OAuth2"
 

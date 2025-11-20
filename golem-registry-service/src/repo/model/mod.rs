@@ -19,6 +19,7 @@ pub mod audit;
 pub mod component;
 pub mod datetime;
 pub mod deployment;
+pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;

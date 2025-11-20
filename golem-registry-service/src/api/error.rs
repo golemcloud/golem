@@ -32,6 +32,7 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
+use crate::services::domain_registration::DomainRegistrationError;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -459,6 +460,36 @@ impl From<DeploymentError> for ApiError {
             DeploymentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentPluginGrantError")),
+            })),
+        }
+    }
+}
+
+
+impl From<DomainRegistrationError> for ApiError {
+    fn from(value: DomainRegistrationError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DomainRegistrationError::ParentEnvironmentNotFound(_)
+            | DomainRegistrationError::DomainRegistrationByIdNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::DomainCannotBeProvisioned { .. }=> {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+
+            DomainRegistrationError::DomainAlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::Unauthorized(inner) => inner.into(),
+            DomainRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("DomainRegistrationError")),
             })),
         }
     }

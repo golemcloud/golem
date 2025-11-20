@@ -26,6 +26,7 @@ pub mod component_constraint;
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
+pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;
