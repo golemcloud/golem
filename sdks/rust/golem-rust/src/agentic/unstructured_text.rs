@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::Schema;
+use crate::agentic::{Schema, SchemaType, ValueType};
 use crate::golem_agentic::golem::agent::common::{
-    ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource, TextType, WitValue,
+    BinaryReference, ElementSchema, ElementValue, TextDescriptor, TextReference, TextSource,
+    TextType, WitValue,
 };
 use golem_wasm::Value;
 
@@ -199,7 +200,7 @@ impl AllowedLanguages for AnyLanguage {
 }
 
 impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
-    fn get_type() -> ElementSchema {
+    fn get_type() -> SchemaType {
         let restrictions = if T::all().is_empty() {
             None
         } else {
@@ -213,10 +214,12 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             Some(restrictions)
         };
 
-        ElementSchema::UnstructuredText(TextDescriptor { restrictions })
+        SchemaType::Default(ElementSchema::UnstructuredText(TextDescriptor {
+            restrictions,
+        }))
     }
 
-    fn to_element_value(self) -> Result<ElementValue, String> {
+    fn to_element_value(self) -> Result<ValueType, String> {
         match self {
             UnstructuredText::Text {
                 text,
@@ -226,32 +229,39 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
                     language_code: code.to_language_code().to_string(),
                 });
 
-                Ok(ElementValue::UnstructuredText(TextReference::Inline(
-                    TextSource {
+                Ok(ValueType::Default(ElementValue::UnstructuredText(
+                    TextReference::Inline(TextSource {
                         data: text,
                         text_type,
-                    },
+                    }),
                 )))
             }
 
-            UnstructuredText::Url(url) => {
-                Ok(ElementValue::UnstructuredText(TextReference::Url(url)))
-            }
+            UnstructuredText::Url(url) => Ok(ValueType::Default(ElementValue::UnstructuredText(
+                TextReference::Url(url),
+            ))),
         }
     }
 
-    fn from_wit_value(wit_value: WitValue, _schema: ElementSchema) -> Result<Self, String>
+    fn from_wit_value(wit_value: WitValue, _schema: SchemaType) -> Result<Self, String>
     where
         Self: Sized,
     {
         UnstructuredText::from_wit_value(wit_value)
     }
 
-    fn from_element_value(value: ElementValue, _schema: ElementSchema) -> Result<Self, String>
+    fn from_element_value(value: ValueType, _schema: SchemaType) -> Result<Self, String>
     where
         Self: Sized,
     {
-        match value {
+        let element_value = match value {
+            ValueType::Default(value) => Ok(value),
+            ValueType::Multimodal(_) => {
+                Err("input mismatch. expected default value, found multimodal".to_string())
+            }
+        }?;
+
+        match element_value {
             ElementValue::ComponentModel(_) => {
                 Err("Expected UnstructuredText ElementValue, got ComponentModel".to_string())
             }
@@ -284,6 +294,76 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
             ElementValue::UnstructuredBinary(_) => {
                 Err("Expected UnstructuredText ElementValue, got UnstructuredBinary".to_string())
             }
+        }
+    }
+
+    fn to_wit_value(self) -> Result<golem_wasm::WitValue, String>
+    where
+        Self: Sized,
+    {
+        let value_type = self.to_element_value()?;
+
+        let element_value_result = match value_type {
+            ValueType::Default(element_value) => Ok(element_value),
+            ValueType::Multimodal(_) => {
+                Err("Expected element value but found multimodal".to_string())
+            }
+        };
+
+        let element_value = element_value_result?;
+
+        match element_value {
+            ElementValue::ComponentModel(wit_value) => Ok(wit_value),
+            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
+                BinaryReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+                BinaryReference::Inline(binary_source) => {
+                    let restriction_record =
+                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
+                            restriction_record,
+                        ]))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+            },
+            ElementValue::UnstructuredText(text_reference) => match text_reference {
+                TextReference::Url(url) => {
+                    let value = Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::String(url))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+
+                TextReference::Inline(text_source) => {
+                    let restriction_record = text_source.text_type.map(|text_type| {
+                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
+                    });
+
+                    let value = Value::Variant {
+                        case_idx: 1,
+                        case_value: Some(Box::new(Value::Record(vec![
+                            Value::String(text_source.data),
+                            Value::Option(restriction_record),
+                        ]))),
+                    };
+
+                    Ok(golem_wasm::WitValue::from(value))
+                }
+            },
         }
     }
 }
