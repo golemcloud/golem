@@ -623,6 +623,8 @@ impl DebugService for DebugServiceDefault {
             source_worker_id.worker_id, target_worker_id
         );
 
+        // TODO: authorize here
+
         // Fork internally proxies the resume of worker using worker-proxy
         // making sure the worker is initiated in the regular worker executor, and not
         // debugging executor

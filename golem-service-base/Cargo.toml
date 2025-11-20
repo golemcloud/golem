@@ -23,6 +23,7 @@ golem-api-grpc = { workspace = true }
 golem-common = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
+golem-rib.workspace = true
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -36,6 +37,7 @@ bitflags = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+derive_more.workspace = true
 desert_rust = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
@@ -47,6 +49,7 @@ http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 lazy_static = { workspace = true }
+openidconnect.workspace = true
 pin-project = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }

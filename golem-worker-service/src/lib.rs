@@ -16,20 +16,14 @@ pub mod api;
 // pub mod aws_config;
 // pub mod aws_load_balancer;
 pub mod config;
-// pub mod gateway_api_definition;
-// pub mod gateway_api_definition_transformer;
-// pub mod gateway_api_deployment;
-// pub mod gateway_binding;
-// pub mod gateway_execution;
-// pub mod gateway_middleware;
-// pub mod gateway_request;
-// pub mod gateway_rib_compiler;
-// pub mod gateway_rib_interpreter;
-// pub mod gateway_security;
-// pub mod getter;
+pub mod gateway_execution;
+pub mod gateway_middleware;
+pub mod gateway_router;
+pub mod gateway_security;
+pub mod getter;
 pub mod grpcapi;
-// pub mod headers;
-// pub mod http_invocation_context;
+pub mod headers;
+pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
@@ -48,12 +42,12 @@ use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryTracing};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
@@ -63,12 +57,12 @@ static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-    // pub custom_request_port: u16,
+    pub custom_request_port: u16,
 }
 
 pub struct TrafficReadyEndpoints {
     pub grpc_port: u16,
-    // pub custom_request_port: u16,
+    pub custom_request_port: u16,
     pub api_endpoint: BoxEndpoint<'static>,
 }
 
@@ -117,17 +111,17 @@ impl WorkerService {
     ) -> anyhow::Result<RunDetails> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set, tracer.clone()).await?;
-        // let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
 
-        // info!(
-        //     "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
-        //     http_port, grpc_port, custom_request_port
-        // );
+        info!(
+            "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
+            http_port, grpc_port, custom_request_port
+        );
 
         Ok(RunDetails {
             http_port,
             grpc_port,
-            // custom_request_port,
+            custom_request_port,
         })
     }
 
@@ -135,15 +129,15 @@ impl WorkerService {
     pub async fn start_endpoints(
         &self,
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-        _tracer: Option<SdkTracer>,
+        tracer: Option<SdkTracer>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        // let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
+        let custom_request_port = self.start_api_gateway_server(join_set, tracer).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
         Ok(TrafficReadyEndpoints {
             grpc_port,
             api_endpoint,
-            // custom_request_port,
+            custom_request_port,
         })
     }
 
@@ -208,38 +202,38 @@ impl WorkerService {
         Ok(port)
     }
 
-    // async fn start_api_gateway_server(
-    //     &self,
-    //     join_set: &mut JoinSet<anyhow::Result<()>>,
-    //     tracer: Option<SdkTracer>,
-    // ) -> Result<u16, anyhow::Error> {
-    //     let route = Route::new()
-    //         .nest("/", api::custom_http_request_api(&self.services))
-    //         .with(OpenTelemetryMetrics::new())
-    //         .with_if_lazy(tracer.is_some(), || {
-    //             OpenTelemetryTracing::new(tracer.unwrap())
-    //         });
-    //
-    //     let poem_listener = poem::listener::TcpListener::bind(format!(
-    //         "0.0.0.0:{}",
-    //         self.config.custom_request_port
-    //     ));
-    //     let acceptor = poem_listener.into_acceptor().await?;
-    //     let port = acceptor.local_addr()[0]
-    //         .as_socket_addr()
-    //         .expect("socket address")
-    //         .port();
-    //
-    //     join_set.spawn(
-    //         async move {
-    //             poem::Server::new_with_acceptor(acceptor)
-    //                 .run(route)
-    //                 .await
-    //                 .map_err(|err| anyhow!(err).context("API Gateway server failed"))
-    //         }
-    //             .in_current_span(),
-    //     );
-    //
-    //     Ok(port)
-    // }
+    async fn start_api_gateway_server(
+        &self,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+        tracer: Option<SdkTracer>,
+    ) -> Result<u16, anyhow::Error> {
+        let route = Route::new()
+            .nest("/", api::custom_http_request_api(&self.services))
+            .with(OpenTelemetryMetrics::new())
+            .with_if_lazy(tracer.is_some(), || {
+                OpenTelemetryTracing::new(tracer.unwrap())
+            });
+
+        let poem_listener = poem::listener::TcpListener::bind(format!(
+            "0.0.0.0:{}",
+            self.config.custom_request_port
+        ));
+        let acceptor = poem_listener.into_acceptor().await?;
+        let port = acceptor.local_addr()[0]
+            .as_socket_addr()
+            .expect("socket address")
+            .port();
+
+        join_set.spawn(
+            async move {
+                poem::Server::new_with_acceptor(acceptor)
+                    .run(route)
+                    .await
+                    .map_err(|err| anyhow!(err).context("API Gateway server failed"))
+            }
+            .in_current_span(),
+        );
+
+        Ok(port)
+    }
 }
