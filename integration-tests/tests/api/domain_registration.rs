@@ -15,7 +15,8 @@
 use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceGetDomainRegistrationError,
+    RegistryServiceClient, RegistryServiceCreateDomainRegistrationError,
+    RegistryServiceGetDomainRegistrationError,
     RegistryServiceListEnvironmentDomainRegistrationsError,
 };
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -34,7 +35,7 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let client = deps.registry_service().client(&user.token).await;
 
-    let domain = Domain("test.golem.cloud".to_string());
+    let domain = Domain("test1.golem.cloud".to_string());
 
     let domain_registration = client
         .create_domain_registration(
@@ -76,7 +77,7 @@ async fn delete_domain(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         .create_domain_registration(
             &env.id.0,
             &DomainRegistrationCreation {
-                domain: Domain("test.golem.cloud".to_string()),
+                domain: Domain("test2.golem.cloud".to_string()),
             },
         )
         .await?;
@@ -109,7 +110,7 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
         .create_domain_registration(
             &env.id.0,
             &DomainRegistrationCreation {
-                domain: Domain("test.golem.cloud".to_string()),
+                domain: Domain("test3.golem.cloud".to_string()),
             },
         )
         .await?;
@@ -133,6 +134,90 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
             )) = result
         );
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn registering_domains_twice_fails(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user_1 = deps.user().await?;
+    let user_2 = deps.user().await?;
+
+    let (_, env_1) = user_1.app_and_env().await?;
+    let (_, env_2) = user_2.app_and_env().await?;
+
+    let client_1 = deps.registry_service().client(&user_1.token).await;
+    let client_2 = deps.registry_service().client(&user_2.token).await;
+
+    let domain = Domain("test4.golem.cloud".to_string());
+
+    client_1
+        .create_domain_registration(
+            &env_1.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await?;
+
+    let result = client_2
+        .create_domain_registration(
+            &env_2.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(
+            RegistryServiceCreateDomainRegistrationError::Error409(_)
+        )) = result
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn domain_can_be_reused_after_deletion(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user_1 = deps.user().await?;
+    let user_2 = deps.user().await?;
+
+    let (_, env_1) = user_1.app_and_env().await?;
+    let (_, env_2) = user_2.app_and_env().await?;
+
+    let client_1 = deps.registry_service().client(&user_1.token).await;
+    let client_2 = deps.registry_service().client(&user_2.token).await;
+
+    let domain = Domain("test5.golem.cloud".to_string());
+
+    let domain_registration = client_1
+        .create_domain_registration(
+            &env_1.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await?;
+
+    client_1
+        .delete_domain_registrations(&domain_registration.id.0)
+        .await?;
+
+    let second_domain_registration = client_2
+        .create_domain_registration(
+            &env_2.id.0,
+            &DomainRegistrationCreation {
+                domain: domain.clone(),
+            },
+        )
+        .await?;
+
+    assert!(second_domain_registration.domain == domain);
 
     Ok(())
 }

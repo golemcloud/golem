@@ -224,7 +224,7 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
 
     async fn list_by_environment(
         &self,
-        domain_registration_id: &Uuid,
+        environment_id: &Uuid,
     ) -> Result<Vec<DomainRegistrationRecord>, DomainRegistrationRepoError> {
         let result = self
             .with_ro("list_by_environment")
@@ -235,10 +235,10 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                         created_at, created_by, deleted_at, deleted_by
                     FROM domain_registrations
                     WHERE
-                        domain_registration_id = $1
+                        environment_id = $1
                         AND deleted_at IS NULL
                 "#})
-                .bind(domain_registration_id),
+                .bind(environment_id),
             )
             .await?;
 
