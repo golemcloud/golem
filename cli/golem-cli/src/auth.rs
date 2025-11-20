@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::Config;
 use crate::config::{
     ApplicationEnvironmentConfig, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
 };
-use crate::config::{Config};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
 use anyhow::{anyhow, bail, Context};
