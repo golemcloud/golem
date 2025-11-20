@@ -25,7 +25,7 @@ pub mod fmt;
 pub mod help;
 // TODO: atomic: pub mod plugin;
 pub mod profile;
+pub mod server;
 pub mod template;
 pub mod token;
 pub mod worker;
-pub mod server;
