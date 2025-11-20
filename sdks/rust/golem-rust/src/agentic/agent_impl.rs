@@ -80,7 +80,7 @@ impl Guest for Component {
 
 impl LoadSnapshotGuest for Component {
     fn load(bytes: Vec<u8>) -> Result<(), String> {
-        let agent_id = get_state().agent_id.borrow().clone();
+        let agent_id = get_resolved_agent();
 
         if agent_id.is_some() {
             return Err("Agent is already initialized".to_string());
@@ -134,6 +134,7 @@ impl SaveSnapshotGuest for Component {
                 .expect("Failed to save agent snapshot");
 
             let total_length = 1 + agent_snapshot.len();
+            
             let mut full_snapshot = Vec::with_capacity(total_length);
 
             full_snapshot.push(1);
