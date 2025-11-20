@@ -4085,6 +4085,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes 1.10.1",
+ "clap",
+ "clap-verbosity-flag",
+ "darling 0.20.11",
+ "dirs 4.0.0",
+ "futures",
+ "golem-cli",
+ "golem-common",
+ "golem-component-compilation-service",
+ "golem-registry-service",
+ "golem-service-base",
+ "golem-shard-manager",
+ "golem-worker-executor",
+ "golem-worker-service",
+ "http-body-util",
+ "hyper 1.7.0",
+ "include_dir",
+ "opentelemetry 0.30.0",
+ "opentelemetry-prometheus-text-exporter",
+ "opentelemetry_sdk 0.30.0",
+ "poem",
+ "prometheus",
+ "regex",
+ "reqwest 0.12.24",
+ "rlimit",
+ "rustls 0.23.35",
+ "serde",
+ "tempfile",
+ "test-r",
+ "tokio",
+ "tracing",
+ "uuid",
+ "warp",
+ "webbrowser",
+]
+
+[[package]]
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [

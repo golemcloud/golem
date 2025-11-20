@@ -19,7 +19,7 @@ members = [
     "integration-tests",
     "golem-wasm",
     "golem-wasm-derive",
-    # "cli/golem",
+    "cli/golem",
     "cli/golem-cli",
     "cli/golem-templates",
 ]
@@ -89,8 +89,8 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
-golem-component-service = { path = "golem-component-service" }
 golem-openapi-client-generator = "=0.0.16"
+golem-registry-service = { path = "golem-registry-service" }
 golem-rib = { version = "=0.0.0", path = "golem-rib" }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
@@ -142,7 +142,6 @@ clap = { version = "4.5.32", features = ["derive", "suggestions", "color", "help
 clap-verbosity-flag = { version = "3.0.2", features = ["tracing"] }
 clap_complete = "4.5.45"
 cli-table = "0.4.9"
-cloud-service = { path = "cloud-service" }
 colored = "3.0.0"
 colored-diff = "0.2.3"
 combine = "4.6.7"
