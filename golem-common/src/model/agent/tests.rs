@@ -164,7 +164,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters);
+        let id = AgentId::new("agent-6".to_string(), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -187,7 +187,7 @@ proptest! {
                 ]
             }
         );
-        let id = AgentId::new("agent-6".to_string(), parameters);
+        let id = AgentId::new("agent-6".to_string(), parameters, None);
         let s = id.to_string();
         println!("{s}");
         let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
