@@ -275,7 +275,7 @@ export function agent(options?: AgentDecoratorOptions) {
       ctor,
     );
 
-    (ctor as any).phantom = getPhantomRemoteClient(
+    (ctor as any).getPhantom = getPhantomRemoteClient(
       agentClassName,
       agentType,
       ctor,
