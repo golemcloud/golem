@@ -60,7 +60,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { AgentId, Multimodal, Result, UnstructuredText } from '../src';
+import { AgentId, Multimodal, MultimodalBasic, Result, UnstructuredText } from '../src';
 import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
@@ -499,6 +499,30 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
   );
 });
 
+test('Invoke function that takes and returns basic multimodal types', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const multimodalInput: MultimodalBasic = [
+    { tag: 'text',  val: {tag: 'url', val: 'https://example.com/text.txt'} },
+  ];
+
+  testInvoke(
+    'fun39',
+    [['param', multimodalInput]],
+    resolvedAgent,
+    multimodalInput,
+    true,
+  );
+});
+
 test('Invoke function that takes and returns multimodal types', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
@@ -541,6 +565,7 @@ test('Invoke function that takes and returns multimodal types', () => {
     true,
   );
 });
+
 
 test('Invoke function that takes and returns typed array', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));

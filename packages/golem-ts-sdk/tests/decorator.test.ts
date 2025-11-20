@@ -140,14 +140,14 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expected = [
       [
-        'string',
+        'text',
         {
           tag: 'component-model',
           val: { nodes: [{ type: { tag: 'prim-string-type' } }] },
         },
       ],
       [
-        'uint8array',
+        'image',
         {
           tag: 'component-model',
           val: {

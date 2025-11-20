@@ -41,6 +41,7 @@ import {
 import { TypeInfoInternal } from './registry/typeInfoInternal';
 import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
+import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 
 export function getConstructorDataSchema(
   agentClassName: string,
@@ -57,10 +58,8 @@ export function getConstructorDataSchema(
 
     if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
       const elementType = paramType.element;
-      const multimodalTypes: Type.Type[] =
-        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
 
-      const multiModalDetails = getMultimodalDetails(multimodalTypes);
+      const multiModalDetails = getMultimodalDetails(elementType);
 
       if (Either.isLeft(multiModalDetails)) {
         return Either.left(
@@ -253,12 +252,7 @@ export function buildMethodInputSchema(
     const paramType = paramTypesArray[0][1];
 
     if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
-      const elementType = paramType.element;
-
-      const multimodalTypes =
-        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
-
-      const multiModalDetails = getMultimodalDetails(multimodalTypes);
+      const multiModalDetails = getMultimodalDetails(paramType.element);
 
       if (Either.isLeft(multiModalDetails)) {
         return Either.left(
@@ -353,12 +347,8 @@ export function buildOutputSchema(
     multiModalTarget.name === 'Multimodal' &&
     multiModalTarget.kind === 'array'
   ) {
-    const elementType = multiModalTarget.element;
-
-    const multimodalTypes =
-      elementType.kind === 'union' ? elementType.unionTypes : [elementType];
-
-    const multiModalDetails = getMultimodalDetails(multimodalTypes);
+    const multiModalDetails =
+      getMultimodalDetails(multiModalTarget.element);
 
     if (Either.isLeft(multiModalDetails)) {
       return Either.left(
@@ -474,18 +464,51 @@ export function buildOutputSchema(
 }
 
 function getMultimodalDetails(
-  types: Type.Type[],
+  type: Type.Type
 ): Either.Either<[string, ElementSchema, TypeInfoInternal][], string> {
-  return Either.all(
-    types.map((paramType) => {
-      const paramTypeName = paramType.name ?? paramType.kind; // For primitive types, aliases are not preserved
 
-      if (paramTypeName && paramTypeName === 'UnstructuredText') {
+  const multimodalTypes =
+    type.kind === 'union' ? getTaggedUnion(type.unionTypes) : getTaggedUnion([type]);
+
+  if (Either.isLeft(multimodalTypes)) {
+    return Either.left(
+      `failed to generate the multimodal schema: ${multimodalTypes.val}`,
+    );
+  }
+
+  const taggedUnionOpt = multimodalTypes.val;
+
+  if (Option.isNone(taggedUnionOpt)) {
+    return Either.left(
+      `multimodal type is not a tagged union: ${multimodalTypes.val}`,
+    );
+  }
+
+  const taggedTypes = TaggedUnion.getTaggedTypes(taggedUnionOpt.val);
+
+  return Either.all(
+    taggedTypes.map((taggedTypeMetadata ) => {
+
+      const paramTypeOpt = taggedTypeMetadata.valueType;
+
+      if (Option.isNone(paramTypeOpt)) {
+        return Either.left(
+          `Multimodal types should have a value associated with the tag ${taggedTypeMetadata.tagLiteralName}`,
+        );
+      }
+
+      const tagName = taggedTypeMetadata.tagLiteralName;
+
+      const paramType = paramTypeOpt.val[1];
+
+      const typeName = paramType.name;
+
+      if (typeName && typeName === 'UnstructuredText') {
         const textDescriptor = getTextDescriptor(paramType);
 
         if (Either.isLeft(textDescriptor)) {
           return Either.left(
-            `Failed to get text descriptor for unstructured-text parameter ${paramTypeName}: ${textDescriptor.val}`,
+            `Failed to get text descriptor for unstructured-text parameter ${tagName}: ${textDescriptor.val}`,
           );
         }
 
@@ -501,18 +524,18 @@ function getMultimodalDetails(
         };
 
         return Either.right([
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ]);
       }
 
-      if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+      if (typeName && typeName === 'UnstructuredBinary') {
         const binaryDescriptor = getBinaryDescriptor(paramType);
 
         if (Either.isLeft(binaryDescriptor)) {
           return Either.left(
-            `Failed to get binary descriptor for unstructured-binary parameter ${paramTypeName}: ${binaryDescriptor.val}`,
+            `Failed to get binary descriptor for unstructured-binary parameter ${tagName}: ${binaryDescriptor.val}`,
           );
         }
 
@@ -528,7 +551,7 @@ function getMultimodalDetails(
         };
 
         return Either.right([
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ]);
@@ -552,7 +575,7 @@ function getMultimodalDetails(
           val: witType,
         };
         return [
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ];

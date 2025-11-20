@@ -18,7 +18,7 @@ import {
   Multimodal,
   UnstructuredBinary,
   UnstructuredText,
-  Result,
+  Result, MultimodalBasic,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -168,8 +168,8 @@ export class FooAgent extends BaseAgent {
   }
 
   async fun18(
-    param: Multimodal<Text | Image>,
-  ): Promise<Multimodal<Text | Image>> {
+    param: Multimodal<TextOrImage>,
+  ): Promise<Multimodal<TextOrImage>> {
     return param;
   }
 
@@ -430,14 +430,16 @@ class BarAgent extends BaseAgent {
   };
 
   async fun23(
-    multimodalInput: Multimodal<Text | Image>,
-  ): Promise<Multimodal<Text | Image>> {
+    multimodalInput: Multimodal<TextOrImage>,
+  ): Promise<Multimodal<TextOrImage>> {
     return multimodalInput;
   }
 }
 
 export type Text = string;
 export type Image = Uint8Array;
+
+export type TextOrImage = {tag: 'text'; val: string } | { tag: 'image'; val:Uint8Array };
 
 @agent({ mode: 'ephemeral' })
 class EphemeralAgent extends BaseAgent {

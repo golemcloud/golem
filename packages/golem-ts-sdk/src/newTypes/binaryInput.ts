@@ -39,7 +39,7 @@ export type UnstructuredBinary<MT extends MimeType[]> =
   | {
       tag: 'inline';
       val: Uint8Array;
-      mimeType?: MT[number];
+      mimeType: MT[number];
     };
 
 export const UnstructuredBinary = {
@@ -55,23 +55,16 @@ export const UnstructuredBinary = {
       });
     }
 
-    if (allowedMimeTypes.length > 0) {
-      if (!allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
-        return Either.left(
-          `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
-        );
-      }
-
-      return Either.right({
-        tag: 'inline',
-        val: dataValue.val.data,
-        mimeType: dataValue.val.binaryType.mimeType,
-      });
+    if (!allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
+      return Either.left(
+        `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
+      );
     }
 
     return Either.right({
       tag: 'inline',
       val: dataValue.val.data,
+      mimeType: dataValue.val.binaryType.mimeType,
     });
   },
 
