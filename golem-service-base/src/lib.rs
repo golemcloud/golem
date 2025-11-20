@@ -16,6 +16,7 @@ pub mod api;
 pub mod api_tags;
 pub mod clients;
 pub mod config;
+pub mod custom_api;
 pub mod db;
 pub mod error;
 pub mod grpc;

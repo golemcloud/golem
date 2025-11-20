@@ -12,12 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use authentication::*;
-pub use cors::*;
-pub use http_middleware::*;
-pub use middleware_error::*;
+pub mod compiled_gateway_binding;
+pub mod compiled_http_api_definition;
+pub mod http_middlewares;
+pub mod identity_provider_metadata;
+pub mod path_pattern;
+pub mod security_scheme;
 
-mod authentication;
-mod cors;
-mod http_middleware;
-mod middleware_error;
+#[derive(Debug, Clone, PartialEq)]
+pub struct HttpCors {
+    pub allow_origin: String,
+    pub allow_methods: String,
+    pub allow_headers: String,
+    pub expose_headers: Option<String>,
+    pub allow_credentials: Option<bool>,
+    pub max_age: Option<u64>,
+}

@@ -51,7 +51,7 @@ impl<T> Router<T> {
 
 #[cfg(test)]
 mod tests {
-    use crate::gateway_execution::router::{Router, RouterPattern};
+    use crate::gateway_router::{Router, RouterPattern};
     use http::Method;
     use test_r::test;
 

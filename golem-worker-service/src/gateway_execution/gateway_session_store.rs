@@ -21,14 +21,13 @@ use golem_service_base::db::sqlite::SqlitePool;
 use sqlx::Row;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::task;
 use tokio::time::interval;
 use tracing::{error, info, Instrument};
 
 #[async_trait]
-pub trait GatewaySession: Send + Sync {
+pub trait GatewaySessionStore: Send + Sync {
     async fn insert(
         &self,
         session_id: SessionId,
@@ -62,8 +61,6 @@ impl SafeDisplay for GatewaySessionError {
         }
     }
 }
-
-pub type GatewaySessionStore = Arc<dyn GatewaySession + Send + Sync>;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct SessionId(pub String);
@@ -142,7 +139,7 @@ impl Default for RedisGatewaySessionExpiration {
 }
 
 #[async_trait]
-impl GatewaySession for RedisGatewaySession {
+impl GatewaySessionStore for RedisGatewaySession {
     async fn insert(
         &self,
         session_id: SessionId,
@@ -312,7 +309,7 @@ impl SqliteGatewaySession {
 }
 
 #[async_trait]
-impl GatewaySession for SqliteGatewaySession {
+impl GatewaySessionStore for SqliteGatewaySession {
     async fn insert(
         &self,
         session_id: SessionId,
