@@ -84,9 +84,6 @@ impl LoadSnapshotGuest for Component {
 impl SaveSnapshotGuest for Component {
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {
-            // TODO; just referring to TS, verify
-            let agent_id_bytes = resolved_agent.agent_id.agent_id.as_bytes();
-
             let agent_snapshot = resolved_agent
                 .agent
                 .borrow()
@@ -94,15 +91,10 @@ impl SaveSnapshotGuest for Component {
                 .await
                 .expect("Failed to save agent snapshot");
 
-            let total_length = 1 + 4 + agent_id_bytes.len() + agent_snapshot.len();
-
+            let total_length = 1 + agent_snapshot.len();
             let mut full_snapshot = Vec::with_capacity(total_length);
 
-            full_snapshot.push(1u8);
-
-            full_snapshot.extend_from_slice(&(agent_id_bytes.len() as u32).to_be_bytes());
-
-            full_snapshot.extend_from_slice(agent_id_bytes);
+            full_snapshot.push(1);
 
             full_snapshot.extend_from_slice(&agent_snapshot);
 
@@ -110,7 +102,6 @@ impl SaveSnapshotGuest for Component {
         })
     }
 }
-
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
 crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
 crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);
