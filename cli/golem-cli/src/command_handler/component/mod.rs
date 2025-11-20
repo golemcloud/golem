@@ -1254,7 +1254,7 @@ impl ComponentCommandHandler {
                 dynamic_linking_wasm_rpc: properties
                     .dynamic_linking
                     .as_ref()
-                    .map(|dynamic_linking| dynamic_linking_to_diffable(dynamic_linking))
+                    .map(dynamic_linking_to_diffable)
                     .unwrap_or_default(),
             }
             .into(),

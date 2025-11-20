@@ -114,6 +114,8 @@ pub struct DynamicHelpSections {
     custom_commands: bool,
     builtin_commands: BTreeSet<String>,
     api_definitions: bool,
+    // TODO: atomic
+    #[allow(unused)]
     api_deployments: bool,
 }
 
@@ -468,9 +470,15 @@ pub struct ApplicationNameAndEnvironments {
 #[derive(Clone, Debug)]
 pub struct Application {
     application_name: WithSource<ApplicationName>,
+    // TODO: atomic
+    #[allow(unused)]
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+    // TODO: atomic
+    #[allow(unused)]
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
+    // TODO: atomic
+    #[allow(unused)]
     temp_dir: Option<WithSource<String>>,
     resolved_temp_dir: PathBuf,
     wit_deps: WithSource<Vec<String>>,
@@ -817,7 +825,7 @@ pub struct ComponentLayer {
 #[derive(Debug, Clone, Serialize)]
 enum ComponentLayerPropertiesKind {
     Empty,
-    Common(ComponentLayerProperties),
+    Common(Box<ComponentLayerProperties>),
     Presets {
         presets: IndexMap<String, ComponentLayerProperties>,
         default_preset: String,
@@ -2100,9 +2108,9 @@ mod app_builder {
                         parents: ComponentLayerId::parent_ids_from_raw_template_references(
                             template.templates,
                         ),
-                        properties: ComponentLayerPropertiesKind::Common(
+                        properties: ComponentLayerPropertiesKind::Common(Box::new(
                             template.component_properties.into(),
-                        ),
+                        )),
                     })
                     .err()
                 {
@@ -2174,9 +2182,9 @@ mod app_builder {
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
                                 component.templates,
                             ),
-                            properties: ComponentLayerPropertiesKind::Common(
+                            properties: ComponentLayerPropertiesKind::Common(Box::new(
                                 component.component_properties.into(),
-                            ),
+                            )),
                         })
                         .err()
                     {
@@ -2706,6 +2714,8 @@ mod app_builder {
             self.available_options_help("profiles", "profile names", unknown, available_profiles)
         }
 
+        // TODO: atomic
+        #[allow(unused)]
         fn available_templates(&self, _unknown: &str) -> String {
             // TODO: atomic
             /*self.available_options_help(

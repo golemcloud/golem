@@ -199,9 +199,11 @@ impl Context {
 
         let use_cloud_profile_for_env = manifest_environment
             .as_ref()
-            .map(|env| match &env.environment.server {
-                Some(Server::Builtin(BuiltinServer::Cloud)) => true,
-                _ => false,
+            .map(|env| {
+                matches!(
+                    &env.environment.server,
+                    Some(Server::Builtin(BuiltinServer::Cloud))
+                )
             })
             .unwrap_or_default();
 
@@ -717,11 +719,11 @@ impl Context {
         force_use_cloud_profile: bool,
     ) -> anyhow::Result<NamedProfile> {
         let profile_name = force_use_cloud_profile
-            .then(|| ProfileName::cloud())
+            .then(ProfileName::cloud)
             .or_else(|| global_flags.profile.clone())
-            .or_else(|| global_flags.local.then(|| ProfileName::local()))
-            .or_else(|| global_flags.cloud.then(|| ProfileName::cloud()))
-            .unwrap_or_else(|| ProfileName::local());
+            .or_else(|| global_flags.local.then(ProfileName::local))
+            .or_else(|| global_flags.cloud.then(ProfileName::cloud))
+            .unwrap_or_else(ProfileName::local);
 
         let config = Config::from_dir(&global_flags.config_dir())?;
 
@@ -895,7 +897,11 @@ impl GolemClients {
 }
 
 struct ApplicationContextConfig {
+    // TODO: atomic
+    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
+    // TODO: atomic
+    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
@@ -928,6 +934,8 @@ impl ApplicationContextConfig {
         }
     }
 
+    // TODO: atomic
+    #[allow(unused)]
     pub fn app_source_mode(&self) -> ApplicationSourceMode {
         if self.disable_app_manifest_discovery {
             ApplicationSourceMode::None

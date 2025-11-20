@@ -127,7 +127,7 @@ impl Auth {
             }
             AuthenticationSource::ApplicationEnvironment(app_env_id) => {
                 let mut config = Config::get_application_environment(config_dir, app_env_id)?
-                    .unwrap_or_else(|| ApplicationEnvironmentConfig {
+                    .unwrap_or(ApplicationEnvironmentConfig {
                         auth: OAuth2AuthenticationConfig { data: None },
                     });
                 config.auth = OAuth2AuthenticationConfig::from_token_with_secret(token);

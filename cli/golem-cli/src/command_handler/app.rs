@@ -450,8 +450,8 @@ impl AppCommandHandler {
 
     async fn deploy_by_revision(
         &self,
-        version: u64,
-        deploy_args: DeployArgs,
+        _version: u64,
+        _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         // TODO: atomic: missing client method
         todo!()
@@ -459,7 +459,7 @@ impl AppCommandHandler {
 
     async fn deploy_from_source(
         &self,
-        plan: bool,
+        _plan: bool, // TODO: atomic
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
@@ -478,16 +478,6 @@ impl AppCommandHandler {
             &ApplicationComponentSelectMode::All,
         )
         .await?;
-
-        let selected_component_names = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .selected_component_names()
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
 
         if deploy_args.reset {
             // TODO: atomic: delete env
@@ -625,7 +615,7 @@ impl AppCommandHandler {
         let account_id = self.ctx.account_id().await?;
 
         match self
-            .get_remote_application(&account_id, &application_name)
+            .get_remote_application(&account_id, application_name)
             .await?
         {
             Some(application) => Ok(Some(application)),

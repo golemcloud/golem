@@ -196,7 +196,7 @@ pub struct Environment {
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
 pub enum Server {
     Builtin(BuiltinServer),
-    Custom(CustomServer),
+    Custom(Box<CustomServer>),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

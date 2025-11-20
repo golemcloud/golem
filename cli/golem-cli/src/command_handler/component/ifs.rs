@@ -42,6 +42,8 @@ pub struct HashedFile {
     pub target: ComponentFilePathWithPermissions,
 }
 
+// TODO: atomic
+#[allow(unused)]
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
@@ -58,6 +60,8 @@ impl IfsFileManager {
         Self { client }
     }
 
+    // TODO: atomic
+    #[allow(unused)]
     pub async fn build_files_archive(
         &self,
         component_files: &[InitialComponentFile],
