@@ -23,6 +23,10 @@ use async_trait::async_trait;
 use golem_wasm::analysis::analysed_type::{field, flags, list, record, u32};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
+use proptest::prelude::Strategy;
+use proptest::strategy::Just;
+use proptest::string::string_regex;
+use proptest::{prop_assert_eq, prop_oneof, proptest};
 use std::collections::HashMap;
 use test_r::test;
 
@@ -125,6 +129,69 @@ fn roundtrip_test_4_2() {
             ],
         }),
     )
+}
+
+fn text_type_strat() -> impl Strategy<Value = Option<TextType>> {
+    prop_oneof! {
+        Just(None),
+        Just(Some(TextType { language_code: "en".to_string() })),
+        Just(Some(TextType { language_code: "de".to_string() })),
+        Just(Some(TextType { language_code: "hu".to_string() })),
+    }
+}
+
+fn text_reference_strat() -> impl Strategy<Value = TextReference> {
+    prop_oneof! {
+        Just(TextReference::Url(Url { value: "https://example.com/xyz?a=1".to_string() })),
+        (string_regex(".*\\p{Cc}.*").unwrap(), text_type_strat()).prop_map(|(data, text_type)| TextReference::Inline(TextSource {
+            data,
+            text_type
+        }))
+    }
+}
+
+proptest! {
+    #[test]
+    fn roundtrip_test_arbitrary_unstructured_text_in_multimodal(txt in text_reference_strat()) {
+        let parameters = DataValue::Multimodal(
+            NamedElementValues {
+                elements: vec![
+                    NamedElementValue {
+                        name: "y".to_string(),
+                        value: ElementValue::UnstructuredText(txt)
+                    },
+                ]
+            }
+        );
+        let id = AgentId::new("agent-6".to_string(), parameters);
+        let s = id.to_string();
+        println!("{s}");
+        let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+        prop_assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn roundtrip_test_multiple_arbitrary_unstructured_text_in_multimodal(txt1 in text_reference_strat(), txt2 in text_reference_strat()) {
+        let parameters = DataValue::Multimodal(
+            NamedElementValues {
+                elements: vec![
+                    NamedElementValue {
+                        name: "y".to_string(),
+                        value: ElementValue::UnstructuredText(txt1)
+                    },
+                    NamedElementValue {
+                        name: "y".to_string(),
+                        value: ElementValue::UnstructuredText(txt2)
+                    },
+                ]
+            }
+        );
+        let id = AgentId::new("agent-6".to_string(), parameters);
+        let s = id.to_string();
+        println!("{s}");
+        let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
+        prop_assert_eq!(id, id2);
+    }
 }
 
 #[test]
