@@ -75,7 +75,7 @@ pub fn get_remote_client(
                            golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                                 #type_name,
                                 &data_value,
-                                Some(golem_rust::Uuid::new_v4()).into()
+                                Some(golem_rust::Uuid::new_v4().into())
                            ).expect("Internal Error: Failed to make agent id");
 
                          let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
@@ -86,7 +86,7 @@ pub fn get_remote_client(
 
                     }
 
-                    pub fn phantom(phantom_id: golem_rust::Uuid, #(#constructor_param_defs), *) -> #remote_client_type_name {
+                    pub fn get_phantom(phantom_id: golem_rust::Uuid, #(#constructor_param_defs), *) -> #remote_client_type_name {
                         let agent_type =
                            golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name).expect("Internal Error: Agent type not registered");
 
@@ -98,7 +98,7 @@ pub fn get_remote_client(
                            golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                                 #type_name,
                                 &data_value,
-                                Some(phantom_id).into()
+                                Some(phantom_id.into())
                            ).expect("Internal Error: Failed to make agent id");
 
                          let agent_id = golem_rust::wasm_rpc::AgentId { agent_id: agent_id_string, component_id: agent_type.implemented_by.clone() };
