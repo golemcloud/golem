@@ -142,6 +142,10 @@ pub fn get_agent_id() -> AgentId {
     get_state().agent_id.borrow().clone().unwrap()
 }
 
+pub fn get_resolved_agent() -> Option<Arc<ResolvedAgent>> {
+    get_state().agent_instance.borrow().resolved_agent.clone()
+}
+
 pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
