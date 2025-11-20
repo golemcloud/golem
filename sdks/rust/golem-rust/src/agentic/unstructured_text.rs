@@ -219,7 +219,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         }))
     }
 
-    fn to_element_value(self) -> Result<StructuredValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         match self {
             UnstructuredText::Text {
                 text,
@@ -250,7 +250,10 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
         UnstructuredText::from_wit_value(wit_value)
     }
 
-    fn from_element_value(value: StructuredValue, _schema: StructuredSchema) -> Result<Self, String>
+    fn from_unstructured_value(
+        value: StructuredValue,
+        _schema: StructuredSchema,
+    ) -> Result<Self, String>
     where
         Self: Sized,
     {
@@ -301,7 +304,7 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
     where
         Self: Sized,
     {
-        let value_type = self.to_element_value()?;
+        let value_type = self.to_structured_value()?;
 
         let element_value_result = match value_type {
             StructuredValue::Default(element_value) => Ok(element_value),
@@ -314,30 +317,10 @@ impl<T: AllowedLanguages> Schema for UnstructuredText<T> {
 
         match element_value {
             ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
-                BinaryReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
-
-                    Ok(golem_wasm::WitValue::from(value))
-                }
-                BinaryReference::Inline(binary_source) => {
-                    let restriction_record =
-                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
-
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
-                            restriction_record,
-                        ]))),
-                    };
-
-                    Ok(golem_wasm::WitValue::from(value))
-                }
-            },
+            ElementValue::UnstructuredBinary(binary_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredBinary: {:?}",
+                binary_reference
+            )),
             ElementValue::UnstructuredText(text_reference) => match text_reference {
                 TextReference::Url(url) => {
                     let value = Value::Variant {

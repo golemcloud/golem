@@ -213,12 +213,15 @@ impl<T: MultimodalSchema> Schema for Multimodal<T> {
         StructuredSchema::Multimodal(T::get_multimodal_schema())
     }
 
-    fn to_element_value(self) -> Result<StructuredValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         let data_value = self.to_name_and_element_values()?;
         Ok(StructuredValue::Multimodal(data_value))
     }
 
-    fn from_element_value(value: StructuredValue, schema: StructuredSchema) -> Result<Self, String>
+    fn from_unstructured_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String>
     where
         Self: Sized,
     {
@@ -315,7 +318,7 @@ impl MultimodalSchema for MultimodalBasicType {
     {
         match self {
             MultimodalBasicType::Text(text) => {
-                let elem_value = text.to_element_value()?;
+                let elem_value = text.to_structured_value()?;
                 Ok((
                     "Text".to_string(),
                     elem_value
@@ -324,7 +327,7 @@ impl MultimodalSchema for MultimodalBasicType {
                 ))
             }
             MultimodalBasicType::Binary(binary) => {
-                let elem_value = binary.to_element_value()?;
+                let elem_value = binary.to_structured_value()?;
                 Ok((
                     "Binary".to_string(),
                     elem_value
@@ -344,13 +347,15 @@ impl MultimodalSchema for MultimodalBasicType {
         match name.as_str() {
             "Text" => {
                 let schema = <UnstructuredText>::get_type();
-                let text =
-                    UnstructuredText::from_element_value(StructuredValue::Default(value), schema)?;
+                let text = UnstructuredText::from_unstructured_value(
+                    StructuredValue::Default(value),
+                    schema,
+                )?;
                 Ok(MultimodalBasicType::Text(text))
             }
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
-                let binary = UnstructuredBinary::<String>::from_element_value(
+                let binary = UnstructuredBinary::<String>::from_unstructured_value(
                     StructuredValue::Default(value),
                     schema,
                 )?;

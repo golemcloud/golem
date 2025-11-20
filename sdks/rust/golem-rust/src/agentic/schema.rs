@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{BinaryReference, ElementValue};
-use crate::golem_agentic::golem::agent::common::{ElementSchema, TextReference};
+use crate::golem_agentic::golem::agent::common::ElementSchema;
+use crate::golem_agentic::golem::agent::common::ElementValue;
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use crate::wasm_rpc::WitValue;
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
-use golem_wasm::Value;
 
 pub trait Schema {
     fn get_type() -> StructuredSchema;
-    fn to_element_value(self) -> Result<StructuredValue, String>;
-    fn from_element_value(value: StructuredValue, schema: StructuredSchema) -> Result<Self, String>
+    fn to_structured_value(self) -> Result<StructuredValue, String>;
+    fn from_unstructured_value(
+        value: StructuredValue,
+        schema: StructuredSchema,
+    ) -> Result<Self, String>
     where
         Self: Sized;
 
@@ -80,14 +82,14 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
         StructuredSchema::Default(ElementSchema::ComponentModel(T::get_type()))
     }
 
-    fn to_element_value(self) -> Result<StructuredValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         let wit_value = self.into_value();
         Ok(StructuredValue::Default(ElementValue::ComponentModel(
             wit_value,
         )))
     }
 
-    fn from_element_value(
+    fn from_unstructured_value(
         value: StructuredValue,
         schema: StructuredSchema,
     ) -> Result<Self, String> {
@@ -112,7 +114,7 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
     }
 
     fn to_wit_value(self) -> Result<WitValue, String> {
-        let value_out = self.to_element_value()?;
+        let value_out = self.to_structured_value()?;
 
         let element_value_result = match value_out {
             StructuredValue::Default(element_value) => Ok(element_value),
@@ -125,56 +127,14 @@ impl<T: IntoValue + FromValueAndType> Schema for T {
 
         match element_value {
             ElementValue::ComponentModel(wit_value) => Ok(wit_value),
-            ElementValue::UnstructuredBinary(binary_reference) => match binary_reference {
-                BinaryReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-                BinaryReference::Inline(binary_source) => {
-                    let restriction_record =
-                        Value::Record(vec![Value::String(binary_source.binary_type.mime_type)]);
-
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::List(binary_source.data.into_iter().map(Value::U8).collect()),
-                            restriction_record,
-                        ]))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-            },
-            ElementValue::UnstructuredText(text_reference) => match text_reference {
-                TextReference::Url(url) => {
-                    let value = Value::Variant {
-                        case_idx: 0,
-                        case_value: Some(Box::new(Value::String(url))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-
-                TextReference::Inline(text_source) => {
-                    let restriction_record = text_source.text_type.map(|text_type| {
-                        Box::new(Value::Record(vec![Value::String(text_type.language_code)]))
-                    });
-
-                    let value = Value::Variant {
-                        case_idx: 1,
-                        case_value: Some(Box::new(Value::Record(vec![
-                            Value::String(text_source.data),
-                            Value::Option(restriction_record),
-                        ]))),
-                    };
-
-                    Ok(WitValue::from(value))
-                }
-            },
+            ElementValue::UnstructuredBinary(binary_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredBinary: {:?}",
+                binary_reference
+            )),
+            ElementValue::UnstructuredText(text_reference) => Err(format!(
+                "Expected ComponentModel value, got UnstructuredText: {:?}",
+                text_reference
+            )),
         }
     }
 }

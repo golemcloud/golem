@@ -179,7 +179,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         }))
     }
 
-    fn to_element_value(self) -> Result<StructuredValue, String> {
+    fn to_structured_value(self) -> Result<StructuredValue, String> {
         match self {
             UnstructuredBinary::Inline { data, mime_type } => {
                 let mime_type = mime_type.to_string();
@@ -198,7 +198,10 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
         }
     }
 
-    fn from_element_value(value: StructuredValue, _schema: StructuredSchema) -> Result<Self, String>
+    fn from_unstructured_value(
+        value: StructuredValue,
+        _schema: StructuredSchema,
+    ) -> Result<Self, String>
     where
         Self: Sized,
     {
@@ -261,7 +264,7 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
     where
         Self: Sized,
     {
-        let value_type = self.to_element_value()?;
+        let value_type = self.to_structured_value()?;
 
         let element_value_result = match value_type {
             StructuredValue::Default(element_value) => Ok(element_value),
