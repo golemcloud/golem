@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::aws_config::AwsConfig;
+use anyhow::anyhow;
 use rusoto_elbv2::{
     DescribeListenersInput, DescribeLoadBalancersInput, DescribeTagsInput, Elb, ElbClient,
     LoadBalancer,
 };
-use anyhow::anyhow;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwsLoadBalancerListener {
@@ -145,9 +145,9 @@ impl AwsLoadBalancer {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
     use crate::services::domain_registration::aws_config::AwsConfig;
     use crate::services::domain_registration::aws_load_balancer::AwsLoadBalancer;
+    use test_r::test;
 
     fn aws_config() -> AwsConfig {
         AwsConfig::new("TOKEN", "ARN")

@@ -12,29 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use super::provisioner::DomainProvisioner;
-use golem_common::model::domain_registration::Domain;
 use super::aws_config::AwsConfig;
-use rusoto_route53::{AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, CreateHostedZoneRequest, ListHostedZonesRequest, ResourceRecordSet, Route53, Route53Client};
 use super::aws_load_balancer::AwsLoadBalancer;
+use super::provisioner::DomainProvisioner;
 use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
 use golem_common::SafeDisplay;
+use golem_common::model::domain_registration::Domain;
+use rusoto_route53::{
+    AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, ListHostedZonesRequest,
+    ResourceRecordSet, Route53, Route53Client,
+};
+use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 pub struct AwsDomainProvisioner {
     domain_suffix: String,
     hosted_zone: AwsRoute53HostedZone,
     client: Route53Client,
-    load_balancer: AwsLoadBalancer
+    load_balancer: AwsLoadBalancer,
 }
 
 impl AwsDomainProvisioner {
     pub async fn new(
         environment: &str,
         workspace: &str,
-        config: &AwsDomainProvisionerConfig
+        config: &AwsDomainProvisionerConfig,
     ) -> anyhow::Result<Self> {
         let aws_config = AwsConfig::from_k8s_env();
         Self::with_aws_config(environment, workspace, aws_config, config).await
@@ -44,17 +47,18 @@ impl AwsDomainProvisioner {
         environment: &str,
         workspace: &str,
         aws_config: AwsConfig,
-        config: &AwsDomainProvisionerConfig
+        config: &AwsDomainProvisionerConfig,
     ) -> anyhow::Result<Self> {
         let load_balancer = AwsLoadBalancer::new(environment, workspace, &aws_config).await?;
         let client: Route53Client = aws_config.clone().try_into()?;
-        let hosted_zone = AwsRoute53HostedZone::with_client(&client, &config.managed_domain).await?;
+        let hosted_zone =
+            AwsRoute53HostedZone::with_client(&client, &config.managed_domain).await?;
 
         Ok(Self {
             domain_suffix: format!(".{}", config.managed_domain),
             hosted_zone,
             client,
-            load_balancer
+            load_balancer,
         })
     }
 }
@@ -65,7 +69,7 @@ impl DomainProvisioner for AwsDomainProvisioner {
         domain.0.ends_with(&self.domain_suffix)
     }
 
-    async fn provision_domain(&self, domain: &Domain) ->  anyhow::Result<()> {
+    async fn provision_domain(&self, domain: &Domain) -> anyhow::Result<()> {
         let change_batch = ChangeBatch {
             changes: vec![Change {
                 action: "UPSERT".to_string(),
@@ -88,14 +92,12 @@ impl DomainProvisioner for AwsDomainProvisioner {
             change_batch,
         };
 
-        self.client
-            .change_resource_record_sets(request)
-            .await?;
+        self.client.change_resource_record_sets(request).await?;
 
         Ok(())
     }
 
-    async fn remove_domain(&self, domain: &Domain) ->  anyhow::Result<()> {
+    async fn remove_domain(&self, domain: &Domain) -> anyhow::Result<()> {
         let change_batch = ChangeBatch {
             changes: vec![Change {
                 action: "DELETE".to_string(),
@@ -118,9 +120,7 @@ impl DomainProvisioner for AwsDomainProvisioner {
             change_batch,
         };
 
-        self.client
-            .change_resource_record_sets(request)
-            .await?;
+        self.client.change_resource_record_sets(request).await?;
 
         Ok(())
     }
@@ -170,7 +170,7 @@ impl Default for AwsDomainProvisionerConfig {
     fn default() -> Self {
         Self {
             // TODO: separate domain for custom apis
-            managed_domain: "dev-api.golem.cloud".to_string()
+            managed_domain: "dev-api.golem.cloud".to_string(),
         }
     }
 }
@@ -186,11 +186,13 @@ impl SafeDisplay for AwsDomainProvisionerConfig {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
     use crate::services::domain_registration::aws_config::AwsConfig;
-    use crate::services::domain_registration::aws_provisioner::{AwsDomainProvisioner, AwsDomainProvisionerConfig};
+    use crate::services::domain_registration::aws_provisioner::{
+        AwsDomainProvisioner, AwsDomainProvisionerConfig,
+    };
     use crate::services::domain_registration::provisioner::DomainProvisioner;
     use golem_common::model::domain_registration::Domain;
+    use test_r::test;
 
     async fn provisioner() -> anyhow::Result<AwsDomainProvisioner> {
         let provisioner = AwsDomainProvisioner::with_aws_config(
@@ -198,9 +200,10 @@ mod tests {
             "release",
             AwsConfig::new("TOKEN", "ARN"),
             &AwsDomainProvisionerConfig {
-                managed_domain: "dev-api.golem.cloud".to_string()
-            }
-        ).await?;
+                managed_domain: "dev-api.golem.cloud".to_string(),
+            },
+        )
+        .await?;
 
         Ok(provisioner)
     }
@@ -209,7 +212,11 @@ mod tests {
     #[ignore]
     pub async fn test_provision() -> anyhow::Result<()> {
         let provisioner = provisioner().await?;
-        let result = provisioner.provision_domain(&Domain("aws-provisioner-test.dev-api.golem.cloud".to_string())).await;
+        let result = provisioner
+            .provision_domain(&Domain(
+                "aws-provisioner-test.dev-api.golem.cloud".to_string(),
+            ))
+            .await;
         println!("result: {result:?}");
         assert!(result.is_ok());
         Ok(())
@@ -219,7 +226,11 @@ mod tests {
     #[ignore]
     pub async fn test_remove() -> anyhow::Result<()> {
         let provisioner = provisioner().await?;
-        let result = provisioner.provision_domain(&Domain("aws-provisioner-test.dev-api.golem.cloud".to_string())).await;
+        let result = provisioner
+            .provision_domain(&Domain(
+                "aws-provisioner-test.dev-api.golem.cloud".to_string(),
+            ))
+            .await;
         println!("result: {result:?}");
         assert!(result.is_ok());
         Ok(())

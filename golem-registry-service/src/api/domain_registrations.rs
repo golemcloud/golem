@@ -14,10 +14,12 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
-use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantId,
+use crate::services::domain_registration::DomainRegistrationService;
+use golem_common::api::Page;
+use golem_common::model::domain_registration::{
+    DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -28,11 +30,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use crate::services::domain_registration::DomainRegistrationService;
-use golem_common::api::api_domain::CreateApiDomainRequest;
-use golem_common::model::domain_registration::{DomainRegistration, DomainRegistrationCreation, DomainRegistrationId};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::api::Page;
 
 pub struct DomainRegistrationsApi {
     domain_registration_service: Arc<DomainRegistrationService>,
@@ -89,7 +86,10 @@ impl DomainRegistrationsApi {
         payload: DomainRegistrationCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<DomainRegistration>> {
-        let domain_registration = self.domain_registration_service.create(environment_id, payload, &auth).await?;
+        let domain_registration = self
+            .domain_registration_service
+            .create(environment_id, payload, &auth)
+            .await?;
 
         Ok(Json(domain_registration))
     }
@@ -126,15 +126,20 @@ impl DomainRegistrationsApi {
         environment_id: EnvironmentId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<DomainRegistration>>> {
-        let domain_registrations = self.domain_registration_service.list_in_environment(&environment_id, &auth).await?;
-        Ok(Json(Page { values: domain_registrations }))
+        let domain_registrations = self
+            .domain_registration_service
+            .list_in_environment(&environment_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: domain_registrations,
+        }))
     }
 
     /// Get domain registration by id
     #[oai(
         path = "/domain-registrations/:domain_registration_id",
         method = "get",
-        operation_id = "get_domain_registration",
+        operation_id = "get_domain_registration"
     )]
     pub async fn get_domain_registration(
         &self,
@@ -173,7 +178,7 @@ impl DomainRegistrationsApi {
     #[oai(
         path = "/domain-registrations/:domain_registration_id",
         method = "delete",
-        operation_id = "delete_domain_registrations",
+        operation_id = "delete_domain_registrations"
     )]
     pub async fn delete_domain_registration(
         &self,
@@ -200,8 +205,7 @@ impl DomainRegistrationsApi {
         domain_registration_id: DomainRegistrationId,
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
-        self
-            .domain_registration_service
+        self.domain_registration_service
             .delete(&domain_registration_id, &auth)
             .await?;
 

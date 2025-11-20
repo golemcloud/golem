@@ -20,10 +20,10 @@ pub mod api_deployments;
 pub mod applications;
 pub mod certificates;
 pub mod components;
+pub mod domain_registrations;
 pub mod environment_api_definitions;
 pub mod environment_api_deployments;
 pub mod environment_certificates;
-pub mod domain_registrations;
 pub mod environment_plugin_grants;
 pub mod environment_security_schemes;
 pub mod environment_shares;
@@ -43,6 +43,7 @@ use self::api_deployments::ApiDeploymentsApi;
 use self::applications::ApplicationsApi;
 use self::certificates::CertificatesApi;
 use self::components::ComponentsApi;
+use self::domain_registrations::DomainRegistrationsApi;
 use self::environment_api_definitions::EnvironmentApiDefinitionsApi;
 use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
@@ -59,7 +60,6 @@ use self::tokens::TokensApi;
 use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
-use self::domain_registrations::DomainRegistrationsApi;
 
 pub type Apis = (
     HealthcheckApi,
@@ -119,7 +119,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.component_write_service.clone(),
                 services.auth_service.clone(),
             ),
-            DomainRegistrationsApi::new(services.domain_registration_service.clone(), services.auth_service.clone()),
+            DomainRegistrationsApi::new(
+                services.domain_registration_service.clone(),
+                services.auth_service.clone(),
+            ),
             (
                 EnvironmentApiDefinitionsApi::new(services.auth_service.clone()),
                 EnvironmentApiDeploymentsApi::new(services.auth_service.clone()),

@@ -18,6 +18,7 @@ use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::deployment::DeploymentError;
+use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
@@ -32,7 +33,6 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
-use crate::services::domain_registration::DomainRegistrationError;
 
 #[derive(ApiResponse, Debug)]
 pub enum ApiError {
@@ -465,7 +465,6 @@ impl From<DeploymentError> for ApiError {
     }
 }
 
-
 impl From<DomainRegistrationError> for ApiError {
     fn from(value: DomainRegistrationError) -> Self {
         let error: String = value.to_safe_string();
@@ -475,7 +474,7 @@ impl From<DomainRegistrationError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            DomainRegistrationError::DomainCannotBeProvisioned { .. }=> {
+            DomainRegistrationError::DomainCannotBeProvisioned { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     cause: None,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 use chrono::Duration;
 use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
@@ -27,7 +28,6 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
 use uuid::uuid;
-use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
@@ -44,7 +44,7 @@ pub struct RegistryServiceConfig {
     pub blob_storage: BlobStorageConfig,
     pub plans: PlansConfig,
     pub accounts: AccountsConfig,
-    pub domain_provisioner: DomainProvisionerConfig
+    pub domain_provisioner: DomainProvisionerConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -102,7 +102,7 @@ impl Default for RegistryServiceConfig {
             blob_storage: BlobStorageConfig::default(),
             plans: PlansConfig::default(),
             accounts: AccountsConfig::default(),
-            domain_provisioner: DomainProvisionerConfig::default()
+            domain_provisioner: DomainProvisionerConfig::default(),
         }
     }
 }

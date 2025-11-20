@@ -14,11 +14,14 @@
 
 use super::Tracing;
 use assert2::assert;
-use golem_client::api::{RegistryServiceClient, RegistryServiceGetDomainRegistrationError, RegistryServiceListEnvironmentDomainRegistrationsError};
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceGetDomainRegistrationError,
+    RegistryServiceListEnvironmentDomainRegistrationsError,
+};
+use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use test_r::{inherit_test_dep, test};
-use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -37,7 +40,7 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
         .create_domain_registration(
             &env.id.0,
             &DomainRegistrationCreation {
-                domain: domain.clone()
+                domain: domain.clone(),
             },
         )
         .await?;
@@ -45,12 +48,16 @@ async fn register_and_fetch_domain(deps: &EnvBasedTestDependencies) -> anyhow::R
     assert!(domain_registration.domain == domain);
 
     {
-        let fetched_domain_registration = client.get_domain_registration(&domain_registration.id.0).await?;
+        let fetched_domain_registration = client
+            .get_domain_registration(&domain_registration.id.0)
+            .await?;
         assert!(fetched_domain_registration == domain_registration);
     }
 
     {
-        let result = client.list_environment_domain_registrations(&env.id.0).await?;
+        let result = client
+            .list_environment_domain_registrations(&env.id.0)
+            .await?;
         assert!(result.values == vec![domain_registration]);
     }
 
@@ -69,7 +76,7 @@ async fn delete_domain(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         .create_domain_registration(
             &env.id.0,
             &DomainRegistrationCreation {
-                domain: Domain("test.golem.cloud".to_string())
+                domain: Domain("test.golem.cloud".to_string()),
             },
         )
         .await?;
@@ -102,7 +109,7 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
         .create_domain_registration(
             &env.id.0,
             &DomainRegistrationCreation {
-                domain: Domain("test.golem.cloud".to_string())
+                domain: Domain("test.golem.cloud".to_string()),
             },
         )
         .await?;
@@ -117,7 +124,9 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
     }
 
     {
-        let result = client_2.list_environment_domain_registrations(&domain.id.0).await;
+        let result = client_2
+            .list_environment_domain_registrations(&domain.id.0)
+            .await;
         assert!(
             let Err(golem_client::Error::Item(
                 RegistryServiceListEnvironmentDomainRegistrationsError::Error404(_)

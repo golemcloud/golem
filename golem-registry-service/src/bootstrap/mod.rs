@@ -21,6 +21,7 @@ use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
+use crate::repo::domain_registration::{DbDomainRegistrationRepo, DomainRegistrationRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
 use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
@@ -42,6 +43,7 @@ use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
 use crate::services::deployment::DeploymentService;
+use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
@@ -64,8 +66,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
-use crate::services::domain_registration::DomainRegistrationService;
-use crate::repo::domain_registration::{DbDomainRegistrationRepo, DomainRegistrationRepo};
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -227,12 +227,17 @@ impl Services {
             component_service.clone(),
         ));
 
-        let domain_provisioner = crate::services::domain_registration::provisioner::configured(&config.environment, &config.workspace, &config.domain_provisioner).await?;
+        let domain_provisioner = crate::services::domain_registration::provisioner::configured(
+            &config.environment,
+            &config.workspace,
+            &config.domain_provisioner,
+        )
+        .await?;
 
         let domain_registration_service = Arc::new(DomainRegistrationService::new(
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
-            domain_provisioner.clone()
+            domain_provisioner.clone(),
         ));
 
         Ok(Self {
@@ -285,7 +290,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
-            let domain_registration_repo = Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
+            let domain_registration_repo =
+                Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -302,7 +308,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plugin_repo,
                 environment_plugin_grant_repo,
                 deployment_repo,
-                domain_registration_repo
+                domain_registration_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -328,7 +334,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
-            let domain_registration_repo = Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
+            let domain_registration_repo =
+                Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -345,7 +352,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plugin_repo,
                 environment_plugin_grant_repo,
                 deployment_repo,
-                domain_registration_repo
+                domain_registration_repo,
             })
         }
     }

@@ -17,27 +17,24 @@ pub mod aws_load_balancer;
 pub mod aws_provisioner;
 pub mod provisioner;
 
-use super::plan::{PlanError, PlanService};
-use crate::config::AccountsConfig;
+use self::provisioner::DomainProvisioner;
+use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::account::AccountRepo;
-use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
-use crate::repo::model::audit::{DeletableRevisionAuditFields, ImmutableAuditFields};
-use anyhow::anyhow;
-use golem_common::model::account::PlanId;
-use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use crate::repo::domain_registration::DomainRegistrationRepo;
+use crate::repo::model::audit::ImmutableAuditFields;
+use crate::repo::model::domain_registration::{
+    DomainRegistrationRecord, DomainRegistrationRepoError,
+};
+use golem_common::model::domain_registration::{
+    Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
+};
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::model::auth::{AccountAction, EnvironmentAction, GlobalAction};
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
-use tracing::{error, info};
-use golem_common::model::domain_registration::{Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId};
-use crate::repo::domain_registration::DomainRegistrationRepo;
-use crate::repo::model::domain_registration::{DomainRegistrationRecord, DomainRegistrationRepoError};
-use super::environment::{EnvironmentError, EnvironmentService};
-use golem_common::model::environment::{Environment, EnvironmentId};
-use self::provisioner::DomainProvisioner;
+use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DomainRegistrationError {
@@ -68,24 +65,28 @@ impl SafeDisplay for DomainRegistrationError {
     }
 }
 
-error_forwarding!(DomainRegistrationError, EnvironmentError, DomainRegistrationRepoError);
+error_forwarding!(
+    DomainRegistrationError,
+    EnvironmentError,
+    DomainRegistrationRepoError
+);
 
 pub struct DomainRegistrationService {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_service: Arc<EnvironmentService>,
-    domain_provisioner: Arc<dyn DomainProvisioner>
+    domain_provisioner: Arc<dyn DomainProvisioner>,
 }
 
 impl DomainRegistrationService {
     pub fn new(
         domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
         environment_service: Arc<EnvironmentService>,
-        domain_provisioner: Arc<dyn DomainProvisioner>
+        domain_provisioner: Arc<dyn DomainProvisioner>,
     ) -> Self {
         Self {
             domain_registration_repo,
             environment_service,
-            domain_provisioner
+            domain_provisioner,
         }
     }
 
@@ -112,8 +113,13 @@ impl DomainRegistrationService {
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
 
-        if !self.domain_provisioner.domain_available_to_provision(&data.domain) {
-            return Err(DomainRegistrationError::DomainCannotBeProvisioned(data.domain));
+        if !self
+            .domain_provisioner
+            .domain_available_to_provision(&data.domain)
+        {
+            return Err(DomainRegistrationError::DomainCannotBeProvisioned(
+                data.domain,
+            ));
         }
 
         let domain_registration = DomainRegistration {
@@ -140,7 +146,9 @@ impl DomainRegistrationService {
             .into();
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
-        self.domain_provisioner.provision_domain(&created.domain).await?;
+        self.domain_provisioner
+            .provision_domain(&created.domain)
+            .await?;
 
         Ok(created)
     }
@@ -170,7 +178,9 @@ impl DomainRegistrationService {
             .into();
 
         // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
-        self.domain_provisioner.remove_domain(&deleted.domain).await?;
+        self.domain_provisioner
+            .remove_domain(&deleted.domain)
+            .await?;
 
         Ok(deleted)
     }

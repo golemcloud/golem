@@ -15,8 +15,10 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
+use golem_common::api::Page;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate
+    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -27,10 +29,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use golem_common::api::Page;
-use golem_common::model::environment::EnvironmentId;
-use uuid::Uuid;
-use golem_common::model::account::AccountId;
 
 pub struct EnvironmentSharesApi {
     environment_share_service: Arc<EnvironmentShareService>,

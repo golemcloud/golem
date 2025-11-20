@@ -99,7 +99,8 @@ impl EnvironmentShareService {
             })?;
 
         let id = EnvironmentShareId::new_v4();
-        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id().clone());
+        let record =
+            EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id().clone());
 
         let result = self
             .environment_share_repo

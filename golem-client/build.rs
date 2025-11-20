@@ -131,11 +131,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // Domain Registration
             (
                 "DomainRegistrationCreation",
-                "golem_common::model::domain_registration::DomainRegistrationCreation"
+                "golem_common::model::domain_registration::DomainRegistrationCreation",
             ),
             (
                 "DomainRegistration",
-                "golem_common::model::domain_registration::DomainRegistration"
+                "golem_common::model::domain_registration::DomainRegistration",
             ),
             // Environment
             (

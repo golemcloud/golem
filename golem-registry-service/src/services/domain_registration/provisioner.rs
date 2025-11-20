@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::aws_provisioner::{AwsDomainProvisioner, AwsDomainProvisionerConfig};
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
+use golem_common::model::Empty;
 use golem_common::model::domain_registration::Domain;
 use serde::{Deserialize, Serialize};
-use golem_common::model::Empty;
-use super::aws_provisioner::{AwsDomainProvisioner, AwsDomainProvisionerConfig};
-use std::sync::Arc;
-use golem_common::SafeDisplay;
 use std::fmt::Write;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait DomainProvisioner: Send + Sync {
@@ -39,7 +39,7 @@ pub enum DomainProvisionerConfig {
 
 impl Default for DomainProvisionerConfig {
     fn default() -> DomainProvisionerConfig {
-        DomainProvisionerConfig::NoOp(Empty {  })
+        DomainProvisionerConfig::NoOp(Empty {})
     }
 }
 
@@ -62,7 +62,7 @@ impl SafeDisplay for DomainProvisionerConfig {
 pub async fn configured(
     environment: &str,
     workspace: &str,
-    config: &DomainProvisionerConfig
+    config: &DomainProvisionerConfig,
 ) -> anyhow::Result<Arc<dyn DomainProvisioner>> {
     match config {
         DomainProvisionerConfig::NoOp(_) => Ok(Arc::new(NoopDomainProvisioner)),

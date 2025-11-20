@@ -15,8 +15,10 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
+use golem_common::api::Page;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -28,8 +30,6 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::api::Page;
 
 pub struct EnvironmentPluginGrantsApi {
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
