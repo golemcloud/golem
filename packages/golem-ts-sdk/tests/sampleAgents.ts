@@ -445,11 +445,9 @@ class BarAgent extends BaseAgent {
     return multimodalInput;
   }
 
-  // async fun24(
-  //   multimodalInput: Multimodal<TextOrImage>,
-  // ): Promise<Multimodal<TextOrImage>> {
-  //   return multimodalInput;
-  // }
+  async fun24(multimodalInput: MultimodalBasic): Promise<MultimodalBasic> {
+    return multimodalInput;
+  }
 }
 
 export type TextOrImage =

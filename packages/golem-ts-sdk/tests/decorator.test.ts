@@ -171,6 +171,33 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
   });
 
+  it('should handle MultimodalBasic in method params', () => {
+    const multimodalAgentMethod = complexAgent.methods.find(
+      (method) => method.name === 'fun24',
+    );
+
+    if (!multimodalAgentMethod) {
+      throw new Error('fun24 method not found in BarAgent');
+    }
+
+    expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
+
+    console.log(JSON.stringify(multimodalAgentMethod.inputSchema.val));
+
+    const expected = [
+      ['text', { tag: 'unstructured-text', val: {} }],
+      [
+        'binary',
+        {
+          tag: 'unstructured-binary',
+          val: {},
+        },
+      ],
+    ];
+
+    expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
+  });
+
   it('should handle UnstructuredBinary in constructor params', () => {
     const elementSchema1 = getElementSchema(
       barAgentConstructor.inputSchema,
@@ -734,7 +761,7 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     // Ensures no functions or constructors are skipped
-    expect(complexAgent.methods.length).toEqual(24);
+    expect(complexAgent.methods.length).toEqual(25);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
     expect(simpleAgent.methods.length).toEqual(39);
