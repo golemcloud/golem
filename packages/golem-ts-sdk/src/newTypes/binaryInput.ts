@@ -36,15 +36,20 @@ import * as Either from '../newTypes/either';
  *  function foo(input: UnstructuredBinary) {..} // any mime type allowed
  *  function bar(input: UnstructuredBinary<['application/json', 'image/png']>) {..} // only application/json and image/png allowed
  *
- *  const imageBinary: UnstructuredBinary = UnstructuredBinary.fromInline(Uint8Array([0x00]), "image/jpeg");
- *  const textBinary: UnstructuredBinary<'text/plain'> = UnstructuredBinary.fromInline(Uint8Array([0x00]), "text/plain");
+ *  const imageBinary: UnstructuredBinary =
+ *    UnstructuredBinary.fromInline(Uint8Array([0x00]), "image/jpeg");
+ *
+ *  const textBinary: UnstructuredBinary<'text/plain'> =
+ *    UnstructuredBinary.fromInline(Uint8Array([0x00]), "text/plain");
  *
  *  foo(imageBinary); // allowed
  *  foo(textBinary); // allowed
  *
  *  bar(imageBinary); // not allowed
  *
- *  const appJsonBinary: UnstructuredBinary<'application/json'> = UnstructuredBinary.fromInline(Uint8Array([0x00]), "application/json");
+ *  const appJsonBinary: UnstructuredBinary<'application/json'> =
+ *    UnstructuredBinary.fromInline(Uint8Array([0x00]), "application/json");
+ *
  *  bar(appJsonBinary); // allowed
  *
  * ```
