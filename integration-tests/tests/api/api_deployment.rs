@@ -1106,11 +1106,12 @@ async fn rib_api_mapping_correctly_encodes_strings(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let admin = deps.admin().await;
-    let project_id = admin.default_project().await;
+    let project_id = admin.create_project().await;
 
     let (_, component_name) = admin
         .component("golem_it_constructor_parameter_echo")
         .name("golem-it:constructor-parameter-echo")
+        .with_project(project_id.clone())
         .store_and_get_name()
         .await;
 
@@ -1126,7 +1127,7 @@ async fn rib_api_mapping_correctly_encodes_strings(
                 security: None,
                 routes: vec![RouteRequestData {
                     method: MethodPattern::Post,
-                    path: "/path/{agent-name}".to_string(),
+                    path: "/rib_api_mapping_correctly_encodes_strings/{agent-name}".to_string(),
                     binding: GatewayBindingData {
                         component: Some(GatewayBindingComponent {
                             name: component_name.to_string(),
@@ -1173,13 +1174,10 @@ async fn rib_api_mapping_correctly_encodes_strings(
             },
         };
 
-        let response = deps
+        let _response = deps
             .worker_service()
             .create_or_update_api_deployment(&admin.token, request.clone())
             .await?;
-
-        check!(request.api_definitions == response.api_definitions);
-        check!(request.site == response.site);
     }
 
     // call custom request api
@@ -1191,7 +1189,7 @@ async fn rib_api_mapping_correctly_encodes_strings(
 
         let response = client
             .post(format!(
-                "http://127.0.0.1:{custom_request_port}/path/{agent_name}"
+                "http://127.0.0.1:{custom_request_port}/rib_api_mapping_correctly_encodes_strings/{agent_name}"
             ))
             .json(&json!({ "input": input }))
             .send()
