@@ -480,7 +480,7 @@ function getMultimodalDetails(
 
   if (Option.isNone(taggedUnionOpt)) {
     return Either.left(
-      `multimodal type is not a tagged union: ${multimodalTypes.val}`,
+      `multimodal type is not a tagged union: ${multimodalTypes.val}. Expected an object with a literal 'tag' and 'val' property`,
     );
   }
 
@@ -497,6 +497,14 @@ function getMultimodalDetails(
       }
 
       const tagName = taggedTypeMetadata.tagLiteralName;
+
+      const valName = paramTypeOpt.val[0];
+
+      if (valName !== 'val') {
+        return Either.left(
+          `The value associated with the tag ${tagName} should be named 'val', found '${valName}' instead`,
+        );
+      }
 
       const paramType = paramTypeOpt.val[1];
 
