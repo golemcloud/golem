@@ -261,6 +261,10 @@ export class FooAgent extends BaseAgent {
     return param;
   }
 
+  fun40(param: UnstructuredBinary): UnstructuredBinary {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {

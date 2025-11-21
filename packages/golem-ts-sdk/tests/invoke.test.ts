@@ -64,7 +64,7 @@ import {
   AgentId,
   Multimodal,
   MultimodalBasic,
-  Result,
+  Result, UnstructuredBinary,
   UnstructuredText,
 } from '../src';
 import {
@@ -636,6 +636,58 @@ test('Invoke function that takes and returns typed array', () => {
     ),
   );
 });
+
+test('Invoke function that takes any unstructured-binary and returns any unstructured-binary', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const binary: UnstructuredBinary = {
+    tag: 'inline',
+    val: new Uint8Array([1, 2, 3]),
+    mimeType: 'application/json',
+  };
+
+  testInvoke(
+    'fun40',
+    [['param', binary]],
+    resolvedAgent,
+    binary,
+    false,
+  );
+})
+
+test('Invoke function that takes json unstructured-binary and returns json unstructured-binary', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const binary: UnstructuredBinary<['application/json']> = {
+    tag: 'inline',
+    val: new Uint8Array([1, 2, 3]),
+    mimeType: 'application/json',
+  };
+
+  testInvoke(
+    'fun40',
+    [['param', binary]],
+    resolvedAgent,
+    binary,
+    false,
+  );
+})
 
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
