@@ -199,9 +199,6 @@ impl ComponentCommandHandler {
         let (common_template, component_template) =
             app_handler.get_template(&template, self.ctx.dev_mode())?;
 
-        // Unloading app context, so we can reload after the new component is created
-        self.ctx.unload_app_context().await;
-
         let application_name = TemplateApplicationName::from(application_name.0);
 
         match add_component_by_template(
@@ -216,7 +213,7 @@ impl ComponentCommandHandler {
                 log_action(
                     "Added",
                     format!(
-                        "new app component {}, loading application manifest...",
+                        "new app component {}",
                         component_package_name
                             .to_string_with_colon()
                             .log_color_highlight()
@@ -227,12 +224,6 @@ impl ComponentCommandHandler {
                 bail!("Failed to create new app component: {}", error)
             }
         }
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        logln("");
-        app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
 
         Ok(())
     }

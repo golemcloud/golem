@@ -33,7 +33,6 @@ use crate::model::app_raw::{BuiltinServer, Environment, Marker, Server};
 use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
 use crate::model::format::Format;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::model::{AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
@@ -512,12 +511,6 @@ impl Context {
         Ok(state)
     }
 
-    pub async fn unload_app_context(&self) {
-        // TODO: atomic: this should also redo env preload
-        // let mut state = self.app_context_state.write().await;
-        // *state = ApplicationContextState::new(self.yes, self.app_context_config.app_source_mode());
-    }
-
     async fn set_app_ctx_init_config<T>(
         &self,
         name: &str,
@@ -594,55 +587,6 @@ impl Context {
 
     pub fn template_group(&self) -> &ComposableAppGroupName {
         &self.template_group
-    }
-
-    // TODO: atomic, if this is needed, find a better place for it (same for resolve_plugin_reference)
-    pub async fn select_account_by_email_or_error(
-        &self,
-        _email: &str,
-    ) -> anyhow::Result<AccountDetails> {
-        // TODO: atomic
-        /*
-        let mut result = self
-            .golem_clients()
-            .await?
-            .account
-            .find_accounts(Some(email))
-            .await?
-            .values;
-
-        if result.len() == 1 {
-            Ok(result.remove(0).into())
-        } else {
-            log_error("referenced account could not be found");
-            bail!(NonSuccessfulExit)
-        }*/
-        todo!()
-    }
-
-    pub async fn resolve_plugin_reference(
-        &self,
-        reference: PluginReference,
-    ) -> anyhow::Result<(AccountId, String, String)> {
-        match reference {
-            PluginReference::FullyQualified {
-                account_email,
-                name,
-                version,
-            } => {
-                let account_id = self
-                    .select_account_by_email_or_error(&account_email)
-                    .await?
-                    .account_id;
-
-                Ok((account_id, name, version))
-            }
-            PluginReference::RelativeToCurrentAccount { name, version } => {
-                let account_id = self.account_id().await?;
-
-                Ok((account_id, name, version))
-            }
-        }
     }
 
     fn log_context_selection_once(&self) {

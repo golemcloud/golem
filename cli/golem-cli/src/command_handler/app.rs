@@ -264,14 +264,6 @@ impl AppCommandHandler {
                 )
             );
         } else {
-            // Unloading app context and switching dir, so we can reload the new app
-            self.ctx.unload_app_context().await;
-            std::env::set_current_dir(app_dir)?;
-
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-
-            app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
             logln(
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
