@@ -39,11 +39,11 @@ pub struct Deployment {
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    components: BTreeMapDiff<String, HashOf<Component>>,
+    pub components: BTreeMapDiff<String, HashOf<Component>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    http_api_definitions: BTreeMapDiff<String, HashOf<HttpApiDefinition>>,
+    pub http_api_definitions: BTreeMapDiff<String, HashOf<HttpApiDefinition>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    http_api_deployments: BTreeMapDiff<HttpApiDeploymentTarget, HashOf<HttpApiDeployment>>,
+    pub http_api_deployments: BTreeMapDiff<HttpApiDeploymentTarget, HashOf<HttpApiDeployment>>,
 }
 
 impl Diffable for Deployment {

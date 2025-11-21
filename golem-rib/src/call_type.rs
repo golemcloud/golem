@@ -191,7 +191,7 @@ mod protobuf {
             Ok(ComponentDependencyKey {
                 component_name,
                 component_id: component_id.into(),
-                component_version,
+                component_revision: component_version,
                 root_package_name,
                 root_package_version,
             })
@@ -202,7 +202,7 @@ mod protobuf {
         fn from(value: ComponentDependencyKey) -> Self {
             crate::proto::golem::rib::ComponentDependencyKey {
                 component_name: value.component_name,
-                component_version: value.component_version,
+                component_version: value.component_revision,
                 value: Some(value.component_id.into()),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,

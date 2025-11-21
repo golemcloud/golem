@@ -5,7 +5,7 @@
 
 components:
   it:scheduled-invocation-client:
-    template: rust
+    templates: rust
 dependencies:
   it:scheduled-invocation-client:
   - target: it:scheduled-invocation-server

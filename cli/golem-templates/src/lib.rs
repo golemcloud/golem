@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::{
-    ComposableAppGroupName, GuestLanguage, PackageName, SdkOverrides, TargetExistsResolveDecision,
-    TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata, TemplateName,
-    TemplateParameters, Transform,
+    ApplicationName, ComposableAppGroupName, GuestLanguage, PackageName, SdkOverrides,
+    TargetExistsResolveDecision, TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata,
+    TemplateName, TemplateParameters, Transform,
 };
 use anyhow::Context;
 use include_dir::{include_dir, Dir, DirEntry};
@@ -178,10 +178,12 @@ pub fn add_component_by_template(
     common_template: Option<&Template>,
     component_template: Option<&Template>,
     target_path: &Path,
+    application_name: &ApplicationName,
     package_name: &PackageName,
     sdk_overrides: Option<&SdkOverrides>,
 ) -> anyhow::Result<()> {
     let parameters = TemplateParameters {
+        application_name: application_name.clone(),
         component_name: package_name.to_string_with_colon().into(),
         package_name: package_name.clone(),
         target_path: target_path.into(),
@@ -270,7 +272,9 @@ fn instantiate_directory(
                 }
                 DirEntry::File(file) => {
                     let content_transform = match (template.kind.is_common(), name.as_str()) {
-                        (true, "golem.yaml") => vec![Transform::ManifestHints],
+                        (true, "golem.yaml") => {
+                            vec![Transform::ManifestHints, Transform::ApplicationName]
+                        }
                         (true, "package.json") => vec![Transform::TsSdk],
                         (true, "Cargo.toml") => vec![Transform::RustSdk],
                         (true, _) => vec![],
@@ -402,6 +406,9 @@ fn transform(
     let transform_manifest_hints =
         |str: &str| -> String { str.replace("# golem-app-manifest-header\n", APP_MANIFEST_HEADER) };
 
+    let transform_app_name =
+        |str: &str| -> String { str.replace("app-name", parameters.application_name.as_str()) };
+
     let transform_rust_sdk = |str: &str| -> String {
         let path_or_version = {
             if let Some(rust_path) = &parameters.sdk_overrides.rust_path {
@@ -450,6 +457,7 @@ fn transform(
             Transform::ManifestHints => transform_manifest_hints(&transformed),
             Transform::TsSdk => transform_ts_sdk(&transformed),
             Transform::RustSdk => transform_rust_sdk(&transformed),
+            Transform::ApplicationName => transform_app_name(&transformed),
         };
     }
 

@@ -180,7 +180,7 @@ impl RibComponentFunctionInvoke for WorkerRequestExecutorRibInvoke {
         let function_params: Vec<ValueAndType> = parameters.0;
 
         let component_id = ComponentId(component_dependency_key.component_id);
-        let component_revision = ComponentRevision(component_dependency_key.component_version);
+        let component_revision = ComponentRevision(component_dependency_key.component_revision);
 
         let worker_request = GatewayResolvedWorkerRequest {
             component_id,

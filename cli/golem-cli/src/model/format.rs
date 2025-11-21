@@ -18,21 +18,15 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
-// NOTE: using aliases for lower-case support in manifest, as global configs are using the
-//       PascalCase versions historically, should be cleared up (migrated), if we touch the global
-//       CLI config
 #[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
 pub enum Format {
-    #[serde(alias = "json")]
     Json,
-    #[serde(alias = "pretty-json", alias = "pretty")]
+    #[serde(alias = "pretty")]
     PrettyJson,
-    #[serde(alias = "yaml")]
     Yaml,
-    #[serde(alias = "pretty-yaml")]
     PrettyYaml,
     #[default]
-    #[serde(alias = "text")]
     Text,
 }
 

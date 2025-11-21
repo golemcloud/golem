@@ -229,7 +229,7 @@ impl From<StreamArgs> for AgentLogStreamOptions {
 }
 
 pub struct WorkerNameMatch {
-    pub environment: Option<ResolvedEnvironmentIdentity>,
+    pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
     pub worker_name: WorkerName,
@@ -237,10 +237,10 @@ pub struct WorkerNameMatch {
 
 impl WorkerNameMatch {
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
-        self.environment.as_ref().and_then(|env| match &env.source {
+        match &self.environment.source {
             ResolvedEnvironmentIdentitySource::Reference(reference) => Some(reference),
             ResolvedEnvironmentIdentitySource::DefaultFromManifest => None,
-        })
+        }
     }
 }
 

@@ -16,36 +16,44 @@ use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
 };
+use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::{log_action, logln, LogColorize, LogIndent};
+use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::app::{DependencyType, InitialComponentFile};
 use crate::model::component::{
-    Component, ComponentNameMatchKind, ComponentSelection, ComponentVersionSelection,
-    SelectedComponents,
+    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection,
+    ComponentSelection, SelectedComponents,
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
-use anyhow::{anyhow, bail};
-use golem_common::model::component::ComponentId;
+use anyhow::{anyhow, bail, Context as AnyhowContext};
+use golem_client::api::ComponentClient;
+use golem_client::model::ComponentDto;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
-    DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
+    dynamic_linking_to_diffable, DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::diff;
+use golem_common::model::diff::HashOf;
 use golem_templates::add_component_by_template;
-use golem_templates::model::{GuestLanguage, PackageName};
+use golem_templates::model::{
+    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
+};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use url::Url;
+use uuid::Uuid;
 
 pub mod ifs;
 // TODO: atomic: pub mod plugin;
@@ -96,8 +104,8 @@ impl ComponentCommandHandler {
             }
             ComponentSubcommand::Get {
                 component_name,
-                version,
-            } => self.cmd_get(component_name.component_name, version).await,
+                revision,
+            } => self.cmd_get(component_name.component_name, revision).await,
 
             ComponentSubcommand::UpdateAgents {
                 component_name,
@@ -141,14 +149,17 @@ impl ComponentCommandHandler {
         //   - checking that we are inside an application
         //   - switching to the root dir as a side effect
         //   - getting existing component names
-        let existing_component_names = {
+        let (existing_component_names, application_name) = {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
-            app_ctx
-                .application
-                .component_names()
-                .map(|name| name.to_string())
-                .collect::<HashSet<_>>()
+            (
+                app_ctx
+                    .application
+                    .component_names()
+                    .map(|name| name.to_string())
+                    .collect::<HashSet<_>>(),
+                app_ctx.application.application_name().clone(),
+            )
         };
 
         let Some((template, component_package_name)) = ({
@@ -191,13 +202,13 @@ impl ComponentCommandHandler {
         let (common_template, component_template) =
             app_handler.get_template(&template, self.ctx.dev_mode())?;
 
-        // Unloading app context, so we can reload after the new component is created
-        self.ctx.unload_app_context().await;
+        let application_name = TemplateApplicationName::from(application_name.0);
 
         match add_component_by_template(
             common_template,
             Some(component_template),
             &PathBuf::from("."),
+            &application_name,
             &component_package_name,
             Some(self.ctx.template_sdk_overrides()),
         ) {
@@ -205,7 +216,7 @@ impl ComponentCommandHandler {
                 log_action(
                     "Added",
                     format!(
-                        "new app component {}, loading application manifest...",
+                        "new app component {}",
                         component_package_name
                             .to_string_with_colon()
                             .log_color_highlight()
@@ -216,12 +227,6 @@ impl ComponentCommandHandler {
                 bail!("Failed to create new app component: {}", error)
             }
         }
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        logln("");
-        app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
 
         Ok(())
     }
@@ -358,7 +363,7 @@ impl ComponentCommandHandler {
     async fn cmd_get(
         &self,
         _component_name: Option<ComponentName>,
-        _version: Option<u64>,
+        _revision: Option<u64>,
     ) -> anyhow::Result<()> {
         // TODO: atomic
         /*
@@ -526,6 +531,14 @@ impl ComponentCommandHandler {
             .cloned()
             .collect::<Vec<_>>();
         for component_name in component_names {
+            log_action(
+                "Showing",
+                format!(
+                    "manifest trace for {}",
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
                     .application
@@ -626,7 +639,7 @@ impl ComponentCommandHandler {
 
     pub async fn update_workers_by_components(
         &self,
-        components: &[Component],
+        components: &[ComponentDto],
         update: AgentUpdateMode,
         await_updates: bool,
     ) -> anyhow::Result<()> {
@@ -644,7 +657,7 @@ impl ComponentCommandHandler {
                 .worker_handler()
                 .update_component_workers(
                     &component.component_name,
-                    &component.component_id,
+                    &component.id,
                     update,
                     component.revision,
                     await_updates,
@@ -659,7 +672,7 @@ impl ComponentCommandHandler {
 
     pub async fn redeploy_workers_by_components(
         &self,
-        components: &[Component],
+        components: &[ComponentDto],
     ) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
@@ -671,7 +684,7 @@ impl ComponentCommandHandler {
         for component in components {
             self.ctx
                 .worker_handler()
-                .redeploy_component_workers(&component.component_name, &component.component_id)
+                .redeploy_component_workers(&component.component_name, &component.id)
                 .await?;
         }
 
@@ -680,7 +693,7 @@ impl ComponentCommandHandler {
         Ok(())
     }
 
-    pub async fn delete_workers(&self, components: &[Component]) -> anyhow::Result<()> {
+    pub async fn delete_workers(&self, components: &[ComponentDto]) -> anyhow::Result<()> {
         if components.is_empty() {
             return Ok(());
         }
@@ -699,11 +712,7 @@ impl ComponentCommandHandler {
                 let deleted_count = self
                     .ctx
                     .worker_handler()
-                    .delete_component_workers(
-                        &component.component_name,
-                        &component.component_id,
-                        first_round,
-                    )
+                    .delete_component_workers(&component.component_name, &component.id, first_round)
                     .await?;
                 if deleted_count > 0 {
                     found_any = true;
@@ -877,19 +886,17 @@ impl ComponentCommandHandler {
 
     pub async fn component_by_name_with_auto_deploy(
         &self,
-        _environment: Option<&ResolvedEnvironmentIdentity>,
-        _component_match_kind: ComponentNameMatchKind,
-        _component_name: &ComponentName,
-        _component_version_selection: Option<ComponentVersionSelection<'_>>,
-        _deploy_args: Option<&DeployArgs>,
-    ) -> anyhow::Result<Component> {
-        // TODO: atomic
-        /*
+        environment: &ResolvedEnvironmentIdentity,
+        component_match_kind: ComponentNameMatchKind,
+        component_name: &ComponentName,
+        component_revision_selection: Option<ComponentRevisionSelection<'_>>,
+        deploy_args: Option<&DeployArgs>,
+    ) -> anyhow::Result<ComponentDto> {
         match self
-            .component(
+            .resolve_component(
                 environment,
                 component_name.into(),
-                component_version_selection,
+                component_revision_selection,
             )
             .await?
         {
@@ -924,26 +931,23 @@ impl ComponentCommandHandler {
                     .confirm_auto_deploy_component(component_name)?
                 {
                     log_action(
-                        "Auto deploying",
+                        "Auto deploying application",
                         format!(
-                            "missing component {}",
+                            "for creating missing component {}",
                             component_name.0.log_color_highlight()
                         ),
                     );
                     self.ctx
-                        .component_handler()
+                        .app_handler()
                         .deploy(
-                            project,
-                            vec![component_name.clone()],
                             false,
-                            None,
-                            &ApplicationComponentSelectMode::CurrentDir,
-                            &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                            ForceBuildArg { force_build: false },
+                            deploy_args.cloned().unwrap_or_else(DeployArgs::none),
                         )
                         .await?;
                     self.ctx
                         .component_handler()
-                        .component(project, component_name.into(), None)
+                        .resolve_component(environment, component_name.into(), None)
                         .await?
                         .ok_or_else(|| {
                             anyhow!("Component ({}) not found after deployment", component_name)
@@ -953,59 +957,47 @@ impl ComponentCommandHandler {
                 }
             }
         }
-        */
-        todo!()
     }
 
     // TODO: merge these 3 args into "component lookup" or "selection" struct
-    pub async fn component(
+    pub async fn resolve_component(
         &self,
-        _environment: Option<&ResolvedEnvironmentIdentity>,
-        _component_name_or_id: ComponentSelection<'_>,
-        _component_version_selection: Option<ComponentVersionSelection<'_>>,
-    ) -> anyhow::Result<Option<Component>> {
-        // TODO: atomic
-        /*
+        environment: &ResolvedEnvironmentIdentity,
+        component_name_or_id: ComponentSelection<'_>,
+        component_version_selection: Option<ComponentRevisionSelection<'_>>,
+    ) -> anyhow::Result<Option<ComponentDto>> {
         let component = match component_name_or_id {
             ComponentSelection::Name(component_name) => {
-                self.latest_component_by_name(project, component_name)
+                self.latest_deployed_server_component_by_name(environment, component_name)
                     .await?
             }
             ComponentSelection::Id(component_id) => {
-                self.latest_component_by_id(component_id).await?
+                self.server_component_by_id(&component_id).await?
             }
         };
 
         match (component, component_version_selection) {
             (Some(component), Some(component_version_selection)) => {
-                let version = match component_version_selection {
-                    ComponentVersionSelection::ByWorkerName(worker_name) => self
+                let revision = match component_version_selection {
+                    ComponentRevisionSelection::ByWorkerName(worker_name) => self
                         .ctx
                         .worker_handler()
-                        .worker_metadata(
-                            component.versioned_component_id.component_id,
-                            &component.component_name,
-                            worker_name,
-                        )
+                        .worker_metadata(component.id.0, &component.component_name, worker_name)
                         .await
                         .ok()
                         .map(|worker_metadata| worker_metadata.component_version),
-                    ComponentVersionSelection::ByExplicitVersion(version) => Some(version),
+                    ComponentRevisionSelection::ByExplicitRevision(version) => Some(version),
                 };
 
-                match version {
-                    Some(version) => {
+                match revision {
+                    Some(revision) => {
                         let clients = self.ctx.golem_clients().await?;
 
                         let component = clients
                             .component
-                            .get_component_metadata(
-                                &component.versioned_component_id.component_id,
-                                &version.to_string(),
-                            )
+                            .get_component_revision(&component.id.0, revision.0)
                             .await
-                            .map_service_error()
-                            .map(Component::from)?;
+                            .map_service_error()?;
 
                         Ok(Some(component))
                     }
@@ -1015,150 +1007,83 @@ impl ComponentCommandHandler {
             (Some(component), None) => Ok(Some(component)),
             (None, _) => Ok(None),
         }
-        */
-        todo!()
     }
 
-    pub async fn component_id_by_name(
+    pub async fn latest_deployed_server_component_by_name(
         &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
+        environment: &ResolvedEnvironmentIdentity,
         component_name: &ComponentName,
-    ) -> anyhow::Result<Option<ComponentId>> {
-        Ok(self
-            .component(environment, component_name.into(), None)
+    ) -> anyhow::Result<Option<ComponentDto>> {
+        self.ctx
+            .golem_clients()
             .await?
-            .map(|c| ComponentId(c.component_id.0)))
-    }
-
-    pub async fn latest_component_by_id(
-        &self,
-        _component_id: uuid::Uuid,
-    ) -> anyhow::Result<Option<Component>> {
-        // TODO: atomic
-        /*
-        let clients = self.ctx.golem_clients().await?;
-
-        let result = clients
             .component
-            .get_latest_component_metadata(&component_id)
+            .get_environment_component(&environment.environment_id.0, component_name.0.as_str())
             .await
-            .map_service_error_not_found_as_opt()?
-            .map(Component::from);
-
-        Ok(result)
-         */
-        todo!()
+            .map_service_error_not_found_as_opt()
     }
 
-    pub async fn latest_component_version_by_id(
+    pub async fn server_component_by_id(
         &self,
-        _component_id: uuid::Uuid,
-    ) -> anyhow::Result<Option<u64>> {
-        // TODO: atomic
-        /*
-        Ok(self
-            .latest_component_by_id(component_id)
+        component_id: &Uuid,
+    ) -> anyhow::Result<Option<ComponentDto>> {
+        self.ctx
+            .golem_clients()
             .await?
-            .map(|component| component.versioned_component_id.version))
-        */
-        todo!()
-    }
-
-    pub async fn latest_component_by_name(
-        &self,
-        _environment: &ResolvedEnvironmentIdentity,
-        _component_name: &ComponentName,
-    ) -> anyhow::Result<Option<Component>> {
-        // TODO: atomic
-        /*
-        let clients = self.ctx.golem_clients().await?;
-
-        let result = clients
             .component
-            .search_components(&ComponentSearchCloud {
-                project_id: project.as_ref().map(|p| p.project_id.0),
-                components: vec![
-                    // TODO: should be the same as ComponentSearchParametersOss in the next release
-                    ComponentSearchParametersCloud {
-                        name: component_name.0.to_string(),
-                        version: None,
-                    },
-                ],
-            })
+            .get_component(component_id)
             .await
-            .map_service_error()?
-            .into_iter()
-            .map(Component::from)
-            .next();
-
-        Ok(result)
-        */
-        todo!()
+            .map_service_error_not_found_as_opt()
     }
 
-    pub async fn latest_components_by_app(
+    pub async fn all_deployable_manifest_components(
         &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-    ) -> anyhow::Result<BTreeMap<String, Component>> {
+    ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
         let component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            app_ctx
-                .application
-                .component_names()
-                .map(|component_name| ComponentName::try_from(component_name.as_str()))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|err| anyhow!(err))?
+            app_ctx.some_or_err()?.deployable_component_names()
         };
 
-        self.latest_components_by_name(environment, component_names)
-            .await
+        let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
+        for component_name in component_names {
+            let properties = self.component_deploy_properties(&component_name).await?;
+            components.insert(component_name, properties);
+        }
+
+        Ok(components)
     }
 
-    // NOTE: the returned Map uses String as a key, so it is easy to use with all the different
-    //       ComponentName types without cloning
-    pub async fn latest_components_by_name(
+    pub async fn component_deploy_properties(
         &self,
-        _environment: Option<&ResolvedEnvironmentIdentity>,
-        _component_names: Vec<ComponentName>,
-    ) -> anyhow::Result<BTreeMap<String, Component>> {
-        // TODO: atomic
-        /*
-        let clients = self.ctx.golem_clients().await?;
+        component_name: &ComponentName,
+    ) -> anyhow::Result<ComponentDeployProperties> {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
-        let results = clients
-            .component
-            .search_components(&ComponentSearchCloud {
-                project_id: project.as_ref().map(|p| p.project_id.0),
-                components: component_names
-                    .into_iter()
-                    .map(|component_name|
-                        // TODO: should be the same as ComponentSearchParametersOss in the next release
-                        ComponentSearchParametersCloud {
-                            name: component_name.0,
-                            version: None,
-                        })
-                    .collect(),
-            })
-            .await?
-            .into_iter()
-            .map(|component| (component.component_name.clone(), Component::from(component)))
-            .collect();
+        let component = app_ctx.application.component(component_name);
+        let linked_wasm_path = component.final_linked_wasm();
+        if !component.component_type().is_deployable() {
+            bail!("Component {component_name} is not deployable");
+        }
+        let files = component.files().clone();
+        let env = resolve_env_vars(component_name, component.env())?;
+        let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
-        Ok(results)
-        */
-        todo!()
+        Ok(ComponentDeployProperties {
+            linked_wasm_path,
+            files,
+            dynamic_linking,
+            env,
+        })
     }
 
-    // TODO: atomic
-    /*
-    // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
-    async fn manifest_diffable_component(
+    pub async fn diffable_local_component(
         &self,
         component_name: &ComponentName,
         properties: &ComponentDeployProperties,
-    ) -> anyhow::Result<DiffableComponent> {
-        let component_hash = {
+    ) -> anyhow::Result<diff::Component> {
+        // TODO: atomic: cache it with a TaskResultMarker?
+        let component_binary_hash = {
             log_action(
                 "Calculating hash",
                 format!(
@@ -1171,254 +1096,50 @@ impl ComponentCommandHandler {
             component_hasher
                 .update_reader(&file)
                 .context("Failed to hash component")?;
-            component_hasher.finalize().to_hex().to_string()
+            component_hasher.finalize()
         };
 
-        let files: BTreeMap<String, DiffableComponentFile> = {
+        // TODO: atomic: cache it with a TaskResultMarker (handling local vs http)?
+        let files: BTreeMap<String, HashOf<diff::ComponentFile>> = {
             IfsFileManager::new(self.ctx.file_download_client().clone())
                 .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
                 .await?
                 .into_iter()
                 .map(|file_hash| {
                     (
-                        file_hash.target.path.to_rel_string(),
-                        DiffableComponentFile {
-                            hash: file_hash.hash_hex,
+                        file_hash.target.path.to_abs_string(),
+                        diff::ComponentFile {
+                            hash: file_hash.hash.into(),
                             permissions: file_hash.target.permissions,
-                        },
+                        }
+                        .into(),
                     )
                 })
                 .collect()
         };
 
-        DiffableComponent::from_manifest(
-            self.ctx.show_sensitive(),
-            component_name,
-            component_hash,
-            files,
-            properties.dynamic_linking.as_ref(),
-            properties.env.as_ref(),
-        )
+        Ok(diff::Component {
+            metadata: diff::ComponentMetadata {
+                version: None, // TODO: atomic
+                env: properties
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                dynamic_linking_wasm_rpc: properties
+                    .dynamic_linking
+                    .as_ref()
+                    .map(dynamic_linking_to_diffable)
+                    .unwrap_or_default(),
+            }
+            .into(),
+            wasm_hash: component_binary_hash.into(),
+            files_by_path: files,
+            plugins_by_priority: Default::default(), // TODO: atomic: plugins
+        })
     }
-
-    // NOTE: all of this is naive for now (as in performance, streaming, parallelism)
-    async fn server_diffable_component(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component: &Component,
-    ) -> anyhow::Result<DiffableComponent> {
-        let component_hash = self
-            .server_component_hash(
-                project,
-                &component.component_name,
-                ComponentId(component.versioned_component_id.component_id),
-                component.versioned_component_id.version,
-            )
-            .await?;
-
-        let files: BTreeMap<String, DiffableComponentFile> = {
-            if component.files.is_empty() {
-                BTreeMap::new()
-            } else {
-                log_action(
-                    "Calculating hashes",
-                    format!(
-                        "for server IFS files, component: {}",
-                        &component.component_name.0.log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
-
-                let mut files = BTreeMap::new();
-                for file in &component.files {
-                    let target_path = file.path.to_rel_string();
-
-                    let hash = self
-                        .server_ifs_file_hash(
-                            project,
-                            &component.component_name,
-                            ComponentId(component.versioned_component_id.component_id),
-                            component.versioned_component_id.version,
-                            &target_path,
-                        )
-                        .await?;
-                    files.insert(
-                        target_path,
-                        DiffableComponentFile {
-                            hash,
-                            permissions: file.permissions,
-                        },
-                    );
-                }
-
-                files
-            }
-        };
-
-        DiffableComponent::from_server(self.ctx.show_sensitive(), component, component_hash, files)
-    }
-
-    async fn server_component_hash(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component_name: &ComponentName,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-    ) -> anyhow::Result<String> {
-        let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
-
-        let hash_result = |component_hash| GetServerComponentHash {
-            project_id: project.map(|p| &p.project_id),
-            component_name,
-            component_version,
-            component_hash,
-        };
-
-        let hash = TaskResultMarker::get_hash(&task_result_marker_dir, hash_result(None))?;
-
-        match hash {
-            Some(hash) => {
-                debug!(
-                    component_name = component_name.0,
-                    component_id = ?component_id.0,
-                    component_version,
-                    hash,
-                    "Found cached hash for server component"
-                );
-                Ok(hash)
-            }
-            None => {
-                log_action(
-                    "Calculating hash",
-                    format!(
-                        "for server component {}@{}",
-                        component_name.0.log_color_highlight(),
-                        component_version.to_string().log_color_highlight()
-                    ),
-                );
-
-                // TODO: streaming
-                let clients = self.ctx.golem_clients().await?;
-
-                let component_bytes = clients
-                    .component
-                    .download_component(&component_id.0, Some(component_version))
-                    .await?;
-
-                let mut component_hasher = blake3::Hasher::new();
-                component_hasher.update(&component_bytes);
-                let hash = component_hasher.finalize().to_hex().to_string();
-
-                TaskResultMarker::new(&task_result_marker_dir, hash_result(Some(&hash)))?
-                    .success()?;
-
-                Ok(hash)
-            }
-        }
-    }
-
-    async fn server_ifs_file_hash(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        component_name: &ComponentName,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        target_path: &str,
-    ) -> anyhow::Result<String> {
-        let task_result_marker_dir = self.ctx.task_result_marker_dir().await?;
-
-        let hash_result = |file_hash| GetServerIfsFileHash {
-            project_id: project.map(|p| &p.project_id),
-            component_name,
-            component_version,
-            target_path,
-            file_hash,
-        };
-
-        let hash = TaskResultMarker::get_hash(&task_result_marker_dir, hash_result(None))?;
-
-        match hash {
-            Some(hash) => {
-                debug!(
-                    component_name = component_name.0,
-                    component_id = ?component_id.0,
-                    component_version,
-                    hash,
-                    "Found cached hash for server IFS file"
-                );
-                Ok(hash)
-            }
-            None => {
-                log_action(
-                    "Calculating hash",
-                    format!(
-                        "for server IFS file {}@{} - {}",
-                        component_name.0.log_color_highlight(),
-                        component_version.to_string().log_color_highlight(),
-                        target_path.log_color_highlight()
-                    ),
-                );
-
-                // TODO: streaming
-                let clients = self.ctx.golem_clients().await?;
-
-                let component_bytes = clients
-                    .component
-                    .download_component_file(
-                        &component_id.0,
-                        &component_version.to_string(),
-                        target_path,
-                    )
-                    .await?;
-
-                let mut component_hasher = blake3::Hasher::new();
-                component_hasher.update(&component_bytes);
-                let hash = component_hasher.finalize().to_hex().to_string();
-
-                TaskResultMarker::new(&task_result_marker_dir, hash_result(Some(&hash)))?
-                    .success()?;
-
-                Ok(hash)
-            }
-        }
-    }
-    */
 }
 
-// TODO: atomic
-#[allow(unused)]
-struct ComponentDeployProperties {
-    linked_wasm_path: PathBuf,
-    files: Vec<InitialComponentFile>,
-    dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-    env: HashMap<String, String>,
-}
-
-// TODO: atomic
-#[allow(unused)]
-fn component_deploy_properties(
-    app_ctx: &mut ApplicationContext,
-    component_name: &ComponentName,
-) -> anyhow::Result<ComponentDeployProperties> {
-    let component = app_ctx.application.component(component_name);
-    let linked_wasm_path = component.final_linked_wasm();
-    if !component.component_type().is_deployable() {
-        bail!("Component {component_name} is not deployable");
-    }
-    let files = component.files().clone();
-    let env = resolve_env_vars(component_name, component.env())?;
-    let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
-
-    Ok(ComponentDeployProperties {
-        linked_wasm_path,
-        files,
-        dynamic_linking,
-        env,
-    })
-}
-
-// TODO: atomic
-#[allow(unused)]
 fn app_component_dynamic_linking(
     app_ctx: &mut ApplicationContext,
     component_name: &ComponentName,

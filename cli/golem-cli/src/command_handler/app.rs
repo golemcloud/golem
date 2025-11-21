@@ -27,21 +27,27 @@ use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::Component;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
+use crate::model::text::fmt::{
+    log_error, log_fuzzy_matches, log_text_view, log_unified_diff, log_warn,
+};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::ApplicationClient;
+use golem_client::api::{ApplicationClient, EnvironmentClient};
 use golem_client::model::ApplicationCreation;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentDto, ComponentName};
+use golem_common::model::diff;
+use golem_common::model::diff::{Diffable, HashOf, Hashable, SerializeMode};
 use golem_templates::add_component_by_template;
-use golem_templates::model::{GuestLanguage, PackageName, Template, TemplateName};
+use golem_templates::model::{
+    ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
+};
 use itertools::Itertools;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -66,9 +72,15 @@ impl AppCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
+                plan,
+                version,
+                revision,
                 force_build,
                 deploy_args,
-            } => self.cmd_deploy(force_build, deploy_args).await,
+            } => {
+                self.cmd_deploy(plan, version, revision, force_build, deploy_args)
+                    .await
+            }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateAgents {
                 component_name,
@@ -156,6 +168,8 @@ impl AppCommandHandler {
             ),
         );
 
+        let application_name = TemplateApplicationName::from(application_name);
+
         if components.is_empty() {
             let common_templates = languages
                 .iter()
@@ -174,6 +188,7 @@ impl AppCommandHandler {
                         Some(common_template),
                         None,
                         &app_dir,
+                        &application_name,
                         &dummy_package_name,
                         Some(self.ctx.template_sdk_overrides()),
                     ) {
@@ -209,6 +224,7 @@ impl AppCommandHandler {
                     common_template,
                     Some(component_template),
                     &app_dir,
+                    &application_name,
                     component_package_name,
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
@@ -232,7 +248,10 @@ impl AppCommandHandler {
 
         log_action(
             "Created",
-            format!("application {}", application_name.log_color_highlight()),
+            format!(
+                "application {}",
+                application_name.as_str().log_color_highlight()
+            ),
         );
 
         logln("");
@@ -241,23 +260,15 @@ impl AppCommandHandler {
             logln(
                 format!(
                     "To add components to the application, switch to the {} directory, and use the `{}` command.",
-                    application_name.log_color_highlight(),
+                    application_name.as_str().log_color_highlight(),
                     "component new".log_color_highlight(),
                 )
             );
         } else {
-            // Unloading app context and switching dir, so we can reload the new app
-            self.ctx.unload_app_context().await;
-            std::env::set_current_dir(app_dir)?;
-
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-
-            app_ctx.log_dynamic_help(&DynamicHelpSections::show_components())?;
             logln(
                 format!(
                     "Switch to the {} directory, and use the `{}` or `{}` commands to use your new application!",
-                    application_name.log_color_highlight(),
+                    application_name.as_str().log_color_highlight(),
                     "app build".log_color_highlight(),
                     "app deploy".log_color_highlight(),
                 )
@@ -290,10 +301,19 @@ impl AppCommandHandler {
 
     async fn cmd_deploy(
         &self,
+        plan: bool,
+        version: Option<String>,
+        revision: Option<u64>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(force_build, deploy_args).await
+        if let Some(version) = version {
+            self.deploy_by_version(version, deploy_args).await
+        } else if let Some(revision) = revision {
+            self.deploy_by_revision(revision, deploy_args).await
+        } else {
+            self.deploy(plan, force_build, deploy_args).await
+        }
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -411,16 +431,154 @@ impl AppCommandHandler {
         .await
     }
 
-    async fn deploy(
+    async fn deploy_by_version(
         &self,
-        _force_build: ForceBuildArg,
+        _version: String,
         _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        let _environment = self
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    async fn deploy_by_revision(
+        &self,
+        _version: u64,
+        _deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        // TODO: atomic: missing client method
+        todo!()
+    }
+
+    pub async fn deploy(
+        &self,
+        _plan: bool, // TODO: atomic
+        force_build: ForceBuildArg,
+        deploy_args: DeployArgs,
+    ) -> anyhow::Result<()> {
+        let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
+
+        self.build(
+            vec![],
+            Some(BuildArgs {
+                step: vec![],
+                force_build: force_build.clone(),
+            }),
+            &ApplicationComponentSelectMode::All,
+        )
+        .await?;
+
+        if deploy_args.reset {
+            // TODO: atomic: delete env
+        }
+
+        let components = self
+            .ctx
+            .component_handler()
+            .all_deployable_manifest_components()
+            .await?;
+
+        let remote_deployment_hash = environment
+            .remote_environment
+            .current_deployment
+            .as_ref()
+            .map(|d| d.hash);
+
+        let diffable_local_deployment = {
+            let diffable_components = {
+                let mut diffable_components = BTreeMap::<String, HashOf<diff::Component>>::new();
+                for (component_name, component_deploy_properties) in &components {
+                    let diffable_component = self
+                        .ctx
+                        .component_handler()
+                        .diffable_local_component(component_name, component_deploy_properties)
+                        .await?;
+                    diffable_components.insert(component_name.0.clone(), diffable_component.into());
+                }
+                diffable_components
+            };
+
+            diff::Deployment {
+                components: diffable_components,
+                http_api_definitions: Default::default(), // TODO: atomic,
+                http_api_deployments: Default::default(), // TODO: atomic
+            }
+        };
+
+        let local_deployment_hash = diffable_local_deployment.hash();
+
+        if Some(local_deployment_hash) == remote_deployment_hash {
+            log_action(
+                "Skipping",
+                format!(
+                    "deployment, no changes detected, deployment hash: {}",
+                    local_deployment_hash.to_string().log_color_highlight()
+                ),
+            );
+            // TODO: atomic: if there is a deployment, show details (version, revision...)
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let server_deployment = match &environment.remote_environment.current_deployment {
+            Some(current_deployment) => Some(
+                clients
+                    .environment
+                    .get_environment_deployed_deployment_plan(
+                        &environment.environment_id.0,
+                        current_deployment.revision.0,
+                    )
+                    .await?,
+            ),
+            None => None,
+        };
+        let diffable_server_deployment = server_deployment.as_ref().map(|d| d.to_diffable());
+
+        let server_staged_deployment = clients
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await?;
+        let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+
+        let diff = diffable_server_deployment
+            .as_ref()
+            .and_then(|d| d.diff_with_local(&diffable_local_deployment));
+        let diff_stage =
+            diffable_server_staged_deployment.diff_with_local(&diffable_local_deployment);
+
+        if diff.is_some() {
+            if let Some(diffable_server_deployment) = &diffable_server_deployment {
+                log_action("Diffing", "with current deployment");
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                log_unified_diff(&diffable_server_deployment.unified_yaml_diff_with_local(
+                    &diffable_local_deployment,
+                    SerializeMode::ValueIfAvailable,
+                ));
+            }
+        }
+
+        if diff_stage.is_some() {
+            log_action("Diffing", "with staging area");
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            log_unified_diff(
+                &diffable_server_staged_deployment.unified_yaml_diff_with_local(
+                    &diffable_local_deployment,
+                    SerializeMode::ValueIfAvailable,
+                ),
+            );
+        }
+
+        if let Some(diff) = diff {
+            self.ctx.log_handler().log_serializable(&diff.components)
+        }
+        if let Some(diff_stage) = &diff_stage {
+            self.ctx
+                .log_handler()
+                .log_serializable(&diff_stage.components)
+        }
 
         // TODO: atomic
         todo!()
@@ -443,14 +601,15 @@ impl AppCommandHandler {
     pub async fn get_or_create_remote_application(
         &self,
     ) -> anyhow::Result<Option<golem_client::model::Application>> {
-        let Some(application_name) = self.ctx.application_name() else {
+        let Some(application_name) = self.ctx.manifest_environment().map(|e| &e.application_name)
+        else {
             return Ok(None);
         };
 
         let account_id = self.ctx.account_id().await?;
 
         match self
-            .get_remote_application(&account_id, &application_name)
+            .get_remote_application(&account_id, application_name)
             .await?
         {
             Some(application) => Ok(Some(application)),
@@ -462,7 +621,7 @@ impl AppCommandHandler {
                     .create_application(
                         &account_id.0,
                         &ApplicationCreation {
-                            name: application_name,
+                            name: application_name.clone(),
                         },
                     )
                     .await?,
@@ -501,7 +660,8 @@ impl AppCommandHandler {
         app_ctx.some_or_err()?.clean()
     }
 
-    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<Component>> {
+    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
+        /*
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -537,7 +697,9 @@ impl AppCommandHandler {
                 }
             }
         }
-        Ok(components)
+        Ok(components)*/
+        // TODO: atomic
+        todo!()
     }
 
     pub async fn must_select_components(

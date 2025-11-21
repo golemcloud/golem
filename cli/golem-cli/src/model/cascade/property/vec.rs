@@ -115,6 +115,11 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
             VecMergeMode::Prepend => {
                 let mut new_vec = elems.clone();
                 new_vec.extend(self.value.clone());
+                self.trace.push(VecPropertyTraceElem::Prepend {
+                    id: id.clone(),
+                    selection: selection.cloned(),
+                    prepended_elems: elems,
+                });
                 self.value = new_vec;
             }
             VecMergeMode::Replace => {
@@ -123,6 +128,7 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
                     selection: selection.cloned(),
                     new_elems: elems.clone(),
                 });
+                self.value = elems;
             }
         }
     }

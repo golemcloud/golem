@@ -15,6 +15,7 @@
 use super::component::{ComponentId, ComponentName, ComponentRevision};
 use super::diff::Hash;
 use super::environment::EnvironmentId;
+use crate::model::diff;
 use crate::{declare_revision, declare_structs};
 
 declare_revision!(DeploymentRevision);
@@ -53,5 +54,33 @@ declare_structs! {
         pub revision: ComponentRevision,
         pub name: ComponentName,
         pub hash: Hash,
+    }
+}
+
+impl DeploymentPlan {
+    pub fn to_diffable(&self) -> diff::Deployment {
+        diff::Deployment {
+            components: self
+                .components
+                .iter()
+                .map(|component| (component.name.0.clone(), component.hash.into()))
+                .collect(),
+            http_api_definitions: Default::default(), // TODO: atomic:
+            http_api_deployments: Default::default(), // TODO: atomic:
+        }
+    }
+}
+
+impl DeploymentSummary {
+    pub fn to_diffable(&self) -> diff::Deployment {
+        diff::Deployment {
+            components: self
+                .components
+                .iter()
+                .map(|component| (component.name.0.clone(), component.hash.into()))
+                .collect(),
+            http_api_definitions: Default::default(), // TODO: atomic:
+            http_api_deployments: Default::default(), // TODO: atomic:
+        }
     }
 }

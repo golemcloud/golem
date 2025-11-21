@@ -1,6 +1,6 @@
 # golem-app-manifest-header
 
-templates:
+componentTemplates:
   ts:
     build:
     - generateQuickjsDts: src/generated/interfaces

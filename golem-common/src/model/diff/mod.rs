@@ -218,7 +218,7 @@ mod test {
                     dynamic_linking_wasm_rpc: Default::default(),
                 }
                 .into(),
-                binary_hash: blake3::hash(name.as_bytes()).into(),
+                wasm_hash: blake3::hash(name.as_bytes()).into(),
                 files_by_path: BTreeMap::from([
                     (
                         "lol".to_string(),

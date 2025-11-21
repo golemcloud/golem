@@ -5,8 +5,8 @@
 
 components:
   auction-registry:
-    template: rust
-    profiles:
+    templates: rust
+    presets:
       debug:
         componentWasm: ../target/wasm32-wasip1/debug/auction_registry.wasm
         linkedWasm: ../target/golem-components/debug/auction_registry_composed.wasm
@@ -21,7 +21,6 @@ components:
           copy:
           - command: cp ../target/wasm32-wasip1/release/auction_registry.wasm ../..
           - command: cp ../target/golem-components/release/auction_registry_composed.wasm ../..
-    defaultProfile: debug
 dependencies:
   auction-registry:
   - target: auction
