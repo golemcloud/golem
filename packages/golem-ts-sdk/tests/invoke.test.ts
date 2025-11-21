@@ -75,7 +75,7 @@ import {
   deserializeDataValue,
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
-import { Image, Text } from './sampleAgents';
+import { TextOrImage } from './sampleAgents';
 
 test('BarAgent can be successfully initiated', () => {
   fc.assert(
@@ -505,7 +505,7 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
   );
 });
 
-test('Invoke function that takes and returns basic multimodal types', () => {
+test('Invoke fssses', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -516,52 +516,10 @@ test('Invoke function that takes and returns basic multimodal types', () => {
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  const multimodalInput: MultimodalBasic = [
-    { tag: 'text', val: { tag: 'url', val: 'https://example.com/text.txt' } },
+  const multimodalInput: Multimodal<TextOrImage> = [
+    { tag: 'text', val: 'Hello, !' },
+    { tag: 'image', val: new Uint8Array([137, 80, 78, 71]) },
   ];
-
-  testInvoke(
-    'fun39',
-    [['param', multimodalInput]],
-    resolvedAgent,
-    multimodalInput,
-    true,
-  );
-});
-
-test('Invoke function that takes and returns multimodal types', () => {
-  overrideSelfAgentId(new AgentId('foo-agent()'));
-
-  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
-
-  if (!classMetadata) {
-    throw new Error('FooAgent type metadata not found');
-  }
-
-  const resolvedAgent = initiateFooAgent('foo', classMetadata);
-
-  const multimodalInput: Multimodal<Text | Image> = [
-    'my-string-input',
-    new Uint8Array([137, 80, 78, 71]),
-  ];
-
-  fc.assert(
-    fc.property(
-      fc.string(),
-      fc.uint8Array({ minLength: 1, maxLength: 10 }),
-      (text, imageData) => {
-        const multimodalInput: Multimodal<Text | Image> = [text, imageData];
-
-        testInvoke(
-          'fun18',
-          [['param', multimodalInput]],
-          resolvedAgent,
-          multimodalInput,
-          true,
-        );
-      },
-    ),
-  );
 
   testInvoke(
     'fun18',

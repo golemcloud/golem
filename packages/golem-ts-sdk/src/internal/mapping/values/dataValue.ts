@@ -31,8 +31,10 @@ import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
+import * as Option from '../../../newTypes/option';
 
 import * as Value from '../values/Value';
+import { record } from '../types/AnalysedType';
 
 export type ParameterDetail = {
   name: string;
@@ -218,7 +220,11 @@ export function deserializeDataValue(
                 );
               }
 
-              return Either.right(WitValue.toTsValue(witValue, paramType.val));
+              let result = WitValue.toTsValue(witValue, paramType.val);
+
+              let multimodal_result = { tag: paramDetail.name, val: result };
+
+              return Either.right(multimodal_result);
           }
         }),
       );
@@ -303,86 +309,100 @@ function serializeMultimodalToDataValue(
   value: any,
   paramDetails: ParameterDetail[],
 ): [string, ElementValue][] {
-  let namesAndElements: [string, ElementValue][] = [];
+  const namesAndElements: [string, ElementValue][] = [];
 
-  const typeMatchers = paramDetails.map((param) => {
-    let matcher: (elem: any) => boolean;
-    const type = param.type;
-
-    switch (type.tag) {
-      case 'analysed':
-        matcher = (elem) => matchesType(elem, type.val);
-        break;
-
-      case 'unstructured-binary':
-        matcher = (elem) => {
-          const isObjectBinary = typeof elem === 'object' && elem !== null;
-          return (
-            isObjectBinary &&
-            'tag' in elem &&
-            (elem['tag'] === 'url' || elem['tag'] === 'inline')
-          );
-        };
-        break;
-
-      case 'unstructured-text':
-        matcher = (elem) => {
-          const isObject = typeof elem === 'object' && elem !== null;
-          return (
-            isObject &&
-            'tag' in elem &&
-            (elem['tag'] === 'url' || elem['tag'] === 'inline')
-          );
-        };
-        break;
-
-      case 'multimodal':
-        throw new Error(`Nested multimodal types are not supported`);
-    }
-
-    return { name: param.name, matcher };
-  });
-
-  if (Array.isArray(value)) {
-    for (const elem of value) {
-      const index = typeMatchers.findIndex(({ matcher }) => matcher(elem));
-
-      if (index === -1)
-        throw new Error(
-          `Unable to process multimodal input of elem ${util.format(elem)}. No matching type found in multimodal definition: ${paramDetails
-            .map((t) => t.name)
-            .join(', ')}`,
-        );
-
-      const result = serializeToDataValue(
-        value[index],
-        paramDetails[index].type,
-      );
-
-      if (Either.isLeft(result)) {
-        throw new Error(
-          `Failed to serialize multimodal element: ${util.format(value[index])} at index ${index}`,
-        );
-      }
-
-      const dataValue = result.val;
-
-      switch (dataValue.tag) {
-        case 'tuple':
-          const element = dataValue.val[0];
-          namesAndElements.push([paramDetails[index].name, element]);
-          break;
-        case 'multimodal':
-          throw new Error(`Nested multimodal types are not supported`);
-      }
-    }
-
-    return namesAndElements;
-  } else {
+  if (!Array.isArray(value)) {
     throw new Error(
       `Unable to serialize multimodal value ${util.format(value)}. Multimodal argument should be an array of values`,
     );
   }
+
+  for (const elem of value) {
+    let matchedParam: ParameterDetail | null = null;
+    let matchedVal: any = undefined;
+
+    for (const param of paramDetails) {
+      const name = param.name;
+      const type = param.type;
+
+      const valOpt = getValFieldFromTaggedObject(elem, name);
+      if (Option.isNone(valOpt)) {
+        continue;
+      }
+
+      const elemVal = valOpt.val;
+
+      let isMatch = false;
+
+      switch (type.tag) {
+        case 'analysed':
+          isMatch = matchesType(elemVal, type.val);
+          break;
+
+        case 'unstructured-binary': {
+          const isObjectBinary =
+            typeof elemVal === 'object' && elemVal !== null;
+          isMatch =
+            isObjectBinary &&
+            'tag' in elemVal &&
+            (elemVal.tag === 'url' || elemVal.tag === 'inline');
+          break;
+        }
+
+        case 'unstructured-text': {
+          const isObjectText = typeof elemVal === 'object' && elemVal !== null;
+          isMatch =
+            isObjectText &&
+            'tag' in elemVal &&
+            (elemVal.tag === 'url' || elemVal.tag === 'inline');
+          break;
+        }
+
+        case 'multimodal':
+          throw new Error(`Nested multimodal types are not supported`);
+      }
+
+      if (isMatch) {
+        matchedParam = param;
+        matchedVal = elemVal;
+        break;
+      }
+    }
+
+    if (matchedParam === null) {
+      throw new Error(
+        `Unable to process multimodal input of elem ${util.format(elem)}. No matching type found in multimodal definition: ${paramDetails
+          .map((t) => t.name)
+          .join(', ')}`,
+      );
+    }
+
+    const result = serializeToDataValue(matchedVal, matchedParam.type);
+
+    if (Either.isLeft(result)) {
+      throw new Error(
+        `Failed to serialize multimodal element: ${util.format(elem)}. Error: ${result.val}`,
+      );
+    }
+
+    const dataValue = result.val;
+
+    switch (dataValue.tag) {
+      case 'tuple': {
+        const element = dataValue.val[0];
+        namesAndElements.push([matchedParam.name, element]);
+        break;
+      }
+      case 'multimodal':
+        throw new Error(`Nested multimodal types are not supported`);
+      default:
+        throw new Error(
+          `Unexpected data value tag while serializing multimodal element: ${util.format(dataValue)}`,
+        );
+    }
+  }
+
+  return namesAndElements;
 }
 
 export function createSingleElementTupleDataValue(
@@ -392,4 +412,23 @@ export function createSingleElementTupleDataValue(
     tag: 'tuple',
     val: [elementValue],
   };
+}
+
+/**
+ * Gets the 'val' field from an object with a specific 'tag' field.
+ *
+ * @param value Example: { tag: 'someTag', val: someValue }
+ * @param tagValue Example: 'someTag'
+ */
+function getValFieldFromTaggedObject(
+  value: any,
+  tagValue: string,
+): Option.Option<any> {
+  if (typeof value === 'object' && value !== null) {
+    if ('tag' in value && 'val' in value && value['tag'] === tagValue) {
+      return Option.some(value['val']);
+    }
+  }
+
+  return Option.none();
 }

@@ -443,9 +443,6 @@ class BarAgent extends BaseAgent {
   // }
 }
 
-export type Text = string;
-export type Image = Uint8Array;
-
 export type TextOrImage =
   | { tag: 'text'; val: string }
   | { tag: 'image'; val: Uint8Array }
