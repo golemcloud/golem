@@ -542,7 +542,7 @@ test('Invoke function that takes and returns multimodal', () => {
   );
 });
 
-test('Invoke function that takes and returns basic multimodal', () => {
+test('Invoke function that takes and returns multimodal basic', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -555,6 +555,16 @@ test('Invoke function that takes and returns basic multimodal', () => {
 
   const multimodalInput: MultimodalBasic = [
     { tag: 'binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    {
+      tag: 'binary',
+      val: {
+        tag: 'inline',
+        val: new Uint8Array([1, 2, 3]),
+        mimeType: 'application/json',
+      },
+    },
+    { tag: 'text', val: { tag: 'inline', val: 'some text' } },
+    { tag: 'text', val: { tag: 'url', val: 'https://foo.bar/some-text.txt' } },
   ];
 
   testInvoke(
