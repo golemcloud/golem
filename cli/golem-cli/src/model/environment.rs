@@ -38,6 +38,16 @@ pub enum EnvironmentReference {
     },
 }
 
+impl EnvironmentReference {
+    pub fn is_manifest_scoped(&self) -> bool {
+        match &self {
+            Self::Environment { .. } => true,
+            Self::ApplicationEnvironment { .. } => false,
+            Self::AccountApplicationEnvironment { .. } => false,
+        }
+    }
+}
+
 impl TryFrom<&str> for EnvironmentReference {
     type Error = String;
 
@@ -58,19 +68,19 @@ impl FromStr for EnvironmentReference {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut segments = s.split("/").collect::<Vec<_>>();
+        let segments = s.split("/").collect::<Vec<_>>();
         match segments.len() {
             1 => Ok(Self::Environment {
-                environment_name: segments.pop().unwrap().parse()?,
+                environment_name: segments[0].parse()?,
             }),
             2 => Ok(Self::ApplicationEnvironment {
-                application_name: segments.pop().unwrap().parse()?,
-                environment_name: segments.pop().unwrap().parse()?,
+                application_name: segments[0].parse()?,
+                environment_name: segments[1].parse()?,
             }),
             3 => Ok(Self::AccountApplicationEnvironment {
-                account_email: segments.pop().unwrap().into(),
-                application_name: segments.pop().unwrap().parse()?,
-                environment_name: segments.pop().unwrap().parse()?,
+                account_email: segments[0].into(),
+                application_name: segments[1].parse()?,
+                environment_name: segments[2].parse()?,
                 auto_create: false,
             }),
             _ => Err(formatdoc! {"
@@ -113,6 +123,15 @@ pub enum ResolvedEnvironmentIdentitySource {
     DefaultFromManifest,
 }
 
+impl ResolvedEnvironmentIdentitySource {
+    pub fn is_manifest_scoped(&self) -> bool {
+        match self {
+            ResolvedEnvironmentIdentitySource::Reference(env_ref) => env_ref.is_manifest_scoped(),
+            ResolvedEnvironmentIdentitySource::DefaultFromManifest => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedEnvironmentIdentity {
     pub source: ResolvedEnvironmentIdentitySource,
@@ -144,6 +163,10 @@ impl ResolvedEnvironmentIdentity {
             environment_name: environment.name.clone(),
             remote_environment: environment,
         }
+    }
+
+    pub fn is_manifest_scoped(&self) -> bool {
+        self.source.is_manifest_scoped()
     }
 }
 

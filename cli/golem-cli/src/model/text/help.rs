@@ -67,25 +67,36 @@ impl MessageWithFields for WorkerNameHelp {
                 ),
         );
         fields.field(
-            "<PROJECT>/<COMPONENT>/<AGENT>",
+            "<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Project and component specific agent name.
+                    Environment and component specific agent name.
 
                     Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project.
+                    specific environment.
 
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT>",
+            "<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, project and component specific agent name.
+                    Application, environment and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project owned by another account
+                    It can refer to components in a specific application and environment, always
+                    expects the component name to be fully qualified.
+                    "
+            ),
+        );
+        fields.field(
+            "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            &indoc!(
+                "
+                    Account, application, environment and component specific agent name.
+
+                    Behaves the same as <APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>, except it can
+                    refer to any account.
                     "
             ),
         );

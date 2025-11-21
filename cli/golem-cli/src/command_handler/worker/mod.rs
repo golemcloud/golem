@@ -25,7 +25,7 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::NonSuccessfulExit;
-use crate::fuzzy::Error;
+use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
@@ -39,7 +39,7 @@ use crate::model::text::fmt::{
 };
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
-    AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
+    AvailableFunctionNamesHelp, ComponentNameHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{
     format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
@@ -47,6 +47,7 @@ use crate::model::text::worker::{
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 
+use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::worker::{
     fuzzy_match_function_name, AgentUpdateMode, WorkerMetadata, WorkerName, WorkerNameMatch,
 };
@@ -56,8 +57,10 @@ use golem_client::model::{
 };
 use golem_client::model::{InvokeResult, ScanCursor};
 use golem_common::model::agent::AgentId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
     RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WasiConfigVars,
@@ -73,6 +76,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -1766,169 +1770,185 @@ impl WorkerCommandHandler {
                     }
                 }
             }
-            // TODO: atomic
             // [ACCOUNT]/[APPLICATION]/[ENVIRONMENT]/<COMPONENT>/<WORKER>
-            // 2..=4 => {
-            //     fn empty_checked<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
-            //         if value.is_empty() {
-            //             log_error(format!("Missing {name} part in agent name!"));
-            //             logln("");
-            //             log_text_view(&ComponentNameHelp);
-            //             bail!(NonSuccessfulExit);
-            //         }
-            //         Ok(value)
-            //     }
-            //
-            //     fn empty_checked_account(value: &str) -> anyhow::Result<&str> {
-            //         empty_checked("account", value)
-            //     }
-            //
-            //     fn empty_checked_project(value: &str) -> anyhow::Result<&str> {
-            //         empty_checked("project", value)
-            //     }
-            //
-            //     fn empty_checked_component(value: &str) -> anyhow::Result<&str> {
-            //         empty_checked("component", value)
-            //     }
-            //
-            //     fn empty_checked_worker(value: &str) -> anyhow::Result<&str> {
-            //         empty_checked("agent", value)
-            //     }
-            //
-            //     let (account_email, app_name, env_name, component_name, worker_name): (
-            //         Option<String>,
-            //         Option<ProjectName>,
-            //         ComponentName,
-            //         String,
-            //     ) = match segments.len() {
-            //         2 => (
-            //             None,
-            //             None,
-            //             empty_checked_component(segments[0])?.into(),
-            //             empty_checked_component(segments[1])?.into(),
-            //         ),
-            //         3 => (
-            //             None,
-            //             Some(empty_checked_project(segments[0])?.into()),
-            //             empty_checked_component(segments[1])?.into(),
-            //             empty_checked_component(segments[2])?.into(),
-            //         ),
-            //         4 => (
-            //             Some(empty_checked_account(segments[0])?.into()),
-            //             Some(empty_checked_project(segments[1])?.into()),
-            //             empty_checked_component(segments[2])?.into(),
-            //             empty_checked_worker(segments[3])?.into(),
-            //         ),
-            //         other => panic!("Unexpected segment count: {other}"),
-            //     };
-            //
-            //     if worker_name.is_empty() {
-            //         logln("");
-            //         log_error("Missing component part in agent name!");
-            //         logln("");
-            //         log_text_view(&WorkerNameHelp);
-            //         bail!(NonSuccessfulExit);
-            //     }
-            //
-            //     let account = if let Some(ref account_email) = account_email {
-            //         Some(
-            //             self.ctx
-            //                 .select_account_by_email_or_error(account_email)
-            //                 .await?,
-            //         )
-            //     } else {
-            //         None
-            //     };
-            //
-            //     let project = match (account_email, project_name) {
-            //         (Some(account_email), Some(project_name)) => {
-            //             self.ctx
-            //                 .cloud_project_handler()
-            //                 .opt_select_project(Some(&ProjectReference::WithAccount {
-            //                     account_email,
-            //                     project_name,
-            //                 }))
-            //                 .await?
-            //         }
-            //         (None, Some(project_name)) => {
-            //             self.ctx
-            //                 .cloud_project_handler()
-            //                 .opt_select_project(Some(&ProjectReference::JustName(project_name)))
-            //                 .await?
-            //         }
-            //         _ => None,
-            //     };
-            //
-            //     self.ctx
-            //         .app_handler()
-            //         .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
-            //         .await?;
-            //
-            //     let app_ctx = self.ctx.app_context_lock().await;
-            //     let app_ctx = app_ctx.opt()?;
-            //     match app_ctx {
-            //         Some(app_ctx) => {
-            //             let fuzzy_search = FuzzySearch::new(
-            //                 app_ctx.application.component_names().map(|cn| cn.as_str()),
-            //             );
-            //             match fuzzy_search.find(&component_name.0) {
-            //                 Ok(match_) => {
-            //                     log_fuzzy_match(&match_);
-            //                     Ok(WorkerNameMatch {
-            //                         account,
-            //                         project,
-            //                         component_name_match_kind: ComponentNameMatchKind::App,
-            //                         component_name: match_.option.into(),
-            //                         worker_name: worker_name.into(),
-            //                     })
-            //                 }
-            //                 Err(error) => match error {
-            //                     Error::Ambiguous {
-            //                         highlighted_options,
-            //                         ..
-            //                     } => {
-            //                         logln("");
-            //                         log_error(format!(
-            //                             "The requested application component name ({}) is ambiguous.",
-            //                             component_name.0.log_color_error_highlight()
-            //                         ));
-            //                         logln("");
-            //                         logln("Did you mean one of");
-            //                         for option in highlighted_options {
-            //                             logln(format!(" - {}", option.bold()));
-            //                         }
-            //                         logln("?");
-            //                         logln("");
-            //                         log_text_view(&WorkerNameHelp);
-            //                         logln("");
-            //                         log_text_view(&AvailableComponentNamesHelp(
-            //                             app_ctx.application.component_names().cloned().collect(),
-            //                         ));
-            //
-            //                         bail!(NonSuccessfulExit);
-            //                     }
-            //                     Error::NotFound { .. } => {
-            //                         // Assuming non-app component
-            //                         Ok(WorkerNameMatch {
-            //                             account,
-            //                             project,
-            //                             component_name_match_kind: ComponentNameMatchKind::Unknown,
-            //                             component_name,
-            //                             worker_name: worker_name.into(),
-            //                         })
-            //                     }
-            //                 },
-            //             }
-            //         }
-            //         None => Ok(WorkerNameMatch {
-            //             account,
-            //             project,
-            //             component_name_match_kind: ComponentNameMatchKind::Unknown,
-            //             component_name,
-            //             worker_name: worker_name.into(),
-            //         }),
-            //     }
-            // }
+            2..=5 => {
+                fn non_empty<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
+                    if value.is_empty() {
+                        log_error(format!(
+                            "Missing {name} part in agent name!",
+                            name = name.log_color_highlight()
+                        ));
+                        logln("");
+                        log_text_view(&ComponentNameHelp);
+                        bail!(NonSuccessfulExit);
+                    }
+                    Ok(value)
+                }
+
+                fn validated<'a, T>(name: &'a str, value: &'a str) -> anyhow::Result<T>
+                where
+                    T: FromStr<Err = String>,
+                {
+                    let value = non_empty(name, value)?;
+                    match T::from_str(value) {
+                        Ok(value) => Ok(value),
+                        Err(err) => {
+                            log_error(format!(
+                                "Invalid {name} part in agent name, value: {value}, error: {err}",
+                                name = name.log_color_highlight(),
+                                value = value.log_color_error_highlight(),
+                                err = err.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&ComponentNameHelp);
+                            bail!(NonSuccessfulExit);
+                        }
+                    }
+                }
+
+                fn validated_account(value: &str) -> anyhow::Result<String> {
+                    Ok(non_empty("account", value)?.to_string())
+                }
+
+                fn validated_application(value: &str) -> anyhow::Result<ApplicationName> {
+                    validated("application", value)
+                }
+
+                fn validated_environment(value: &str) -> anyhow::Result<EnvironmentName> {
+                    validated("environment", value)
+                }
+
+                fn validated_component(value: &str) -> anyhow::Result<ComponentName> {
+                    validated("component", value)
+                }
+
+                fn validated_worker(value: &str) -> anyhow::Result<String> {
+                    Ok(non_empty("agent", value)?.to_string())
+                }
+
+                let (environment_reference, component_name, worker_name): (
+                    Option<EnvironmentReference>,
+                    ComponentName,
+                    String,
+                ) = match segments.len() {
+                    2 => (
+                        None,
+                        validated_component(segments[0])?,
+                        validated_worker(segments[1])?,
+                    ),
+                    3 => (
+                        Some(EnvironmentReference::Environment {
+                            environment_name: validated_environment(segments[0])?,
+                        }),
+                        validated_component(segments[1])?,
+                        validated_worker(segments[2])?,
+                    ),
+                    4 => (
+                        Some(EnvironmentReference::ApplicationEnvironment {
+                            application_name: validated_application(segments[0])?,
+                            environment_name: validated_environment(segments[1])?,
+                        }),
+                        validated_component(segments[2])?,
+                        validated_worker(segments[3])?,
+                    ),
+                    5 => (
+                        Some(EnvironmentReference::AccountApplicationEnvironment {
+                            account_email: validated_account(segments[0])?,
+                            application_name: validated_application(segments[1])?,
+                            environment_name: validated_environment(segments[2])?,
+                            auto_create: false,
+                        }),
+                        validated_component(segments[3])?,
+                        validated_worker(segments[4])?,
+                    ),
+                    other => panic!("Unexpected segment count: {other}"),
+                };
+
+                let environment = match &environment_reference {
+                    Some(environment_reference) => Some(
+                        self.ctx
+                            .environment_handler()
+                            .resolve_environment_reference(
+                                EnvironmentResolveMode::Any,
+                                environment_reference,
+                            )
+                            .await?,
+                    ),
+                    None => None,
+                };
+
+                self.ctx
+                    .app_handler()
+                    .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
+                    .await?;
+
+                let is_manifest_scoped = environment
+                    .as_ref()
+                    .map(|env| env.is_manifest_scoped())
+                    .unwrap_or(true);
+
+                let app_ctx = self.ctx.app_context_lock().await;
+                let app_ctx = app_ctx.opt()?;
+                match app_ctx {
+                    Some(app_ctx) if is_manifest_scoped => {
+                        let fuzzy_search = FuzzySearch::new(
+                            app_ctx.application.component_names().map(|cn| cn.as_str()),
+                        );
+                        match fuzzy_search.find(&component_name.0) {
+                            Ok(match_) => {
+                                log_fuzzy_match(&match_);
+                                Ok(WorkerNameMatch {
+                                    environment,
+                                    component_name_match_kind: ComponentNameMatchKind::App,
+                                    component_name: ComponentName(match_.option),
+                                    worker_name: worker_name.into(),
+                                })
+                            }
+                            Err(error) => match error {
+                                Error::Ambiguous {
+                                    highlighted_options,
+                                    ..
+                                } => {
+                                    logln("");
+                                    log_error(format!(
+                                        "The requested application component name ({}) is ambiguous.",
+                                        component_name.0.log_color_error_highlight()
+                                    ));
+                                    logln("");
+                                    logln("Did you mean one of");
+                                    for option in highlighted_options {
+                                        logln(format!(" - {}", option.bold()));
+                                    }
+                                    logln("?");
+                                    logln("");
+                                    log_text_view(&WorkerNameHelp);
+                                    logln("");
+                                    log_text_view(&AvailableComponentNamesHelp(
+                                        app_ctx.application.component_names().cloned().collect(),
+                                    ));
+
+                                    bail!(NonSuccessfulExit);
+                                }
+                                Error::NotFound { .. } => {
+                                    // Assuming non-app component
+                                    Ok(WorkerNameMatch {
+                                        environment,
+                                        component_name_match_kind: ComponentNameMatchKind::Unknown,
+                                        component_name,
+                                        worker_name: worker_name.into(),
+                                    })
+                                }
+                            },
+                        }
+                    }
+                    _ => Ok(WorkerNameMatch {
+                        environment,
+                        component_name_match_kind: ComponentNameMatchKind::Unknown,
+                        component_name,
+                        worker_name: worker_name.into(),
+                    }),
+                }
+            }
             _ => {
                 logln("");
                 log_error(format!(
