@@ -50,6 +50,7 @@ jsonwebtoken = "9.2.0"
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"
 num-traits = { workspace = true }
+openidconnect.workspace = true
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }

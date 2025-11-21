@@ -29,6 +29,7 @@ pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod plugin;
 pub mod reports;
+pub mod security_scheme;
 pub mod token;
 
 // Model for SQL records and fields

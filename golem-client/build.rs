@@ -189,6 +189,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OplogProcessorPluginSpec",
                 "golem_common::model::plugin_registration::OplogProcessorPluginSpec",
             ),
+            // Security Scheme
+            (
+                "SecuritySchemeCreation",
+                "golem_common::model::security_scheme::SecuritySchemeCreation",
+            ),
+            (
+                "SecuritySchemeUpdate",
+                "golem_common::model::security_scheme::SecuritySchemeUpdate",
+            ),
+            (
+                "SecuritySchemeDto",
+                "golem_common::model::security_scheme::SecuritySchemeDto",
+            ),
             // Worker
             (
                 "FlatComponentFileSystemNode",

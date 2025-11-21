@@ -97,30 +97,30 @@ impl EnvironmentSharesApi {
     #[oai(
         path = "/envs/:environment_id/shares",
         method = "get",
-        operation_id = "get_environment_shares",
+        operation_id = "get_environment_environment_shares",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_shares(
+    async fn get_environment_environment_shares(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<EnvironmentShare>>> {
         let record = recorded_http_api_request!(
-            "get_environment_shares",
+            "get_environment_environment_shares",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_shares_internal(environment_id.0, auth)
+            .get_environment_environment_shares_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_shares_internal(
+    async fn get_environment_environment_shares_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,

@@ -19,7 +19,7 @@ use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_share::{
     EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate,
 };
@@ -122,23 +122,15 @@ impl EnvironmentShareService {
         update: EnvironmentShareUpdate,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self.get(environment_share_id, auth).await?;
+        let (mut environment_share, environment) = self
+            .get_with_environment(environment_share_id, auth)
+            .await?;
 
-        self.environment_service
-            .get_and_authorize(
-                &environment_share.environment_id,
-                EnvironmentAction::UpdateShare,
-                false,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
-                }
-                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
-                other => other.into(),
-            })?;
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::UpdateShare,
+        )?;
 
         let current_revision = environment_share.revision;
 
@@ -169,23 +161,15 @@ impl EnvironmentShareService {
         environment_share_id: &EnvironmentShareId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let mut environment_share: EnvironmentShare = self.get(environment_share_id, auth).await?;
+        let (mut environment_share, environment) = self
+            .get_with_environment(environment_share_id, auth)
+            .await?;
 
-        self.environment_service
-            .get_and_authorize(
-                &environment_share.environment_id,
-                EnvironmentAction::DeleteShare,
-                false,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
-                }
-                EnvironmentError::Unauthorized(inner) => EnvironmentShareError::Unauthorized(inner),
-                other => other.into(),
-            })?;
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::DeleteShare,
+        )?;
 
         let current_revision = environment_share.revision;
 
@@ -215,30 +199,9 @@ impl EnvironmentShareService {
         environment_share_id: &EnvironmentShareId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
-        let environment_share: EnvironmentShare = self
-            .environment_share_repo
-            .get_by_id(&environment_share_id.0)
-            .await?
-            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                environment_share_id.clone(),
-            ))?
-            .try_into()?;
-
-        self.environment_service
-            .get_and_authorize(
-                &environment_share.environment_id,
-                EnvironmentAction::ViewShares,
-                false,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => {
-                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
-                }
-                other => other.into(),
-            })?;
-
+        let (environment_share, _) = self
+            .get_with_environment(environment_share_id, auth)
+            .await?;
         Ok(environment_share)
     }
 
@@ -294,5 +257,38 @@ impl EnvironmentShareService {
             .transpose()?;
 
         Ok(result)
+    }
+
+    async fn get_with_environment(
+        &self,
+        environment_share_id: &EnvironmentShareId,
+        auth: &AuthCtx,
+    ) -> Result<(EnvironmentShare, Environment), EnvironmentShareError> {
+        let environment_share: EnvironmentShare = self
+            .environment_share_repo
+            .get_by_id(&environment_share_id.0)
+            .await?
+            .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
+                environment_share_id.clone(),
+            ))?
+            .try_into()?;
+
+        let environment = self
+            .environment_service
+            .get_and_authorize(
+                &environment_share.environment_id,
+                EnvironmentAction::ViewShares,
+                false,
+                auth,
+            )
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => {
+                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        Ok((environment_share, environment))
     }
 }

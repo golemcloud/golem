@@ -25,7 +25,6 @@ pub mod environment_api_definitions;
 pub mod environment_api_deployments;
 pub mod environment_certificates;
 pub mod environment_plugin_grants;
-pub mod environment_security_schemes;
 pub mod environment_shares;
 pub mod environments;
 pub mod error;
@@ -48,7 +47,6 @@ use self::environment_api_definitions::EnvironmentApiDefinitionsApi;
 use self::environment_api_deployments::EnvironmentApiDeploymentsApi;
 use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
-use self::environment_security_schemes::EnvironmentSecuritySchemesApi;
 use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
@@ -76,7 +74,6 @@ pub type Apis = (
         EnvironmentCertificatesApi,
         EnvironmentPluginGrantsApi,
         EnvironmentsApi,
-        EnvironmentSecuritySchemesApi,
         EnvironmentSharesApi,
     ),
     LoginApi,
@@ -136,7 +133,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.deployment_service.clone(),
                     services.auth_service.clone(),
                 ),
-                EnvironmentSecuritySchemesApi::new(services.auth_service.clone()),
                 EnvironmentSharesApi::new(
                     services.environment_share_service.clone(),
                     services.auth_service.clone(),
@@ -154,7 +150,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.reports_service.clone(),
                 services.auth_service.clone(),
             ),
-            SecuritySchemesApi::new(services.auth_service.clone()),
+            SecuritySchemesApi::new(
+                services.security_scheme_service.clone(),
+                services.auth_service.clone(),
+            ),
             TokensApi::new(
                 services.token_service.clone(),
                 services.auth_service.clone(),

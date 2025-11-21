@@ -93,6 +93,13 @@ async fn delete_domain(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         );
     }
 
+    {
+        let result = client
+            .list_environment_domain_registrations(&env.id.0)
+            .await?;
+        assert!(result.values.is_empty())
+    }
+
     Ok(())
 }
 
@@ -126,7 +133,7 @@ async fn other_users_cannot_see_domain(deps: &EnvBasedTestDependencies) -> anyho
 
     {
         let result = client_2
-            .list_environment_domain_registrations(&domain.id.0)
+            .list_environment_domain_registrations(&env.id.0)
             .await;
         assert!(
             let Err(golem_client::Error::Item(

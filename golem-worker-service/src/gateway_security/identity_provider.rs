@@ -14,9 +14,9 @@
 
 use crate::gateway_security::open_id_client::OpenIdClient;
 use async_trait::async_trait;
+use golem_common::model::security_scheme::Provider;
 use golem_common::SafeDisplay;
 use golem_service_base::custom_api::identity_provider_metadata::GolemIdentityProviderMetadata;
-use golem_service_base::custom_api::security_scheme::Provider;
 use golem_service_base::custom_api::security_scheme::SecurityScheme;
 use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
@@ -169,7 +169,7 @@ impl IdentityProvider for DefaultIdentityProvider {
     ) -> Result<OpenIdClient, IdentityProviderError> {
         debug!(
             "Creating identity provider client for {}",
-            security_scheme.scheme_identifier
+            security_scheme.name
         );
 
         let provider_metadata = self
