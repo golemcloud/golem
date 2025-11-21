@@ -166,11 +166,16 @@ export function deserializeDataValue(
                 );
               }
 
-              return UnstructuredText.fromDataValue(
+              const unstructuredText = UnstructuredText.fromDataValue(
                 name,
                 textRef,
                 languageCodes.val,
               );
+
+              return Either.map(unstructuredText, (v) => ({
+                tag: name,
+                val: v,
+              }));
 
             case 'unstructured-binary':
               const binaryParameterDetail = multimodalParamTypes.find(
@@ -193,11 +198,16 @@ export function deserializeDataValue(
                 );
               }
 
-              return UnstructuredBinary.fromDataValue(
+              const unstructuredBinary = UnstructuredBinary.fromDataValue(
                 name,
                 binaryRef,
                 mimeTypes.val,
               );
+
+              return Either.map(unstructuredBinary, (v) => ({
+                tag: name,
+                val: v,
+              }));
 
             case 'component-model':
               const witValue = elem.val;

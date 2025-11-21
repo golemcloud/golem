@@ -277,6 +277,7 @@ export interface CustomData {
   value: number;
 }
 
+// Used in invoke.test.ts
 @agent({ name: 'my-complex-agent' })
 class BarAgent extends BaseAgent {
   constructor(

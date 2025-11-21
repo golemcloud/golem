@@ -505,7 +505,7 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
   );
 });
 
-test('Invoke fssses', () => {
+test('Invoke function that takes and returns multimodal', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -517,8 +517,19 @@ test('Invoke fssses', () => {
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
   const multimodalInput: Multimodal<TextOrImage> = [
-    { tag: 'text', val: 'Hello, !' },
+    { tag: 'un-text', val: { tag: 'inline', val: 'data' } },
+    { tag: 'un-binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    { tag: 'text', val: 'foo' },
     { tag: 'image', val: new Uint8Array([137, 80, 78, 71]) },
+    { tag: 'un-text', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    {
+      tag: 'un-binary',
+      val: {
+        tag: 'inline',
+        val: new Uint8Array([1, 2, 3]),
+        mimeType: 'application/json',
+      },
+    },
   ];
 
   testInvoke(
@@ -529,6 +540,31 @@ test('Invoke fssses', () => {
     true,
   );
 });
+
+// test('Invoke function that takes and returns basic multimodal', () => {
+//   overrideSelfAgentId(new AgentId('foo-agent()'));
+//
+//   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+//
+//   if (!classMetadata) {
+//     throw new Error('FooAgent type metadata not found');
+//   }
+//
+//   const resolvedAgent = initiateFooAgent('foo', classMetadata);
+//
+//   const multimodalInput: MultimodalBasic = [
+//     { tag: 'text', val: {tag: 'url', val: 'https://foo.bar'} },
+//     { tag: 'binary', val: {tag: 'inline', val: new Uint8Array([1,2,3]), mimeType: 'application/octet-stream'} },
+//   ];
+//
+//   testInvoke(
+//     'fun38',
+//     [['param', multimodalInput]],
+//     resolvedAgent,
+//     multimodalInput,
+//     true,
+//   );
+// });
 
 test('Invoke function that takes and returns typed array', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
@@ -754,10 +790,9 @@ function createInputDataValue(
       );
     }
 
-    return Either.getOrThrowWith(
-      serializeToDataValue(value, paramAnalysedType),
-      (error) => new Error(error),
-    );
+    const result = serializeToDataValue(value, paramAnalysedType);
+
+    return Either.getOrThrowWith(result, (error) => new Error(error));
   }
 
   const elementValues: ElementValue[] = parameterNameAndValues.map(
