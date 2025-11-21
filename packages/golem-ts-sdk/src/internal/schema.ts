@@ -43,6 +43,8 @@ import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 
+const MULTIMODAL_TYPE_NAMES = ['Multimodal', 'MultimodalBasic'];
+
 export function getConstructorDataSchema(
   agentClassName: string,
   classType: ClassMetadata,
@@ -52,11 +54,11 @@ export function getConstructorDataSchema(
 
   if (
     constructorParamInfos.length === 1 &&
-    constructorParamInfos[0].type.name === 'Multimodal'
+    isNamedMultimodal(constructorParamInfos[0].type)
   ) {
     const paramType = constructorParamInfos[0].type;
 
-    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
+    if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
       const elementType = paramType.element;
 
       const multiModalDetails = getMultimodalDetails(elementType);
@@ -247,11 +249,11 @@ export function buildMethodInputSchema(
 
   if (
     paramTypesArray.length === 1 &&
-    paramTypesArray[0][1].name === 'Multimodal'
+    isNamedMultimodal(paramTypesArray[0][1])
   ) {
     const paramType = paramTypesArray[0][1];
 
-    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
+    if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
       const multiModalDetails = getMultimodalDetails(paramType.element);
 
       if (Either.isLeft(multiModalDetails)) {
@@ -336,15 +338,15 @@ export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<[TypeDetails, DataSchema], string> {
   const multiModalTarget =
-    returnType.kind === 'promise' && returnType.element.name === 'Multimodal'
+    returnType.kind === 'promise' && isNamedMultimodal(returnType.element)
       ? returnType.element
-      : returnType.name === 'Multimodal'
+      : isNamedMultimodal(returnType)
         ? returnType
         : null;
 
   if (
     multiModalTarget &&
-    multiModalTarget.name === 'Multimodal' &&
+    isNamedMultimodal(multiModalTarget) &&
     multiModalTarget.kind === 'array'
   ) {
     const multiModalDetails = getMultimodalDetails(multiModalTarget.element);
@@ -1097,4 +1099,11 @@ export function getLanguageCodes(
   return Either.left(
     `Type mismatch. Expected UnstructuredText, Found ${type.name}`,
   );
+}
+
+function isNamedMultimodal(type: Type.Type): boolean {
+  if (type.name) {
+    return MULTIMODAL_TYPE_NAMES.includes(type.name);
+  }
+  return false;
 }

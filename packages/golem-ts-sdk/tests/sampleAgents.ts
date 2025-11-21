@@ -253,6 +253,14 @@ export class FooAgent extends BaseAgent {
     return Result.ok(undefined);
   }
 
+  fun38(param: MultimodalBasic): Promise<MultimodalBasic> {
+    return Promise.reject(param);
+  }
+
+  fun39(param: MultimodalBasic): MultimodalBasic {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
