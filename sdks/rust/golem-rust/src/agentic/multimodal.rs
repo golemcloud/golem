@@ -25,11 +25,11 @@ use golem_wasm::{Value, WitValue};
 /// # Example
 ///
 /// ```
-/// use golem_rust::agentic::{Multimodal};
+/// use golem_rust::agentic::{MultimodalCustom};
 /// use golem_rust::MultimodalSchema;
 ///
 /// // Create a multimodal dataset with text and image inputs
-/// let multimodal_data = Multimodal::new([
+/// let multimodal_data = MultimodalCustom::new([
 ///     Input::Text("foo".to_string()),
 ///     Input::Image(vec![1, 2, 3])
 /// ]);
@@ -41,7 +41,7 @@ use golem_wasm::{Value, WitValue};
 /// }
 ///
 /// // Function that shows how an agent might receive multimodal input
-/// fn my_agent_method(input: Multimodal<Input>) {
+/// fn my_agent_method(input: MultimodalCustom<Input>) {
 ///     // handle the multimodal input here
 /// }
 ///
@@ -56,22 +56,22 @@ use golem_wasm::{Value, WitValue};
 /// - Unlike a plain `Vec<MultimodalInput>`, this type carries additional semantic and schema-level information
 ///   that indicates the data represents a *multimodal input* — not just a generic list.
 ///
-pub struct Multimodal<T> {
+pub struct MultimodalCustom<T> {
     pub items: Vec<T>,
 }
 
-impl<T: MultimodalSchema> Multimodal<T> {
+impl<T: MultimodalSchema> MultimodalCustom<T> {
     /// Create a Multimodal input data for agent functions.
     /// Note that you cannot mix a multimodal input with other input types
     ///
     /// # Example
     ///
     /// ```
-    /// use golem_rust::agentic::{Multimodal};
+    /// use golem_rust::agentic::{MultimodalCustom};
     /// use golem_rust::MultimodalSchema;
     ///
     /// // Create a multimodal dataset with text and image inputs
-    /// let multimodal_data = Multimodal::new([
+    /// let multimodal_data = MultimodalCustom::new([
     ///     Input::Text("foo".to_string()),
     ///     Input::Image(vec![1, 2, 3])
     /// ]);
@@ -83,7 +83,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
     /// }
     ///
     /// // Function that shows how an agent might receive multimodal input
-    /// fn my_agent_method(input: Multimodal<Input>) {
+    /// fn my_agent_method(input: MultimodalCustom<Input>) {
     ///     // handle the multimodal input here
     /// }
     ///
@@ -128,7 +128,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
 
     pub fn from_element_values(
         elems: Vec<(String, ElementValue)>,
-    ) -> Result<Multimodal<T>, String> {
+    ) -> Result<MultimodalCustom<T>, String> {
         let mut items = Vec::new();
 
         for elem in elems {
@@ -136,7 +136,7 @@ impl<T: MultimodalSchema> Multimodal<T> {
             items.push(item);
         }
 
-        Ok(Multimodal { items })
+        Ok(MultimodalCustom { items })
     }
 
     pub fn convert_to_wit_value(self) -> Result<WitValue, String> {
@@ -201,14 +201,14 @@ impl<T: MultimodalSchema> Multimodal<T> {
                     }
                 }
 
-                Ok(Multimodal { items })
+                Ok(MultimodalCustom { items })
             }
             _ => Err("Expected List value for Multimodal".to_string()),
         }
     }
 }
 
-impl<T: MultimodalSchema> Schema for Multimodal<T> {
+impl<T: MultimodalSchema> Schema for MultimodalCustom<T> {
     fn get_type() -> StructuredSchema {
         StructuredSchema::Multimodal(T::get_multimodal_schema())
     }
@@ -249,24 +249,24 @@ impl<T: MultimodalSchema> Schema for Multimodal<T> {
     }
 }
 
-pub type MultimodalBasic = Multimodal<MultimodalBasicType>;
+pub type Multimodal = MultimodalCustom<MultimodalBasicType>;
 
-impl Multimodal<MultimodalBasicType> {
+impl Multimodal {
     /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
     ///
     /// # Example
     /// ```
-    /// use golem_rust::agentic::{Multimodal, MultimodalBasicType, UnstructuredText, UnstructuredBinary, MultimodalBasic};
+    /// use golem_rust::agentic::{MultimodalCustom, MultimodalBasicType, UnstructuredText, UnstructuredBinary, Multimodal};
     /// use golem_rust::MultimodalSchema;
     ///
     /// // Create a multimodal dataset with text and binary inputs
-    /// let multimodal_data = Multimodal::new_basic([
+    /// let multimodal_data = MultimodalCustom::new_basic([
     ///     MultimodalBasicType::Text(UnstructuredText::from_inline_any("foo".to_string())),
     ///     MultimodalBasicType::Binary(UnstructuredBinary::from_inline(vec![1, 2, 3], "image/png".to_string()))
     /// ]);
     ///
     /// // Function that shows how an agent might receive multimodal input
-    /// fn my_agent_method(input: MultimodalBasic) {
+    /// fn my_agent_method(input: Multimodal) {
     ///     // handle the multimodal input here
     /// }
     ///
