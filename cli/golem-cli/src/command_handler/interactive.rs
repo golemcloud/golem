@@ -79,7 +79,7 @@ impl InteractiveHandler {
         self.confirm(
             true,
             format!(
-                "Component {} was not found between deployed components, do you want to deploy it, then continue?",
+                "Component {} was not found between deployed components, do you want to deploy the application, then continue?",
                 component_name.0.log_color_highlight()
             ),
             None,

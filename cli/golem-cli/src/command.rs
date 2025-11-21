@@ -623,8 +623,8 @@ pub enum GolemCliSubcommand {
     Repl {
         #[command(flatten)]
         component_name: ComponentOptionalComponentName,
-        /// Optional component version to use, defaults to latest component version
-        version: Option<u64>,
+        /// Optional component revision to use, defaults to latest deployed component revision
+        revision: Option<u64>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
@@ -1007,12 +1007,12 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
         },
-        /// Get latest or selected version of deployed component metadata
+        /// Get the latest or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-            /// Optional component version to get
-            version: Option<u64>,
+            /// Optional component revision to get
+            revision: Option<u64>,
         },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
@@ -1075,8 +1075,8 @@ pub mod component {
             Get {
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// The version of the component
-                version: Option<u64>,
+                /// The revision of the component
+                revision: Option<u64>,
             },
             /// Update component plugin
             Update {
@@ -1205,8 +1205,8 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
-            /// The new version of the updated agent (default is the latest version)
-            target_version: Option<u64>,
+            /// The new revision of the updated agent (default is the latest revision)
+            target_revision: Option<u64>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,

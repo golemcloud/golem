@@ -157,8 +157,8 @@ impl ErrorHandler {
                 if let Ok(Some(component)) = self
                     .ctx
                     .component_handler()
-                    .component(
-                        worker_name_match.environment.as_ref(),
+                    .resolve_component(
+                        &worker_name_match.environment,
                         (&worker_name_match.component_name).into(),
                         Some((&worker_name_match.worker_name).into()),
                     )

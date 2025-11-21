@@ -29,7 +29,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
-    agent_interface_name, function_params_types, show_exported_agent_constructors, Component,
+    agent_interface_name, function_params_types, show_exported_agent_constructors,
     ComponentNameMatchKind,
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
@@ -53,7 +53,7 @@ use crate::model::worker::{
 };
 use golem_client::api::WorkerClient;
 use golem_client::model::{
-    InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
+    ComponentDto, InvokeParameters, RevertWorkerTarget, UpdateWorkerRequest, WorkerCreationRequest,
 };
 use golem_client::model::{InvokeResult, ScanCursor};
 use golem_common::model::agent::AgentId;
@@ -154,13 +154,13 @@ impl WorkerCommandHandler {
             AgentSubcommand::Update {
                 agent_id: worker_name,
                 mode,
-                target_version,
+                target_revision,
                 r#await,
             } => {
                 self.cmd_update(
                     worker_name,
                     mode.unwrap_or(AgentUpdateMode::Automatic),
-                    target_version,
+                    target_revision,
                     r#await,
                 )
                 .await
@@ -214,7 +214,7 @@ impl WorkerCommandHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                worker_name_match.environment.as_ref(),
+                &worker_name_match.environment,
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
@@ -230,7 +230,7 @@ impl WorkerCommandHandler {
         );
 
         self.new_worker(
-            component.component_id.0,
+            component.id.0,
             worker_name_match.worker_name.0.clone(),
             arguments,
             env.into_iter().collect(),
@@ -292,7 +292,7 @@ impl WorkerCommandHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                worker_name_match.environment.as_ref(),
+                &worker_name_match.environment,
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
@@ -456,7 +456,7 @@ impl WorkerCommandHandler {
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.component_id,
+            &component.id,
             worker_name.0.clone(),
             stream_args.into(),
             self.ctx.allow_insecure(),
@@ -516,7 +516,7 @@ impl WorkerCommandHandler {
                 let result = clients
                     .worker
                     .get_oplog(
-                        &component.component_id.0,
+                        &component.id.0,
                         &worker_name.0,
                         from,
                         batch_size,
@@ -597,7 +597,7 @@ impl WorkerCommandHandler {
 
             clients
                 .worker
-                .revert_worker(&component.component_id.0, &worker_name.0, &target)
+                .revert_worker(&component.id.0, &worker_name.0, &target)
                 .await
                 .map(|_| ())
                 .map_service_error()?
@@ -635,11 +635,7 @@ impl WorkerCommandHandler {
 
         let canceled = clients
             .worker
-            .cancel_invocation(
-                &component.component_id.0,
-                &worker_name.0,
-                &idempotency_key.value,
-            )
+            .cancel_invocation(&component.id.0, &worker_name.0, &idempotency_key.value)
             .await
             .map(|result| result.canceled)
             .map_service_error()?;
@@ -820,7 +816,7 @@ impl WorkerCommandHandler {
         &self,
         _worker_name: AgentIdArgs,
         _mode: AgentUpdateMode,
-        _target_version: Option<u64>, // TODO: atomic ComponentRevision
+        _target_revision: Option<u64>, // TODO: atomic ComponentRevision
         _await_update: bool,
     ) -> anyhow::Result<()> {
         // TODO: atomic
@@ -885,7 +881,7 @@ impl WorkerCommandHandler {
         let result = {
             let result = clients
                 .worker
-                .get_worker_metadata(&component.component_id.0, &worker_name.0)
+                .get_worker_metadata(&component.id.0, &worker_name.0)
                 .await
                 .map_service_error()?;
 
@@ -911,8 +907,7 @@ impl WorkerCommandHandler {
             format!("agent {}", format_worker_name_match(&worker_name_match)),
         );
 
-        self.delete(component.component_id.0, &worker_name.0)
-            .await?;
+        self.delete(component.id.0, &worker_name.0).await?;
 
         log_action(
             "Deleted",
@@ -941,7 +936,7 @@ impl WorkerCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let nodes = match clients
             .worker
-            .get_files(&component.component_id.0, &worker_name.0, &path)
+            .get_files(&component.id.0, &worker_name.0, &path)
             .await
             .map_service_error()
         {
@@ -1016,7 +1011,7 @@ impl WorkerCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let file_contents = match clients
             .worker
-            .get_file_content(&component.component_id.0, &worker_name.0, &path)
+            .get_file_content(&component.id.0, &worker_name.0, &path)
             .await
             .map_service_error()
         {
@@ -1100,7 +1095,7 @@ impl WorkerCommandHandler {
 
     pub async fn invoke_worker(
         &self,
-        component: &Component,
+        component: &ComponentDto,
         worker_name: &WorkerName,
         function_name: &str,
         arguments: Vec<OptionallyValueAndTypeJson>,
@@ -1113,7 +1108,7 @@ impl WorkerCommandHandler {
                 let connection = WorkerConnection::new(
                     self.ctx.worker_service_url().clone(),
                     self.ctx.auth_token().await?,
-                    &component.component_id,
+                    &component.id,
                     worker_name.0.clone(),
                     stream_args.into(),
                     self.ctx.allow_insecure(),
@@ -1138,7 +1133,7 @@ impl WorkerCommandHandler {
             clients
                 .worker
                 .invoke_function(
-                    &component.component_id.0,
+                    &component.id.0,
                     &worker_name.0,
                     Some(&idempotency_key.value),
                     function_name,
@@ -1152,7 +1147,7 @@ impl WorkerCommandHandler {
                 clients
                     .worker_invoke
                     .invoke_and_await_function(
-                        &component.component_id.0,
+                        &component.id.0,
                         &worker_name.0,
                         Some(&idempotency_key.value),
                         function_name,
@@ -1643,12 +1638,12 @@ impl WorkerCommandHandler {
     async fn component_by_worker_name_match(
         &self,
         worker_name_match: &WorkerNameMatch,
-    ) -> anyhow::Result<(Component, WorkerName)> {
+    ) -> anyhow::Result<(ComponentDto, WorkerName)> {
         let component = self
             .ctx
             .component_handler()
-            .component(
-                worker_name_match.environment.as_ref(),
+            .resolve_component(
+                &worker_name_match.environment,
                 (&worker_name_match.component_name).into(),
                 Some((&worker_name_match.worker_name).into()),
             )
@@ -1671,14 +1666,14 @@ impl WorkerCommandHandler {
 
     async fn resume_worker(
         &self,
-        component: &Component,
+        component: &ComponentDto,
         worker_name: &WorkerName,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
         clients
             .worker
-            .resume_worker(&component.component_id.0, &worker_name.0)
+            .resume_worker(&component.id.0, &worker_name.0)
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -1688,7 +1683,7 @@ impl WorkerCommandHandler {
 
     async fn interrupt_worker(
         &self,
-        component: &Component,
+        component: &ComponentDto,
         worker_name: &WorkerName,
         recover_immediately: bool,
     ) -> anyhow::Result<()> {
@@ -1696,11 +1691,7 @@ impl WorkerCommandHandler {
 
         clients
             .worker
-            .interrupt_worker(
-                &component.component_id.0,
-                &worker_name.0,
-                Some(recover_immediately),
-            )
+            .interrupt_worker(&component.id.0, &worker_name.0, Some(recover_immediately))
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -1748,8 +1739,14 @@ impl WorkerCommandHandler {
                             bail!(NonSuccessfulExit);
                         }
 
+                        let environment = self
+                            .ctx
+                            .environment_handler()
+                            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                            .await?;
+
                         Ok(WorkerNameMatch {
-                            environment: None,
+                            environment,
                             component_name_match_kind: ComponentNameMatchKind::AppCurrentDir,
                             component_name: ComponentName::try_from(
                                 selected_component_names.iter().next().unwrap().as_str(),
@@ -1865,16 +1862,21 @@ impl WorkerCommandHandler {
                 };
 
                 let environment = match &environment_reference {
-                    Some(environment_reference) => Some(
+                    Some(environment_reference) => {
                         self.ctx
                             .environment_handler()
                             .resolve_environment_reference(
                                 EnvironmentResolveMode::Any,
                                 environment_reference,
                             )
-                            .await?,
-                    ),
-                    None => None,
+                            .await?
+                    }
+                    None => {
+                        self.ctx
+                            .environment_handler()
+                            .resolve_environment(EnvironmentResolveMode::Any)
+                            .await?
+                    }
                 };
 
                 self.ctx
@@ -1882,15 +1884,10 @@ impl WorkerCommandHandler {
                     .opt_select_components(vec![], &ApplicationComponentSelectMode::All)
                     .await?;
 
-                let is_manifest_scoped = environment
-                    .as_ref()
-                    .map(|env| env.is_manifest_scoped())
-                    .unwrap_or(true);
-
                 let app_ctx = self.ctx.app_context_lock().await;
                 let app_ctx = app_ctx.opt()?;
                 match app_ctx {
-                    Some(app_ctx) if is_manifest_scoped => {
+                    Some(app_ctx) if environment.is_manifest_scoped() => {
                         let fuzzy_search = FuzzySearch::new(
                             app_ctx.application.component_names().map(|cn| cn.as_str()),
                         );
@@ -1964,7 +1961,7 @@ impl WorkerCommandHandler {
 
     pub fn validate_worker_and_function_names(
         &self,
-        component: &Component,
+        component: &ComponentDto,
         worker_name: &WorkerName,
         function_name: Option<&str>,
     ) -> anyhow::Result<Option<AgentId>> {
@@ -2044,7 +2041,7 @@ impl WorkerCommandHandler {
 }
 
 fn wave_args_to_invoke_args(
-    component: &Component,
+    component: &ComponentDto,
     function_name: &str,
     wave_args: Vec<String>,
 ) -> anyhow::Result<Vec<OptionallyValueAndTypeJson>> {

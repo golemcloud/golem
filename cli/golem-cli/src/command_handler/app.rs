@@ -27,7 +27,6 @@ use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::Component;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
@@ -38,7 +37,7 @@ use golem_client::api::{ApplicationClient, EnvironmentClient};
 use golem_client::model::ApplicationCreation;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, HashOf, Hashable, SerializeMode};
 use golem_templates::add_component_by_template;
@@ -311,8 +310,7 @@ impl AppCommandHandler {
         } else if let Some(revision) = revision {
             self.deploy_by_revision(revision, deploy_args).await
         } else {
-            self.deploy_from_source(plan, force_build, deploy_args)
-                .await
+            self.deploy(plan, force_build, deploy_args).await
         }
     }
 
@@ -449,7 +447,7 @@ impl AppCommandHandler {
         todo!()
     }
 
-    async fn deploy_from_source(
+    pub async fn deploy(
         &self,
         _plan: bool, // TODO: atomic
         force_build: ForceBuildArg,
@@ -478,7 +476,7 @@ impl AppCommandHandler {
         let components = self
             .ctx
             .component_handler()
-            .all_deployable_components()
+            .all_deployable_manifest_components()
             .await?;
 
         let remote_deployment_hash = environment
@@ -658,7 +656,8 @@ impl AppCommandHandler {
         app_ctx.some_or_err()?.clean()
     }
 
-    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<Component>> {
+    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
+        /*
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -694,7 +693,9 @@ impl AppCommandHandler {
                 }
             }
         }
-        Ok(components)
+        Ok(components)*/
+        // TODO: atomic
+        todo!()
     }
 
     pub async fn must_select_components(

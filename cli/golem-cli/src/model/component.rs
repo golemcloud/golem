@@ -17,14 +17,14 @@ use crate::model::wave::function_wave_compatible;
 use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
-use golem_client::model::AnalysedType;
+use golem_client::model::{AnalysedType, ComponentDto};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InitialComponentFile};
-use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
@@ -67,20 +67,20 @@ impl From<Uuid> for ComponentSelection<'_> {
     }
 }
 
-pub enum ComponentVersionSelection<'a> {
+pub enum ComponentRevisionSelection<'a> {
     ByWorkerName(&'a WorkerName),
-    ByExplicitVersion(u64),
+    ByExplicitRevision(ComponentRevision),
 }
 
-impl<'a> From<&'a WorkerName> for ComponentVersionSelection<'a> {
+impl<'a> From<&'a WorkerName> for ComponentRevisionSelection<'a> {
     fn from(value: &'a WorkerName) -> Self {
         Self::ByWorkerName(value)
     }
 }
 
-impl From<u64> for ComponentVersionSelection<'_> {
-    fn from(value: u64) -> Self {
-        Self::ByExplicitVersion(value)
+impl From<ComponentRevision> for ComponentRevisionSelection<'_> {
+    fn from(value: ComponentRevision) -> Self {
+        Self::ByExplicitRevision(value)
     }
 }
 
@@ -92,37 +92,8 @@ pub enum ComponentNameMatchKind {
 }
 
 pub struct SelectedComponents {
-    pub environment: Option<ResolvedEnvironmentIdentity>,
+    pub environment: ResolvedEnvironmentIdentity,
     pub component_names: Vec<ComponentName>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Component {
-    pub component_id: ComponentId,
-    pub revision: ComponentRevision,
-    pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub environment_id: Option<EnvironmentId>,
-    pub created_at: Option<DateTime<Utc>>,
-    pub files: Vec<InitialComponentFile>,
-    pub env: BTreeMap<String, String>,
-}
-
-impl From<golem_client::model::ComponentDto> for Component {
-    fn from(value: golem_client::model::ComponentDto) -> Self {
-        Component {
-            component_id: value.id,
-            revision: value.revision,
-            component_name: value.component_name,
-            component_size: value.component_size,
-            metadata: value.metadata,
-            environment_id: Some(value.environment_id),
-            created_at: Some(value.created_at),
-            files: value.files,
-            env: value.env.into_iter().collect(),
-        }
-    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,12 +126,12 @@ impl Display for AppComponentType {
 
 pub enum ComponentUpsertResult {
     Skipped,
-    Added(Component),
-    Updated(Component),
+    Added(ComponentDto),
+    Updated(ComponentDto),
 }
 
 impl ComponentUpsertResult {
-    pub fn into_component(self) -> Option<Component> {
+    pub fn into_component(self) -> Option<ComponentDto> {
         match self {
             ComponentUpsertResult::Skipped => None,
             ComponentUpsertResult::Added(component) => Some(component),
@@ -182,9 +153,8 @@ pub struct ComponentView {
     pub component_version: Option<String>,
     pub component_revision: u64,
     pub component_size: u64,
-    pub created_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub environment_id: Option<EnvironmentId>,
+    pub created_at: DateTime<Utc>,
+    pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
@@ -193,15 +163,15 @@ pub struct ComponentView {
 }
 
 impl ComponentView {
-    pub fn new_rib_style(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_rib_style(show_sensitive: bool, value: ComponentDto) -> Self {
         Self::new(show_sensitive, true, value)
     }
 
-    pub fn new_wit_style(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_wit_style(show_sensitive: bool, value: ComponentDto) -> Self {
         Self::new(show_sensitive, false, value)
     }
 
-    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: Component) -> Self {
+    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
@@ -236,7 +206,7 @@ impl ComponentView {
             show_sensitive,
             show_exports_for_rib,
             component_name: value.component_name,
-            component_id: value.component_id,
+            component_id: value.id,
             component_version: value.metadata.root_package_version().clone(),
             component_revision: value.revision.0,
             component_size: value.component_size,
@@ -542,7 +512,7 @@ pub fn format_function_name(prefix: Option<&str>, name: &str) -> String {
 }
 
 fn resolve_function<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<(&'t AnalysedFunction, ParsedFunctionName)> {
     let parsed = ParsedFunctionName::parse(function).map_err(|err| anyhow!(err))?;
@@ -582,7 +552,7 @@ fn resolve_function<'t>(
 }
 
 pub fn function_result_types<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
     let (func, _) = resolve_function(component, function)?;
@@ -591,7 +561,7 @@ pub fn function_result_types<'t>(
 }
 
 pub fn function_params_types<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
     let (func, _parsed) = resolve_function(component, function)?;
@@ -599,7 +569,7 @@ pub fn function_params_types<'t>(
     Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
-pub fn agent_interface_name(component: &Component, agent_type_name: &str) -> Option<String> {
+pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> Option<String> {
     match (
         component.metadata.root_package_name(),
         component.metadata.root_package_version(),

@@ -14,7 +14,7 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::component::{
-    agent_interface_name, render_type, show_exported_functions, Component,
+    agent_interface_name, render_type, show_exported_functions,
 };
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
@@ -27,6 +27,7 @@ use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
+use golem_client::model::ComponentDto;
 
 pub struct WorkerNameHelp;
 
@@ -211,7 +212,7 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new(component: &Component, agent_id: Option<&AgentId>) -> Self {
+    pub fn new(component: &ComponentDto, agent_id: Option<&AgentId>) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: agent_id

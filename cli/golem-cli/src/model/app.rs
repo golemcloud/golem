@@ -1547,6 +1547,7 @@ mod app_builder {
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::environment::EnvironmentName;
+    use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::fmt::Debug;
@@ -1691,7 +1692,7 @@ mod app_builder {
         // For environment build
         app: Option<WithSource<ApplicationName>>,
         default_environment_names: BTreeSet<EnvironmentName>,
-        environments: BTreeMap<EnvironmentName, app_raw::Environment>,
+        environments: IndexMap<EnvironmentName, app_raw::Environment>,
 
         // For app build
         include: Vec<String>,
@@ -1850,7 +1851,7 @@ mod app_builder {
 
             validation.build(ApplicationNameAndEnvironments {
                 application_name,
-                environments: builder.environments,
+                environments: builder.environments.into_iter().collect(),
             })
         }
 
