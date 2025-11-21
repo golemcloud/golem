@@ -64,7 +64,8 @@ import {
   AgentId,
   Multimodal,
   MultimodalBasic,
-  Result, UnstructuredBinary,
+  Result,
+  UnstructuredBinary,
   UnstructuredText,
 } from '../src';
 import {
@@ -654,14 +655,8 @@ test('Invoke function that takes any unstructured-binary and returns any unstruc
     mimeType: 'application/json',
   };
 
-  testInvoke(
-    'fun40',
-    [['param', binary]],
-    resolvedAgent,
-    binary,
-    false,
-  );
-})
+  testInvoke('fun40', [['param', binary]], resolvedAgent, binary, false);
+});
 
 test('Invoke function that takes json unstructured-binary and returns json unstructured-binary', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
@@ -680,14 +675,8 @@ test('Invoke function that takes json unstructured-binary and returns json unstr
     mimeType: 'application/json',
   };
 
-  testInvoke(
-    'fun40',
-    [['param', binary]],
-    resolvedAgent,
-    binary,
-    false,
-  );
-})
+  testInvoke('fun40', [['param', binary]], resolvedAgent, binary, false);
+});
 
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.

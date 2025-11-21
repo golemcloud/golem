@@ -80,7 +80,10 @@ export const UnstructuredBinary = {
       } as UnstructuredBinary<MT>);
     }
 
-    if (allowedMimeTypes.length > 0 && !allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
+    if (
+      allowedMimeTypes.length > 0 &&
+      !allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)
+    ) {
       return Either.left(
         `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
       );
