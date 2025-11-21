@@ -1,0 +1,38 @@
+name: Daily Windows Build
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Run daily at 2 AM UTC
+  workflow_dispatch:
+
+permissions:
+  checks: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      CARGO_BUILD_JOBS: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v3-rust
+          shared-key: windows-daily
+          cache-all-crates: true
+          save-if: true
+
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Building all executables
+        env:
+          QUIET: true
+        run: cargo make --profile ci build-all-bins-including-tests
+        timeout-minutes: 60
