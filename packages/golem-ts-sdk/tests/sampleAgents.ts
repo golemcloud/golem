@@ -254,7 +254,7 @@ export class FooAgent extends BaseAgent {
   }
 
   fun38(param: MultimodalBasic): Promise<MultimodalBasic> {
-    return Promise.reject(param);
+    return Promise.resolve(param);
   }
 
   fun39(param: MultimodalBasic): MultimodalBasic {

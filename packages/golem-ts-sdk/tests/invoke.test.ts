@@ -542,30 +542,29 @@ test('Invoke function that takes and returns multimodal', () => {
   );
 });
 
-// test('Invoke function that takes and returns basic multimodal', () => {
-//   overrideSelfAgentId(new AgentId('foo-agent()'));
-//
-//   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
-//
-//   if (!classMetadata) {
-//     throw new Error('FooAgent type metadata not found');
-//   }
-//
-//   const resolvedAgent = initiateFooAgent('foo', classMetadata);
-//
-//   const multimodalInput: MultimodalBasic = [
-//     { tag: 'text', val: {tag: 'url', val: 'https://foo.bar'} },
-//     { tag: 'binary', val: {tag: 'inline', val: new Uint8Array([1,2,3]), mimeType: 'application/octet-stream'} },
-//   ];
-//
-//   testInvoke(
-//     'fun38',
-//     [['param', multimodalInput]],
-//     resolvedAgent,
-//     multimodalInput,
-//     true,
-//   );
-// });
+test('Invoke function that takes and returns basic multimodal', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const multimodalInput: MultimodalBasic = [
+    { tag: 'binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+  ];
+
+  testInvoke(
+    'fun38',
+    [['param', multimodalInput]],
+    resolvedAgent,
+    multimodalInput,
+    true,
+  );
+});
 
 test('Invoke function that takes and returns typed array', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
