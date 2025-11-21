@@ -51,4 +51,4 @@ export type MultimodalBasic = Multimodal<MultimodalBasicType>;
 
 export type MultimodalBasicType =
   | { tag: 'text'; val: UnstructuredText }
-  | { tag: 'binary'; val: UnstructuredBinary<[string]> };
+  | { tag: 'binary'; val: UnstructuredBinary };
