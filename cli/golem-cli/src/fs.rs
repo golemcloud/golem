@@ -531,9 +531,10 @@ pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Ve
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .map(|(root_dir, pattern)| {
-            Glob::new(&normalize_pattern(pattern))
+            let normalized_pattern = normalize_pattern(pattern);
+            Glob::new(&normalized_pattern)
                 .with_context(|| anyhow!("Failed to compile glob expression: {}", pattern))
-                .map(|pattern| (root_dir, pattern))
+                .map(|pattern| (root_dir, pattern.into_owned()))
         })
         .collect::<Result<Vec<_>, _>>()?
         .iter()
