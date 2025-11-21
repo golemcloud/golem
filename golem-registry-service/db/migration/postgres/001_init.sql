@@ -662,10 +662,10 @@ CREATE UNIQUE INDEX environment_shares_environment_grantee_uk
     ON environment_shares (environment_id, grantee_account_id)
     WHERE deleted_at IS NULL;
 
-CREATE UNIQUE INDEX environment_shares_environment_idx
+CREATE INDEX environment_shares_environment_idx
     ON environment_shares (environment_id);
 
-CREATE UNIQUE INDEX environment_shares_grantee_idx
+CREATE INDEX environment_shares_grantee_idx
     ON environment_shares (grantee_account_id);
 
 CREATE TABLE environment_share_revisions
@@ -734,3 +734,51 @@ CREATE UNIQUE INDEX domain_registrations_domain_uk
     WHERE deleted_at IS NULL;
 
 CREATE INDEX domain_registrations_environment_id_idx ON environments (environment_id);
+
+CREATE TABLE security_schemes
+(
+    security_scheme_id UUID      NOT NULL,
+    environment_id       UUID      NOT NULL,
+    name   TEXT      NOT NULL,
+
+    created_at           TIMESTAMP NOT NULL,
+    updated_at           TIMESTAMP NOT NULL,
+    deleted_at           TIMESTAMP,
+    modified_by          UUID      NOT NULL,
+
+    current_revision_id  BIGINT    NOT NULL,
+
+    CONSTRAINT security_schemes_pk
+        PRIMARY KEY (security_scheme_id),
+    CONSTRAINT security_schemes_environments_fk
+        FOREIGN KEY (environment_id) REFERENCES environments
+);
+
+CREATE UNIQUE INDEX security_schemes_environment_name_uk
+    ON security_schemes (environment_id, name)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX security_schemes_environment_idx
+    ON security_schemes (environment_id);
+
+CREATE TABLE security_scheme_revisions
+(
+    security_scheme_id UUID NOT NULL,
+    revision_id BIGINT NOT NULL,
+
+    provider_type TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_secret TEXT NOT NULL,
+    redirect_url TEXT NOT NULL,
+    -- string containing a json array
+    scopes TEXT NOT NULL,
+
+    created_at           TIMESTAMP NOT NULL,
+    created_by           UUID      NOT NULL,
+    deleted              BOOLEAN   NOT NULL,
+
+    CONSTRAINT security_scheme_revisions_pk
+        PRIMARY KEY (security_scheme_id, revision_id),
+    CONSTRAINT security_schemes_revisions_security_schemes_fk
+        FOREIGN KEY (security_scheme_id) REFERENCES security_schemes
+);
