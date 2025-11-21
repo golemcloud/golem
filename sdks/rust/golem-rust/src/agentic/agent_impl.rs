@@ -134,7 +134,7 @@ impl SaveSnapshotGuest for Component {
                 .expect("Failed to save agent snapshot");
 
             let total_length = 1 + agent_snapshot.len();
-            
+
             let mut full_snapshot = Vec::with_capacity(total_length);
 
             full_snapshot.push(1);
