@@ -17,6 +17,7 @@ mod application;
 mod auth;
 mod component;
 mod deployment;
+mod domain_registration;
 mod environment;
 mod environment_plugin_grants;
 mod environment_share;

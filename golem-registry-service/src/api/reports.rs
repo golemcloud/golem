@@ -34,8 +34,7 @@ pub struct ReportsApi {
 #[OpenApi(
     prefix_path = "/v1/reports",
     tag = ApiTags::RegistryService,
-    tag = ApiTags::Account,
-    tag = ApiTags::Token
+    tag = ApiTags::Reports
 )]
 impl ReportsApi {
     pub fn new(reports_service: Arc<ReportsService>, auth_service: Arc<AuthService>) -> Self {

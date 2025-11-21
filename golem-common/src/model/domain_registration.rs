@@ -12,24 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Repos
-pub mod account;
-pub mod account_usage;
-pub mod application;
-pub mod component;
-pub mod deployment;
-pub mod domain_registration;
-pub mod environment;
-pub mod environment_plugin_grant;
-pub mod environment_share;
-pub mod http_api_definition;
-pub mod http_api_deployment;
-pub mod oauth2_token;
-pub mod oauth2_webflow_state;
-pub mod plan;
-pub mod plugin;
-pub mod reports;
-pub mod token;
+use super::environment::EnvironmentId;
+use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 
-// Model for SQL records and fields
-pub mod model;
+newtype_uuid!(DomainRegistrationId);
+
+declare_transparent_newtypes! {
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    pub struct Domain(pub String);
+}
+
+declare_structs! {
+    pub struct DomainRegistrationCreation {
+        pub domain: Domain
+    }
+
+    pub struct DomainRegistration {
+        pub id: DomainRegistrationId,
+        pub environment_id: EnvironmentId,
+        pub domain: Domain
+    }
+}

@@ -183,9 +183,11 @@ pub enum AccountAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
     CreateComponent,
+    CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
     CreateShare,
     CreateWorker,
+    DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
     DeleteShare,
@@ -198,6 +200,7 @@ pub enum EnvironmentAction {
     ViewComponent,
     ViewDeployment,
     ViewDeploymentPlan,
+    ViewDomainRegistration,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
     ViewShares,
@@ -373,6 +376,12 @@ impl AuthCtx {
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
+            EnvironmentAction::CreateDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
             EnvironmentAction::UpdateComponent => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
@@ -406,6 +415,14 @@ impl AuthCtx {
             EnvironmentAction::CreateEnvironmentPluginGrant => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
+            EnvironmentAction::ViewDomainRegistration => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
             EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
                 roles_from_shares,
                 &[

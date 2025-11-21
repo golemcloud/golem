@@ -85,7 +85,6 @@ impl EnvironmentShareService {
         &self,
         environment_id: EnvironmentId,
         data: EnvironmentShareCreation,
-        actor: AccountId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         self.environment_service
@@ -100,7 +99,8 @@ impl EnvironmentShareService {
             })?;
 
         let id = EnvironmentShareId::new_v4();
-        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, actor);
+        let record =
+            EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id().clone());
 
         let result = self
             .environment_share_repo

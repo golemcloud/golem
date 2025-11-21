@@ -18,6 +18,7 @@ use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::deployment::DeploymentError;
+use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
@@ -459,6 +460,35 @@ impl From<DeploymentError> for ApiError {
             DeploymentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentPluginGrantError")),
+            })),
+        }
+    }
+}
+
+impl From<DomainRegistrationError> for ApiError {
+    fn from(value: DomainRegistrationError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DomainRegistrationError::ParentEnvironmentNotFound(_)
+            | DomainRegistrationError::DomainRegistrationByIdNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::DomainCannotBeProvisioned { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+
+            DomainRegistrationError::DomainAlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::Unauthorized(inner) => inner.into(),
+            DomainRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("DomainRegistrationError")),
             })),
         }
     }

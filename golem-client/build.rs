@@ -128,6 +128,15 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
             ),
+            // Domain Registration
+            (
+                "DomainRegistrationCreation",
+                "golem_common::model::domain_registration::DomainRegistrationCreation",
+            ),
+            (
+                "DomainRegistration",
+                "golem_common::model::domain_registration::DomainRegistration",
+            ),
             // Environment
             (
                 "Environment",

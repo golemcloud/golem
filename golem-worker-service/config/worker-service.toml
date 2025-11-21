@@ -12,9 +12,6 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
-[component_service]
-cache_capacity = 1000
-
 [db]
 type = "Sqlite"
 
@@ -141,9 +138,6 @@ multiplier = 10.0
 # 
 # [blob_storage.config]
 # root = "../data/blob_storage"
-# 
-# [component_service]
-# cache_capacity = 1000
 # 
 # [db]
 # type = "Postgres"
@@ -289,9 +283,6 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-# 
-# [component_service]
-# cache_capacity = 1000
 # 
 # [db]
 # type = "Postgres"

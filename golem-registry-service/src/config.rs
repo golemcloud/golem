@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
 use chrono::Duration;
 use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
@@ -43,6 +44,7 @@ pub struct RegistryServiceConfig {
     pub blob_storage: BlobStorageConfig,
     pub plans: PlansConfig,
     pub accounts: AccountsConfig,
+    pub domain_provisioner: DomainProvisionerConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -73,6 +75,13 @@ impl SafeDisplay for RegistryServiceConfig {
         );
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
 
+        let _ = writeln!(&mut result, "domain provision:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.domain_provisioner.to_safe_string_indented()
+        );
+
         result
     }
 }
@@ -93,6 +102,7 @@ impl Default for RegistryServiceConfig {
             blob_storage: BlobStorageConfig::default(),
             plans: PlansConfig::default(),
             accounts: AccountsConfig::default(),
+            domain_provisioner: DomainProvisionerConfig::default(),
         }
     }
 }
