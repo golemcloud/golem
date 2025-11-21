@@ -19,9 +19,7 @@ use crate::{
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
-use crate::agentic::{
-    agent_registry, get_agent_id, get_resolved_agent, get_state, AgentInitiators,
-};
+use crate::agentic::{agent_registry, get_resolved_agent};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
@@ -101,7 +99,8 @@ impl LoadSnapshotGuest for Component {
         let id = std::env::var("GOLEM_AGENT_ID")
             .expect("GOLEM_AGENT_ID environment variable must be set");
 
-        let (agent_type_name, agent_parameters) = parse_agent_id(&id).map_err(|e| e.to_string())?;
+        let (agent_type_name, agent_parameters, _) =
+            parse_agent_id(&id).map_err(|e| e.to_string())?;
 
         with_agent_initiator(
             |initiator| async move {
