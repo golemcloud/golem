@@ -28,7 +28,9 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
+use crate::model::text::fmt::{
+    log_error, log_fuzzy_matches, log_text_view, log_unified_diff, log_warn,
+};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
@@ -551,19 +553,21 @@ impl AppCommandHandler {
             if let Some(diffable_server_deployment) = &diffable_server_deployment {
                 log_action("Diffing", "with current deployment");
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
-                diffable_server_deployment.unified_yaml_diff_with_local(
+                log_unified_diff(&diffable_server_deployment.unified_yaml_diff_with_local(
                     &diffable_local_deployment,
                     SerializeMode::ValueIfAvailable,
-                );
+                ));
             }
         }
 
         if diff_stage.is_some() {
             log_action("Diffing", "with staging area");
             let _indent = self.ctx.log_handler().nested_text_view_indent();
-            diffable_server_staged_deployment.unified_yaml_diff_with_local(
-                &diffable_local_deployment,
-                SerializeMode::ValueIfAvailable,
+            log_unified_diff(
+                &diffable_server_staged_deployment.unified_yaml_diff_with_local(
+                    &diffable_local_deployment,
+                    SerializeMode::ValueIfAvailable,
+                ),
             );
         }
 

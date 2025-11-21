@@ -998,7 +998,7 @@ impl Layer for ComponentLayer {
                 id,
                 selection,
                 (
-                    value.build_merge_mode.unwrap_or_default(),
+                    properties.build_merge_mode.unwrap_or_default(),
                     properties
                         .build
                         .value()

@@ -68,12 +68,13 @@ pub struct ComponentWasmRpcTarget {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
-    // TODO: agents? or should consider that part of the wasm binary?
+    // TODO: atomic: agents? or should consider that part of the wasm binary?
 }
 
 impl Hashable for ComponentMetadata {

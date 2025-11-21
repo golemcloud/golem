@@ -531,6 +531,14 @@ impl ComponentCommandHandler {
             .cloned()
             .collect::<Vec<_>>();
         for component_name in component_names {
+            log_action(
+                "Showing",
+                format!(
+                    "manifest trace for {}",
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().nested_text_view_indent();
             self.ctx.log_handler().log_serializable(
                 &app_ctx
                     .application
