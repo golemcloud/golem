@@ -57,7 +57,7 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
                 &[#(#mime_strs),*]
             }
 
-            fn from_mime_type(mime_type: &str) -> Option<Self> {
+            fn from_string(mime_type: &str) -> Option<Self> {
                 match mime_type {
                     #(
                         #mime_strs => Some(Self::#variant_idents),
@@ -66,10 +66,10 @@ pub fn derive_allowed_mime_types(input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn to_string(&self) -> &'static str {
+            fn to_string(&self) -> String {
                 match self {
                     #(
-                        Self::#variant_idents => #mime_strs,
+                        Self::#variant_idents => #mime_strs.to_string(),
                     )*
                 }
             }
