@@ -1,6 +1,5 @@
-// resources.rs
 use rust_mcp_sdk::schema::{
-    ListResourcesResult, Resource,Annotations, 
+    ListResourcesResult, Resource, 
     ReadResourceResult, ReadResourceResultContentsItem, TextResourceContents,
 };
 

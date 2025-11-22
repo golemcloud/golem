@@ -5,16 +5,14 @@ use handler::MyClientHandler;
 
 use rust_mcp_sdk::error::SdkResult;
 use rust_mcp_sdk::mcp_client::client_runtime;
-use rust_mcp_sdk::mcp_client::client_runtime_core;
 
 use rust_mcp_sdk::schema::{
     ClientCapabilities,
     Implementation,
     InitializeRequestParams,
-    LoggingLevel,
     LATEST_PROTOCOL_VERSION,
 };
-use rust_mcp_sdk::{ McpClient, RequestOptions, ClientSseTransport, ClientSseTransportOptions };
+use rust_mcp_sdk::{ McpClient, ClientSseTransport, ClientSseTransportOptions };
 use std::sync::Arc;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -82,17 +80,6 @@ async fn main() -> SdkResult<()> {
 
     // Display the list of tools available on the server
     utils.print_tool_list().await?;
-
-    // Display the list of prompts available on the server
-    //utils.print_prompts_list().await?;
-
-    // Display the list of resources available on the server
-    //utils.print_resource_list().await?;
-
-    // Display the list of resource templates available on the server
-    //utils.print_resource_templates().await?;
-
-    let mut installation_id = String::new();
 
     // Call add tool, and print the result
     let mut commands = vec![

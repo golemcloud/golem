@@ -97,7 +97,7 @@ struct ToolResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ToolCallResultPayload {
+pub struct ToolCallResultPayload {
     ok: bool,
     command: ExecutedCommand,
     logs: Vec<LogLine>,
@@ -698,42 +698,6 @@ impl CallToolTool {
 // ======================================================================================
 //  ListResourcesTool
 // ======================================================================================
-
-#[derive(Serialize)]
-struct ResourceNode {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub available: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<ResourceNode>,
-}
-
-#[derive(Serialize)]
-struct ListResourcesResult {
-    pub resources: Vec<ResourceNode>,
-}
-
-fn to_resource_tree(cmd_name: &str, subs: &Vec<SubcommandDescriptor>) -> ResourceNode {
-    fn build(nodes: &Vec<SubcommandDescriptor>) -> Vec<ResourceNode> {
-        let mut out = Vec::new();
-        for sc in nodes {
-            let children = build(&sc.subcommands);
-            let available = if sc.name == "list" { Some(serde_json::Value::Null) } else { None };
-            out.push(ResourceNode {
-                name: sc.name.clone(),
-                available,
-                children,
-            });
-        }
-        out
-    }
-
-    ResourceNode {
-        name: cmd_name.to_string(),
-        available: None,
-        children: build(subs),
-    }
-}
 
 #[mcp_tool(
     name = "list_resources",

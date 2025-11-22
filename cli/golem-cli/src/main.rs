@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -53,8 +52,6 @@ mod hooks {
         LATEST_PROTOCOL_VERSION,
     };
 
-    // Enable `.with(...)` by importing the tracing prelude
-    use tracing_subscriber::prelude::*;
     pub struct NoHooks;
 
     impl CommandHandlerHooks for NoHooks {
@@ -68,24 +65,9 @@ mod hooks {
 
         fn run_server() -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
             async move {
-                //use crate::serve;
                 // Pull the args parsed in main(); fall back to the same defaults the parser used.
                 let args = crate::SERVE_ARGS.get().cloned().unwrap_or_default();
-
-                // Mirror the original cwd fallback from main()
-                let cwd = args.cwd.unwrap_or_else(|| std::env::current_dir().expect("current_dir"));
-
-                //serve::serve_http_mcp(args.port, cwd).await?;
-                // initialize tracing
-                /*tracing_subscriber
-                    ::registry()
-                    .with(
-                        tracing_subscriber::EnvFilter
-                            ::try_from_default_env()
-                            .unwrap_or_else(|_| "info".into())
-                    )
-                    .with(tracing_subscriber::fmt::layer())
-                    .init();*/
+          
                 // STEP 1: Define server details and capabilities
                 let server_details = InitializeResult {
                     // server name and version
@@ -156,7 +138,6 @@ use hooks::NoHooks;
 struct ServeArgs {
     enable: bool,
     port: u16,
-    cwd: Option<PathBuf>,
 }
 
 fn parse_and_strip_serve(argv: &[OsString]) -> (ServeArgs, Vec<OsString>) {
@@ -168,7 +149,6 @@ fn parse_and_strip_serve(argv: &[OsString]) -> (ServeArgs, Vec<OsString>) {
     let mut i = 1usize;
     let mut enable = false;
     let mut port: u16 = 1232;
-    let mut cwd: Option<PathBuf> = None;
 
     while i < argv.len() {
         let s = argv[i].to_string_lossy();
@@ -187,17 +167,11 @@ fn parse_and_strip_serve(argv: &[OsString]) -> (ServeArgs, Vec<OsString>) {
             }
         }
 
-        if s == "--serve-cwd" && i + 1 < argv.len() {
-            cwd = Some(PathBuf::from(argv[i + 1].to_string_lossy().to_string()));
-            i += 2;
-            continue;
-        }
-
         forwarded.push(argv[i].clone());
         i += 1;
     }
 
-    (ServeArgs { enable, port, cwd }, forwarded)
+    (ServeArgs { enable, port }, forwarded)
 }
 
 #[cfg(feature = "server-commands")]
