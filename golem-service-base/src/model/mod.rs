@@ -23,8 +23,7 @@ use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationAction};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
-    ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
-    WorkerId,
+    ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter, WorkerId,
 };
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::ValueAndType;
@@ -366,7 +365,6 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub installed_plugins: Vec<PluginInstallation>,
     pub env: HashMap<String, String>,
@@ -392,12 +390,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .apply(SystemTime::try_from)
             .map_err(|_| "Failed to convert timestamp".to_string())?
             .into();
-
-        let component_type = value
-            .component_type
-            .ok_or("missing component_type")?
-            .try_into()
-            .map_err(|_| "Failed to convert component_type".to_string())?;
 
         let files = value
             .files
@@ -428,7 +420,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .ok_or("Missing metadata")?
                 .try_into()?,
             created_at,
-            component_type,
             files,
             installed_plugins,
             env: value.env,
@@ -446,7 +437,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             component_size: value.component_size,
             metadata: Some(value.metadata.into()),
             created_at: Some(SystemTime::from(value.created_at).into()),
-            component_type: Some(value.component_type as i32),
             files: value.files.into_iter().map(Into::into).collect(),
             installed_plugins: value
                 .installed_plugins

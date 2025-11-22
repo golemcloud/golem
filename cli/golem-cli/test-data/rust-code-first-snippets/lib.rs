@@ -1,5 +1,7 @@
 mod model;
 
+use std::collections::HashMap;
+
 use golem_rust::agentic::{Agent, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
@@ -50,6 +52,11 @@ trait FooAgent {
         &mut self,
         tuple: (String, f64, AllPrimitives, bool),
     ) -> (String, f64, AllPrimitives, bool);
+
+    async fn fun_map(
+        &mut self,
+        map: std::collections::HashMap<String, i32>,
+    ) -> std::collections::HashMap<String, i32>;
 
     async fn fun_collections(&mut self, collections: Collections) -> Collections;
 
@@ -182,6 +189,13 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_tuple_complex(tuple).await
     }
 
+    async fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32> {
+        self.client.fun_map(map).await
+    }
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections {
         self.client.fun_collections(collections).await
     }
@@ -302,6 +316,11 @@ trait BarAgent {
         &mut self,
         tuple: (String, f64, AllPrimitives, bool),
     ) -> (String, f64, AllPrimitives, bool);
+
+    fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32>;
 
     fn fun_collections(&mut self, collections: Collections) -> Collections;
 
@@ -427,6 +446,13 @@ impl BarAgent for BarAgentImpl {
         tuple: (String, f64, AllPrimitives, bool),
     ) -> (String, f64, AllPrimitives, bool) {
         tuple
+    }
+
+    fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32> {
+        map
     }
 
     fn fun_collections(&mut self, collections: Collections) -> Collections {

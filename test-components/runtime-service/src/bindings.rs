@@ -588,14 +588,31 @@ pub mod golem {
                     }
                 }
             }
-            /// Indicates which agent the code is running on after `fork`
-            #[repr(u8)]
-            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            /// Details about the fork result
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ForkDetails {
+                pub forked_phantom_id: Uuid,
+            }
+            impl ::core::fmt::Debug for ForkDetails {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ForkDetails")
+                        .field("forked-phantom-id", &self.forked_phantom_id)
+                        .finish()
+                }
+            }
+            /// Indicates which agent the code is running on after `fork`.
+            /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+            /// created agent.
+            #[derive(Clone, Copy)]
             pub enum ForkResult {
                 /// The original agent that called `fork`
-                Original,
+                Original(ForkDetails),
                 /// The new agent
-                Forked,
+                Forked(ForkDetails),
             }
             impl ::core::fmt::Debug for ForkResult {
                 fn fmt(
@@ -603,25 +620,12 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        ForkResult::Original => {
-                            f.debug_tuple("ForkResult::Original").finish()
+                        ForkResult::Original(e) => {
+                            f.debug_tuple("ForkResult::Original").field(e).finish()
                         }
-                        ForkResult::Forked => {
-                            f.debug_tuple("ForkResult::Forked").finish()
+                        ForkResult::Forked(e) => {
+                            f.debug_tuple("ForkResult::Forked").field(e).finish()
                         }
-                    }
-                }
-            }
-            impl ForkResult {
-                #[doc(hidden)]
-                pub unsafe fn _lift(val: u8) -> ForkResult {
-                    if !cfg!(debug_assertions) {
-                        return ::core::mem::transmute(val);
-                    }
-                    match val {
-                        0 => ForkResult::Original,
-                        1 => ForkResult::Forked,
-                        _ => panic!("invalid enum discriminant"),
                     }
                 }
             }
@@ -2502,26 +2506,59 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-            /// and this agent continues running as well. The return value is going to be different in this agent and
-            /// the forked agent.
-            pub fn fork(new_name: &str) -> ForkResult {
+            /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+            /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+            /// both sides. The newly created agent continues running from the same point, but the return value is
+            /// going to be different in this agent and the forked agent.
+            pub fn fork() -> ForkResult {
                 unsafe {
-                    let vec0 = new_name;
-                    let ptr0 = vec0.as_ptr().cast::<u8>();
-                    let len0 = vec0.len();
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "fork"]
-                        fn wit_import1(_: *mut u8, _: usize) -> i32;
+                        fn wit_import1(_: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import1(_: *mut u8, _: usize) -> i32 {
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
                         unreachable!()
                     }
-                    let ret = unsafe { wit_import1(ptr0.cast_mut(), len0) };
-                    ForkResult::_lift(ret as u8)
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let v7 = match l2 {
+                        0 => {
+                            let e7 = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+                                let l4 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l3 as u64,
+                                        low_bits: l4 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Original(e7)
+                        }
+                        n => {
+                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                            let e7 = {
+                                let l5 = *ptr0.add(8).cast::<i64>();
+                                let l6 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l5 as u64,
+                                        low_bits: l6 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Forked(e7)
+                        }
+                    };
+                    let result8 = v7;
+                    result8
                 }
             }
         }
@@ -15692,12 +15729,12 @@ pub(crate) use __export_runtime_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12020] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xee\\\x01A\x02\x01A)\
-\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
-method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
-le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
-\0\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12058] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x94]\x01A\x02\x01A)\x01\
+B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[meth\
+od]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollable.b\
+lock\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\0\
+\x12wasi:io/poll@0.2.3\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\x01\x01\
 \x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08duratio\
 n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x01\
 \x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\x09\x01@\
@@ -15747,7 +15784,7 @@ ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0
 \x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x03\
 \0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0cc\
 omponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\x03\0\x03\x08\
-agent-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+agent-id\x01B\x87\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
 \x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\
 \x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\
 \x08agent-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\
@@ -15775,167 +15812,168 @@ rs4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\x08agent-id
 \x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x11component-versionw\x0bretry\
 -countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01q\x02\x15r\
 evert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\x13revert\
--agent-target\x03\0=\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0?\x04\
-\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\x06fil\
-ter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]get-agents\x01D\x01h<\x01\
-p;\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[method]get-agents.get-nex\
-t\x01H\x01hA\x01i\x0b\x01@\x01\x04self\xc9\0\0\xca\0\x04\0$[method]get-promise-r\
-esult.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[m\
-ethod]get-promise-result.get\x01N\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01O\x01i\
-A\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\0\x0bget-promise\x01Q\x01@\x02\x0apromi\
-se-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01@\0\0\x0d\x04\0\x0f\
-get-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01\
-T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\x14mark-begin-ope\
-ration\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\x01@\0\0\
-\x18\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-policy\x18\x01\0\x04\0\
-\x10set-retry-policy\x01X\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01Y\
-\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-leve\
-l\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
-\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
-tency-key\x01]\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
-\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\x01\
-\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource-age\
+-agent-target\x03\0=\x01r\x01\x11forked-phantom-id\x05\x04\0\x0cfork-details\x03\
+\0?\x01q\x02\x08original\x01\xc0\0\0\x06forked\x01\xc0\0\0\x04\0\x0bfork-result\x03\
+\0A\x04\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\
+\x06filter\xc4\0\x07precise\x7f\0\xc5\0\x04\0\x17[constructor]get-agents\x01F\x01\
+h<\x01p;\x01k\xc8\0\x01@\x01\x04self\xc7\0\0\xc9\0\x04\0\x1b[method]get-agents.g\
+et-next\x01J\x01hC\x01i\x0b\x01@\x01\x04self\xcb\0\0\xcc\0\x04\0$[method]get-pro\
+mise-result.subscribe\x01M\x01p}\x01k\xce\0\x01@\x01\x04self\xcb\0\0\xcf\0\x04\0\
+\x1e[method]get-promise-result.get\x01P\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01\
+Q\x01iC\x01@\x01\x0apromise-id\x0f\0\xd2\0\x04\0\x0bget-promise\x01S\x01@\x02\x0a\
+promise-id\x0f\x04data\xce\0\0\x7f\x04\0\x10complete-promise\x01T\x01@\0\0\x0d\x04\
+\0\x0fget-oplog-index\x01U\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-in\
+dex\x01V\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01W\x04\0\x14mark-be\
+gin-operation\x01U\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01X\x01\
+@\0\0\x18\x04\0\x10get-retry-policy\x01Y\x01@\x01\x10new-retry-policy\x18\x01\0\x04\
+\0\x10set-retry-policy\x01Z\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01\
+[\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-lev\
+el\x01\\\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01]\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01^\x01@\0\0\x05\x04\0\x18generate-idempot\
+ency-key\x01_\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
+\0\x0cupdate-agent\x01`\x01@\0\0;\x04\0\x11get-self-metadata\x01a\x01k;\x01@\x01\
+\x08agent-id\x09\0\xe2\0\x04\0\x12get-agent-metadata\x01c\x01@\x03\x0fsource-age\
 nt-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afork-ag\
-ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
-c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
-d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
-resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
-s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x04\x04\0\
-\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug\
--string\x01\x02\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B\
-(\x02\x03\x02\x01\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollab\
-le\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\
-\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-strea\
-m\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\
-\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking\
--read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[met\
-hod]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01\
-i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\
-\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\
-\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]\
-output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\
-\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\
-\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\
-\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\
-\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.b\
-locking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\
-\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stream.b\
-locking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0ci\
-nput-stream\x02\x03\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\
-\x08duration\x03\0\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\
-\x02\x01\x10\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-er\
-ror\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\
-\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05\
-trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTT\
-P\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\
-\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\
-\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\
-\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\
-\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destina\
-tion-not-found\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\
-\0\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-term\
-inated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\0\x18connectio\
-n-write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15\
-TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\
-\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1b\
-HTTP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-\
-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-h\
-eader-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request\
--trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-sec\
-tion-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body\
--size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-t\
-railer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-respons\
-e-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\
-\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0e\
-internal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-synta\
-x\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\
-\0\x09field-key\x03\0\x1e\x04\0\x0afield-name\x03\0\x1f\x01p}\x04\0\x0bfield-val\
-ue\x03\0!\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0#\x04\0\x08trailers\x03\0\
-#\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0fr\
-equest-options\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-c\
-ode\x03\0*\x04\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\
-\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoi\
-ng-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\x01i#\x01@\0\02\x04\0\x13\
-[constructor]fields\x013\x01o\x02\x20\"\x01p4\x01j\x012\x01\x1d\x01@\x01\x07entr\
-ies5\06\x04\0\x18[static]fields.from-list\x017\x01h#\x01p\"\x01@\x02\x04self8\x04\
-name\x20\09\x04\0\x12[method]fields.get\x01:\x01@\x02\x04self8\x04name\x20\0\x7f\
-\x04\0\x12[method]fields.has\x01;\x01j\0\x01\x1d\x01@\x03\x04self8\x04name\x20\x05\
-value9\0<\x04\0\x12[method]fields.set\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\0\
-\x15[method]fields.delete\x01>\x01@\x03\x04self8\x04name\x20\x05value\"\0<\x04\0\
-\x15[method]fields.append\x01?\x01@\x01\x04self8\05\x04\0\x16[method]fields.entr\
-ies\x01@\x01@\x01\x04self8\02\x04\0\x14[method]fields.clone\x01A\x01h&\x01@\x01\x04\
-self\xc2\0\0\x0b\x04\0\x1f[method]incoming-request.method\x01C\x01@\x01\x04self\xc2\
-\0\0\x0e\x04\0([method]incoming-request.path-with-query\x01D\x01k\x0d\x01@\x01\x04\
-self\xc2\0\0\xc5\0\x04\0\x1f[method]incoming-request.scheme\x01F\x04\0\"[method]\
-incoming-request.authority\x01D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\0\x20[m\
-ethod]incoming-request.headers\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04self\xc2\0\
-\0\xca\0\x04\0\x20[method]incoming-request.consume\x01K\x01i'\x01@\x01\x07header\
-s\xc7\0\0\xcc\0\x04\0\x1d[constructor]outgoing-request\x01M\x01h'\x01i0\x01j\x01\
-\xcf\0\0\x01@\x01\x04self\xce\0\0\xd0\0\x04\0\x1d[method]outgoing-request.body\x01\
-Q\x01@\x01\x04self\xce\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01R\x01\
-j\0\0\x01@\x02\x04self\xce\0\x06method\x0b\0\xd3\0\x04\0#[method]outgoing-reques\
-t.set-method\x01T\x01@\x01\x04self\xce\0\0\x0e\x04\0([method]outgoing-request.pa\
-th-with-query\x01U\x01@\x02\x04self\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\0,[\
-method]outgoing-request.set-path-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\0\x04\
-\0\x1f[method]outgoing-request.scheme\x01W\x01@\x02\x04self\xce\0\x06scheme\xc5\0\
-\0\xd3\0\x04\0#[method]outgoing-request.set-scheme\x01X\x04\0\"[method]outgoing-\
-request.authority\x01U\x01@\x02\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\0&[me\
-thod]outgoing-request.set-authority\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\0\x20\
-[method]outgoing-request.headers\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[constructor\
-]request-options\x01\\\x01h(\x01k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0'[meth\
-od]request-options.connect-timeout\x01_\x01@\x02\x04self\xdd\0\x08duration\xde\0\
-\0\xd3\0\x04\0+[method]request-options.set-connect-timeout\x01`\x04\0*[method]re\
-quest-options.first-byte-timeout\x01_\x04\0.[method]request-options.set-first-by\
-te-timeout\x01`\x04\0-[method]request-options.between-bytes-timeout\x01_\x04\01[\
-method]request-options.set-between-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\0\
-\x01\x1b\x01@\x02\x05param\xe1\0\x08response\xe3\0\x01\0\x04\0\x1d[static]respon\
-se-outparam.set\x01d\x01h,\x01@\x01\x04self\xe5\0\0+\x04\0\x20[method]incoming-r\
-esponse.status\x01f\x01@\x01\x04self\xe5\0\0\xc7\0\x04\0![method]incoming-respon\
-se.headers\x01g\x01@\x01\x04self\xe5\0\0\xca\0\x04\0![method]incoming-response.c\
-onsume\x01h\x01h-\x01i\x03\x01j\x01\xea\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\0\
-\x1c[method]incoming-body.stream\x01l\x01i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\0\
-\x1c[static]incoming-body.finish\x01n\x01h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\
-\0\x04\0![method]future-trailers.subscribe\x01q\x01i%\x01k\xf2\0\x01j\x01\xf3\0\x01\
-\x1b\x01j\x01\xf4\0\0\x01k\xf5\0\x01@\x01\x04self\xef\0\0\xf6\0\x04\0\x1b[method\
-]future-trailers.get\x01w\x01@\x01\x07headers\xc7\0\0\xe2\0\x04\0\x1e[constructo\
-r]outgoing-response\x01x\x01h/\x01@\x01\x04self\xf9\0\0+\x04\0%[method]outgoing-\
-response.status-code\x01z\x01@\x02\x04self\xf9\0\x0bstatus-code+\0\xd3\0\x04\0)[\
-method]outgoing-response.set-status-code\x01{\x01@\x01\x04self\xf9\0\0\xc7\0\x04\
-\0![method]outgoing-response.headers\x01|\x01@\x01\x04self\xf9\0\0\xd0\0\x04\0\x1e\
-[method]outgoing-response.body\x01}\x01h0\x01i\x05\x01j\x01\xff\0\0\x01@\x01\x04\
-self\xfe\0\0\x80\x01\x04\0\x1b[method]outgoing-body.write\x01\x81\x01\x01j\0\x01\
-\x1b\x01@\x02\x04this\xcf\0\x08trailers\xf3\0\0\x82\x01\x04\0\x1c[static]outgoin\
-g-body.finish\x01\x83\x01\x01h1\x01@\x01\x04self\x84\x01\0\xf0\0\x04\0*[method]f\
-uture-incoming-response.subscribe\x01\x85\x01\x01i,\x01j\x01\x86\x01\x01\x1b\x01\
-j\x01\x87\x01\0\x01k\x88\x01\x01@\x01\x04self\x84\x01\0\x89\x01\x04\0$[method]fu\
-ture-incoming-response.get\x01\x8a\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8b\x01\
-\0\x8c\x01\x04\0\x0fhttp-error-code\x01\x8d\x01\x03\0\x15wasi:http/types@0.2.3\x05\
-\x11\x02\x03\0\x07\x10outgoing-request\x02\x03\0\x07\x0frequest-options\x02\x03\0\
-\x07\x18future-incoming-response\x02\x03\0\x07\x0aerror-code\x01B\x0f\x02\x03\x02\
-\x01\x12\x04\0\x10outgoing-request\x03\0\0\x02\x03\x02\x01\x13\x04\0\x0frequest-\
-options\x03\0\x02\x02\x03\x02\x01\x14\x04\0\x18future-incoming-response\x03\0\x04\
-\x02\x03\x02\x01\x15\x04\0\x0aerror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01\
-i\x05\x01j\x01\x0b\x01\x07\x01@\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06\
-handle\x01\x0d\x03\0\x20wasi:http/outgoing-handler@0.2.3\x05\x16\x02\x03\0\x04\x0c\
-component-id\x02\x03\0\x04\x08agent-id\x02\x03\0\x04\x11component-version\x02\x03\
-\0\x04\x0bupdate-mode\x02\x03\0\x04\x10agent-any-filter\x02\x03\0\x04\x0eagent-m\
-etadata\x02\x03\0\x04\x04uuid\x01B'\x02\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\
-\0\0\x02\x03\x02\x01\x18\x04\0\x08agent-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x11\
-component-version\x03\0\x04\x02\x03\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\
-\x03\x02\x01\x1b\x04\0\x10agent-any-filter\x03\0\x08\x02\x03\x02\x01\x1c\x04\0\x0e\
-agent-metadata\x03\0\x0a\x02\x03\x02\x01\x1d\x04\0\x04uuid\x03\0\x0c\x01@\0\0w\x04\
-\0\x04jump\x01\x0e\x01@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-\
-retries\x01\x0f\x01@\x01\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x10\x01\
-@\0\x01\0\x04\0\x0datomic-region\x01\x11\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10\
-idempotence-flag\x01\x12\x04\0\x0fpersist-nothing\x01\x11\x01k\x09\x01p\x0b\x01@\
-\x03\x0ccomponent-id\x01\x06filter\x13\x07precise\x7f\0\x14\x04\0\x0bget-workers\
-\x01\x15\x01@\0\0\x0b\x04\0\x11get-self-metadata\x01\x16\x01k\x0b\x01@\x01\x08ag\
-ent-id\x03\0\x17\x04\0\x13get-worker-metadata\x01\x18\x01@\x03\x08agent-id\x03\x11\
-component-version\x05\x0bupdate-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01\
-o\x02\x0d\x0d\x01@\0\0\x1a\x04\0\x19generate-idempotency-keys\x01\x1b\x04\0\x0cg\
-olem:it/api\x05\x1e\x04\0\x18golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0frun\
-time-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
-0.227.1\x10wit-bindgen-rust\x060.41.0";
+ent\x01d\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
+e\x01k\x03\x01@\x01\x13component-references\0\xe6\0\x04\0\x14resolve-component-i\
+d\x01g\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe8\0\x04\0\x10\
+resolve-agent-id\x01i\x04\0\x17resolve-agent-id-strict\x01i\x01@\0\0\xc2\0\x04\0\
+\x04fork\x01j\x03\0\x14golem:api/host@1.3.0\x05\x0b\x01B\x04\x04\0\x05error\x03\x01\
+\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug-string\x01\x02\x03\
+\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B(\x02\x03\x02\x01\x0d\
+\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x02\x01i\x01\
+\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\0\x0cstream-error\
+\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-stream\x03\x01\x01h\x07\
+\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\x04\0\x19[method]\
+input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking-read\x01\x0c\x01j\
+\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[method]input-stream.s\
+kip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01i\x03\x01@\x01\x04\
+self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\x01h\x08\x01@\x01\
+\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\x12\x01j\0\x01\x06\
+\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]output-stream.write\
+\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\x01\x14\x01@\x01\x04\
+self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\x04\0$[method]output\
+-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\0\x1f[method]outpu\
+t-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\x04\0\"[method]out\
+put-stream.write-zeroes\x01\x17\x04\05[method]output-stream.blocking-write-zeroe\
+s-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\x0d\x04\0\x1c[meth\
+od]output-stream.splice\x01\x18\x04\0%[method]output-stream.blocking-splice\x01\x18\
+\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0cinput-stream\x02\x03\0\x06\
+\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\
+\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\x02\x01\x10\x04\0\x0dou\
+tput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-error\x03\0\x06\x02\x03\x02\
+\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\x04head\0\0\x04post\0\0\
+\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05trace\0\0\x05patch\0\0\
+\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05\
+other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\x05rcode\x0e\x09info\
+-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\x08alert-id\x12\x0d\
+alert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\x01ky\x01r\x02\x0a\
+field-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\0\x16\x01kw\x01\
+k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destination-not-found\0\
+\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\0\x19destinatio\
+n-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-terminated\0\0\x12co\
+nnection-timeout\0\0\x17connection-read-timeout\0\0\x18connection-write-timeout\0\
+\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15TLS-certificate-\
+error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\0\0\x1cHTTP-req\
+uest-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1bHTTP-request-met\
+hod-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-URI-too-long\0\0\
+\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-header-size\x01\x19\
+\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request-trailer-size\x01\x17\
+\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-section-size\x01\x15\0\x19\
+HTTP-response-header-size\x01\x17\0\x17HTTP-response-body-size\x01\x18\0\"HTTP-r\
+esponse-trailer-section-size\x01\x15\0\x1aHTTP-response-trailer-size\x01\x17\0\x1d\
+HTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-response-content-coding\x01\x0e\0\
+\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\0\x13HTTP-protocol-error\0\
+\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0einternal-error\x01\x0e\0\x04\
+\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-syntax\0\0\x09forbidden\0\0\x09im\
+mutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x04\
+\0\x0afield-name\x03\0\x1f\x01p}\x04\0\x0bfield-value\x03\0!\x04\0\x06fields\x03\
+\x01\x04\0\x07headers\x03\0#\x04\0\x08trailers\x03\0#\x04\0\x10incoming-request\x03\
+\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0frequest-options\x03\x01\x04\0\x11\
+response-outparam\x03\x01\x01{\x04\0\x0bstatus-code\x03\0*\x04\0\x11incoming-res\
+ponse\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\0\x0ffuture-trailers\x03\x01\x04\
+\0\x11outgoing-response\x03\x01\x04\0\x0doutgoing-body\x03\x01\x04\0\x18future-i\
+ncoming-response\x03\x01\x01i#\x01@\0\02\x04\0\x13[constructor]fields\x013\x01o\x02\
+\x20\"\x01p4\x01j\x012\x01\x1d\x01@\x01\x07entries5\06\x04\0\x18[static]fields.f\
+rom-list\x017\x01h#\x01p\"\x01@\x02\x04self8\x04name\x20\09\x04\0\x12[method]fie\
+lds.get\x01:\x01@\x02\x04self8\x04name\x20\0\x7f\x04\0\x12[method]fields.has\x01\
+;\x01j\0\x01\x1d\x01@\x03\x04self8\x04name\x20\x05value9\0<\x04\0\x12[method]fie\
+lds.set\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\0\x15[method]fields.delete\x01\
+>\x01@\x03\x04self8\x04name\x20\x05value\"\0<\x04\0\x15[method]fields.append\x01\
+?\x01@\x01\x04self8\05\x04\0\x16[method]fields.entries\x01@\x01@\x01\x04self8\02\
+\x04\0\x14[method]fields.clone\x01A\x01h&\x01@\x01\x04self\xc2\0\0\x0b\x04\0\x1f\
+[method]incoming-request.method\x01C\x01@\x01\x04self\xc2\0\0\x0e\x04\0([method]\
+incoming-request.path-with-query\x01D\x01k\x0d\x01@\x01\x04self\xc2\0\0\xc5\0\x04\
+\0\x1f[method]incoming-request.scheme\x01F\x04\0\"[method]incoming-request.autho\
+rity\x01D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\0\x20[method]incoming-request\
+.headers\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04self\xc2\0\0\xca\0\x04\0\x20[me\
+thod]incoming-request.consume\x01K\x01i'\x01@\x01\x07headers\xc7\0\0\xcc\0\x04\0\
+\x1d[constructor]outgoing-request\x01M\x01h'\x01i0\x01j\x01\xcf\0\0\x01@\x01\x04\
+self\xce\0\0\xd0\0\x04\0\x1d[method]outgoing-request.body\x01Q\x01@\x01\x04self\xce\
+\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01R\x01j\0\0\x01@\x02\x04self\
+\xce\0\x06method\x0b\0\xd3\0\x04\0#[method]outgoing-request.set-method\x01T\x01@\
+\x01\x04self\xce\0\0\x0e\x04\0([method]outgoing-request.path-with-query\x01U\x01\
+@\x02\x04self\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\0,[method]outgoing-reques\
+t.set-path-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\0\x04\0\x1f[method]outgo\
+ing-request.scheme\x01W\x01@\x02\x04self\xce\0\x06scheme\xc5\0\0\xd3\0\x04\0#[me\
+thod]outgoing-request.set-scheme\x01X\x04\0\"[method]outgoing-request.authority\x01\
+U\x01@\x02\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\0&[method]outgoing-request\
+.set-authority\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\0\x20[method]outgoing-req\
+uest.headers\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[constructor]request-options\x01\
+\\\x01h(\x01k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0'[method]request-options.c\
+onnect-timeout\x01_\x01@\x02\x04self\xdd\0\x08duration\xde\0\0\xd3\0\x04\0+[meth\
+od]request-options.set-connect-timeout\x01`\x04\0*[method]request-options.first-\
+byte-timeout\x01_\x04\0.[method]request-options.set-first-byte-timeout\x01`\x04\0\
+-[method]request-options.between-bytes-timeout\x01_\x04\01[method]request-option\
+s.set-between-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\0\x01\x1b\x01@\x02\x05\
+param\xe1\0\x08response\xe3\0\x01\0\x04\0\x1d[static]response-outparam.set\x01d\x01\
+h,\x01@\x01\x04self\xe5\0\0+\x04\0\x20[method]incoming-response.status\x01f\x01@\
+\x01\x04self\xe5\0\0\xc7\0\x04\0![method]incoming-response.headers\x01g\x01@\x01\
+\x04self\xe5\0\0\xca\0\x04\0![method]incoming-response.consume\x01h\x01h-\x01i\x03\
+\x01j\x01\xea\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\0\x1c[method]incoming-body.\
+stream\x01l\x01i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\0\x1c[static]incoming-body.\
+finish\x01n\x01h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\0\x04\0![method]future-t\
+railers.subscribe\x01q\x01i%\x01k\xf2\0\x01j\x01\xf3\0\x01\x1b\x01j\x01\xf4\0\0\x01\
+k\xf5\0\x01@\x01\x04self\xef\0\0\xf6\0\x04\0\x1b[method]future-trailers.get\x01w\
+\x01@\x01\x07headers\xc7\0\0\xe2\0\x04\0\x1e[constructor]outgoing-response\x01x\x01\
+h/\x01@\x01\x04self\xf9\0\0+\x04\0%[method]outgoing-response.status-code\x01z\x01\
+@\x02\x04self\xf9\0\x0bstatus-code+\0\xd3\0\x04\0)[method]outgoing-response.set-\
+status-code\x01{\x01@\x01\x04self\xf9\0\0\xc7\0\x04\0![method]outgoing-response.\
+headers\x01|\x01@\x01\x04self\xf9\0\0\xd0\0\x04\0\x1e[method]outgoing-response.b\
+ody\x01}\x01h0\x01i\x05\x01j\x01\xff\0\0\x01@\x01\x04self\xfe\0\0\x80\x01\x04\0\x1b\
+[method]outgoing-body.write\x01\x81\x01\x01j\0\x01\x1b\x01@\x02\x04this\xcf\0\x08\
+trailers\xf3\0\0\x82\x01\x04\0\x1c[static]outgoing-body.finish\x01\x83\x01\x01h1\
+\x01@\x01\x04self\x84\x01\0\xf0\0\x04\0*[method]future-incoming-response.subscri\
+be\x01\x85\x01\x01i,\x01j\x01\x86\x01\x01\x1b\x01j\x01\x87\x01\0\x01k\x88\x01\x01\
+@\x01\x04self\x84\x01\0\x89\x01\x04\0$[method]future-incoming-response.get\x01\x8a\
+\x01\x01h\x07\x01k\x1b\x01@\x01\x03err\x8b\x01\0\x8c\x01\x04\0\x0fhttp-error-cod\
+e\x01\x8d\x01\x03\0\x15wasi:http/types@0.2.3\x05\x11\x02\x03\0\x07\x10outgoing-r\
+equest\x02\x03\0\x07\x0frequest-options\x02\x03\0\x07\x18future-incoming-respons\
+e\x02\x03\0\x07\x0aerror-code\x01B\x0f\x02\x03\x02\x01\x12\x04\0\x10outgoing-req\
+uest\x03\0\0\x02\x03\x02\x01\x13\x04\0\x0frequest-options\x03\0\x02\x02\x03\x02\x01\
+\x14\x04\0\x18future-incoming-response\x03\0\x04\x02\x03\x02\x01\x15\x04\0\x0aer\
+ror-code\x03\0\x06\x01i\x01\x01i\x03\x01k\x09\x01i\x05\x01j\x01\x0b\x01\x07\x01@\
+\x02\x07request\x08\x07options\x0a\0\x0c\x04\0\x06handle\x01\x0d\x03\0\x20wasi:h\
+ttp/outgoing-handler@0.2.3\x05\x16\x02\x03\0\x04\x0ccomponent-id\x02\x03\0\x04\x08\
+agent-id\x02\x03\0\x04\x11component-version\x02\x03\0\x04\x0bupdate-mode\x02\x03\
+\0\x04\x10agent-any-filter\x02\x03\0\x04\x0eagent-metadata\x02\x03\0\x04\x04uuid\
+\x01B'\x02\x03\x02\x01\x17\x04\0\x0ccomponent-id\x03\0\0\x02\x03\x02\x01\x18\x04\
+\0\x08agent-id\x03\0\x02\x02\x03\x02\x01\x19\x04\0\x11component-version\x03\0\x04\
+\x02\x03\x02\x01\x1a\x04\0\x0bupdate-mode\x03\0\x06\x02\x03\x02\x01\x1b\x04\0\x10\
+agent-any-filter\x03\0\x08\x02\x03\x02\x01\x1c\x04\0\x0eagent-metadata\x03\0\x0a\
+\x02\x03\x02\x01\x1d\x04\0\x04uuid\x03\0\x0c\x01@\0\0w\x04\0\x04jump\x01\x0e\x01\
+@\x01\x0bmax-retriesw\x01\0\x04\0\x1cfail-with-custom-max-retries\x01\x0f\x01@\x01\
+\x08replicas}\x01\0\x04\0\x0fexplicit-commit\x01\x10\x01@\0\x01\0\x04\0\x0datomi\
+c-region\x01\x11\x01@\x01\x07enabled\x7f\x01\0\x04\0\x10idempotence-flag\x01\x12\
+\x04\0\x0fpersist-nothing\x01\x11\x01k\x09\x01p\x0b\x01@\x03\x0ccomponent-id\x01\
+\x06filter\x13\x07precise\x7f\0\x14\x04\0\x0bget-workers\x01\x15\x01@\0\0\x0b\x04\
+\0\x11get-self-metadata\x01\x16\x01k\x0b\x01@\x01\x08agent-id\x03\0\x17\x04\0\x13\
+get-worker-metadata\x01\x18\x01@\x03\x08agent-id\x03\x11component-version\x05\x0b\
+update-mode\x07\x01\0\x04\0\x0dupdate-worker\x01\x19\x01o\x02\x0d\x0d\x01@\0\0\x1a\
+\x04\0\x19generate-idempotency-keys\x01\x1b\x04\0\x0cgolem:it/api\x05\x1e\x04\0\x18\
+golem:it/runtime-service\x04\0\x0b\x15\x01\0\x0fruntime-service\x03\0\0\0G\x09pr\
+oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
+0.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

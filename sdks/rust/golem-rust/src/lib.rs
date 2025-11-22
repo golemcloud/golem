@@ -16,6 +16,11 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+#[cfg(test)]
+test_r::enable!();
+
+pub use uuid::Uuid;
+
 pub mod bindings {
     use wit_bindgen::generate;
 
@@ -142,6 +147,12 @@ pub mod golem_agentic {
 
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
+
+#[cfg(feature = "export_golem_agentic")]
+pub use ctor;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use async_trait;
 
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {

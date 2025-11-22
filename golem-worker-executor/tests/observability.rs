@@ -22,7 +22,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
+use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::{IntoValueAndType, Record, Value};
@@ -94,7 +94,6 @@ async fn get_oplog_1(
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
     drop(executor);
 
-    tracing::warn!("oplog: {oplog:?}");
     assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
@@ -368,7 +367,6 @@ async fn invocation_context_test(
                     WasmRpcTarget {
                         interface_name: "golem:ictest-exports/golem-ictest-api".to_string(),
                         component_name: "golem_ictest".to_string(),
-                        component_type: ComponentType::Durable,
                     },
                 )]),
             }),

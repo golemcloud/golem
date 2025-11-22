@@ -70,6 +70,7 @@ impl ToWitNaming for AgentType {
             constructor: self.constructor.to_wit_naming(),
             methods: self.methods.to_wit_naming(),
             dependencies: self.dependencies.to_wit_naming(),
+            mode: self.mode,
         }
     }
 }

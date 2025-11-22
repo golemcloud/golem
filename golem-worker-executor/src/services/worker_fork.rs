@@ -41,7 +41,7 @@ use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestGolemApiFork, HostResponse,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
     HostResponseGolemApiFork, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
@@ -50,6 +50,7 @@ use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -67,6 +68,7 @@ pub trait WorkerForkService: Send + Sync {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
+        forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -489,7 +491,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 ))),
                 read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
                     ExecutionStatus::Suspended {
-                        component_type: source_worker_instance.component_type(),
+                        agent_mode: source_worker_instance.agent_mode(),
                         timestamp: Timestamp::now_utc(),
                     },
                 ))),
@@ -547,6 +549,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         source_worker_id: &OwnedWorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
+        forked_phantom_id: Uuid,
     ) -> Result<(), WorkerExecutorError> {
         let new_oplog = self
             .copy_source_oplog(
@@ -564,10 +567,9 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         let _ = new_oplog
             .add_imported_function_invoked(
                 GolemApiFork::HOST_FUNCTION_NAME,
-                &HostRequest::GolemApiFork(HostRequestGolemApiFork {
-                    name: target_worker_id.worker_name.clone(),
-                }),
+                &HostRequest::NoInput(HostRequestNoInput {}),
                 &HostResponse::GolemApiFork(HostResponseGolemApiFork {
+                    forked_phantom_id,
                     result: Ok(golem_common::model::ForkResult::Forked),
                 }),
                 DurableFunctionType::WriteRemote,

@@ -54,9 +54,9 @@ use golem_common::model::{
     WorkerResourceDescription, WorkerStatus,
 };
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
-    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
-    SuccessfulUpdateRecord, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    ComponentFileSystemNode, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
+    InitialComponentFile, InitialComponentFileKey, ScanCursor, SuccessfulUpdateRecord,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex};
@@ -78,7 +78,6 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dsl: &'a DSL,
     name: String,
     wasm_name: String,
-    component_type: ComponentType,
     unique: bool,
     unverified: bool,
     files: Vec<(PathBuf, InitialComponentFile)>,
@@ -93,7 +92,6 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             dsl,
             name: name.as_ref().to_string(),
             wasm_name: name.as_ref().to_string(),
-            component_type: ComponentType::Durable,
             unique: false,
             unverified: false,
             files: vec![],
@@ -106,18 +104,6 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
     /// Set the name of the component.
     pub fn name(mut self, name: &str) -> Self {
         self.name = name.to_string();
-        self
-    }
-
-    /// Set the component type to ephemeral.
-    pub fn ephemeral(mut self) -> Self {
-        self.component_type = ComponentType::Ephemeral;
-        self
-    }
-
-    /// Set the component type to durable.
-    pub fn durable(mut self) -> Self {
-        self.component_type = ComponentType::Durable;
         self
     }
 
@@ -199,7 +185,6 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             .store_component_with(
                 &self.wasm_name,
                 &self.name,
-                self.component_type,
                 self.unique,
                 self.unverified,
                 &self.files,
@@ -219,7 +204,6 @@ pub trait TestDsl {
         &self,
         wasm_name: &str,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
@@ -500,7 +484,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         &self,
         wasm_name: &str,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
@@ -516,10 +499,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             let uuid = Uuid::new_v4();
             format!("{name}---{uuid}")
         } else {
-            match component_type {
-                ComponentType::Durable => name.to_string(),
-                ComponentType::Ephemeral => format!("{name}---ephemeral"),
-            }
+            name.to_string()
         };
         let dynamic_linking = HashMap::from_iter(
             dynamic_linking
@@ -550,7 +530,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                         &self.token,
                         &source_path,
                         &component_name,
-                        component_type,
                         files,
                         &dynamic_linking,
                         unverified,
@@ -566,7 +545,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                         &self.token,
                         &source_path,
                         &component_name,
-                        component_type,
                         files,
                         &dynamic_linking,
                         unverified,
@@ -593,13 +571,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
             .component_service()
-            .add_component_with_id(
-                &source_path,
-                component_id,
-                name,
-                ComponentType::Durable,
-                None,
-            )
+            .add_component_with_id(&source_path, component_id, name, None)
             .await
             .expect("Failed to store component");
     }
@@ -633,7 +605,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                 &self.token,
                 component_id,
                 &source_path,
-                ComponentType::Durable,
                 None,
                 None,
                 &component_env,
@@ -655,7 +626,6 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                 &self.token,
                 component_id,
                 &source_path,
-                ComponentType::Durable,
                 files,
                 None,
                 &HashMap::new(),
@@ -675,15 +645,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         let source_path = self.deps.component_directory().join(format!("{name}.wasm"));
         self.deps
             .component_service()
-            .update_component(
-                &self.token,
-                component_id,
-                &source_path,
-                ComponentType::Durable,
-                None,
-                None,
-                &map,
-            )
+            .update_component(&self.token, component_id, &source_path, None, None, &map)
             .await
             .unwrap()
     }
@@ -2160,7 +2122,6 @@ pub trait TestDslUnsafe {
     async fn store_component_with(
         &self,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
@@ -2382,7 +2343,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
     async fn store_component_with(
         &self,
         name: &str,
-        component_type: ComponentType,
         unique: bool,
         unverified: bool,
         files: &[(PathBuf, InitialComponentFile)],
@@ -2394,7 +2354,6 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             self,
             name,
             name,
-            component_type,
             unique,
             unverified,
             files,

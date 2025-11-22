@@ -17,17 +17,81 @@ use quote::{format_ident, quote};
 use syn::{ItemTrait, Type};
 
 use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
+    extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
+    FunctionInputInfo, FunctionOutputInfo,
 };
 use crate::agentic::{
-    get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
-    no_constructor_method_error,
+    async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal,
+    multiple_constructor_methods_error, no_constructor_method_error,
 };
 
-pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
+    if attrs.is_empty() {
+        return quote! {
+            golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+        };
+    }
 
-    match get_agent_type_with_remote_client(&item_trait) {
+    if let Ok(ident) = syn::parse2::<syn::Ident>(attrs.clone().into()) {
+        // Shorthand case: just "ephemeral"
+        if ident == "ephemeral" {
+            return quote! {
+                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+            };
+        }
+    }
+
+    // Try parsing the full expression: mode = "..." or mode = ...
+    if let Ok(expr) = syn::parse2::<syn::ExprAssign>(attrs.into()) {
+        if let syn::Expr::Path(left) = &*expr.left {
+            if left.path.is_ident("mode") {
+                // Extract the right side
+                match &*expr.right {
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) => {
+                        if lit_str.value() == "ephemeral" {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+                            };
+                        } else if lit_str.value() == "durable" {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+                            };
+                        }
+                    }
+                    syn::Expr::Path(path) => {
+                        if path.path.is_ident("ephemeral") {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+                            };
+                        } else if path.path.is_ident("durable") {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    panic!("Invalid agent mode - use `mode = ephemeral` or `mode = durable`");
+}
+
+pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let agent_mode = parse_agent_mode(attrs);
+
+    let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
+
+    if has_async_trait_attribute {
+        return async_trait_in_agent_definition_error(&item_trait).into();
+    }
+
+    match get_agent_type_with_remote_client(&item_trait, agent_mode) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,
@@ -36,15 +100,16 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
 
             let register_fn_name = get_register_function_ident(&item_trait);
 
+            // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+            // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
             let register_fn = quote! {
-                #[::ctor::ctor]
-                fn #register_fn_name() {
+                ::golem_rust::ctor::__support::ctor_parse!(#[ctor]fn #register_fn_name() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
                     );
-                }
+                });
             };
 
             let result = quote! {
@@ -77,6 +142,7 @@ struct AgentTypeWithRemoteClient {
 
 fn get_agent_type_with_remote_client(
     item_trait: &syn::ItemTrait,
+    mode_value: proc_macro2::TokenStream,
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let trait_ident = &item_trait.ident;
     let type_name = trait_ident.to_string();
@@ -117,7 +183,7 @@ fn get_agent_type_with_remote_client(
                             Err(meta.error("expected `description = \"...\"`"))
                         }
                     })
-                    .ok();
+                        .ok();
                     if let Some(val) = found {
                         description = val;
                     }
@@ -128,7 +194,7 @@ fn get_agent_type_with_remote_client(
             let mut output_parameters = vec![];
 
             match fn_input_info.input_shape {
-                DefaultOrMultimodal::Default =>  {
+                DefaultOrMultimodal::Default => {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
                             let param_name = match &*pat_type.pat {
@@ -141,8 +207,7 @@ fn get_agent_type_with_remote_client(
                             });
                         }
                     }
-
-                },
+                }
                 DefaultOrMultimodal::Multimodal => {
                     for input in &trait_fn.sig.inputs {
                         if let syn::FnArg::Typed(pat_type) = input {
@@ -155,7 +220,6 @@ fn get_agent_type_with_remote_client(
                             input_parameters.push(quote! {
                                 golem_rust::agentic::Multimodal::<#inner_type>::get_schema()
                             });
-
                         }
                     }
                 }
@@ -175,7 +239,7 @@ fn get_agent_type_with_remote_client(
                             }
                         }
                     };
-                },
+                }
                 DefaultOrMultimodal::Multimodal => {
                     match &trait_fn.sig.output {
                         syn::ReturnType::Default => (),
@@ -200,7 +264,7 @@ fn get_agent_type_with_remote_client(
                     quote! {
                         golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
                     }
-                },
+                }
             };
 
             let output_schema = match fn_output_info.output_shape {
@@ -214,7 +278,7 @@ fn get_agent_type_with_remote_client(
                     quote! {
                         golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
                     }
-                },
+                }
             };
 
             Some(quote! {
@@ -319,6 +383,7 @@ fn get_agent_type_with_remote_client(
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
                 constructor: #agent_constructor,
+                mode: #mode_value,
             }
         },
         remote_client,

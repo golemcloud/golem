@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_function_kind, is_constructor_method, DefaultOrMultimodal, FunctionInputInfo,
-    FunctionOutputInfo, FutureOrImmediate,
+    get_function_kind, has_async_trait_attribute, is_constructor_method, DefaultOrMultimodal,
+    FunctionInputInfo, FunctionOutputInfo, FutureOrImmediate,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -26,6 +26,17 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Ok(b) => b,
         Err(e) => return e.to_compile_error().into(),
     };
+
+    let has_async_trait_attribute = has_async_trait_attribute(&impl_block);
+
+    if has_async_trait_attribute {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "#[async_trait] cannot be used along with #[agent_implementation]. #[agent_implementation] automatically handles async methods. Please remove it",
+        )
+        .to_compile_error()
+        .into();
+    }
 
     let (impl_generics, ty_generics, where_clause) = impl_block.generics.split_for_impl();
 
@@ -339,7 +350,7 @@ fn generate_base_agent_impl(
 ) -> proc_macro2::TokenStream {
     let self_ty = &impl_block.self_ty;
     quote! {
-        #[async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait(?Send)]
         impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
@@ -423,7 +434,7 @@ fn generate_initiator_impl(
     quote! {
         struct #initiator_ident;
 
-        #[async_trait::async_trait(?Send)]
+        #[golem_rust::async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
             async fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> Result<(), golem_rust::golem_agentic::golem::agent::common::AgentError> {
@@ -442,13 +453,16 @@ fn generate_register_initiator_fn(
         trait_name_str_raw.to_lowercase()
     );
 
+    // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+    // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
     quote! {
-        #[::ctor::ctor]
-        fn #register_initiator_fn_name() {
-            golem_rust::agentic::register_agent_initiator(
-                #trait_name_str_raw.to_string().as_str(),
-                std::sync::Arc::new(#initiator_ident)
-            );
-        }
+        ::golem_rust::ctor::__support::ctor_parse!(
+            #[ctor] fn #register_initiator_fn_name() {
+                golem_rust::agentic::register_agent_initiator(
+                    #trait_name_str_raw.to_string().as_str(),
+                    std::sync::Arc::new(#initiator_ident)
+                );
+            }
+        );
     }
 }

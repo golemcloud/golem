@@ -251,7 +251,6 @@ impl ApplicationContext {
     pub fn component_stub_def(
         &mut self,
         component_name: &AppComponentName,
-        is_ephemeral: bool,
     ) -> anyhow::Result<&StubDefinition> {
         if !self.component_stub_defs.contains_key(component_name) {
             self.component_stub_defs.insert(
@@ -267,7 +266,6 @@ impl ApplicationContext {
                     extract_source_exports_package: false,
                     seal_cargo_workspace: true,
                     component_name: component_name.clone(),
-                    is_ephemeral,
                 })
                 .context("Failed to gather information for the stub generator")?,
             );
@@ -279,15 +277,10 @@ impl ApplicationContext {
         &mut self,
         component_name: &AppComponentName,
     ) -> anyhow::Result<ComponentStubInterfaces> {
-        let is_ephemeral = self
-            .application
-            .component_properties(component_name, self.build_profile())
-            .is_ephemeral();
-        let stub_def = self.component_stub_def(component_name, is_ephemeral)?;
+        let stub_def = self.component_stub_def(component_name)?;
         let client_package_name = stub_def.client_parser_package_name();
         let result = ComponentStubInterfaces {
             component_name: component_name.clone(),
-            is_ephemeral,
             stub_interface_name: client_package_name
                 .interface_id(&stub_def.client_interface_name()),
             exported_interfaces_per_stub_resource: BTreeMap::from_iter(

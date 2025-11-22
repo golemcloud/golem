@@ -1,11 +1,68 @@
 use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{ResourceMode, Uri, WitNode, WitType, WitTypeNode, WitValue};
+use crate::{ResourceMode, Uri, Value, WitNode, WitType, WitTypeNode, WitValue};
 use desert_rust::adt::{AdtMetadata, AdtSerializer};
 use desert_rust::{
-    BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext, Evolution,
-    SerializationContext,
+    deserialize_iterator, serialize_iterator, BinaryDeserializer, BinaryInput, BinaryOutput,
+    BinarySerializer, DeserializationContext, Evolution, SerializationContext,
 };
 use lazy_static::lazy_static;
+use std::borrow::Cow;
+
+pub struct VecValueWrapper<'a>(pub Cow<'a, [Value]>);
+
+impl<'a> BinarySerializer for VecValueWrapper<'a> {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        let all_u8 = self.0.iter().all(|v| matches!(v, Value::U8(_)));
+        if all_u8 {
+            context.write_u8(1); // special case 1
+            let bytes = self
+                .0
+                .iter()
+                .map(|v| match v {
+                    Value::U8(b) => *b,
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<u8>>();
+            context.write_var_u32(bytes.len() as u32);
+            context.write_bytes(&bytes);
+            Ok(())
+        } else {
+            context.write_u8(0); // default case 0
+            serialize_iterator(&mut self.0.iter(), context)
+        }
+    }
+}
+
+impl<'a> BinaryDeserializer for VecValueWrapper<'a> {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        let tag = context.read_u8()?;
+        match tag {
+            0 => {
+                let (iter, maybe_size) = deserialize_iterator(context);
+                let mut vec = Vec::with_capacity(maybe_size.unwrap_or_default());
+                for item in iter {
+                    vec.push(item?);
+                }
+
+                Ok(Self(Cow::Owned(vec)))
+            }
+            1 => {
+                let length = context.read_var_u32()? as usize;
+                let bytes = context.read_bytes(length)?;
+                Ok(Self(Cow::Owned(
+                    bytes.iter().map(|b| Value::U8(*b)).collect(),
+                )))
+            }
+            other => Err(desert_rust::Error::DeserializationFailure(format!(
+                "Invalid Vec<Value> tag: {}",
+                other
+            ))),
+        }
+    }
+}
 
 impl BinarySerializer for Uri {
     fn serialize<Output: BinaryOutput>(
@@ -92,11 +149,12 @@ impl BinarySerializer for WitNode {
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        let mut adt = AdtSerializer::new_v0(&WIT_NODE_METADATA, context);
+        let mut adt = AdtSerializer::<_, 1>::new_v0(&WIT_NODE_METADATA, context);
         match self {
             WitNode::RecordValue(field_indices) => {
                 adt.write_constructor(0, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_RECORD_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_RECORD_VALUE_METADATA, context);
                     inner.write_field("field_indices", field_indices)?;
                     inner.finish()
                 })?;
@@ -104,7 +162,7 @@ impl BinarySerializer for WitNode {
             WitNode::VariantValue((cons_idx, value_idx)) => {
                 adt.write_constructor(1, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_NODE_VARIANT_VALUE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_VARIANT_VALUE_METADATA, context);
                     inner.write_field("cons_idx", cons_idx)?;
                     inner.write_field("value_idx", value_idx)?;
                     inner.finish()
@@ -112,140 +170,160 @@ impl BinarySerializer for WitNode {
             }
             WitNode::EnumValue(value) => {
                 adt.write_constructor(2, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_ENUM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_ENUM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::FlagsValue(values) => {
                 adt.write_constructor(3, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_FLAGS_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_FLAGS_VALUE_METADATA, context);
                     inner.write_field("values", values)?;
                     inner.finish()
                 })?;
             }
             WitNode::TupleValue(value_indices) => {
                 adt.write_constructor(4, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_TUPLE_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_TUPLE_VALUE_METADATA, context);
                     inner.write_field("value_indices", value_indices)?;
                     inner.finish()
                 })?;
             }
             WitNode::ListValue(value_indices) => {
                 adt.write_constructor(5, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_LIST_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_LIST_VALUE_METADATA, context);
                     inner.write_field("value_indices", value_indices)?;
                     inner.finish()
                 })?;
             }
             WitNode::OptionValue(opt_idx) => {
                 adt.write_constructor(6, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_OPTION_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_OPTION_VALUE_METADATA, context);
                     inner.write_field("opt_idx", opt_idx)?;
                     inner.finish()
                 })?;
             }
             WitNode::ResultValue(res_idx) => {
                 adt.write_constructor(7, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_RESULT_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_RESULT_VALUE_METADATA, context);
                     inner.write_field("res_idx", res_idx)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimU8(value) => {
                 adt.write_constructor(8, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimU16(value) => {
                 adt.write_constructor(9, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimU32(value) => {
                 adt.write_constructor(10, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimU64(value) => {
                 adt.write_constructor(11, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimS8(value) => {
                 adt.write_constructor(12, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimS16(value) => {
                 adt.write_constructor(13, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimS32(value) => {
                 adt.write_constructor(14, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimS64(value) => {
                 adt.write_constructor(15, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimFloat32(value) => {
                 adt.write_constructor(16, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimFloat64(value) => {
                 adt.write_constructor(17, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimChar(value) => {
                 adt.write_constructor(18, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimBool(value) => {
                 adt.write_constructor(19, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::PrimString(value) => {
                 adt.write_constructor(20, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context);
                     inner.write_field("value", value)?;
                     inner.finish()
                 })?;
             }
             WitNode::Handle((uri, value)) => {
                 adt.write_constructor(21, |context| {
-                    let mut inner = AdtSerializer::new_v0(&WIT_NODE_HANDLE_VALUE_METADATA, context);
+                    let mut inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_NODE_HANDLE_VALUE_METADATA, context);
                     inner.write_field("uri", uri)?;
                     inner.write_field("value", value)?;
                     inner.finish()
@@ -261,20 +339,22 @@ impl BinarySerializer for WitTypeNode {
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        let mut adt = AdtSerializer::new_v0(&WIT_TYPE_NODE_METADATA, context);
+        let mut adt = AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_METADATA, context);
         match self {
             WitTypeNode::RecordType(field_types) => {
                 adt.write_constructor(0, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_RECORD_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_RECORD_TYPE_METADATA, context);
                     inner.write_field("field_types", field_types)?;
                     inner.finish()
                 })?;
             }
             WitTypeNode::VariantType(cons_types) => {
                 adt.write_constructor(1, |context| {
-                    let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_VARIANT_TYPE_METADATA, context);
+                    let mut inner = AdtSerializer::<_, 1>::new_v0(
+                        &WIT_TYPE_NODE_VARIANT_TYPE_METADATA,
+                        context,
+                    );
                     inner.write_field("cons_types", cons_types)?;
                     inner.finish()
                 })?;
@@ -282,7 +362,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::EnumType(names) => {
                 adt.write_constructor(2, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_ENUM_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_ENUM_TYPE_METADATA, context);
                     inner.write_field("names", names)?;
                     inner.finish()
                 })?;
@@ -290,7 +370,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::FlagsType(names) => {
                 adt.write_constructor(3, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_FLAGS_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_FLAGS_TYPE_METADATA, context);
                     inner.write_field("names", names)?;
                     inner.finish()
                 })?;
@@ -298,7 +378,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::TupleType(field_types) => {
                 adt.write_constructor(4, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_TUPLE_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_TUPLE_TYPE_METADATA, context);
                     inner.write_field("field_types", field_types)?;
                     inner.finish()
                 })?;
@@ -306,7 +386,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::ListType(elem_type) => {
                 adt.write_constructor(5, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_LIST_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_LIST_TYPE_METADATA, context);
                     inner.write_field("elem_type", elem_type)?;
                     inner.finish()
                 })?;
@@ -314,7 +394,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::OptionType(inner_type) => {
                 adt.write_constructor(6, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_OPTION_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_OPTION_TYPE_METADATA, context);
                     inner.write_field("inner_type", inner_type)?;
                     inner.finish()
                 })?;
@@ -322,7 +402,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::ResultType((ok_type, err_type)) => {
                 adt.write_constructor(7, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_RESULT_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_RESULT_TYPE_METADATA, context);
                     inner.write_field("ok_type", ok_type)?;
                     inner.write_field("err_type", err_type)?;
                     inner.finish()
@@ -331,7 +411,7 @@ impl BinarySerializer for WitTypeNode {
             WitTypeNode::HandleType((id, mode)) => {
                 adt.write_constructor(8, |context| {
                     let mut inner =
-                        AdtSerializer::new_v0(&WIT_TYPE_NODE_HANDLE_TYPE_METADATA, context);
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_HANDLE_TYPE_METADATA, context);
                     inner.write_field("id", id)?;
                     inner.write_field("mode", mode)?;
                     inner.finish()
@@ -339,79 +419,92 @@ impl BinarySerializer for WitTypeNode {
             }
             WitTypeNode::PrimU8Type => {
                 adt.write_constructor(9, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimU16Type => {
                 adt.write_constructor(10, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimU32Type => {
                 adt.write_constructor(11, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimU64Type => {
                 adt.write_constructor(12, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimS8Type => {
                 adt.write_constructor(13, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimS16Type => {
                 adt.write_constructor(14, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimS32Type => {
                 adt.write_constructor(15, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimS64Type => {
                 adt.write_constructor(16, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimF32Type => {
                 adt.write_constructor(17, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimF64Type => {
                 adt.write_constructor(18, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimCharType => {
                 adt.write_constructor(19, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimBoolType => {
                 adt.write_constructor(20, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
             WitTypeNode::PrimStringType => {
                 adt.write_constructor(21, |context| {
-                    let inner = AdtSerializer::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
+                    let inner =
+                        AdtSerializer::<_, 1>::new_v0(&WIT_TYPE_NODE_PRIM_TYPE_METADATA, context);
                     inner.finish()
                 })?;
             }
@@ -425,401 +518,398 @@ impl BinaryDeserializer for WitNode {
         use desert_rust::BinaryInput;
         let stored_version = context.read_u8()?;
         let mut deserializer = if stored_version == 0 {
-            desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_METADATA, context)?
+            desert_rust::adt::AdtDeserializer::<1>::new_v0(&WIT_NODE_METADATA, context)?
         } else {
-            desert_rust::adt::AdtDeserializer::new(&WIT_NODE_METADATA, context, stored_version)?
+            desert_rust::adt::AdtDeserializer::<1>::new(
+                &WIT_NODE_METADATA,
+                context,
+                stored_version,
+            )?
         };
 
-        if let Some(result) = deserializer.read_constructor(0i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            if stored_version == 0 {
-                let mut deserializer = desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_NODE_RECORD_VALUE_METADATA,
-                    context,
-                )?;
-                let field_indices = deserializer.read_field("field_indices", None)?;
-                Ok(Self::RecordValue(field_indices))
-            } else {
-                let mut deserializer = desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_RECORD_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?;
-                let field_indices = deserializer.read_field("field_indices", None)?;
+        let constructor_idx = deserializer.read_constructor_idx()?;
+        match constructor_idx {
+            0 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_RECORD_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_RECORD_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let field_indices = inner_deserializer.read_field("field_indices", None)?;
                 Ok(Self::RecordValue(field_indices))
             }
-        })? {
-            return Ok(result);
+            1 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_VARIANT_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_VARIANT_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let cons_idx = inner_deserializer.read_field("cons_idx", None)?;
+                let value_idx = inner_deserializer.read_field("value_idx", None)?;
+                Ok(Self::VariantValue((cons_idx, value_idx)))
+            }
+            2 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_ENUM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_ENUM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::EnumValue(value))
+            }
+            3 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_FLAGS_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_FLAGS_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let values = inner_deserializer.read_field("values", None)?;
+                Ok(Self::FlagsValue(values))
+            }
+            4 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_TUPLE_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_TUPLE_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value_indices = inner_deserializer.read_field("value_indices", None)?;
+                Ok(Self::TupleValue(value_indices))
+            }
+            5 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_LIST_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_LIST_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value_indices = inner_deserializer.read_field("value_indices", None)?;
+                Ok(Self::ListValue(value_indices))
+            }
+            6 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_OPTION_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_OPTION_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let opt_idx = inner_deserializer.read_field("opt_idx", None)?;
+                Ok(Self::OptionValue(opt_idx))
+            }
+            7 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_RESULT_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_RESULT_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let res_idx = inner_deserializer.read_field("res_idx", None)?;
+                Ok(Self::ResultValue(res_idx))
+            }
+            8 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimU8(value))
+            }
+            9 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimU16(value))
+            }
+            10 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimU32(value))
+            }
+            11 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimU64(value))
+            }
+            12 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimS8(value))
+            }
+            13 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimS16(value))
+            }
+            14 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimS32(value))
+            }
+            15 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimS64(value))
+            }
+            16 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimFloat32(value))
+            }
+            17 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimFloat64(value))
+            }
+            18 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimChar(value))
+            }
+            19 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimBool(value))
+            }
+            20 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_PRIM_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::PrimString(value))
+            }
+            21 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_NODE_HANDLE_VALUE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_NODE_HANDLE_VALUE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let uri = inner_deserializer.read_field("uri", None)?;
+                let value = inner_deserializer.read_field("value", None)?;
+                Ok(Self::Handle((uri, value)))
+            }
+            _ => Err(desert_rust::Error::InvalidConstructorId {
+                type_name: "WitNode".to_string(),
+                constructor_id: constructor_idx,
+            }),
         }
-
-        if let Some(result) = deserializer.read_constructor(1i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_NODE_VARIANT_VALUE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_VARIANT_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let cons_idx = deserializer.read_field("cons_idx", None)?;
-            let value_idx = deserializer.read_field("value_idx", None)?;
-            Ok(Self::VariantValue((cons_idx, value_idx)))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(2i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_ENUM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_ENUM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::EnumValue(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(3i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_FLAGS_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_FLAGS_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let values = deserializer.read_field("values", None)?;
-            Ok(Self::FlagsValue(values))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(4i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_TUPLE_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_TUPLE_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value_indices = deserializer.read_field("value_indices", None)?;
-            Ok(Self::TupleValue(value_indices))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(5i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_LIST_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_LIST_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value_indices = deserializer.read_field("value_indices", None)?;
-            Ok(Self::ListValue(value_indices))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(6i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_OPTION_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_OPTION_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let opt_idx = deserializer.read_field("opt_idx", None)?;
-            Ok(Self::OptionValue(opt_idx))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(7i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_RESULT_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_RESULT_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let res_idx = deserializer.read_field("res_idx", None)?;
-            Ok(Self::ResultValue(res_idx))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(8i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimU8(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(9i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimU16(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(10i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimU32(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(11i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimU64(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(12i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimS8(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(13i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimS16(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(14i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimS32(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(15i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimS64(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(16i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimFloat32(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(17i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimFloat64(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(18i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimChar(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(19i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimBool(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(20i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_PRIM_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_PRIM_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::PrimString(value))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(21i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(&WIT_NODE_HANDLE_VALUE_METADATA, context)?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_NODE_HANDLE_VALUE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let uri = deserializer.read_field("uri", None)?;
-            let value = deserializer.read_field("value", None)?;
-            Ok(Self::Handle((uri, value)))
-        })? {
-            return Ok(result);
-        }
-
-        Err(desert_rust::Error::InvalidConstructorId {
-            type_name: "WitNode".to_string(),
-            constructor_id: deserializer
-                .read_or_get_constructor_idx()
-                .unwrap_or(u32::MAX),
-        })
     }
 }
 
@@ -828,450 +918,385 @@ impl BinaryDeserializer for WitTypeNode {
         use desert_rust::BinaryInput;
         let stored_version = context.read_u8()?;
         let mut deserializer = if stored_version == 0 {
-            desert_rust::adt::AdtDeserializer::new_v0(&WIT_TYPE_NODE_METADATA, context)?
+            desert_rust::adt::AdtDeserializer::<1>::new_v0(&WIT_TYPE_NODE_METADATA, context)?
         } else {
-            desert_rust::adt::AdtDeserializer::new(
+            desert_rust::adt::AdtDeserializer::<1>::new(
                 &WIT_TYPE_NODE_METADATA,
                 context,
                 stored_version,
             )?
         };
 
-        if let Some(result) = deserializer.read_constructor(0i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_RECORD_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_RECORD_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let field_types = deserializer.read_field("field_types", None)?;
-            Ok(Self::RecordType(field_types))
-        })? {
-            return Ok(result);
+        let constructor_idx = deserializer.read_constructor_idx()?;
+        match constructor_idx {
+            0 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_RECORD_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_RECORD_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let field_types = inner_deserializer.read_field("field_types", None)?;
+                Ok(Self::RecordType(field_types))
+            }
+            1 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_VARIANT_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_VARIANT_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let cons_types = inner_deserializer.read_field("cons_types", None)?;
+                Ok(Self::VariantType(cons_types))
+            }
+            2 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_ENUM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_ENUM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let names = inner_deserializer.read_field("names", None)?;
+                Ok(Self::EnumType(names))
+            }
+            3 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_FLAGS_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_FLAGS_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let names = inner_deserializer.read_field("names", None)?;
+                Ok(Self::FlagsType(names))
+            }
+            4 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_TUPLE_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_TUPLE_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let field_types = inner_deserializer.read_field("field_types", None)?;
+                Ok(Self::TupleType(field_types))
+            }
+            5 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_LIST_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_LIST_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let elem_type = inner_deserializer.read_field("elem_type", None)?;
+                Ok(Self::ListType(elem_type))
+            }
+            6 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_OPTION_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_OPTION_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let inner_type = inner_deserializer.read_field("inner_type", None)?;
+                Ok(Self::OptionType(inner_type))
+            }
+            7 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_RESULT_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_RESULT_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let ok_type = inner_deserializer.read_field("ok_type", None)?;
+                let err_type = inner_deserializer.read_field("err_type", None)?;
+                Ok(Self::ResultType((ok_type, err_type)))
+            }
+            8 => {
+                let stored_version = context.read_u8()?;
+                let mut inner_deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_HANDLE_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_HANDLE_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                let id = inner_deserializer.read_field("id", None)?;
+                let mode = inner_deserializer.read_field("mode", None)?;
+                Ok(Self::HandleType((id, mode)))
+            }
+            9 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimU8Type)
+            }
+            10 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimU16Type)
+            }
+            11 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimU32Type)
+            }
+            12 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimU64Type)
+            }
+            13 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimS8Type)
+            }
+            14 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimS16Type)
+            }
+            15 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimS32Type)
+            }
+            16 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimS64Type)
+            }
+            17 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimF32Type)
+            }
+            18 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimF64Type)
+            }
+            19 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimCharType)
+            }
+            20 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimBoolType)
+            }
+            21 => {
+                let stored_version = context.read_u8()?;
+                let _deserializer = if stored_version == 0 {
+                    desert_rust::adt::AdtDeserializer::<1>::new_v0(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                    )?
+                } else {
+                    desert_rust::adt::AdtDeserializer::<1>::new(
+                        &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
+                        context,
+                        stored_version,
+                    )?
+                };
+                Ok(Self::PrimStringType)
+            }
+            _ => Err(desert_rust::Error::InvalidConstructorId {
+                type_name: "WitTypeNode".to_string(),
+                constructor_id: constructor_idx,
+            }),
         }
-
-        if let Some(result) = deserializer.read_constructor(1i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_VARIANT_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_VARIANT_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let cons_types = deserializer.read_field("cons_types", None)?;
-            Ok(Self::VariantType(cons_types))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(2i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_ENUM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_ENUM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let names = deserializer.read_field("names", None)?;
-            Ok(Self::EnumType(names))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(3i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_FLAGS_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_FLAGS_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let names = deserializer.read_field("names", None)?;
-            Ok(Self::FlagsType(names))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(4i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_TUPLE_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_TUPLE_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let field_types = deserializer.read_field("field_types", None)?;
-            Ok(Self::TupleType(field_types))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(5i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_LIST_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_LIST_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let elem_type = deserializer.read_field("elem_type", None)?;
-            Ok(Self::ListType(elem_type))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(6i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_OPTION_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_OPTION_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let inner_type = deserializer.read_field("inner_type", None)?;
-            Ok(Self::OptionType(inner_type))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(7i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_RESULT_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_RESULT_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let ok_type = deserializer.read_field("ok_type", None)?;
-            let err_type = deserializer.read_field("err_type", None)?;
-            Ok(Self::ResultType((ok_type, err_type)))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(8i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let mut deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_HANDLE_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_HANDLE_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            let id = deserializer.read_field("id", None)?;
-            let mode = deserializer.read_field("mode", None)?;
-            Ok(Self::HandleType((id, mode)))
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(9i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimU8Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(10i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimU16Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(11i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimU32Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(12i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimU64Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(13i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimS8Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(14i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimS16Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(15i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimS32Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(16i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimS64Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(17i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimF32Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(18i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimF64Type)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(19i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimCharType)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(20i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimBoolType)
-        })? {
-            return Ok(result);
-        }
-
-        if let Some(result) = deserializer.read_constructor(21i32 as u32, |context| {
-            let stored_version = context.read_u8()?;
-            let _deserializer = if stored_version == 0 {
-                desert_rust::adt::AdtDeserializer::new_v0(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                )?
-            } else {
-                desert_rust::adt::AdtDeserializer::new(
-                    &WIT_TYPE_NODE_PRIM_TYPE_METADATA,
-                    context,
-                    stored_version,
-                )?
-            };
-            Ok(Self::PrimStringType)
-        })? {
-            return Ok(result);
-        }
-
-        Err(desert_rust::Error::InvalidConstructorId {
-            type_name: "WitTypeNode".to_string(),
-            constructor_id: deserializer
-                .read_or_get_constructor_idx()
-                .unwrap_or(u32::MAX),
-        })
     }
 }
 
@@ -1280,7 +1305,7 @@ impl BinarySerializer for NamedWitTypeNode {
         &self,
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
-        let mut adt = AdtSerializer::new_v0(&NAMED_WIT_TYPE_NODE_METADATA, context);
+        let mut adt = AdtSerializer::<_, 1>::new_v0(&NAMED_WIT_TYPE_NODE_METADATA, context);
         adt.write_field("name", &self.name)?;
         adt.write_field("owner", &self.owner)?;
         adt.write_field("type_", &self.type_)?;
@@ -1293,9 +1318,9 @@ impl BinaryDeserializer for NamedWitTypeNode {
         use desert_rust::BinaryInput;
         let stored_version = context.read_u8()?;
         let mut deserializer = if stored_version == 0 {
-            desert_rust::adt::AdtDeserializer::new_v0(&NAMED_WIT_TYPE_NODE_METADATA, context)?
+            desert_rust::adt::AdtDeserializer::<1>::new_v0(&NAMED_WIT_TYPE_NODE_METADATA, context)?
         } else {
-            desert_rust::adt::AdtDeserializer::new(
+            desert_rust::adt::AdtDeserializer::<1>::new(
                 &NAMED_WIT_TYPE_NODE_METADATA,
                 context,
                 stored_version,

@@ -2575,8 +2575,8 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 mod internal {
     use async_trait::async_trait;
     use golem_common::model::agent::{
-        AgentConstructor, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
-        NamedElementSchema, NamedElementSchemas,
+        AgentConstructor, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
+        ElementSchema, NamedElementSchema, NamedElementSchemas,
     };
     use golem_common::model::auth::Namespace;
     use golem_common::model::component::VersionedComponentId;
@@ -2910,6 +2910,7 @@ mod internal {
                 },
                 methods: vec![],
                 dependencies: vec![],
+                mode: AgentMode::Durable,
             }],
         );
 
