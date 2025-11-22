@@ -19,7 +19,8 @@ use crate::{
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
-use crate::agentic::agent_registry;
+use crate::agentic::{agent_registry, get_resolved_agent};
+use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
 
@@ -76,17 +77,73 @@ impl Guest for Component {
 }
 
 impl LoadSnapshotGuest for Component {
-    fn load(_bytes: Vec<u8>) -> Result<(), String> {
-        Err("Load snapshot not implemented".to_string())
+    fn load(bytes: Vec<u8>) -> Result<(), String> {
+        let agent_id = get_resolved_agent();
+
+        if agent_id.is_some() {
+            return Err("Agent is already initialized".to_string());
+        }
+
+        if bytes.is_empty() {
+            return Err("Snapshot is empty".into());
+        }
+
+        let version = bytes[0];
+
+        if version != 1 {
+            return Err(format!("Unsupported snapshot version: {}", version));
+        }
+
+        let agent_snapshot = bytes[1..].to_vec();
+
+        let id = std::env::var("GOLEM_AGENT_ID")
+            .expect("GOLEM_AGENT_ID environment variable must be set");
+
+        let (agent_type_name, agent_parameters, _) =
+            parse_agent_id(&id).map_err(|e| e.to_string())?;
+
+        with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .initiate(agent_parameters)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                get_resolved_agent()
+                    .unwrap()
+                    .agent
+                    .borrow()
+                    .load_snapshot_base(agent_snapshot)
+                    .await
+            },
+            &AgentTypeName(agent_type_name),
+        )
+        .map_err(|e| e.to_string())
     }
 }
 
 impl SaveSnapshotGuest for Component {
     fn save() -> Vec<u8> {
-        vec![]
+        with_agent_instance_async(|resolved_agent| async move {
+            let agent_snapshot = resolved_agent
+                .agent
+                .borrow()
+                .save_snapshot_base()
+                .await
+                .expect("Failed to save agent snapshot");
+
+            let total_length = 1 + agent_snapshot.len();
+
+            let mut full_snapshot = Vec::with_capacity(total_length);
+
+            full_snapshot.push(1);
+
+            full_snapshot.extend_from_slice(&agent_snapshot);
+
+            full_snapshot
+        })
     }
 }
-
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
 crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
 crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);

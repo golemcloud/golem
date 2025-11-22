@@ -329,6 +329,14 @@ fn generate_base_agent_impl(
                 golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str.to_string()))
                     .expect("Agent definition not found")
             }
+
+            async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String> {
+                self.load_snapshot(bytes).await
+            }
+
+            async fn save_snapshot_base(&self) -> Result<Vec<u8>, String> {
+                self.save_snapshot().await
+            }
         }
     }
 }
