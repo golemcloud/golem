@@ -28,7 +28,7 @@ export * from './newTypes/either';
 export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
-export * from './newTypes/multimodal';
+export * from './newTypes/multimodalAdvanced';
 
 export { WithRemoteMethods } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';

@@ -15,11 +15,11 @@
 import {
   agent,
   BaseAgent,
-  Multimodal,
+  MultimodalAdvanced,
   UnstructuredBinary,
   UnstructuredText,
   Result,
-  MultimodalBasic,
+  Multimodal,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -169,8 +169,8 @@ export class FooAgent extends BaseAgent {
   }
 
   async fun18(
-    param: Multimodal<TextOrImage>,
-  ): Promise<Multimodal<TextOrImage>> {
+    param: MultimodalAdvanced<TextOrImage>,
+  ): Promise<MultimodalAdvanced<TextOrImage>> {
     return param;
   }
 
@@ -253,11 +253,11 @@ export class FooAgent extends BaseAgent {
     return Result.ok(undefined);
   }
 
-  fun38(param: MultimodalBasic): Promise<MultimodalBasic> {
+  fun38(param: Multimodal): Promise<Multimodal> {
     return Promise.resolve(param);
   }
 
-  fun39(param: MultimodalBasic): MultimodalBasic {
+  fun39(param: Multimodal): Multimodal {
     return param;
   }
 
@@ -444,12 +444,12 @@ class BarAgent extends BaseAgent {
   };
 
   async fun23(
-    multimodalInput: Multimodal<TextOrImage>,
-  ): Promise<Multimodal<TextOrImage>> {
+    multimodalInput: MultimodalAdvanced<TextOrImage>,
+  ): Promise<MultimodalAdvanced<TextOrImage>> {
     return multimodalInput;
   }
 
-  async fun24(multimodalInput: MultimodalBasic): Promise<MultimodalBasic> {
+  async fun24(multimodalInput: Multimodal): Promise<Multimodal> {
     return multimodalInput;
   }
 }

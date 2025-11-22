@@ -62,8 +62,8 @@ import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodPa
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 import {
   AgentId,
+  MultimodalAdvanced,
   Multimodal,
-  MultimodalBasic,
   Result,
   UnstructuredBinary,
   UnstructuredText,
@@ -517,7 +517,7 @@ test('Invoke function that takes and returns multimodal', () => {
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  const multimodalInput: Multimodal<TextOrImage> = [
+  const multimodalInput: MultimodalAdvanced<TextOrImage> = [
     { tag: 'un-text', val: { tag: 'inline', val: 'data' } },
     { tag: 'un-binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
     { tag: 'text', val: 'foo' },
@@ -553,7 +553,7 @@ test('Invoke function that takes and returns multimodal basic', () => {
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  const multimodalInput: MultimodalBasic = [
+  const multimodalInput: Multimodal = [
     { tag: 'binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
     {
       tag: 'binary',

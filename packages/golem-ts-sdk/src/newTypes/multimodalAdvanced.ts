@@ -45,10 +45,17 @@ import { UnstructuredBinary } from './binaryInput';
  *
  * ```
  */
-export type Multimodal<T> = T[];
+export type MultimodalAdvanced<T> = T[];
 
-export type MultimodalBasic = Multimodal<MultimodalBasicType>;
+export type Multimodal = MultimodalAdvanced<BasicModality>;
 
-export type MultimodalBasicType =
+export type MultimodalCustom<T> = MultimodalAdvanced<CustomModality<T>>;
+
+export type BasicModality =
   | { tag: 'text'; val: UnstructuredText }
   | { tag: 'binary'; val: UnstructuredBinary };
+
+export type CustomModality<T> =
+  | { tag: 'text'; val: UnstructuredText }
+  | { tag: 'binary'; val: UnstructuredBinary }
+  | { tag: 'custom'; val: T };

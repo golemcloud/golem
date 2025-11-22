@@ -43,7 +43,11 @@ import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 
-const MULTIMODAL_TYPE_NAMES = ['Multimodal', 'MultimodalBasic'];
+const MULTIMODAL_TYPE_NAMES = [
+  'Multimodal',
+  'MultimodalAdvanced',
+  'MultimodalCustom',
+];
 
 export function getConstructorDataSchema(
   agentClassName: string,
