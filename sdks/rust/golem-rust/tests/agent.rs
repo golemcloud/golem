@@ -17,7 +17,9 @@ test_r::enable!();
 #[cfg(test)]
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
-    use golem_rust::agentic::{Multimodal, MultimodalCustom, UnstructuredBinary, UnstructuredText};
+    use golem_rust::agentic::{
+        Multimodal, MultimodalAdvanced, UnstructuredBinary, UnstructuredText,
+    };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
@@ -36,8 +38,8 @@ mod tests {
         fn echo_option(&self, option: Option<String>) -> Option<String>;
         fn echo_multimodal_custom(
             &self,
-            input: MultimodalCustom<TextOrImage>,
-        ) -> MultimodalCustom<TextOrImage>;
+            input: MultimodalAdvanced<TextOrImage>,
+        ) -> MultimodalAdvanced<TextOrImage>;
         fn echo_multimodal(&self, input: Multimodal) -> Multimodal;
 
         fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
@@ -106,8 +108,8 @@ mod tests {
 
         fn echo_multimodal_custom(
             &self,
-            input: MultimodalCustom<TextOrImage>,
-        ) -> MultimodalCustom<TextOrImage> {
+            input: MultimodalAdvanced<TextOrImage>,
+        ) -> MultimodalAdvanced<TextOrImage> {
             input
         }
 
@@ -229,8 +231,8 @@ mod tests {
         async fn echo_option(&self, option: Option<String>) -> Option<String>;
         async fn echo_multimodal_custom(
             &self,
-            input: MultimodalCustom<TextOrImage>,
-        ) -> MultimodalCustom<TextOrImage>;
+            input: MultimodalAdvanced<TextOrImage>,
+        ) -> MultimodalAdvanced<TextOrImage>;
         async fn echo_multimodal(&self, input: Multimodal) -> Multimodal;
         async fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
         async fn echo_unstructured_text_lc(
@@ -281,8 +283,8 @@ mod tests {
 
         async fn echo_multimodal_custom(
             &self,
-            input: MultimodalCustom<TextOrImage>,
-        ) -> MultimodalCustom<TextOrImage> {
+            input: MultimodalAdvanced<TextOrImage>,
+        ) -> MultimodalAdvanced<TextOrImage> {
             input
         }
 

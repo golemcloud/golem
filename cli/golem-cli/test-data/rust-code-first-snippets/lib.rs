@@ -2,7 +2,7 @@ mod model;
 
 use std::collections::HashMap;
 
-use golem_rust::agentic::{Agent, MultimodalCustom, Multimodal, UnstructuredBinary, UnstructuredText};
+use golem_rust::agentic::{Agent, MultimodalAdvanced, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -92,7 +92,7 @@ trait FooAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    async fn fun_multi_modal(&self, input: MultimodalCustom<TextImageData>) -> MultimodalCustom<TextImageData>;
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
 
     async fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
 
@@ -264,7 +264,7 @@ impl FooAgent for FooAgentImpl {
             .fun_enum_with_only_literals(enum_with_only_literals).await
     }
 
-    async fn fun_multi_modal(&self, input: MultimodalCustom<TextImageData>) -> MultimodalCustom<TextImageData> {
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
         self.client.fun_multi_modal(input).await
     }
 
@@ -365,7 +365,7 @@ trait BarAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    fn fun_multi_modal(&self, input: MultimodalCustom<TextImageData>) -> MultimodalCustom<TextImageData>;
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
 
     fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
 
@@ -528,7 +528,7 @@ impl BarAgent for BarAgentImpl {
         enum_with_only_literals
     }
 
-    fn fun_multi_modal(&self, input: MultimodalCustom<TextImageData>) -> MultimodalCustom<TextImageData> {
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
         input
     }
 

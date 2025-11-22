@@ -25,11 +25,11 @@ use golem_wasm::{Value, WitValue};
 /// # Example
 ///
 /// ```
-/// use golem_rust::agentic::{MultimodalCustom};
+/// use golem_rust::agentic::{MultimodalAdvanced};
 /// use golem_rust::MultimodalSchema;
 ///
 /// // Create a multimodal dataset with text and image inputs
-/// let multimodal_data = MultimodalCustom::new([
+/// let multimodal_data = MultimodalAdvanced::new([
 ///     Input::Text("foo".to_string()),
 ///     Input::Image(vec![1, 2, 3])
 /// ]);
@@ -41,12 +41,15 @@ use golem_wasm::{Value, WitValue};
 /// }
 ///
 /// // Function that shows how an agent might receive multimodal input
-/// fn my_agent_method(input: MultimodalCustom<Input>) {
+/// fn my_agent_method(input: MultimodalAdvanced<Input>) {
 ///     // handle the multimodal input here
 /// }
 ///
 /// my_agent_method(multimodal_data);
 /// ```
+///
+/// The dynamic representation of this type would have variants corresponding to each variant of the `Input` enum,
+/// and they are `text` and `image` holding `String` and `Vec<u8>` respectively.
 ///
 /// # Notes
 /// - Each variant of the `Input` enum represents a **modality**.
@@ -56,22 +59,22 @@ use golem_wasm::{Value, WitValue};
 /// - Unlike a plain `Vec<MultimodalInput>`, this type carries additional semantic and schema-level information
 ///   that indicates the data represents a *multimodal input* — not just a generic list.
 ///
-pub struct MultimodalCustom<T> {
+pub struct MultimodalAdvanced<T> {
     pub items: Vec<T>,
 }
 
-impl<T: MultimodalSchema> MultimodalCustom<T> {
+impl<T: MultimodalSchema> MultimodalAdvanced<T> {
     /// Create a Multimodal input data for agent functions.
     /// Note that you cannot mix a multimodal input with other input types
     ///
     /// # Example
     ///
     /// ```
-    /// use golem_rust::agentic::{MultimodalCustom};
+    /// use golem_rust::agentic::{MultimodalAdvanced};
     /// use golem_rust::MultimodalSchema;
     ///
     /// // Create a multimodal dataset with text and image inputs
-    /// let multimodal_data = MultimodalCustom::new([
+    /// let multimodal_data = MultimodalAdvanced::new([
     ///     Input::Text("foo".to_string()),
     ///     Input::Image(vec![1, 2, 3])
     /// ]);
@@ -83,14 +86,14 @@ impl<T: MultimodalSchema> MultimodalCustom<T> {
     /// }
     ///
     /// // Function that shows how an agent might receive multimodal input
-    /// fn my_agent_method(input: MultimodalCustom<Input>) {
+    /// fn my_agent_method(input: MultimodalAdvanced<Input>) {
     ///     // handle the multimodal input here
     /// }
     ///
     /// my_agent_method(multimodal_data);
     /// ```
     ///
-    /// If you need a predefined basic multimodal type with text and binary data, you can use `MultimodalBasic` .
+    /// If you need a predefined basic multimodal type with text and binary data, you can use `Multimodal` .
     ///
     pub fn new<I>(items: I) -> Self
     where
@@ -128,7 +131,7 @@ impl<T: MultimodalSchema> MultimodalCustom<T> {
 
     pub fn from_element_values(
         elems: Vec<(String, ElementValue)>,
-    ) -> Result<MultimodalCustom<T>, String> {
+    ) -> Result<MultimodalAdvanced<T>, String> {
         let mut items = Vec::new();
 
         for elem in elems {
@@ -136,7 +139,7 @@ impl<T: MultimodalSchema> MultimodalCustom<T> {
             items.push(item);
         }
 
-        Ok(MultimodalCustom { items })
+        Ok(MultimodalAdvanced { items })
     }
 
     pub fn convert_to_wit_value(self) -> Result<WitValue, String> {
@@ -201,14 +204,14 @@ impl<T: MultimodalSchema> MultimodalCustom<T> {
                     }
                 }
 
-                Ok(MultimodalCustom { items })
+                Ok(MultimodalAdvanced { items })
             }
             _ => Err("Expected List value for Multimodal".to_string()),
         }
     }
 }
 
-impl<T: MultimodalSchema> Schema for MultimodalCustom<T> {
+impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
     fn get_type() -> StructuredSchema {
         StructuredSchema::Multimodal(T::get_multimodal_schema())
     }
@@ -249,20 +252,20 @@ impl<T: MultimodalSchema> Schema for MultimodalCustom<T> {
     }
 }
 
-pub type Multimodal = MultimodalCustom<MultimodalBasicType>;
+pub type Multimodal = MultimodalAdvanced<BasicModality>;
 
 impl Multimodal {
     /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
     ///
     /// # Example
     /// ```
-    /// use golem_rust::agentic::{MultimodalCustom, MultimodalBasicType, UnstructuredText, UnstructuredBinary, Multimodal};
+    /// use golem_rust::agentic::*;
     /// use golem_rust::MultimodalSchema;
     ///
     /// // Create a multimodal dataset with text and binary inputs
-    /// let multimodal_data = MultimodalCustom::new_basic([
-    ///     MultimodalBasicType::Text(UnstructuredText::from_inline_any("foo".to_string())),
-    ///     MultimodalBasicType::Binary(UnstructuredBinary::from_inline(vec![1, 2, 3], "image/png".to_string()))
+    /// let multimodal_data = Multimodal::new([
+    ///     BasicModality::text("foo".to_string()),
+    ///     BasicModality::binary(vec![1, 2, 3], "image/png".to_string())
     /// ]);
     ///
     /// // Function that shows how an agent might receive multimodal input
@@ -272,9 +275,15 @@ impl Multimodal {
     ///
     /// my_agent_method(multimodal_data);
     /// ```
-    pub fn new_basic<I>(items: I) -> Self
+    ///
+    /// The dynamic representation of this type would have two variants: "text" and "binary",
+    /// holding `UnstructuredText` and `UnstructuredBinary` respectively.
+    ///
+    /// If you need a user defined type along with these two variants, you can use `MultimodalCustom<T>` where `T` is your custom type.
+    ///
+    pub fn basic<I>(items: I) -> Self
     where
-        I: IntoIterator<Item = MultimodalBasicType>,
+        I: IntoIterator<Item = BasicModality>,
     {
         Self {
             items: items.into_iter().collect(),
@@ -282,12 +291,22 @@ impl Multimodal {
     }
 }
 
-pub enum MultimodalBasicType {
+pub enum BasicModality {
     Text(UnstructuredText),
     Binary(UnstructuredBinary<String>),
 }
 
-impl MultimodalSchema for MultimodalBasicType {
+impl BasicModality {
+    pub fn text(text: String) -> BasicModality {
+        BasicModality::Text(UnstructuredText::from_inline_any(text))
+    }
+
+    pub fn binary(data: Vec<u8>, mime_type: String) -> BasicModality {
+        BasicModality::Binary(UnstructuredBinary::from_inline(data, mime_type))
+    }
+}
+
+impl MultimodalSchema for BasicModality {
     fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
         vec![
             (
@@ -307,8 +326,8 @@ impl MultimodalSchema for MultimodalBasicType {
 
     fn get_name(&self) -> String {
         match self {
-            MultimodalBasicType::Text(_) => "Text".to_string(),
-            MultimodalBasicType::Binary(_) => "Binary".to_string(),
+            BasicModality::Text(_) => "Text".to_string(),
+            BasicModality::Binary(_) => "Binary".to_string(),
         }
     }
 
@@ -317,7 +336,7 @@ impl MultimodalSchema for MultimodalBasicType {
         Self: Sized,
     {
         match self {
-            MultimodalBasicType::Text(text) => {
+            BasicModality::Text(text) => {
                 let elem_value = text.to_structured_value()?;
                 Ok((
                     "Text".to_string(),
@@ -326,7 +345,7 @@ impl MultimodalSchema for MultimodalBasicType {
                         .expect("internal error: unable to get element value for Text"),
                 ))
             }
-            MultimodalBasicType::Binary(binary) => {
+            BasicModality::Binary(binary) => {
                 let elem_value = binary.to_structured_value()?;
                 Ok((
                     "Binary".to_string(),
@@ -351,7 +370,7 @@ impl MultimodalSchema for MultimodalBasicType {
                     StructuredValue::Default(value),
                     schema,
                 )?;
-                Ok(MultimodalBasicType::Text(text))
+                Ok(BasicModality::Text(text))
             }
             "Binary" => {
                 let schema = <UnstructuredBinary<String>>::get_type();
@@ -359,7 +378,7 @@ impl MultimodalSchema for MultimodalBasicType {
                     StructuredValue::Default(value),
                     schema,
                 )?;
-                Ok(MultimodalBasicType::Binary(binary))
+                Ok(BasicModality::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
         }
@@ -374,11 +393,11 @@ impl MultimodalSchema for MultimodalBasicType {
         match name.as_str() {
             "Text" => {
                 let text = UnstructuredText::from_wit_value(value)?;
-                Ok(MultimodalBasicType::Text(text))
+                Ok(BasicModality::Text(text))
             }
             "Binary" => {
                 let binary = UnstructuredBinary::<String>::from_wit_value(value)?;
-                Ok(MultimodalBasicType::Binary(binary))
+                Ok(BasicModality::Binary(binary))
             }
             _ => Err(format!("Unknown modality name: {}", name)),
         }
@@ -389,8 +408,159 @@ impl MultimodalSchema for MultimodalBasicType {
         Self: Sized,
     {
         match self {
-            MultimodalBasicType::Text(text) => text.to_wit_value(),
-            MultimodalBasicType::Binary(binary) => binary.to_wit_value(),
+            BasicModality::Text(text) => text.to_wit_value(),
+            BasicModality::Binary(binary) => binary.to_wit_value(),
+        }
+    }
+}
+
+pub type MultimodalExtended<T> = MultimodalAdvanced<ExtendedModality<T>>;
+
+impl<T: Schema> MultimodalExtended<T> {
+    /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
+    ///
+    /// # Example
+    /// ```
+    /// use golem_rust::agentic::*;
+    /// use golem_rust::MultimodalSchema;
+    /// use golem_rust::Schema;
+    ///
+    /// // Define a custom type
+    /// #[derive(Schema)]
+    /// struct MyCustomType {
+    ///   x: String,
+    ///   y: i32,
+    /// }
+    ///
+    /// // Create a multimodal dataset with text, binary and custom inputs
+    /// let multimodal_data = MultimodalExtended::new_custom([
+    ///     ExtendedModality::text("foo".to_string()),
+    ///     ExtendedModality::binary(vec![1, 2, 3], "image/png".to_string()),
+    ///     ExtendedModality::Custom(MyCustomType { x: "bar".to_string(), y: 42 }),
+    /// ]);
+    /// // Function that shows how an agent might receive multimodal input
+    /// fn my_agent_method(input: MultimodalExtended<MyCustomType>) {
+    ///     // handle the multimodal input here
+    /// }
+    /// my_agent_method(multimodal_data);
+    /// ```
+    /// The dynamic representation of this type would have three variants: "text", "binary" and "custom"
+    /// holding `UnstructuredText`, `UnstructuredBinary`, `CustomType` respectively.
+    ///
+    pub fn new_custom<I>(items: I) -> Self
+    where
+        I: IntoIterator<Item = ExtendedModality<T>>,
+    {
+        Self {
+            items: items.into_iter().collect(),
+        }
+    }
+}
+
+pub enum ExtendedModality<T: Schema> {
+    Basic(BasicModality),
+    Custom(T),
+}
+
+impl<T: Schema> ExtendedModality<T> {
+    pub fn text(text: String) -> ExtendedModality<T> {
+        ExtendedModality::Basic(BasicModality::text(text))
+    }
+
+    pub fn binary(data: Vec<u8>, mime_type: String) -> ExtendedModality<T> {
+        ExtendedModality::Basic(BasicModality::binary(data, mime_type))
+    }
+
+    pub fn custom(value: T) -> ExtendedModality<T> {
+        ExtendedModality::Custom(value)
+    }
+}
+
+impl<T: Schema> MultimodalSchema for ExtendedModality<T> {
+    fn get_multimodal_schema() -> Vec<(String, ElementSchema)> {
+        let mut schema = BasicModality::get_multimodal_schema();
+
+        schema.push((
+            "Custom".to_string(),
+            T::get_type()
+                .get_element_schema()
+                .expect("internal error: unable to get element schema for Custom modality"),
+        ));
+        schema
+    }
+
+    fn get_name(&self) -> String {
+        match self {
+            ExtendedModality::Basic(basic) => basic.get_name(),
+            ExtendedModality::Custom(_) => "Custom".to_string(),
+        }
+    }
+
+    fn to_element_value(self) -> Result<(String, ElementValue), String>
+    where
+        Self: Sized,
+    {
+        match self {
+            ExtendedModality::Basic(basic) => basic.to_element_value(),
+            ExtendedModality::Custom(custom) => {
+                let elem_value = custom.to_structured_value()?;
+                Ok((
+                    "Custom".to_string(),
+                    elem_value
+                        .get_element_value()
+                        .expect("internal error: unable to get element value for Custom modality"),
+                ))
+            }
+        }
+    }
+
+    fn from_element_value(elem: (String, ElementValue)) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let (name, value) = elem;
+
+        match name.as_str() {
+            "Text" | "Binary" => {
+                let basic = BasicModality::from_element_value((name, value))?;
+                Ok(ExtendedModality::Basic(basic))
+            }
+            "Custom" => {
+                let schema = T::get_type();
+                let custom = T::from_structured_value(StructuredValue::Default(value), schema)?;
+                Ok(ExtendedModality::Custom(custom))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
+        }
+    }
+
+    fn from_wit_value(wit_value: (String, WitValue)) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let (name, value) = wit_value;
+
+        match name.as_str() {
+            "Text" | "Binary" => {
+                let basic = BasicModality::from_wit_value((name, value))?;
+                Ok(ExtendedModality::Basic(basic))
+            }
+            "Custom" => {
+                let schema = T::get_type();
+                let custom = T::from_wit_value(value, schema)?;
+                Ok(ExtendedModality::Custom(custom))
+            }
+            _ => Err(format!("Unknown modality name: {}", name)),
+        }
+    }
+
+    fn to_wit_value(self) -> Result<WitValue, String>
+    where
+        Self: Sized,
+    {
+        match self {
+            ExtendedModality::Basic(basic) => basic.to_wit_value(),
+            ExtendedModality::Custom(custom) => custom.to_wit_value(),
         }
     }
 }
