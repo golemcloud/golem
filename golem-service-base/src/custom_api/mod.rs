@@ -17,6 +17,7 @@ pub mod compiled_http_api_definition;
 pub mod http_middlewares;
 pub mod identity_provider_metadata;
 pub mod path_pattern;
+mod path_pattern_parser;
 pub mod security_scheme;
 
 #[derive(Debug, Clone, PartialEq)]

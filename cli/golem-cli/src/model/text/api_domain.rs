@@ -14,7 +14,7 @@
 
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_client::model::ApiDomain;
+use golem_common::model::api_domain::ApiDomain;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -25,7 +25,7 @@ impl MessageWithFields for ApiDomainNewView {
     fn message(&self) -> String {
         format!(
             "Created new API domain {}",
-            format_message_highlight(&self.0.domain_name)
+            format_message_highlight(&self.0.domain_name.0)
         )
     }
 
@@ -33,7 +33,7 @@ impl MessageWithFields for ApiDomainNewView {
         let mut fields = FieldsBuilder::new();
 
         fields
-            .fmt_field("Domain name", &self.0.domain_name, format_main_id)
+            .fmt_field("Domain name", &self.0.domain_name.0, format_main_id)
             .fmt_field("Environment ID", &self.0.environment_id, format_id)
             .fmt_field("Created at", &self.0.created_at, |d| d.to_string())
             .fmt_field_optional(
@@ -60,8 +60,8 @@ struct ApiDomainTableView {
 impl From<&ApiDomain> for ApiDomainTableView {
     fn from(value: &ApiDomain) -> Self {
         ApiDomainTableView {
-            domain_name: value.domain_name.to_string(),
-            environment_id: value.environment_id,
+            domain_name: value.domain_name.0.clone(),
+            environment_id: value.environment_id.0,
             name_servers: value.name_servers.join("\n"),
         }
     }

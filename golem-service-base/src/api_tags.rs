@@ -50,6 +50,7 @@ pub enum ApiTags {
     ProjectGrant,
     /// Project policies describe a set of actions one account can perform when it was associated with a grant for a project.
     ProjectPolicy,
+    Reports,
     /// The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
     Token,
     Worker,

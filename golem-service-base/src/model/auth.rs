@@ -183,23 +183,30 @@ pub enum AccountAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
 pub enum EnvironmentAction {
     CreateComponent,
+    CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
+    CreateSecurityScheme,
     CreateShare,
     CreateWorker,
+    DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
+    DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
     DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
+    UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
     ViewComponent,
     ViewDeployment,
     ViewDeploymentPlan,
+    ViewDomainRegistration,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
+    ViewSecurityScheme,
     ViewShares,
     ViewWorker,
 }
@@ -373,6 +380,12 @@ impl AuthCtx {
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
+            EnvironmentAction::CreateDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
             EnvironmentAction::UpdateComponent => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
@@ -406,6 +419,14 @@ impl AuthCtx {
             EnvironmentAction::CreateEnvironmentPluginGrant => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
+            EnvironmentAction::ViewDomainRegistration => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
             EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
                 roles_from_shares,
                 &[
@@ -437,10 +458,47 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
-            EnvironmentAction::CreateWorker => todo!(),
-            EnvironmentAction::DeleteWorker => todo!(),
-            EnvironmentAction::ViewWorker => todo!(),
-            EnvironmentAction::UpdateWorker => todo!(),
+            EnvironmentAction::CreateWorker => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::DeleteWorker => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewWorker => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::UpdateWorker => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::CreateSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewSecurityScheme => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
         };
 
         if !is_allowed {

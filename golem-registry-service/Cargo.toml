@@ -50,6 +50,7 @@ jsonwebtoken = "9.2.0"
 lazy_static = { workspace = true }
 mappable-rc = "0.1.1"
 num-traits = { workspace = true }
+openidconnect.workspace = true
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
@@ -66,6 +67,12 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 rayon = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+rusoto_acm = { workspace = true }
+rusoto_core = { workspace = true }
+rusoto_credential = { workspace = true }
+rusoto_elbv2 = { workspace = true }
+rusoto_route53 = { workspace = true }
+rusoto_sts = { workspace = true }
 sanitize-filename = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

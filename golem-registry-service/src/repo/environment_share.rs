@@ -216,8 +216,6 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         revision: EnvironmentShareRevisionRecord,
         grantee_account_id: Uuid,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let revision = revision.ensure_first();
-
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "create", |tx| {
             async move {
                 let environment_share_record: EnvironmentShareRecord = tx
@@ -254,7 +252,6 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         current_revision_id: i64,
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let revision = revision.ensure_new(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -290,7 +287,6 @@ impl EnvironmentShareRepo for DbEnvironmentShareRepo<PostgresPool> {
         current_revision_id: i64,
         revision: EnvironmentShareRevisionRecord,
     ) -> Result<EnvironmentShareExtRevisionRecord, EnvironmentShareRepoError> {
-        let revision = revision.ensure_deletion(current_revision_id);
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision_record = Self::insert_revision(tx, revision.clone()).await?;

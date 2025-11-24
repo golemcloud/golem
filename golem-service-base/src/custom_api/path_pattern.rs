@@ -12,14 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::path_pattern_parser::parse_path_pattern;
 use desert_rust::BinaryCodec;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
 use std::fmt::Display;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
 pub struct AllPathPatterns {
     pub path_patterns: Vec<PathPattern>,
     pub query_params: Vec<QueryInfo>,
+}
+
+impl AllPathPatterns {
+    pub fn parse(input: &str) -> Result<AllPathPatterns, String> {
+        input.parse()
+    }
 }
 
 impl Display for AllPathPatterns {
@@ -40,6 +49,50 @@ impl Display for AllPathPatterns {
         }
 
         Ok(())
+    }
+}
+
+impl FromStr for AllPathPatterns {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        parse_path_pattern(s)
+            .map_err(|err| err.to_string())
+            .and_then(|(leftover, result)| {
+                if !leftover.is_empty() {
+                    Err("Failed to parse path".to_string())
+                } else {
+                    Ok(result)
+                }
+            })
+    }
+}
+
+impl<'de> Deserialize<'de> for AllPathPatterns {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+
+        match value {
+            Value::String(value) => match AllPathPatterns::parse(value.as_str()) {
+                Ok(path_pattern) => Ok(path_pattern),
+                Err(message) => Err(serde::de::Error::custom(message.to_string())),
+            },
+
+            _ => Err(serde::de::Error::custom("Failed to parse path from yaml")),
+        }
+    }
+}
+
+impl Serialize for AllPathPatterns {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let value = Value::String(self.to_string());
+        Value::serialize(&value, serializer)
     }
 }
 

@@ -22,6 +22,7 @@ pub mod component_object_store;
 pub mod component_resolver;
 pub mod component_transformer_plugin_caller;
 pub mod deployment;
+pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;
@@ -30,6 +31,7 @@ pub mod oauth2_github_client;
 pub mod plan;
 pub mod plugin_registration;
 pub mod reports;
+pub mod security_scheme;
 pub mod token;
 
 /// Run CPU-heavy work on the global Rayon pool, returning a Future

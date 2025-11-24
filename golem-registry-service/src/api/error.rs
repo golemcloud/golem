@@ -18,6 +18,7 @@ use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::deployment::DeploymentError;
+use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
@@ -25,6 +26,7 @@ use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
+use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -242,10 +244,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::AlreadyExists(_) => {
-                Self::Conflict(Json(ErrorBody { error, cause: None }))
-            }
-
             ComponentError::ComponentProcessingError(_)
             | ComponentError::InitialComponentFileNotFound { .. }
             | ComponentError::InvalidFilePath(_)
@@ -270,7 +268,7 @@ impl From<ComponentError> for ApiError {
                 }))
             }
 
-            ComponentError::ConcurrentUpdate => {
+            ComponentError::AlreadyExists(_) | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
@@ -459,6 +457,63 @@ impl From<DeploymentError> for ApiError {
             DeploymentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("EnvironmentPluginGrantError")),
+            })),
+        }
+    }
+}
+
+impl From<DomainRegistrationError> for ApiError {
+    fn from(value: DomainRegistrationError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DomainRegistrationError::ParentEnvironmentNotFound(_)
+            | DomainRegistrationError::DomainRegistrationByIdNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::DomainCannotBeProvisioned { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+
+            DomainRegistrationError::DomainAlreadyExists(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DomainRegistrationError::Unauthorized(inner) => inner.into(),
+            DomainRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("DomainRegistrationError")),
+            })),
+        }
+    }
+}
+
+impl From<SecuritySchemeError> for ApiError {
+    fn from(value: SecuritySchemeError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            SecuritySchemeError::ParentEnvironmentNotFound(_)
+            | SecuritySchemeError::SecuritySchemeNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            SecuritySchemeError::InvalidRedirectUrl => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+
+            SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(_)
+            | SecuritySchemeError::ConcurrentUpdateAttempt => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            SecuritySchemeError::Unauthorized(inner) => inner.into(),
+            SecuritySchemeError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("DomainRegistrationError")),
             })),
         }
     }

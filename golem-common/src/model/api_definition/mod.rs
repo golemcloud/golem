@@ -14,21 +14,17 @@
 
 pub mod cors;
 pub mod oas;
-pub mod security_scheme;
 
-use self::cors::CorsConfiguration;
-use super::component::ComponentRevision;
-use super::ComponentId;
-use crate::api::api_definition::GatewayBindingType;
-use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use super::component::ComponentName;
+use super::security_scheme::SecuritySchemeId;
+use crate::model::Empty;
+use crate::{declare_enums, declare_revision, declare_structs, declare_unions, newtype_uuid};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 newtype_uuid!(ApiDefinitionId);
 
-declare_transparent_newtypes! {
-    pub struct ApiDefinitionRevision(pub u64);
-}
+declare_revision!(ApiDefinitionRevision);
 
 declare_enums! {
     pub enum RouteMethod {
@@ -88,47 +84,58 @@ impl FromStr for RouteMethod {
 }
 
 declare_structs! {
-    pub struct GatewayBindingComponent {
-        name: String,
-        /// Version of the component. If not provided the latest version is used.
-        /// Note that the version is only used to typecheck the various rib scripts and prevent component updates.
-        /// During runtime, the actual version of the worker or the latest version (in case no worker was found) is used.
-        version: Option<u64>,
+    pub struct HttpApiDefinitionCreation {
+        pub routes: Vec<Route>,
     }
 
-    pub struct ResolvedGatewayBindingComponent {
-        name: String,
-        id: ComponentId,
-        revision: ComponentRevision,
+    pub struct HttpApiDefinition {
+        pub id: ApiDefinitionId,
+        pub revision: ApiDefinitionRevision,
+        pub routes: Vec<Route>,
+        pub created_at: chrono::DateTime<chrono::Utc>,
     }
 
-    pub struct GatewayBindingData {
-        pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
-        // For binding type - worker/default and file-server
-        // Optional only to keep backward compatibility
-        pub component: Option<GatewayBindingComponent>,
-        // worker-name is optional to keep backward compatibility
-        // this is not required anymore with first class worker support in rib
-        // which is embedded in response field
-        pub worker_name: Option<String>,
-        // For binding type - worker/default
+    pub struct Route {
+        pub method: RouteMethod,
+        pub path: String,
+        pub binding: GatewayBinding,
+        pub security: Option<SecuritySchemeId>
+    }
+
+    pub struct SecuritySchemeConfiguration {
+        security_scheme: SecuritySchemeId,
+        // Additional scope support can go in future
+    }
+
+    pub struct WorkerGatewayBinding {
+        pub component_name: ComponentName,
         pub idempotency_key: Option<String>,
-        // For binding type - worker/default and fileserver, this is required
-        // For binding type cors-preflight, this is optional otherwise default cors-preflight settings
-        // is used
-        pub response: Option<String>,
-        // For binding type - worker/default
+        pub response: String,
         pub invocation_context: Option<String>,
     }
 
-
-    pub struct Middlewares {
-        pub cors: Option<CorsConfiguration>,
-        pub auth: Option<SecuritySchemeReferenceData>,
+    pub struct FileServerBinding {
+        pub component_name: ComponentName,
+        pub response: String,
     }
 
-    pub struct SecuritySchemeReferenceData {
-        security_scheme: String,
-        // Additional scope support can go in future
+    pub struct HttpHandlerBinding {
+        pub component_name: ComponentName,
+        pub worker_name: Option<String>,
+        pub idempotency_key: Option<String>,
+    }
+
+    pub struct CorsPreflightBinding {
+        pub response: String,
+    }
+}
+
+declare_unions! {
+    pub enum GatewayBinding {
+        Worker(WorkerGatewayBinding),
+        FileServer(FileServerBinding),
+        HttpHandler(HttpHandlerBinding),
+        CorsPreflight(CorsPreflightBinding),
+        SwaggerUi(Empty)
     }
 }

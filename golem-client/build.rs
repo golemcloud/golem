@@ -128,6 +128,15 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DeploymentSummary",
                 "golem_common::model::deployment::DeploymentSummary",
             ),
+            // Domain Registration
+            (
+                "DomainRegistrationCreation",
+                "golem_common::model::domain_registration::DomainRegistrationCreation",
+            ),
+            (
+                "DomainRegistration",
+                "golem_common::model::domain_registration::DomainRegistration",
+            ),
             // Environment
             (
                 "Environment",
@@ -179,6 +188,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "OplogProcessorPluginSpec",
                 "golem_common::model::plugin_registration::OplogProcessorPluginSpec",
+            ),
+            // Security Scheme
+            (
+                "SecuritySchemeCreation",
+                "golem_common::model::security_scheme::SecuritySchemeCreation",
+            ),
+            (
+                "SecuritySchemeUpdate",
+                "golem_common::model::security_scheme::SecuritySchemeUpdate",
+            ),
+            (
+                "SecuritySchemeDto",
+                "golem_common::model::security_scheme::SecuritySchemeDto",
             ),
             // Worker
             (

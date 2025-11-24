@@ -18,6 +18,7 @@ pub mod account_usage;
 pub mod application;
 pub mod component;
 pub mod deployment;
+pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;
@@ -28,6 +29,7 @@ pub mod oauth2_webflow_state;
 pub mod plan;
 pub mod plugin;
 pub mod reports;
+pub mod security_scheme;
 pub mod token;
 
 // Model for SQL records and fields

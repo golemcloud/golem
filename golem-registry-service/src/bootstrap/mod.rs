@@ -21,6 +21,7 @@ use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
 use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
+use crate::repo::domain_registration::{DbDomainRegistrationRepo, DomainRegistrationRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
 use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
@@ -31,6 +32,7 @@ use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowS
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
 use crate::repo::plugin::{DbPluginRepo, PluginRepo};
 use crate::repo::reports::{DbReportsRepo, ReportsRepo};
+use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
@@ -42,12 +44,14 @@ use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
 use crate::services::deployment::DeploymentService;
+use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::reports::ReportsService;
+use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
@@ -78,6 +82,7 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployment_service: Arc<DeploymentService>,
+    pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
@@ -85,6 +90,7 @@ pub struct Services {
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
     pub reports_service: Arc<ReportsService>,
+    pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
 }
 
@@ -93,16 +99,18 @@ struct Repos {
     account_usage_repo: Arc<dyn AccountUsageRepo>,
     application_repo: Arc<dyn ApplicationRepo>,
     component_repo: Arc<dyn ComponentRepo>,
+    deployment_repo: Arc<dyn DeploymentRepo>,
+    domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
+    environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
-    plan_repo: Arc<dyn PlanRepo>,
-    token_repo: Arc<dyn TokenRepo>,
+    environment_share_repo: Arc<dyn EnvironmentShareRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-    environment_share_repo: Arc<dyn EnvironmentShareRepo>,
-    reports_repo: Arc<dyn ReportsRepo>,
+    plan_repo: Arc<dyn PlanRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
-    environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
-    deployment_repo: Arc<dyn DeploymentRepo>,
+    reports_repo: Arc<dyn ReportsRepo>,
+    security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
+    token_repo: Arc<dyn TokenRepo>,
 }
 
 impl Services {
@@ -223,6 +231,24 @@ impl Services {
             component_service.clone(),
         ));
 
+        let domain_provisioner = crate::services::domain_registration::provisioner::configured(
+            &config.environment,
+            &config.workspace,
+            &config.domain_provisioner,
+        )
+        .await?;
+
+        let domain_registration_service = Arc::new(DomainRegistrationService::new(
+            repos.domain_registration_repo.clone(),
+            environment_service.clone(),
+            domain_provisioner.clone(),
+        ));
+
+        let security_scheme_service = Arc::new(SecuritySchemeService::new(
+            repos.security_scheme_repo.clone(),
+            environment_service.clone(),
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -233,6 +259,7 @@ impl Services {
             component_service,
             component_write_service,
             deployment_service,
+            domain_registration_service,
             environment_plugin_grant_service,
             environment_service,
             environment_share_service,
@@ -240,6 +267,7 @@ impl Services {
             plan_service,
             plugin_registration_service,
             reports_service,
+            security_scheme_service,
             token_service,
         })
     }
@@ -272,26 +300,31 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
+            let domain_registration_repo =
+                Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
+            let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
                 application_repo,
                 component_repo,
+                deployment_repo,
+                domain_registration_repo,
+                environment_plugin_grant_repo,
                 environment_repo,
-                plan_repo,
-                token_repo,
+                environment_share_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
-                environment_share_repo,
-                reports_repo,
+                plan_repo,
                 plugin_repo,
-                environment_plugin_grant_repo,
-                deployment_repo,
+                reports_repo,
+                security_scheme_repo,
+                token_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
-            db::sqlite::migrate(sqlite_config, migrations.postgres_migrations())
+            db::sqlite::migrate(sqlite_config, migrations.sqlite_migrations())
                 .await
                 .context("Sqlite DB migration")?;
 
@@ -313,22 +346,27 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
+            let domain_registration_repo =
+                Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
+            let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
                 account_usage_repo,
                 application_repo,
                 component_repo,
+                deployment_repo,
+                domain_registration_repo,
+                environment_plugin_grant_repo,
                 environment_repo,
-                plan_repo,
-                token_repo,
+                environment_share_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
-                environment_share_repo,
-                reports_repo,
+                plan_repo,
                 plugin_repo,
-                environment_plugin_grant_repo,
-                deployment_repo,
+                reports_repo,
+                security_scheme_repo,
+                token_repo,
             })
         }
     }

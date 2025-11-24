@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod account;
-mod application;
-mod auth;
-mod component;
-mod deployment;
-mod domain_registration;
-mod environment;
-mod environment_plugin_grants;
-mod environment_share;
-mod plugin_registration;
-mod reports;
-mod security_schemes;
+use super::environment::EnvironmentId;
+use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 
-use super::Tracing;
-use golem_test_framework::config::EnvBasedTestDependencies;
-use test_r::inherit_test_dep;
+newtype_uuid!(DomainRegistrationId);
 
-inherit_test_dep!(Tracing);
-inherit_test_dep!(EnvBasedTestDependencies);
+declare_transparent_newtypes! {
+    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    pub struct Domain(pub String);
+}
+
+declare_structs! {
+    pub struct DomainRegistrationCreation {
+        pub domain: Domain
+    }
+
+    pub struct DomainRegistration {
+        pub id: DomainRegistrationId,
+        pub environment_id: EnvironmentId,
+        pub domain: Domain
+    }
+}
