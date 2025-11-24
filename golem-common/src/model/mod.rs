@@ -41,6 +41,7 @@ pub mod poem;
 pub mod protobuf;
 pub mod regions;
 pub mod reports;
+pub mod security_scheme;
 pub mod trim_date;
 pub mod worker;
 

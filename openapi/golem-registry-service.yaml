@@ -4944,226 +4944,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_deployed_deployment_plan
-  /v1/envs/{environment_id}/security-schemes:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiSecurity
-      summary: Get all security schemes in the environment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_SecuritySchemeResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_environment_security_schemes
-    post:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiSecurity
-      summary: Create a new security scheme in the environment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreateSecuritySchemeRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/SecuritySchemeResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_environment_security_scheme
-  /v1/envs/{environment_id}/security-schemes/{security_scheme_name}:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiSecurity
-      summary: Get a security scheme
-      description: Get a security scheme by name
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: security_scheme_name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/SecuritySchemeResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_environment_security_scheme
   /v1/envs/{environment_id}/shares:
     post:
       tags:
@@ -5306,7 +5086,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_shares
+      operationId: get_environment_environment_shares
   /v1/environment-shares/{environment_share_id}:
     get:
       tags:
@@ -6277,12 +6057,155 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account_count_report
+  /v1/envs/{environment_id}/security-schemes:
+    post:
+      tags:
+      - RegistryService
+      - ApiSecurity
+      - Environment
+      summary: Create a new security scheme
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SecuritySchemeCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_security_scheme
+    get:
+      tags:
+      - RegistryService
+      - ApiSecurity
+      - Environment
+      summary: Get all security-schemes of the environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_SecuritySchemeDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_environment_security_schemes
   /v1/security-schemes/{security_scheme_id}:
     get:
       tags:
       - RegistryService
       - ApiSecurity
-      summary: Get api security scheme by id
+      summary: Get security scheme
       parameters:
       - name: security_scheme_id
         schema:
@@ -6298,7 +6221,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/SecuritySchemeResponseView'
+                $ref: '#/components/schemas/SecuritySchemeDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6345,12 +6268,11 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_security_scheme
-  /v1/security-schemes/{security_scheme_id}/revisions:
-    get:
+    patch:
       tags:
       - RegistryService
       - ApiSecurity
-      summary: Get all revisions of the security scheme
+      summary: Update security scheme
       parameters:
       - name: security_scheme_id
         schema:
@@ -6360,13 +6282,19 @@ paths:
         required: true
         deprecated: false
         explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SecuritySchemeUpdate'
+        required: true
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_SecuritySchemeResponseView'
+                $ref: '#/components/schemas/SecuritySchemeDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6412,7 +6340,74 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_security_scheme_revisions
+      operationId: update_security_scheme
+    delete:
+      tags:
+      - RegistryService
+      - ApiSecurity
+      summary: Delete security scheme
+      parameters:
+      - name: security_scheme_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_security_scheme
   /v1/tokens/{token_id}:
     get:
       tags:
@@ -7524,31 +7519,6 @@ components:
             $ref: '#/components/schemas/RouteRequestView'
         version:
           type: string
-    CreateSecuritySchemeRequest:
-      type: object
-      title: CreateSecuritySchemeRequest
-      required:
-      - providerType
-      - schemeIdentifier
-      - clientId
-      - clientSecret
-      - redirectUrl
-      - scopes
-      properties:
-        providerType:
-          $ref: '#/components/schemas/Provider'
-        schemeIdentifier:
-          type: string
-        clientId:
-          type: string
-        clientSecret:
-          type: string
-        redirectUrl:
-          type: string
-        scopes:
-          type: array
-          items:
-            type: string
     DataSchema:
       type: object
       oneOf:
@@ -8288,16 +8258,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginRegistrationDto'
-    Page_SecuritySchemeResponseView:
+    Page_SecuritySchemeDto:
       type: object
-      title: Page_SecuritySchemeResponseView
+      title: Page_SecuritySchemeDto
       required:
       - values
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/SecuritySchemeResponseView'
+            $ref: '#/components/schemas/SecuritySchemeDto'
     Page_Token:
       type: object
       title: Page_Token
@@ -8594,10 +8564,10 @@ components:
     Provider:
       type: string
       enum:
-      - Google
-      - Facebook
-      - Microsoft
-      - Gitlab
+      - google
+      - facebook
+      - microsoft
+      - gitlab
     RibInputTypeInfo:
       type: object
       title: RibInputTypeInfo
@@ -8660,22 +8630,21 @@ components:
           $ref: '#/components/schemas/GatewayBindingResponseView'
         security:
           type: string
-    SecuritySchemeResponseView:
+    SecuritySchemeCreation:
       type: object
-      title: SecuritySchemeResponseView
+      title: SecuritySchemeCreation
       required:
+      - name
       - providerType
-      - schemeIdentifier
       - clientId
       - clientSecret
       - redirectUrl
       - scopes
-      - createdAt
       properties:
+        name:
+          type: string
         providerType:
           $ref: '#/components/schemas/Provider'
-        schemeIdentifier:
-          type: string
         clientId:
           type: string
         clientSecret:
@@ -8686,9 +8655,56 @@ components:
           type: array
           items:
             type: string
-        createdAt:
+    SecuritySchemeDto:
+      type: object
+      title: SecuritySchemeDto
+      required:
+      - id
+      - revision
+      - name
+      - environmentId
+      - providerType
+      - clientId
+      - redirectUrl
+      - scopes
+      properties:
+        id:
           type: string
-          format: date-time
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        environmentId:
+          type: string
+          format: uuid
+        providerType:
+          $ref: '#/components/schemas/Provider'
+        clientId:
+          type: string
+        redirectUrl:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+    SecuritySchemeUpdate:
+      type: object
+      title: SecuritySchemeUpdate
+      properties:
+        providerType:
+          $ref: '#/components/schemas/Provider'
+        clientId:
+          type: string
+        clientSecret:
+          type: string
+        redirectUrl:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
     TextDescriptor:
       type: object
       title: TextDescriptor

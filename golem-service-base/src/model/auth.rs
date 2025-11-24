@@ -185,16 +185,19 @@ pub enum EnvironmentAction {
     CreateComponent,
     CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
+    CreateSecurityScheme,
     CreateShare,
     CreateWorker,
     DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
+    DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
     DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
+    UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
     ViewComponent,
@@ -203,6 +206,7 @@ pub enum EnvironmentAction {
     ViewDomainRegistration,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
+    ViewSecurityScheme,
     ViewShares,
     ViewWorker,
 }
@@ -454,10 +458,47 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
-            EnvironmentAction::CreateWorker => todo!(),
-            EnvironmentAction::DeleteWorker => todo!(),
-            EnvironmentAction::ViewWorker => todo!(),
-            EnvironmentAction::UpdateWorker => todo!(),
+            EnvironmentAction::CreateWorker => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::DeleteWorker => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewWorker => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::UpdateWorker => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::CreateSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteSecurityScheme => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewSecurityScheme => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
         };
 
         if !is_allowed {

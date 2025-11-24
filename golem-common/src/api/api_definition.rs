@@ -14,9 +14,9 @@
 
 use super::ComponentReference;
 use crate::model::api_definition::cors::CorsConfiguration;
-use crate::model::api_definition::security_scheme::Provider;
 use crate::model::api_definition::ApiDefinitionId;
 use crate::model::api_definition::RouteMethod;
+use crate::model::security_scheme::Provider;
 use crate::{declare_enums, declare_structs};
 use chrono::{DateTime, Utc};
 use rib::{RibInputTypeInfo, RibOutputTypeInfo};

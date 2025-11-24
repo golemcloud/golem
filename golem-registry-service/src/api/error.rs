@@ -26,6 +26,7 @@ use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
+use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -243,10 +244,6 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::AlreadyExists(_) => {
-                Self::Conflict(Json(ErrorBody { error, cause: None }))
-            }
-
             ComponentError::ComponentProcessingError(_)
             | ComponentError::InitialComponentFileNotFound { .. }
             | ComponentError::InvalidFilePath(_)
@@ -271,7 +268,7 @@ impl From<ComponentError> for ApiError {
                 }))
             }
 
-            ComponentError::ConcurrentUpdate => {
+            ComponentError::AlreadyExists(_) | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
@@ -487,6 +484,34 @@ impl From<DomainRegistrationError> for ApiError {
 
             DomainRegistrationError::Unauthorized(inner) => inner.into(),
             DomainRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("DomainRegistrationError")),
+            })),
+        }
+    }
+}
+
+impl From<SecuritySchemeError> for ApiError {
+    fn from(value: SecuritySchemeError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            SecuritySchemeError::ParentEnvironmentNotFound(_)
+            | SecuritySchemeError::SecuritySchemeNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            SecuritySchemeError::InvalidRedirectUrl => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+
+            SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(_)
+            | SecuritySchemeError::ConcurrentUpdateAttempt => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            SecuritySchemeError::Unauthorized(inner) => inner.into(),
+            SecuritySchemeError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner.context("DomainRegistrationError")),
             })),
