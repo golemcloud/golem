@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::{Oplog, OplogOps, OplogService};
+use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
@@ -46,7 +46,6 @@ pub struct ExportedFunctionInvoked {
 #[derive(Debug, Clone)]
 pub struct ReplayState {
     owned_worker_id: OwnedWorkerId,
-    oplog_service: Arc<dyn OplogService>,
     oplog: Arc<dyn Oplog>,
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
@@ -70,15 +69,13 @@ struct InternalReplayState {
 impl ReplayState {
     pub async fn new(
         owned_worker_id: OwnedWorkerId,
-        oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         skipped_regions: DeletedRegions,
-        last_oplog_index: OplogIndex,
     ) -> Self {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
+        let last_oplog_index = oplog.current_oplog_index().await;
         let mut result = Self {
             owned_worker_id,
-            oplog_service,
             oplog,
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -316,7 +313,11 @@ impl ReplayState {
         let read_idx = self.last_replayed_index.get().next();
 
         let oplog_entries = self.read_oplog(read_idx, 1).await;
-        let oplog_entry = oplog_entries.into_iter().next().unwrap();
+        let oplog_entry = if let Some((_, oplog_entry)) = oplog_entries.into_iter().next() {
+            oplog_entry
+        } else {
+            panic!("missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}", self.owned_worker_id, read_idx, self.replay_target.get(), self.last_replayed_non_hint_index.get())
+        };
 
         // record side effects that need to be applied at the next opportunity
         if let OplogEntry::SuccessfulUpdate { target_version, .. } = oplog_entry {
@@ -387,10 +388,7 @@ impl ReplayState {
         let mut violation = false;
 
         while start < replay_target {
-            let entries = self
-                .oplog_service
-                .read(&self.owned_worker_id, start, CHUNK_SIZE)
-                .await;
+            let entries = self.read_oplog(start, CHUNK_SIZE).await;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()
@@ -436,7 +434,6 @@ impl ReplayState {
         }
     }
 
-    // TODO: can we rewrite this on top of get_oplog_entry?
     pub async fn get_oplog_entry_exported_function_invoked(
         &mut self,
     ) -> Result<Option<ExportedFunctionInvoked>, WorkerExecutorError> {
@@ -513,7 +510,7 @@ impl ReplayState {
         }
     }
 
-    pub(crate) async fn get_out_of_skipped_region(&mut self) {
+    async fn get_out_of_skipped_region(&mut self) {
         if self.is_replay() {
             let mut internal = self.internal.write().await;
             let update_next_skipped_region = match &internal.next_skipped_region {
@@ -540,12 +537,8 @@ impl ReplayState {
         }
     }
 
-    async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<OplogEntry> {
-        self.oplog_service
-            .read(&self.owned_worker_id, idx, n)
-            .await
-            .into_values()
-            .collect()
+    async fn read_oplog(&self, idx: OplogIndex, n: u64) -> Vec<(OplogIndex, OplogEntry)> {
+        self.oplog.read_many(idx, n).await.into_iter().collect()
     }
 }
 
