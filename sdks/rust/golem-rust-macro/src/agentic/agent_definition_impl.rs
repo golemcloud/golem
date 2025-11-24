@@ -17,11 +17,12 @@ use quote::{format_ident, quote};
 use syn::{ItemTrait, Type};
 
 use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
+    extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
+    FunctionInputInfo, FunctionOutputInfo,
 };
 use crate::agentic::{
-    get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
-    no_constructor_method_error,
+    async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal,
+    multiple_constructor_methods_error, no_constructor_method_error,
 };
 
 fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
@@ -84,6 +85,12 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let item_trait = syn::parse_macro_input!(item as ItemTrait);
     let agent_mode = parse_agent_mode(attrs);
 
+    let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
+
+    if has_async_trait_attribute {
+        return async_trait_in_agent_definition_error(&item_trait).into();
+    }
+
     match get_agent_type_with_remote_client(&item_trait, agent_mode) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
@@ -93,15 +100,16 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             let register_fn_name = get_register_function_ident(&item_trait);
 
+            // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
+            // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
             let register_fn = quote! {
-                #[::ctor::ctor]
-                fn #register_fn_name() {
+                ::golem_rust::ctor::__support::ctor_parse!(#[ctor]fn #register_fn_name() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
                     );
-                }
+                });
             };
 
             let result = quote! {

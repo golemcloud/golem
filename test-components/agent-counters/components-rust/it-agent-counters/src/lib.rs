@@ -6,6 +6,7 @@ trait Counter {
     fn increment(&mut self) -> u32;
     async fn increment_through_rpc(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
 }
 
 struct CounterImpl {
@@ -33,6 +34,11 @@ impl Counter for CounterImpl {
         let mut client = EphemeralCounterClient::get(format!("{}-ephemeral", self.id));
         client.increment().await
     }
+
+    async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
+        let mut client = EphemeralSingletonCounterClient::new_phantom();
+        client.increment().await
+    }
 }
 
 #[agent_definition(ephemeral)]
@@ -57,6 +63,30 @@ impl EphemeralCounter for EphemeralCounterImpl {
         self.count
     }
 }
+
+
+#[agent_definition(ephemeral)]
+trait EphemeralSingletonCounter {
+    fn new() -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSingletonCounterImpl {
+    count: u32
+}
+
+#[agent_implementation]
+impl EphemeralSingletonCounter for EphemeralSingletonCounterImpl {
+    fn new() -> Self {
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
 
 #[agent_definition(ephemeral)]
 trait HostFunctionTests {

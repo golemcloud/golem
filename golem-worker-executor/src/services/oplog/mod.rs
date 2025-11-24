@@ -205,6 +205,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Reads the entry at the given oplog index
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry;
 
+    /// Reads the entry at the given oplog index
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry>;
+
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
 

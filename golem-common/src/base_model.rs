@@ -311,6 +311,11 @@ impl OplogIndex {
     pub fn is_defined(&self) -> bool {
         self.0 > 0
     }
+
+    /// Get the signed distance between this oplog index and the other oplog index
+    pub fn distance_from(&self, other: OplogIndex) -> i64 {
+        (self.0 as i64) - (other.0 as i64)
+    }
 }
 
 impl Display for OplogIndex {

@@ -356,10 +356,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn stop(&self) {
-        self.stop_internal(false, None).await;
-    }
-
     /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
     /// previously returned true.
     ///
@@ -1268,6 +1264,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(error) = fail_pending_invocations {
                     self.fail_pending_invocation(error).await;
                 };
+
+                // Make sure the oplog is committed
+                self.oplog.commit(CommitLevel::Always).await;
 
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {

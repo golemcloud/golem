@@ -787,8 +787,7 @@ async fn error_message_non_existing_target_component(
     executor.log_output(&registry_worker_id).await?;
 
     let expiration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
 
     let create_auction_result = executor
@@ -845,6 +844,49 @@ async fn ephemeral_worker_invocation_via_rpc1(
         .invoke_and_await(
             &worker_id,
             "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
+            vec![],
+        )
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    assert_eq!(result, Ok(vec![Value::U32(1)]));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn ephemeral_worker_invocation_via_rpc2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let worker_id = WorkerId {
+        component_id: component.id,
+        worker_name: "counter(\"ephemeral_worker_invocation_via_rpc2\")".to_string(),
+    };
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
+            vec![],
+        )
+        .await;
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
             vec![],
         )
         .await?;

@@ -6,7 +6,7 @@ includes:
 - common-*/golem.yaml
 - components-*/*/golem.yaml
 witDeps:
-- golem-temp/wit/deps
+- .wit/wit/deps
 
 environments:
   local:

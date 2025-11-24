@@ -177,6 +177,16 @@ pub fn is_unstructured_binary(ty: &Type) -> bool {
     false
 }
 
+pub fn has_async_trait_attribute(impl_block: &syn::ItemImpl) -> bool {
+    impl_block.attrs.iter().any(is_async_trait_attr)
+}
+
+pub fn is_async_trait_attr(attr: &syn::Attribute) -> bool {
+    let path = attr.path();
+
+    path.is_ident("async_trait") || path.is_ident("async_trait::async_trait")
+}
+
 fn is_multimodal_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(seg) = type_path.path.segments.last() {

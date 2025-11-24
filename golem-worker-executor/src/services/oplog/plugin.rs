@@ -703,6 +703,10 @@ impl Oplog for ForwardingOplog {
         self.inner.read(oplog_index).await
     }
 
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read_many(oplog_index, n).await
+    }
+
     async fn length(&self) -> u64 {
         self.inner.length().await
     }

@@ -56,7 +56,7 @@ pub trait DebugSessions: Send + Sync {
 
     async fn update_oplog_index(
         &self,
-        debug_session_id: DebugSessionId,
+        debug_session_id: &DebugSessionId,
         oplog_index: OplogIndex,
     ) -> Option<DebugSessionData>;
 }
@@ -115,11 +115,11 @@ impl DebugSessions for DebugSessionsDefault {
 
     async fn update_oplog_index(
         &self,
-        debug_session_id: DebugSessionId,
+        debug_session_id: &DebugSessionId,
         oplog_index: OplogIndex,
     ) -> Option<DebugSessionData> {
         let mut session = self.session.lock().unwrap();
-        let session_data = session.get_mut(&debug_session_id);
+        let session_data = session.get_mut(debug_session_id);
         if let Some(session_data) = session_data {
             session_data.current_oplog_index = oplog_index;
             Some(session_data.clone())

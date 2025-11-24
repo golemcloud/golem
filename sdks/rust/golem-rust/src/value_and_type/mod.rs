@@ -528,12 +528,16 @@ impl<T: FromValueAndType> FromValueAndType for Vec<T> {
 
 impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        let mut builder = builder.list();
-        for (k, v) in self {
-            builder = k.add_to_builder(builder.item().tuple().item()).finish();
-            builder = v.add_to_builder(builder.item().tuple().item()).finish();
+        let mut list_builder = builder.list();
+
+        for (key, value) in self {
+            let mut tuple_builder = list_builder.item().tuple();
+            tuple_builder = key.add_to_builder(tuple_builder.item());
+            tuple_builder = value.add_to_builder(tuple_builder.item());
+            list_builder = tuple_builder.finish();
         }
-        builder.finish()
+
+        list_builder.finish()
     }
 
     fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {

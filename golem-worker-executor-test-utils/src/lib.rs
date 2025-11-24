@@ -1291,6 +1291,10 @@ impl Oplog for TestOplog {
         self.oplog.read(oplog_index).await
     }
 
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.oplog.read_many(oplog_index, n).await
+    }
+
     async fn length(&self) -> u64 {
         self.oplog.length().await
     }

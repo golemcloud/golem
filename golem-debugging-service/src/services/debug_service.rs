@@ -587,7 +587,7 @@ impl DebugService for DebugServiceDefault {
             .await;
 
         self.debug_session
-            .update_oplog_index(debug_session_id.clone(), OplogIndex::NONE)
+            .update_oplog_index(&debug_session_id, OplogIndex::NONE)
             .await;
 
         // we restart regardless of the current status of the worker such that it restarts
@@ -786,6 +786,20 @@ mod tests {
                     timestamp: Timestamp::now_utc(),
                 }
             }
+        }
+
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let mut result = BTreeMap::new();
+            let mut current = oplog_index;
+            for _ in 0..n {
+                result.insert(current, self.read(current).await);
+                current = current.next();
+            }
+            result
         }
 
         async fn length(&self) -> u64 {

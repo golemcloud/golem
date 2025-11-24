@@ -29,8 +29,11 @@ use golem_client::model::{
     ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinitionCreation,
     PluginScope, PluginTypeSpecificCreation,
 };
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::plugin::{ComponentPluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentId, Empty};
+use heck::ToKebabCase;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -119,17 +122,30 @@ impl PluginCommandHandler {
                 )
             }
             PluginTypeSpecificManifest::OplogProcessor(spec) => {
-                let component_name = ComponentName(format!(
-                    "oplog_processor:{}:{}",
-                    manifest.name, manifest.version
-                ));
-
                 let component_file = File::open(&spec.component).await.with_context(|| {
                     anyhow!(
                         "Failed to open plugin component WASM at {}",
                         &spec.component.display().to_string().log_color_highlight()
                     )
                 })?;
+
+                let component_metadata = ComponentMetadata::analyse_component(
+                    &std::fs::read(&spec.component).with_context(|| {
+                        anyhow!(
+                            "Failed to read plugin component WASM from {}",
+                            &spec.component.display().to_string().log_color_highlight()
+                        )
+                    })?,
+                    HashMap::new(),
+                    vec![],
+                )?;
+
+                let component_name =
+                    if let Some(package_name) = component_metadata.root_package_name() {
+                        ComponentName(package_name.clone())
+                    } else {
+                        ComponentName(format!("oplog-processor:{}", manifest.name.to_kebab_case()))
+                    };
 
                 let component = {
                     log_action(

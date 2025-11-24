@@ -296,6 +296,9 @@ async fn ephemeral_agent_works(
         .start_worker(&component.id, "ephemeral-echo-agent(\"param2\")")
         .await?;
 
+    executor.log_output(&worker_id1).await?;
+    executor.log_output(&worker_id2).await?;
+
     let result1 = executor
         .invoke_and_await(
             &worker_id1,

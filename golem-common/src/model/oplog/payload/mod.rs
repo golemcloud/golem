@@ -94,9 +94,6 @@ oplog_payload! {
             component_slug: String,
             agent_name: String
         },
-        GolemApiFork {
-            name: String,
-        },
         GolemApiForkAgent {
             source_agent_id: WorkerId,
             target_agent_id: WorkerId,
@@ -230,6 +227,7 @@ oplog_payload! {
             result: Result<Option<ComponentId>, String>
         },
         GolemApiFork {
+            forked_phantom_id: Uuid,
             result: Result<ForkResult, String>,
         },
         GolemApiIdempotencyKey {
@@ -420,7 +418,7 @@ pub mod host_functions {
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
         (GolemApiResolveWorkerIdStrict => "golem::api", "resolve_worker_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", GolemApiFork, GolemApiFork)
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
     }
 }
 
