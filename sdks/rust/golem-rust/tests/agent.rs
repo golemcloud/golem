@@ -23,12 +23,13 @@ mod tests {
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
-    use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use golem_rust::golem_ai::golem::llm::llm::Config;
     use test_r::test;
 
     #[agent_definition]
     trait Echo {
-        fn new(init: UserId) -> Self;
+        fn new(init: UserId, llm_config: Config) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
         fn get_id(&self) -> String;
@@ -75,7 +76,7 @@ mod tests {
 
     #[agent_implementation]
     impl Echo for EchoImpl {
-        fn new(id: UserId) -> Self {
+        fn new(id: UserId, llm_config: Config) -> Self {
             EchoImpl { _id: id }
         }
         fn echo_mut(&mut self, message: String) -> String {
@@ -229,7 +230,7 @@ mod tests {
 
     #[agent_definition]
     trait EchoAsync {
-        async fn new(init: UserId) -> Self;
+        async fn new(init: UserId, llm_config: Config) -> Self;
         async fn echo_mut(&mut self, message: String) -> String;
         async fn echo(&self, message: String) -> String;
         async fn get_id(&self) -> String;
@@ -254,12 +255,13 @@ mod tests {
 
     struct EchoAsyncImpl {
         id: UserId,
+        llm_config: Config
     }
 
     #[agent_implementation]
     impl EchoAsync for EchoAsyncImpl {
-        async fn new(id: UserId) -> Self {
-            EchoAsyncImpl { id }
+        async fn new(id: UserId, llm_config: Config) -> Self {
+            EchoAsyncImpl { id, llm_config }
         }
         async fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
@@ -312,7 +314,7 @@ mod tests {
         }
 
         async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.echo(string).await
         }
 

@@ -35,6 +35,7 @@ export_golem_agentic = ["dep:ctor", "dep:async-trait"]
 export_load_snapshot = []
 export_oplog_processor = []
 export_save_snapshot = []
+export_golem_ai = []
 json = ["dep:serde", "dep:serde_json"]
 macro = ["dep:golem-rust-macro"]
 
