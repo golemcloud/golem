@@ -42,7 +42,7 @@ pub enum DeploymentError {
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
     DeploymentValidationFailed(Vec<DeployValidationError>),
     #[error(
-        "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}"
+        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
     )]
     DeploymentHashMismatch {
         requested_hash: SqlBlake3Hash,

@@ -14,10 +14,12 @@
 
 use crate::model::diff::ser::{to_json_with_mode, SerializeMode, ToSerializableWithMode};
 use crate::model::diff::Diffable;
+use blake3::HexError;
 use serde::de::Visitor;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display, Formatter};
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, std::hash::Hash, PartialEq, Eq, Debug)]
@@ -56,6 +58,22 @@ impl From<Hash> for blake3::Hash {
 impl From<blake3::Hash> for Hash {
     fn from(hash: blake3::Hash) -> Self {
         Self::new(hash)
+    }
+}
+
+impl TryFrom<&str> for Hash {
+    type Error = HexError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        blake3::Hash::from_hex(value).map(Hash)
+    }
+}
+
+impl FromStr for Hash {
+    type Err = HexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
     }
 }
 
