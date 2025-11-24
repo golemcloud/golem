@@ -1,0 +1,149 @@
+package golem:stt@1.0.0;
+
+interface types {
+  variant stt-error {
+    invalid-audio(string),
+    unsupported-format(string),
+    unsupported-language(string),
+    transcription-failed(string),
+    unauthorized(string),
+    access-denied(string),
+    rate-limited(string),
+    insufficient-credits,
+    unsupported-operation(string),
+    service-unavailable(string),
+    network-error(string),
+    internal-error(string),
+  }
+
+  type language-code = string;
+
+  enum audio-format {
+    wav,
+    mp3,
+    flac,
+    ogg,
+    aac,
+    pcm,
+  }
+
+  record audio-config {
+    format: audio-format,
+    sample-rate: option<u32>,
+    channels: option<u8>,
+  }
+
+  record timing-info {
+    start-time-seconds: f32,
+    end-time-seconds: f32,
+  }
+
+  record word-segment {
+    text: string,
+    timing-info: option<timing-info>,
+    confidence: option<f32>,
+    speaker-id: option<string>,
+  }
+
+  record transcription-metadata {
+    duration-seconds: f32,
+    audio-size-bytes: u32,
+    request-id: string,
+    model: option<string>,
+    language: language-code,
+  }
+
+  record transcription-channel {
+    id: string,
+    transcript: string,
+    segments: list<transcription-segment>
+  }
+
+  record transcription-segment {
+    transcript: string,
+    timing-info: option<timing-info>,
+    speaker-id: option<string>,
+    words: list<word-segment>,
+  }
+
+  record transcription-result {
+    transcript-metadata: transcription-metadata,
+    channels: list<transcription-channel>
+  }
+}
+
+interface languages {
+  use types.{language-code, stt-error};
+
+  record language-info {
+    code: language-code,
+    name: string,
+    native-name: string,
+  }
+
+  list-languages: func() -> result<list<language-info>, stt-error>;
+}
+
+interface transcription {
+  use types.{
+    audio-config,
+    transcription-result,
+    stt-error,
+    language-code,
+  };
+
+  record phrase {
+     value: string,
+     boost: option<f32>
+  }
+
+  record vocabulary {
+     phrases: list<phrase>
+  }
+
+  record diarization-options {
+    enabled: bool,
+    min-speaker-count: option<u32>,
+    max-speaker-count: option<u32>,
+  }
+
+  record transcribe-options {
+    language: option<language-code>,
+    model: option<string>,
+    profanity-filter: option<bool>,
+    vocabulary: option<vocabulary>,
+    diarization: option<diarization-options>,
+    enable-multi-channel: option<bool>
+  }
+
+  record transcription-request {
+    request-id: string,
+    audio: list<u8>,
+    config: audio-config,
+    options: option<transcribe-options>
+  }
+
+  record failed-transcription {
+    request-id: string,
+    error: stt-error,
+  }
+
+  record multi-transcription-result {
+    successes: list<transcription-result>,
+    failures: list<failed-transcription>
+  }
+
+  transcribe: func(
+    request: transcription-request
+  ) -> result<transcription-result, stt-error>;
+
+  transcribe-many: func(
+    requests: list<transcription-request>
+  ) -> result<multi-transcription-result, stt-error>;
+}
+
+world stt-library {
+    export types;
+    export languages;
+    export transcription;
+}

@@ -148,7 +148,6 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
-
 #[cfg(feature = "export_golem_ai")]
 pub mod golem_ai {
     use wit_bindgen::generate;
@@ -157,7 +156,7 @@ pub mod golem_ai {
         world: "golem-ai",
         generate_all,
         generate_unused_types: true,
-        additional_derives: [crate::FromValueAndType, crate::IntoValue],
+        additional_derives: [crate::Schema],
         pub_export_macro: true,
         with: {
             "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,

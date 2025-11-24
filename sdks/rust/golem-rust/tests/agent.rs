@@ -21,10 +21,10 @@ mod tests {
         Multimodal, MultimodalAdvanced, UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
+    use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
-    use golem_rust::golem_ai::golem::llm::llm::Config;
     use test_r::test;
 
     #[agent_definition]
@@ -57,6 +57,7 @@ mod tests {
 
     struct EchoImpl {
         _id: UserId,
+        _llm_config: Config,
     }
 
     #[derive(AllowedLanguages)]
@@ -77,7 +78,10 @@ mod tests {
     #[agent_implementation]
     impl Echo for EchoImpl {
         fn new(id: UserId, llm_config: Config) -> Self {
-            EchoImpl { _id: id }
+            EchoImpl {
+                _id: id,
+                _llm_config: llm_config,
+            }
         }
         fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
@@ -255,7 +259,7 @@ mod tests {
 
     struct EchoAsyncImpl {
         id: UserId,
-        llm_config: Config
+        llm_config: Config,
     }
 
     #[agent_implementation]
@@ -319,12 +323,12 @@ mod tests {
         }
 
         fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.trigger_echo(string);
         }
 
         fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.schedule_echo(
                 string,
                 Datetime {
