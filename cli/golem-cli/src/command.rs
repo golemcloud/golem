@@ -891,10 +891,13 @@ pub mod app {
         },
         /// Deploy application
         Deploy {
+            /// Only plan deployment, but apply no changes to the environment
             #[arg(long, conflicts_with_all = ["version", "revision"])]
             plan: bool,
+            /// Revert to the specified version
             #[arg(long, conflicts_with_all = ["force_build", "revision"])]
             version: Option<String>,
+            /// Revert to the specified revision
             #[arg(long, conflicts_with_all = ["force_build", "version"])]
             revision: Option<u64>,
             #[command(flatten)]
@@ -1040,7 +1043,7 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },
-        // TODO: atomic: find better name for this, maybe add to "app" and other entities
+        /// Show component manifest properties with source trace
         ManifestTrace {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
