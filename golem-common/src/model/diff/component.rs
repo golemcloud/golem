@@ -68,12 +68,13 @@ pub struct ComponentWasmRpcTarget {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
-    // TODO: agents? or should consider that part of the wasm binary?
+    // TODO: atomic: agents? or should consider that part of the wasm binary?
 }
 
 impl Hashable for ComponentMetadata {
@@ -87,7 +88,7 @@ impl Hashable for ComponentMetadata {
 pub struct Component {
     #[serde(serialize_with = "serialize_with_mode")]
     pub metadata: HashOf<ComponentMetadata>,
-    pub binary_hash: Hash,
+    pub wasm_hash: Hash,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
     pub files_by_path: BTreeMap<String, HashOf<ComponentFile>>,
@@ -110,7 +111,7 @@ impl Diffable for Component {
 
     fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
         let update_metadata = local.metadata != remote.metadata;
-        let update_binary = local.binary_hash != remote.binary_hash;
+        let update_binary = local.wasm_hash != remote.wasm_hash;
         let file_changes = local.files_by_path.diff_with_server(&remote.files_by_path);
         let plugins_changed = local.plugins_by_priority == remote.plugins_by_priority;
 

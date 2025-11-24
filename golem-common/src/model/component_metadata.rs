@@ -15,6 +15,7 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
+use crate::model::diff;
 use crate::{virtual_exports, SafeDisplay};
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
@@ -26,7 +27,7 @@ use golem_wasm::analysis::{
 use golem_wasm::metadata::Producers as WasmAstProducers;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
@@ -1372,4 +1373,31 @@ mod protobuf {
             })
         }
     }
+}
+
+pub fn dynamic_linking_to_diffable(
+    dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
+) -> BTreeMap<String, BTreeMap<String, diff::ComponentWasmRpcTarget>> {
+    dynamic_linking
+        .iter()
+        .map(|(link_name, link)| {
+            (
+                link_name.clone(),
+                match link {
+                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => targets
+                        .iter()
+                        .map(|(target_name, target)| {
+                            (
+                                target_name.clone(),
+                                diff::ComponentWasmRpcTarget {
+                                    interface_name: target.interface_name.clone(),
+                                    component_name: target.component_name.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                },
+            )
+        })
+        .collect()
 }

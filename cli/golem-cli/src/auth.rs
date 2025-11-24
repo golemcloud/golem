@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::{AuthenticationConfig, OAuth2AuthenticationData};
-use crate::config::{Config, ProfileName};
+use crate::config::Config;
+use crate::config::{
+    ApplicationEnvironmentConfig, AuthenticationConfig, AuthenticationConfigWithSource,
+    AuthenticationSource, OAuth2AuthenticationConfig, OAuth2AuthenticationData,
+};
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
 use anyhow::{anyhow, bail, Context};
@@ -73,76 +76,84 @@ impl Auth {
     pub async fn authenticate(
         &self,
         token_override: Option<Uuid>,
-        auth_config: &AuthenticationConfig,
+        auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
-        profile_name: &ProfileName,
     ) -> anyhow::Result<Authentication> {
-        if let Some(secret) = token_override {
-            let secret: TokenSecret = secret.into();
-            Ok(Authentication::from_token_and_secret(
-                self.token_details(&secret).await?,
-                secret,
-            ))
-        } else {
-            self.profile_authentication(auth_config, config_dir, profile_name)
-                .await
+        match token_override {
+            Some(secret) => {
+                let secret: TokenSecret = secret.into();
+                Ok(Authentication::from_token_and_secret(
+                    self.token_details(&secret).await?,
+                    secret,
+                ))
+            }
+            None => match &auth_config.authentication {
+                AuthenticationConfig::Static(inner) => {
+                    let secret: TokenSecret = inner.secret.0.into();
+                    Ok(Authentication::from_token_and_secret(
+                        self.token_details(&secret).await?,
+                        secret,
+                    ))
+                }
+                AuthenticationConfig::OAuth2(inner) => {
+                    if let Some(data) = &inner.data {
+                        Ok(Authentication::from_oauth2_config(data.clone()))
+                    } else {
+                        self.oauth2(&auth_config.source, config_dir).await
+                    }
+                }
+            },
         }
     }
 
     fn save_auth(
         &self,
         token: TokenWithSecret,
-        profile_name: &ProfileName,
+        auth_source: &AuthenticationSource,
         config_dir: &Path,
     ) -> anyhow::Result<()> {
-        let named_profile = Config::get_profile(config_dir, profile_name)?.ok_or(anyhow!(
-            "Can't find profile {} in config",
-            profile_name.0.log_color_highlight()
-        ))?;
-
-        let mut profile = named_profile.profile;
-
-        profile.auth = AuthenticationConfig::from_token_with_secret(token);
-        Config::set_profile(profile_name.clone(), profile, config_dir)
-            .with_context(|| "Failed to save auth token")?;
+        match auth_source {
+            AuthenticationSource::Profile(profile_name) => {
+                let named_profile =
+                    Config::get_profile(config_dir, profile_name)?.ok_or(anyhow!(
+                        "Can't find profile {} in config",
+                        profile_name.0.log_color_highlight()
+                    ))?;
+                let mut profile = named_profile.profile;
+                profile.auth = AuthenticationConfig::from_token_with_secret(token);
+                Config::set_profile(profile_name.clone(), profile, config_dir).with_context(
+                    || format!("Failed to save auth token for profile {profile_name}"),
+                )?;
+            }
+            AuthenticationSource::ApplicationEnvironment(app_env_id) => {
+                let mut config = Config::get_application_environment(config_dir, app_env_id)?
+                    .unwrap_or(ApplicationEnvironmentConfig {
+                        auth: OAuth2AuthenticationConfig { data: None },
+                    });
+                config.auth = OAuth2AuthenticationConfig::from_token_with_secret(token);
+                Config::set_application_environment(app_env_id, config, config_dir).with_context(
+                    || {
+                        format!(
+                            "Failed to save auth token for application environment: {app_env_id}"
+                        )
+                    },
+                )?;
+            }
+        }
 
         Ok(())
     }
 
     async fn oauth2(
         &self,
-        profile_name: &ProfileName,
+        auth_source: &AuthenticationSource,
         config_dir: &Path,
     ) -> anyhow::Result<Authentication> {
         let data = self.start_oauth2().await?;
         inform_user(&data);
         let token = self.complete_oauth2(data.state).await?;
-        self.save_auth(token.clone(), profile_name, config_dir)?;
+        self.save_auth(token.clone(), auth_source, config_dir)?;
         Ok(Authentication(token))
-    }
-
-    async fn profile_authentication(
-        &self,
-        auth_config: &AuthenticationConfig,
-        config_dir: &Path,
-        profile_name: &ProfileName,
-    ) -> anyhow::Result<Authentication> {
-        match auth_config {
-            AuthenticationConfig::Static(inner) => {
-                let secret: TokenSecret = inner.secret.0.into();
-                Ok(Authentication::from_token_and_secret(
-                    self.token_details(&secret).await?,
-                    secret,
-                ))
-            }
-            AuthenticationConfig::OAuth2(inner) => {
-                if let Some(data) = &inner.data {
-                    Ok(Authentication::from_oauth2_config(data.clone()))
-                } else {
-                    self.oauth2(profile_name, config_dir).await
-                }
-            }
-        }
     }
 
     async fn token_details(&self, token_secret: &TokenSecret) -> anyhow::Result<Token> {

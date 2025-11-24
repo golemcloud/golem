@@ -157,8 +157,8 @@ impl ErrorHandler {
                 if let Ok(Some(component)) = self
                     .ctx
                     .component_handler()
-                    .component(
-                        worker_name_match.environment.as_ref(),
+                    .resolve_component(
+                        &worker_name_match.environment,
                         (&worker_name_match.component_name).into(),
                         Some((&worker_name_match.worker_name).into()),
                     )
@@ -294,6 +294,26 @@ impl ErrorHandler {
 
                 logln("Available environments:".log_color_help_group().to_string());
                 for environment_name in manifest_environment_names {
+                    logln(format!("- {}", environment_name.0));
+                }
+
+                Ok(())
+            }
+            ContextInitHintError::ProfileNotFound {
+                profile_name,
+                available_profile_names,
+            } => {
+                log_error(format!(
+                    "Profile '{}' not found!",
+                    profile_name.0.log_color_highlight()
+                ));
+
+                logln(
+                    "Available profile names:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
+                for environment_name in available_profile_names {
                     logln(format!("- {}", environment_name.0));
                 }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::app_raw::Environment;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -33,8 +34,18 @@ pub enum EnvironmentReference {
         account_email: String,
         application_name: ApplicationName,
         environment_name: EnvironmentName,
-        auto_create: bool,
+        auto_create: bool, // TODO: atomic: do we need this?
     },
+}
+
+impl EnvironmentReference {
+    pub fn is_manifest_scoped(&self) -> bool {
+        match &self {
+            Self::Environment { .. } => true,
+            Self::ApplicationEnvironment { .. } => false,
+            Self::AccountApplicationEnvironment { .. } => false,
+        }
+    }
 }
 
 impl TryFrom<&str> for EnvironmentReference {
@@ -57,19 +68,19 @@ impl FromStr for EnvironmentReference {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut segments = s.split("/").collect::<Vec<_>>();
+        let segments = s.split("/").collect::<Vec<_>>();
         match segments.len() {
             1 => Ok(Self::Environment {
-                environment_name: segments.pop().unwrap().parse()?,
+                environment_name: segments[0].parse()?,
             }),
             2 => Ok(Self::ApplicationEnvironment {
-                application_name: segments.pop().unwrap().parse()?,
-                environment_name: segments.pop().unwrap().parse()?,
+                application_name: segments[0].parse()?,
+                environment_name: segments[1].parse()?,
             }),
             3 => Ok(Self::AccountApplicationEnvironment {
-                account_email: segments.pop().unwrap().into(),
-                application_name: segments.pop().unwrap().parse()?,
-                environment_name: segments.pop().unwrap().parse()?,
+                account_email: segments[0].into(),
+                application_name: segments[1].parse()?,
+                environment_name: segments[2].parse()?,
                 auto_create: false,
             }),
             _ => Err(formatdoc! {"
@@ -112,6 +123,15 @@ pub enum ResolvedEnvironmentIdentitySource {
     DefaultFromManifest,
 }
 
+impl ResolvedEnvironmentIdentitySource {
+    pub fn is_manifest_scoped(&self) -> bool {
+        match self {
+            ResolvedEnvironmentIdentitySource::Reference(env_ref) => env_ref.is_manifest_scoped(),
+            ResolvedEnvironmentIdentitySource::DefaultFromManifest => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedEnvironmentIdentity {
     pub source: ResolvedEnvironmentIdentitySource,
@@ -121,6 +141,33 @@ pub struct ResolvedEnvironmentIdentity {
     pub application_name: ApplicationName,
     pub environment_id: EnvironmentId,
     pub environment_name: EnvironmentName,
+
+    pub remote_environment: golem_client::model::Environment,
+}
+
+impl ResolvedEnvironmentIdentity {
+    pub fn new(
+        environment_reference: Option<&EnvironmentReference>,
+        application: golem_client::model::Application,
+        environment: golem_client::model::Environment,
+    ) -> Self {
+        Self {
+            source: match environment_reference {
+                Some(env_ref) => ResolvedEnvironmentIdentitySource::Reference(env_ref.clone()),
+                None => ResolvedEnvironmentIdentitySource::DefaultFromManifest,
+            },
+            account_id: application.account_id,
+            application_id: application.id,
+            application_name: application.name,
+            environment_id: environment.id.clone(),
+            environment_name: environment.name.clone(),
+            remote_environment: environment,
+        }
+    }
+
+    pub fn is_manifest_scoped(&self) -> bool {
+        self.source.is_manifest_scoped()
+    }
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -140,4 +187,11 @@ impl EnvironmentResolveMode {
             EnvironmentResolveMode::Any => true,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectedManifestEnvironment {
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub environment: Environment,
 }

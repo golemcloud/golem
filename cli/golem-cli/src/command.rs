@@ -104,12 +104,12 @@ pub struct GolemCliGlobalFlags {
     )]
     pub environment: Option<EnvironmentReference>,
 
-    /// Select "local" environment from the manifest, or target the builtin local server
+    /// Select" local" environment from the manifest, or "local" profile
     #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103
     )]
     pub local: bool,
 
-    /// Select "cloud" environment from the manifest, or target the cloud server
+    /// Select "cloud" environment from the manifest, or "cloud" profile
     #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104
     )]
     pub cloud: bool,
@@ -623,8 +623,8 @@ pub enum GolemCliSubcommand {
     Repl {
         #[command(flatten)]
         component_name: ComponentOptionalComponentName,
-        /// Optional component version to use, defaults to latest component version
-        version: Option<u64>,
+        /// Optional component revision to use, defaults to latest deployed component revision
+        revision: Option<u64>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
@@ -762,9 +762,7 @@ pub mod shared_args {
     #[derive(Debug, Args, Clone)]
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"]
-
-        )]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"])]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
@@ -773,12 +771,10 @@ pub mod shared_args {
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate agents and HTTP APIs
-        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
-        )]
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
         pub redeploy_all: bool,
         /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"]
-        )]
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
         pub reset: bool,
     }
 
@@ -895,6 +891,15 @@ pub mod app {
         },
         /// Deploy application
         Deploy {
+            /// Only plan deployment, but apply no changes to the environment
+            #[arg(long, conflicts_with_all = ["version", "revision"])]
+            plan: bool,
+            /// Revert to the specified version
+            #[arg(long, conflicts_with_all = ["force_build", "revision"])]
+            version: Option<String>,
+            /// Revert to the specified revision
+            #[arg(long, conflicts_with_all = ["force_build", "version"])]
+            revision: Option<u64>,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
@@ -1005,12 +1010,12 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
         },
-        /// Get latest or selected version of deployed component metadata
+        /// Get the latest or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-            /// Optional component version to get
-            version: Option<u64>,
+            /// Optional component revision to get
+            revision: Option<u64>,
         },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
@@ -1038,7 +1043,7 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
         },
-        // TODO: atomic: find better name for this, maybe add to "app" and other entities
+        /// Show component manifest properties with source trace
         ManifestTrace {
             #[command(flatten)]
             component_name: ComponentOptionalComponentNames,
@@ -1073,8 +1078,8 @@ pub mod component {
             Get {
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// The version of the component
-                version: Option<u64>,
+                /// The revision of the component
+                revision: Option<u64>,
             },
             /// Update component plugin
             Update {
@@ -1203,8 +1208,8 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
-            /// The new version of the updated agent (default is the latest version)
-            target_version: Option<u64>,
+            /// The new revision of the updated agent (default is the latest revision)
+            target_revision: Option<u64>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
@@ -1547,14 +1552,11 @@ pub mod profile {
             set_active: bool,
             /// URL of Golem Component service
             #[arg(long)]
-            component_url: Option<Url>,
+            url: Option<Url>,
             /// URL of Golem Worker service, if not provided defaults to component-url
             #[arg(long)]
             worker_url: Option<Url>,
             /// URL of Golem Cloud service, if not provided defaults to component-url
-            #[arg(long)]
-            cloud_url: Option<Url>,
-            /// Default output format
             #[arg(long, default_value_t = Format::Text)]
             default_format: Format,
             /// Token to use for authenticating against Golem. If not provided an OAuth2 flow will be performed when authentication is needed for the first time.

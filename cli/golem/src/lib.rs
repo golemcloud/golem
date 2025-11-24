@@ -22,8 +22,7 @@ mod router;
 test_r::enable!();
 
 pub struct StartedComponents {
-    pub cloud_service: cloud_service::TrafficReadyEndpoints,
-    pub component_service: golem_component_service::TrafficReadyEndpoints,
+    pub registry_service: golem_registry_service::SingleExecutableRunDetails,
     pub shard_manager: golem_shard_manager::RunDetails,
     pub worker_executor: golem_worker_executor::RunDetails,
     pub worker_service: golem_worker_service::TrafficReadyEndpoints,

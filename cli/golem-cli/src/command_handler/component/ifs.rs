@@ -36,11 +36,9 @@ struct LoadedFile {
     target: ComponentFilePathWithPermissions,
 }
 
-// TODO: atomic
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub struct HashedFile {
-    pub hash_hex: String,
+    pub hash: blake3::Hash,
     pub target: ComponentFilePathWithPermissions,
 }
 
@@ -53,19 +51,17 @@ pub struct ComponentFilesArchive {
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }
 
-// TODO: atomic
-#[allow(unused)]
 pub struct IfsFileManager {
     client: reqwest::Client,
 }
 
-// TODO: atomic
-#[allow(unused)]
 impl IfsFileManager {
     pub fn new(client: reqwest::Client) -> Self {
         Self { client }
     }
 
+    // TODO: atomic
+    #[allow(unused)]
     pub async fn build_files_archive(
         &self,
         component_files: &[InitialComponentFile],
@@ -357,7 +353,7 @@ impl FileProcessor<HashedFile> for FileHasher {
             .with_context(|| anyhow!("Failed to hash local IFS file: {}", path.display()))?;
 
         Ok(HashedFile {
-            hash_hex: hasher.finalize().to_hex().to_string(),
+            hash: hasher.finalize(),
             target: target.clone(),
         })
     }
@@ -392,15 +388,13 @@ impl FileProcessor<HashedFile> for FileHasher {
         }
 
         Ok(HashedFile {
-            hash_hex: hasher.finalize().to_hex().to_string(),
+            hash: hasher.finalize(),
             target: target.clone(),
         })
     }
 }
 
 // TODO: add this to manifest validation (too or instead of doing it here)?
-// TODO: atomic
-#[allow(unused)]
 fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::Result<()> {
     let non_unique_target_paths = component_files
         .iter()

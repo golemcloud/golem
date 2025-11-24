@@ -32,7 +32,7 @@ pub enum DeployRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(
-        "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
+        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}."
     )]
     DeploymentHashMismatch {
         actual_hash: SqlBlake3Hash,

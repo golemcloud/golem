@@ -8,7 +8,7 @@
 
 components:
   golem-it:high-volume-logging:
-    template: rust
+    templates: rust
 
 # Example for adding dependencies for Worker to Worker communication:
 # See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information

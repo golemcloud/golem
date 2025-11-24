@@ -22,8 +22,9 @@ use url::Url;
 
 #[async_trait]
 pub trait OAuth2GithubClient: Send + Sync {
-    async fn initiate_device_workflow(&self) -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
-    ß
+    async fn initiate_device_workflow(&self)
+        -> Result<DeviceWorkflowData, OAuth2GithubClientError>;
+
     async fn get_access_token(
         &self,
         device_code: &str,

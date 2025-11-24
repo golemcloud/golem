@@ -1,3 +1,17 @@
+// Copyright 2024-2025 Golem Cloud
+//
+// Licensed under the Golem Source License v1.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
@@ -182,7 +196,7 @@ pub struct Environment {
 #[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
 pub enum Server {
     Builtin(BuiltinServer),
-    Custom(CustomServer),
+    Custom(Box<CustomServer>),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,7 +213,14 @@ pub struct CustomServer {
     pub url: Url,
     pub worker_url: Option<Url>,
     pub allow_insecure: Option<bool>,
-    // TODO: atomic: auth
+    pub auth: CustomServerAuth,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum CustomServerAuth {
+    OAuth2 { oauth2: Marker },
+    Static { static_token: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

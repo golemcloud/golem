@@ -300,7 +300,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             }
             GolemCliSubcommand::Repl {
                 component_name,
-                version,
+                revision,
                 deploy_args,
                 script,
                 script_file,
@@ -310,7 +310,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .rib_repl_handler()
                     .cmd_repl(
                         component_name.component_name,
-                        version,
+                        revision,
                         deploy_args.as_ref(),
                         script,
                         script_file,

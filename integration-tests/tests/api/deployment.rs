@@ -42,9 +42,8 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &env.id.0,
             &DeploymentCreation {
                 current_deployment_revision: None,
-                expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "117f421db0bf93bbe6134a570fd758a7670fd189f2d6935f6516e5145d62a212",
-                )?),
+                expected_deployment_hash:
+                    "d14c6cc958f2dbb6c77400744c809deb08caceb2f9d1e8e39265387a4dbfe8de".parse()?,
                 version: "0.0.1".to_string(),
             },
         )
@@ -120,9 +119,8 @@ async fn get_component_version_from_previous_deployment(
             &env.id.0,
             &DeploymentCreation {
                 current_deployment_revision: None,
-                expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "117f421db0bf93bbe6134a570fd758a7670fd189f2d6935f6516e5145d62a212",
-                )?),
+                expected_deployment_hash:
+                    "d14c6cc958f2dbb6c77400744c809deb08caceb2f9d1e8e39265387a4dbfe8de".parse()?,
                 version: "0.0.1".to_string(),
             },
         )
@@ -153,9 +151,8 @@ async fn get_component_version_from_previous_deployment(
             &env.id.0,
             &DeploymentCreation {
                 current_deployment_revision: Some(deployment_1.revision),
-                expected_deployment_hash: Hash::new(blake3::Hash::from_hex(
-                    "7b337b2e67d393152fdfde4430f3d5a89e3862335269d9fad026d37da1f06121",
-                )?),
+                expected_deployment_hash:
+                    "1513f16898ef099114f5148e388f47a254d91fc788eac2d234dea0ad0ed7425d".parse()?,
                 version: "0.0.2".to_string(),
             },
         )

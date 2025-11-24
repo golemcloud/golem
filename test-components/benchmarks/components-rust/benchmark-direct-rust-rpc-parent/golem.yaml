@@ -8,7 +8,7 @@
 
 components:
   benchmark:direct-rust-rpc-parent:
-    template: rust
+    templates: rust
 
 dependencies:
   benchmark:direct-rust-rpc-parent:

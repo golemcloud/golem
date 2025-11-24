@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use crate::log::{logln, LogColorize};
-use crate::model::component::{
-    agent_interface_name, render_type, show_exported_functions, Component,
-};
+use crate::model::component::{agent_interface_name, render_type, show_exported_functions};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
 };
 use cli_table::Table;
 use colored::Colorize;
+use golem_client::model::ComponentDto;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
@@ -67,25 +66,36 @@ impl MessageWithFields for WorkerNameHelp {
                 ),
         );
         fields.field(
-            "<PROJECT>/<COMPONENT>/<AGENT>",
+            "<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Project and component specific agent name.
+                    Environment and component specific agent name.
 
                     Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project.
+                    specific environment.
 
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT>",
+            "<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, project and component specific agent name.
+                    Application, environment and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
-                    specific project owned by another account
+                    It can refer to components in a specific application and environment, always
+                    expects the component name to be fully qualified.
+                    "
+            ),
+        );
+        fields.field(
+            "<ACCOUNT>/<APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>",
+            &indoc!(
+                "
+                    Account, application, environment and component specific agent name.
+
+                    Behaves the same as <APPLICATION>/<ENVIRONMENT/<COMPONENT>/<AGENT>, except it can
+                    refer to any account.
                     "
             ),
         );
@@ -200,7 +210,7 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new(component: &Component, agent_id: Option<&AgentId>) -> Self {
+    pub fn new(component: &ComponentDto, agent_id: Option<&AgentId>) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
             agent_name: agent_id

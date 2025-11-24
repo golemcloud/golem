@@ -18,7 +18,6 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
-    ResolvedEnvironmentIdentitySource,
 };
 use golem_client::api::EnvironmentClient;
 use golem_client::model::EnvironmentCreation;
@@ -45,105 +44,14 @@ impl EnvironmentCommandHandler {
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
-        let clients = self.ctx.golem_clients().await?;
-
         match self.ctx.environment_reference() {
             Some(environment_reference) => {
-                if !mode.allowed(environment_reference) {
-                    // TODO: atomic: message about manifest etc.
-                    todo!()
-                }
-
-                match environment_reference {
-                    // NOTE: when only the env name is included in the reference,
-                    //       we on-demand create the application and the env
-                    EnvironmentReference::Environment { environment_name } => {
-                        let application = self
-                            .ctx
-                            .app_handler()
-                            .get_or_create_remote_application()
-                            .await?;
-
-                        match application {
-                            Some(application) => {
-                                let environment = self
-                                    .get_or_create_remote_environment(
-                                        &application.id,
-                                        environment_name,
-                                    )
-                                    .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::Reference(
-                                        environment_reference.clone(),
-                                    ),
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
-                            }
-                            None => {
-                                // TODO: atomic: show error about
-                                //       - using an app manifest
-                                //       - using flags
-                                //       - using ENV VARS
-                                todo!()
-                            }
-                        }
-                    }
-                    // NOTE: with app-env references we DO NOT create anything, these are used for
-                    //       querying without using the manifest
-                    EnvironmentReference::ApplicationEnvironment {
-                        application_name,
-                        environment_name,
-                    } => {
-                        let application = self
-                            .ctx
-                            .app_handler()
-                            .get_remote_application(&self.ctx.account_id().await?, application_name)
-                            .await?;
-
-                        match application {
-                            Some(application) => {
-                                let environment = clients
-                                    .environment
-                                    .get_application_environment(
-                                        &application.id.0,
-                                        &environment_name.0,
-                                    )
-                                    .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::Reference(
-                                        environment_reference.clone(),
-                                    ),
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
-                            }
-                            None => {
-                                // TODO: atomic: show error about
-                                //       - using an app manifest
-                                //       - using flags
-                                //       - using ENV VARS
-                                todo!()
-                            }
-                        }
-                    }
-                    EnvironmentReference::AccountApplicationEnvironment { .. } => {
-                        // TODO: atomic: use search / lookup API once available
-                        // TODO: this mode should be dynamic on auto-creation based on the current account id
-                        //       and the use case
-                        todo!()
-                    }
-                }
+                self.resolve_environment_reference(mode, environment_reference)
+                    .await
             }
             None => {
-                match self.ctx.manifest_environment_name() {
-                    Some(environment_name) => {
+                match self.ctx.manifest_environment() {
+                    Some(env) => {
                         let application = self
                             .ctx
                             .app_handler()
@@ -155,17 +63,14 @@ impl EnvironmentCommandHandler {
                                 let environment = self
                                     .get_or_create_remote_environment(
                                         &application.id,
-                                        environment_name,
+                                        &env.environment_name,
                                     )
                                     .await?;
-                                Ok(ResolvedEnvironmentIdentity {
-                                    source: ResolvedEnvironmentIdentitySource::DefaultFromManifest,
-                                    account_id: application.account_id,
-                                    application_id: application.id,
-                                    application_name: application.name,
-                                    environment_id: environment.id,
-                                    environment_name: environment.name,
-                                })
+                                Ok(ResolvedEnvironmentIdentity::new(
+                                    None,
+                                    application,
+                                    environment,
+                                ))
                             }
                             None => {
                                 // TODO: atomic: show error about
@@ -184,6 +89,91 @@ impl EnvironmentCommandHandler {
                         todo!()
                     }
                 }
+            }
+        }
+    }
+
+    pub async fn resolve_environment_reference(
+        &self,
+        mode: EnvironmentResolveMode,
+        environment_reference: &EnvironmentReference,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        if !mode.allowed(environment_reference) {
+            // TODO: atomic: message about manifest etc.
+            todo!()
+        }
+
+        match environment_reference {
+            // NOTE: when only the env name is included in the reference,
+            //       we on-demand create the application and the env
+            EnvironmentReference::Environment { environment_name } => {
+                let application = self
+                    .ctx
+                    .app_handler()
+                    .get_or_create_remote_application()
+                    .await?;
+
+                match application {
+                    Some(application) => {
+                        let environment = self
+                            .get_or_create_remote_environment(&application.id, environment_name)
+                            .await?;
+                        Ok(ResolvedEnvironmentIdentity::new(
+                            Some(environment_reference),
+                            application,
+                            environment,
+                        ))
+                    }
+                    None => {
+                        // TODO: atomic: show error about
+                        //       - using an app manifest
+                        //       - using flags
+                        //       - using ENV VARS
+                        todo!()
+                    }
+                }
+            }
+            // NOTE: with app-env references we DO NOT create anything, these are used for
+            //       querying without using the manifest
+            EnvironmentReference::ApplicationEnvironment {
+                application_name,
+                environment_name,
+            } => {
+                let application = self
+                    .ctx
+                    .app_handler()
+                    .get_remote_application(&self.ctx.account_id().await?, application_name)
+                    .await?;
+
+                match application {
+                    Some(application) => {
+                        let environment = self
+                            .ctx
+                            .golem_clients()
+                            .await?
+                            .environment
+                            .get_application_environment(&application.id.0, &environment_name.0)
+                            .await?;
+                        Ok(ResolvedEnvironmentIdentity::new(
+                            Some(environment_reference),
+                            application,
+                            environment,
+                        ))
+                    }
+                    None => {
+                        // TODO: atomic: show error about
+                        //       - using an app manifest
+                        //       - using flags
+                        //       - using ENV VARS
+                        todo!()
+                    }
+                }
+            }
+            EnvironmentReference::AccountApplicationEnvironment { .. } => {
+                // TODO: atomic: use search / lookup API once available
+                // TODO: this mode should be dynamic on auto-creation based on the current account id
+                //       and the use case
+                todo!()
             }
         }
     }

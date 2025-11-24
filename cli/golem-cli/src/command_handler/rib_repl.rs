@@ -18,7 +18,8 @@ use crate::context::{Context, RibReplState};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
-use crate::model::component::{ComponentNameMatchKind, ComponentVersionSelection, ComponentView};
+use crate::model::component::{ComponentNameMatchKind, ComponentRevisionSelection, ComponentView};
+use crate::model::environment::EnvironmentResolveMode;
 use crate::model::format::Format;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
@@ -27,7 +28,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
 use golem_common::model::agent::AgentId;
-use golem_common::model::component::ComponentName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::IdempotencyKey;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
@@ -59,7 +60,7 @@ impl RibReplHandler {
     pub async fn cmd_repl(
         &self,
         component_name: Option<ComponentName>,
-        component_version: Option<u64>,
+        component_revision: Option<u64>,
         deploy_args: Option<&DeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
@@ -100,18 +101,18 @@ impl RibReplHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                selected_components.environment.as_ref(),
+                &selected_components.environment,
                 ComponentNameMatchKind::App,
                 &component_name,
-                component_version.map(|v| v.into()),
+                component_revision.map(|v| ComponentRevision(v).into()),
                 deploy_args,
             )
             .await?;
 
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
-            component_id: component.component_id.0,
-            component_version: component.revision.0,
+            component_id: component.id.0,
+            component_revision: component.revision.0,
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };
@@ -331,13 +332,19 @@ impl WorkerFunctionInvoke for RibReplHandler {
         .to_string()
         .into();
 
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
         let component = self
             .ctx
             .component_handler()
-            .component(
-                None,
+            .resolve_component(
+                &environment,
                 component_id.into(),
-                Some(ComponentVersionSelection::ByWorkerName(&worker_name)),
+                Some(ComponentRevisionSelection::ByWorkerName(&worker_name)),
             )
             .await?;
 

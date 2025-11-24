@@ -376,7 +376,7 @@ impl ComponentRevisionRecord {
                     .collect(),
             }
             .into(),
-            binary_hash: self.binary_hash.into_blake3_hash().into(),
+            wasm_hash: self.binary_hash.into_blake3_hash().into(),
             files_by_path: self
                 .original_files
                 .iter()

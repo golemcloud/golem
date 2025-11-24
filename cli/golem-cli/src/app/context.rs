@@ -21,8 +21,9 @@ use crate::fs::{compile_and_collect_globs, PathExtra};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, Application, ApplicationComponentSelectMode, ApplicationConfig,
-    ApplicationSourceMode, BinaryComponentSource, ComponentPresetSelector, ComponentStubInterfaces,
-    DependentComponent, DynamicHelpSections, DEFAULT_CONFIG_FILE_NAME,
+    ApplicationNameAndEnvironments, ApplicationSourceMode, BinaryComponentSource,
+    ComponentPresetSelector, ComponentStubInterfaces, DependentComponent, DynamicHelpSections,
+    WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
 use crate::validation::{ValidatedResult, ValidationBuilder};
@@ -31,6 +32,7 @@ use crate::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use crate::wasm_rpc_stubgen::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use anyhow::{anyhow, bail, Context};
 use colored::Colorize;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
@@ -98,7 +100,7 @@ impl ToolsWithEnsuredCommonDeps {
 pub struct ApplicationPreloadResult {
     pub source_mode: ApplicationSourceMode,
     pub loaded_with_warnings: bool,
-    pub environments: Option<BTreeMap<EnvironmentName, app_raw::Environment>>,
+    pub application_name_and_environments: Option<ApplicationNameAndEnvironments>,
 }
 
 impl ApplicationContext {
@@ -119,7 +121,7 @@ impl ApplicationContext {
             None => Ok(ApplicationPreloadResult {
                 source_mode: ApplicationSourceMode::None,
                 loaded_with_warnings: false,
-                environments: None,
+                application_name_and_environments: None,
             }),
         }
     }
@@ -127,13 +129,17 @@ impl ApplicationContext {
     pub async fn new(
         source_mode: ApplicationSourceMode,
         config: ApplicationConfig,
+        application_name: WithSource<ApplicationName>,
         environments: BTreeMap<EnvironmentName, app_raw::Environment>,
         component_presets: ComponentPresetSelector,
         file_download_client: reqwest::Client,
     ) -> anyhow::Result<Option<ApplicationContext>> {
-        let Some(app_and_calling_working_dir) =
-            load_app(environments, component_presets, source_mode)
-        else {
+        let Some(app_and_calling_working_dir) = load_app(
+            application_name,
+            environments,
+            component_presets,
+            source_mode,
+        ) else {
             return Ok(None);
         };
 
@@ -421,6 +427,14 @@ impl ApplicationContext {
         &self.selected_component_names
     }
 
+    pub fn deployable_component_names(&self) -> BTreeSet<ComponentName> {
+        self.application
+            .component_names()
+            .filter(|name| self.application.component(name).is_deployable())
+            .cloned()
+            .collect()
+    }
+
     pub async fn build(&mut self) -> anyhow::Result<()> {
         build_app(self).await
     }
@@ -612,13 +626,14 @@ impl ApplicationContext {
 }
 
 fn load_app(
+    application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_presets: ComponentPresetSelector,
     source_mode: ApplicationSourceMode,
 ) -> Option<ValidatedResult<(Application, PathBuf)>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::from_raw_apps(environments, component_presets, raw_apps)
+            Application::from_raw_apps(application_name, environments, component_presets, raw_apps)
                 .map(|app| (app, calling_working_dir))
         })
     })
@@ -629,16 +644,16 @@ fn load_environments(
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|raw_apps_and_calling_working_dir| {
         raw_apps_and_calling_working_dir.and_then(|(raw_apps, calling_working_dir)| {
-            Application::environments_from_raw_apps(raw_apps.as_slice()).map(|environments| {
-                ApplicationPreloadResult {
+            Application::environments_from_raw_apps(raw_apps.as_slice()).map(
+                |application_name_and_environments| ApplicationPreloadResult {
                     source_mode: ApplicationSourceMode::Preloaded {
                         raw_apps,
                         calling_working_dir,
                     },
                     loaded_with_warnings: false,
-                    environments: Some(environments),
-                }
-            })
+                    application_name_and_environments: Some(application_name_and_environments),
+                },
+            )
         })
     })
 }
