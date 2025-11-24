@@ -589,7 +589,7 @@ impl DebugService for DebugServiceDefault {
             .await;
 
         self.debug_session
-            .update_oplog_index(debug_session_id.clone(), OplogIndex::NONE)
+            .update_oplog_index(&debug_session_id, OplogIndex::NONE)
             .await;
 
         // we restart regardless of the current status of the worker such that it restarts
