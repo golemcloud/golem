@@ -34,3 +34,15 @@ It is also possible to manually implement a pair of functions for saving and loa
         ```
     </Tabs.Tab>
 </Tabs>
+
+After making a change that requires a manual update, you need to build and deploy the updated component. Then, to update a specific agent, run the following command:
+
+```shell copy
+golem agent update <AGENT_ID> manual
+```
+
+Alternatively, you can update all agents when deploying the updated component:
+
+```shell copy
+golem app deploy --update-agents manual
+```
