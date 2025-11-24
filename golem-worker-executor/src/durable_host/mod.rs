@@ -213,8 +213,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_stdout(Stdout);
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
-        let last_oplog_index = oplog.current_oplog_index().await;
-
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
@@ -258,7 +256,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rpc,
                 worker_proxy,
                 worker_config.deleted_regions.clone(),
-                last_oplog_index,
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_fork,
@@ -1623,20 +1620,15 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
         let is_live = self.is_live();
 
-        // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
-        // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
-        // does not have the StartSpan/FinishSpan paris persisted.
         let span = if is_live {
             self.state
                 .invocation_context
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
-        } else if let Some((_, entry)) = self
-            .state
-            .replay_state
-            .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
-            .await
-        {
+        } else {
+            let (_, entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
+
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
                     timestamp, span_id, ..
@@ -1651,11 +1643,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
-        } else {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
         };
 
         if current_span_id != parent
@@ -2696,7 +2683,6 @@ impl PrivateDurableWorkerState {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
-        last_oplog_index: OplogIndex,
         component_metadata: golem_service_base::model::Component,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -2710,14 +2696,8 @@ impl PrivateDurableWorkerState {
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
     ) -> Self {
-        let replay_state = ReplayState::new(
-            owned_worker_id.clone(),
-            oplog_service.clone(),
-            oplog.clone(),
-            deleted_regions,
-            last_oplog_index,
-        )
-        .await;
+        let replay_state =
+            ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
@@ -3265,14 +3245,13 @@ fn effective_wasi_config_vars(
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
-    ($private_state:expr, $($cases:path),+) => {
+    ($replay_state:expr, $($cases:path),+) => {
         loop {
-            let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
+            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await;
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
                 })+
-                entry if entry.is_hint() => {}
                 _ => {
                     break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),

@@ -788,6 +788,20 @@ mod tests {
             }
         }
 
+        async fn read_many(
+            &self,
+            oplog_index: OplogIndex,
+            n: u64,
+        ) -> BTreeMap<OplogIndex, OplogEntry> {
+            let mut result = BTreeMap::new();
+            let mut current = oplog_index;
+            for _ in 0..n {
+                result.insert(current, self.read(current).await);
+                current = current.next();
+            }
+            result
+        }
+
         async fn length(&self) -> u64 {
             unimplemented!()
         }
