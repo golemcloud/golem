@@ -46,7 +46,7 @@ impl EnvironmentCommandHandler {
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         match self.ctx.environment_reference() {
             Some(environment_reference) => {
-                self.resolve_environment_reference(mode, &environment_reference)
+                self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
             None => {
