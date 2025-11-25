@@ -186,6 +186,7 @@ pub enum EnvironmentAction {
     CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
     CreateHttpApiDefinition,
+    CreateHttpApiDeployment,
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
@@ -193,6 +194,7 @@ pub enum EnvironmentAction {
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
     DeleteHttpApiDefinition,
+    DeleteHttpApiDeployment,
     DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
@@ -200,6 +202,7 @@ pub enum EnvironmentAction {
     UpdateComponent,
     UpdateEnvironment,
     UpdateHttpApiDefinition,
+    UpdateHttpApiDeployment,
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
@@ -210,6 +213,7 @@ pub enum EnvironmentAction {
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
     ViewHttpApiDefinition,
+    ViewHttpApiDeployment,
     ViewSecurityScheme,
     ViewShares,
     ViewWorker,
@@ -525,6 +529,27 @@ impl AuthCtx {
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
             EnvironmentAction::ViewHttpApiDefinition => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            // Http api deployment
+            EnvironmentAction::CreateHttpApiDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateHttpApiDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteHttpApiDeployment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewHttpApiDeployment => has_any_role(
                 roles_from_shares,
                 &[
                     EnvironmentRole::Admin,

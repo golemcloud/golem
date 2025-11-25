@@ -12,26 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
-use crate::model::api_definition::HttpApiDefinitionId;
-use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
+use super::http_api_definition::HttpApiDefinitionName;
+use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
 
-newtype_uuid!(ApiDeploymentId);
+newtype_uuid!(HttpApiDeploymentId);
 
-declare_transparent_newtypes! {
-    pub struct ApiSiteString(pub String);
-
-    pub struct ApiDeploymentRevision(pub u64);
-}
+declare_revision!(HttpApiDeploymentRevision);
 
 declare_structs! {
-    pub struct ApiDeployment {
-        pub id: ApiDeploymentId,
-        pub revision: ApiDeploymentRevision,
-        pub api_definitions: Vec<HttpApiDefinitionId>,
+    pub struct HttpApiDeploymentCreation {
+        pub domain: Domain,
+        pub api_definitions: Vec<HttpApiDefinitionName>
+    }
+
+    pub struct HttpApiDeploymentUpdate {
+        pub current_revision: HttpApiDeploymentRevision,
+        pub api_definitions: Option<Vec<HttpApiDefinitionName>>
+    }
+
+    pub struct HttpApiDeployment {
+        pub id: HttpApiDeploymentId,
+        pub revision: HttpApiDeploymentRevision,
         pub environment_id: EnvironmentId,
-        pub site: ApiSiteString,
+        pub domain: Domain,
+        pub api_definitions: Vec<HttpApiDefinitionName>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }

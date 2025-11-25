@@ -36,7 +36,6 @@ use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, Poo
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
-use std::collections::HashSet;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -724,41 +723,41 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn version_exists(&self, environment_id: &Uuid, version: &str) -> RepoResult<bool>;
 
     fn validate_stage(
-        environment: &MinimalEnvironmentExtRevisionRecord,
-        stage: &DeploymentIdentity,
+        _environment: &MinimalEnvironmentExtRevisionRecord,
+        _stage: &DeploymentIdentity,
     ) -> Vec<DeployValidationError> {
-        let http_api_definition_ids = stage
-            .http_api_definitions
-            .iter()
-            .map(|d| d.http_api_definition_id)
-            .collect::<HashSet<_>>();
+        // let http_api_definition_ids = stage
+        //     .http_api_definitions
+        //     .iter()
+        //     .map(|d| d.http_api_definition_id)
+        //     .collect::<HashSet<_>>();
 
-        let mut errors = Vec::new();
+        // let mut errors = Vec::new();
 
-        for http_api_deployment in &stage.http_api_deployments {
-            let mut missing_http_api_definition_ids = Vec::new();
+        // for http_api_deployment in &stage.http_api_deployments {
+        //     let mut missing_http_api_definition_ids = Vec::new();
 
-            for definition_id in &http_api_deployment.http_api_definitions {
-                if !http_api_definition_ids.contains(definition_id) {
-                    missing_http_api_definition_ids.push(*definition_id);
-                }
-            }
+        //     for definition_id in &http_api_deployment.http_api_definitions {
+        //         if !http_api_definition_ids.contains(definition_id) {
+        //             missing_http_api_definition_ids.push(*definition_id);
+        //         }
+        //     }
 
-            if !missing_http_api_definition_ids.is_empty() {
-                errors.push(
-                    DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
-                        http_api_deployment_id: http_api_deployment.http_api_deployment_id,
-                        missing_http_api_definition_ids: vec![],
-                    },
-                )
-            }
-        }
+        //     if !missing_http_api_definition_ids.is_empty() {
+        //         errors.push(
+        //             DeployValidationError::HttpApiDeploymentMissingHttpApiDefinition {
+        //                 http_api_deployment_id: http_api_deployment.http_api_deployment_id,
+        //                 missing_http_api_definition_ids: vec![],
+        //             },
+        //         )
+        //     }
+        // }
 
-        if environment.revision.compatibility_check {
-            // TODO: validate api def constraints on components
-        }
+        // if environment.revision.compatibility_check {
+        //     // TODO: validate api def constraints on components
+        // }
 
-        errors
+        Vec::new()
     }
 }
 
@@ -888,10 +887,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         environment_id: &Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
-        let mut deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = tx
+        let deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = tx
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT d.http_api_deployment_id, d.host, d.subdomain, dr.revision_id, dr.hash
+                    SELECT d.http_api_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM http_api_deployments d
                     JOIN http_api_deployment_revisions dr
                         ON d.http_api_deployment_id = dr.http_api_deployment_id
@@ -902,26 +901,26 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             )
             .await?;
 
-        // NOTE: this is an N+1 problem / implementation, but we expect very low cardinality around
-        //       these for now, and this way we avoid many other inconsistencies or DB specific ways
-        //       and limitations to use "IN" properly
-        for deployment in &mut deployments {
-            let definitions = tx
-                .fetch_all(
-                    sqlx::query(indoc! { r#"
-                        SELECT http_definition_id
-                        FROM http_api_deployment_definitions
-                        WHERE http_api_deployment_id = $1 AND revision_id = $2
-                    "#})
-                    .bind(deployment.http_api_deployment_id)
-                    .bind(deployment.revision_id),
-                )
-                .await?;
-            deployment.http_api_definitions = definitions
-                .iter()
-                .map(|row| row.try_get("http_definition_id"))
-                .collect::<Result<_, _>>()?;
-        }
+        // // NOTE: this is an N+1 problem / implementation, but we expect very low cardinality around
+        // //       these for now, and this way we avoid many other inconsistencies or DB specific ways
+        // //       and limitations to use "IN" properly
+        // for deployment in &mut deployments {
+        //     let definitions = tx
+        //         .fetch_all(
+        //             sqlx::query(indoc! { r#"
+        //                 SELECT http_definition_id
+        //                 FROM http_api_deployment_definitions
+        //                 WHERE http_api_deployment_id = $1 AND revision_id = $2
+        //             "#})
+        //             .bind(deployment.http_api_deployment_id)
+        //             .bind(deployment.revision_id),
+        //         )
+        //         .await?;
+        //     deployment.http_api_definitions = definitions
+        //         .iter()
+        //         .map(|row| row.try_get("http_definition_id"))
+        //         .collect::<Result<_, _>>()?;
+        // }
 
         Ok(deployments)
     }
@@ -1140,41 +1139,41 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         environment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
-        let mut deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_http_api_deployments - deployments")
+        let deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = self.with_ro("get_deployed_http_api_deployments - deployments")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT had.http_api_deployment_id, had.host, had.subdomain, hadr.revision_id, hadr.hash
+                    SELECT had.http_api_deployment_id, had.domain, hadr.revision_id, hadr.hash
                     FROM http_api_deployments had
                     JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
                     JOIN deployment_http_api_definition_revisions dhadr
                         ON dhadr.http_api_definition_id = hadr.http_api_deployment_id
                             AND dhadr.http_api_definition_revision_id = hadr.revision_id
                     WHERE dhadr.environment_id = $1 AND dhadr.deployment_revision_id = $2
-                    ORDER BY had.host, had.subdomain
+                    ORDER BY had.domain
                 "#})
                     .bind(environment_id)
                     .bind(revision_id),
             )
             .await?;
 
-        for deployment in &mut deployments {
-            let definitions = self
-                .with_ro("get_deployed_http_api_deployments - definitions")
-                .fetch_all(
-                    sqlx::query(indoc! { r#"
-                        SELECT http_definition_id
-                        FROM http_api_deployment_definitions
-                        WHERE http_api_deployment_id = $1 AND revision_id = $2
-                    "#})
-                    .bind(deployment.http_api_deployment_id)
-                    .bind(deployment.revision_id),
-                )
-                .await?;
-            deployment.http_api_definitions = definitions
-                .iter()
-                .map(|row| row.try_get("http_definition_id"))
-                .collect::<Result<_, _>>()?;
-        }
+        // for deployment in &mut deployments {
+        //     let definitions = self
+        //         .with_ro("get_deployed_http_api_deployments - definitions")
+        //         .fetch_all(
+        //             sqlx::query(indoc! { r#"
+        //                 SELECT http_definition_id
+        //                 FROM http_api_deployment_definitions
+        //                 WHERE http_api_deployment_id = $1 AND revision_id = $2
+        //             "#})
+        //             .bind(deployment.http_api_deployment_id)
+        //             .bind(deployment.revision_id),
+        //         )
+        //         .await?;
+        //     deployment.http_api_definitions = definitions
+        //         .iter()
+        //         .map(|row| row.try_get("http_definition_id"))
+        //         .collect::<Result<_, _>>()?;
+        // }
 
         Ok(deployments)
     }

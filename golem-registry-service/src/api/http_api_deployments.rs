@@ -14,14 +14,14 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::http_api_definition::HttpApiDefinitionService;
+use crate::services::http_api_deployment::HttpApiDeploymentService;
 use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::HttpApiDefinitionRevision;
-use golem_common::model::http_api_definition::{
-    HttpApiDefinition, HttpApiDefinitionCreation, HttpApiDefinitionId, HttpApiDefinitionName,
-    HttpApiDefinitionUpdate,
+use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
+use golem_common::model::http_api_deployment::{
+    HttpApiDeploymentCreation, HttpApiDeploymentRevision, HttpApiDeploymentUpdate,
 };
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -34,265 +34,261 @@ use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
 
-pub struct HttpApiDefinitionsApi {
-    http_api_definition_service: Arc<HttpApiDefinitionService>,
+pub struct HttpApiDeploymentsApi {
+    http_api_deployment_service: Arc<HttpApiDeploymentService>,
     auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
     prefix_path = "/v1",
     tag = ApiTags::RegistryService,
-    tag = ApiTags::HttpApiDefinition
+    tag = ApiTags::ApiDeployment
 )]
-impl HttpApiDefinitionsApi {
+impl HttpApiDeploymentsApi {
     pub fn new(
-        http_api_definition_service: Arc<HttpApiDefinitionService>,
+        http_api_deployment_service: Arc<HttpApiDeploymentService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
-            http_api_definition_service,
+            http_api_deployment_service,
             auth_service,
         }
     }
 
-    /// Create a new api-definition in the environment
+    /// Create a new api-deployment in the environment
     #[oai(
-        path = "/envs/:environment_id/http-api-definitions",
+        path = "/envs/:environment_id/http-api-deployment",
         method = "post",
-        operation_id = "create_http_api_definition",
+        operation_id = "create_http_api_deployment",
         tag = ApiTags::Environment,
     )]
-    async fn create_http_api_definition(
+    async fn create_http_api_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<HttpApiDefinitionCreation>,
+        payload: Json<HttpApiDeploymentCreation>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let record = recorded_http_api_request!(
-            "create_http_api_definition",
+            "create_http_api_deployment",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .create_http_api_definition_internal(environment_id.0, payload.0, auth)
+            .create_http_api_deployment_internal(environment_id.0, payload.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn create_http_api_definition_internal(
+    async fn create_http_api_deployment_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: HttpApiDefinitionCreation,
+        payload: HttpApiDeploymentCreation,
         auth: AuthCtx,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let result = self
-            .http_api_definition_service
+            .http_api_deployment_service
             .create(&environment_id, payload, &auth)
             .await?;
 
         Ok(Json(result))
     }
 
-    /// Get http api definition
+    /// Get an api-deployment by id
     #[oai(
-        path = "/http-api-definitions/:http_api_definition_id",
+        path = "/http-api-deployments/:http_api_deployment_id",
         method = "get",
-        operation_id = "get_http_api_definition"
+        operation_id = "get_http_api_deployment"
     )]
-    async fn get_http_api_definition(
+    async fn get_http_api_deployment(
         &self,
-        http_api_definition_id: Path<HttpApiDefinitionId>,
+        http_api_deployment_id: Path<HttpApiDeploymentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let record = recorded_http_api_request!(
-            "get_http_api_definition",
-            http_api_definition_id = http_api_definition_id.0.to_string(),
+            "get_http_api_deployment",
+            http_api_deployment_id = http_api_deployment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_http_api_definition_internal(http_api_definition_id.0, auth)
+            .get_http_api_deployment_internal(http_api_deployment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_http_api_definition_internal(
+    async fn get_http_api_deployment_internal(
         &self,
-        http_api_definition_id: HttpApiDefinitionId,
+        http_api_deployment_id: HttpApiDeploymentId,
         auth: AuthCtx,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
-        let result = self
-            .http_api_definition_service
-            .get_staged(&http_api_definition_id, &auth)
+    ) -> ApiResult<Json<HttpApiDeployment>> {
+        let http_api_deployment = self
+            .http_api_deployment_service
+            .get_staged(&http_api_deployment_id, &auth)
             .await?;
 
-        Ok(Json(result))
+        Ok(Json(http_api_deployment))
     }
 
-    /// Update http api definition
+    /// Update an api-deployment
     #[oai(
-        path = "/http-api-definitions/:http_api_definition_id",
+        path = "/http-api-deployments/:http_api_deployment_id",
         method = "patch",
-        operation_id = "update_http_api_definition"
+        operation_id = "update_http_api_deployment"
     )]
-    async fn update_http_api_definition(
+    async fn update_http_api_deployment(
         &self,
-        http_api_definition_id: Path<HttpApiDefinitionId>,
-        payload: Json<HttpApiDefinitionUpdate>,
+        http_api_deployment_id: Path<HttpApiDeploymentId>,
+        payload: Json<HttpApiDeploymentUpdate>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let record = recorded_http_api_request!(
-            "update_http_api_definition",
-            http_api_definition_id = http_api_definition_id.0.to_string(),
+            "update_http_api_deployment",
+            http_api_deployment_id = http_api_deployment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .update_http_api_definition_internal(http_api_definition_id.0, payload.0, auth)
+            .update_http_api_deployment_internal(http_api_deployment_id.0, payload.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn update_http_api_definition_internal(
+    async fn update_http_api_deployment_internal(
         &self,
-        http_api_definition_id: HttpApiDefinitionId,
-        payload: HttpApiDefinitionUpdate,
+        http_api_deployment_id: HttpApiDeploymentId,
+        payload: HttpApiDeploymentUpdate,
         auth: AuthCtx,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
-        let result = self
-            .http_api_definition_service
-            .update(&http_api_definition_id, payload, &auth)
+    ) -> ApiResult<Json<HttpApiDeployment>> {
+        let updated = self
+            .http_api_deployment_service
+            .update(&http_api_deployment_id, payload, &auth)
             .await?;
 
-        Ok(Json(result))
+        Ok(Json(updated))
     }
 
-    /// Delete http api definition
+    /// Delete an api-deployment
     #[oai(
-        path = "/http-api-definitions/:http_api_definition_id",
+        path = "/http-api-deployments/:http_api_deployment_id",
         method = "delete",
-        operation_id = "delete_http_api_definition"
+        operation_id = "delete_http_api_deployment"
     )]
-    async fn delete_http_api_definition(
+    async fn delete_http_api_deployment(
         &self,
-        http_api_definition_id: Path<HttpApiDefinitionId>,
-        current_revision: Query<HttpApiDefinitionRevision>,
+        http_api_deployment_id: Path<HttpApiDeploymentId>,
+        current_revision: Query<HttpApiDeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<NoContentResponse> {
         let record = recorded_http_api_request!(
-            "delete_http_api_definition",
-            http_api_definition_id = http_api_definition_id.0.to_string(),
+            "delete_http_api_deployment",
+            http_api_deployment_id = http_api_deployment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_http_api_definition_internal(http_api_definition_id.0, current_revision.0, auth)
+            .delete_http_api_deployment_internal(http_api_deployment_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn delete_http_api_definition_internal(
+    async fn delete_http_api_deployment_internal(
         &self,
-        http_api_definition_id: HttpApiDefinitionId,
-        current_revision: HttpApiDefinitionRevision,
+        http_api_deployment_id: HttpApiDeploymentId,
+        current_revision: HttpApiDeploymentRevision,
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
-        self.http_api_definition_service
-            .delete(&http_api_definition_id, current_revision, &auth)
+        self.http_api_deployment_service
+            .delete(&http_api_deployment_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)
     }
 
-    /// Get http api definition by name in the environment
+    /// Get http api deployment by domain in the environment
     #[oai(
-        path = "/envs/:environment_id/http-api-definitions/:http_api_definition_name",
+        path = "/envs/:environment_id/http-api-deployments/:domain",
         method = "get",
-        operation_id = "get_http_api_definition_in_environment",
+        operation_id = "get_http_api_deployment_in_environment",
         tag = ApiTags::Environment
     )]
-    async fn get_http_api_definition_in_environment(
+    async fn get_http_api_deployment_in_environment(
         &self,
         environment_id: Path<EnvironmentId>,
-        http_api_definition_name: Path<HttpApiDefinitionName>,
+        domain: Path<Domain>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let record = recorded_http_api_request!(
             "get_http_api_definition_in_environment",
             environment_id = environment_id.0.to_string(),
-            http_api_definition_name = http_api_definition_name.0.to_string(),
+            domain = domain.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_http_api_definition_in_environment_internal(
-                environment_id.0,
-                http_api_definition_name.0,
-                auth,
-            )
+            .get_http_api_deployment_in_environment_internal(environment_id.0, domain.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_http_api_definition_in_environment_internal(
+    async fn get_http_api_deployment_in_environment_internal(
         &self,
         environment_id: EnvironmentId,
-        http_api_definition_name: HttpApiDefinitionName,
+        domain: Domain,
         auth: AuthCtx,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let http_api_definition = self
-            .http_api_definition_service
-            .get_staged_by_name(&environment_id, &http_api_definition_name, &auth)
+            .http_api_deployment_service
+            .get_staged_by_domain(&environment_id, &domain, &auth)
             .await?;
 
         Ok(Json(http_api_definition))
     }
 
-    /// Get http api definition by name in the deployment
+    /// Get http api deployment by domain in the deployment
     #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions/:http_api_definition_name",
+        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-deployments/:domain",
         method = "get",
-        operation_id = "get_http_api_definition_in_deployment",
+        operation_id = "get_http_api_deployment_in_deployment",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
-    async fn get_http_api_definition_in_deployment(
+    async fn get_http_api_deployment_in_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
-        http_api_definition_name: Path<HttpApiDefinitionName>,
+        domain: Path<Domain>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let record = recorded_http_api_request!(
-            "get_http_api_definition_in_deployment",
+            "get_http_api_deployment_in_deployment",
             environment_id = environment_id.0.to_string(),
             deployment_revision = deployment_revision.0.to_string(),
-            http_api_definition_name = http_api_definition_name.0.to_string(),
+            domain = domain.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_http_api_definition_in_deployment_internal(
+            .get_http_api_deployment_in_deployment_internal(
                 environment_id.0,
                 deployment_revision.0,
-                http_api_definition_name.0,
+                domain.0,
                 auth,
             )
             .instrument(record.span.clone())
@@ -301,89 +297,85 @@ impl HttpApiDefinitionsApi {
         record.result(response)
     }
 
-    async fn get_http_api_definition_in_deployment_internal(
+    async fn get_http_api_deployment_in_deployment_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
-        http_api_definition_name: HttpApiDefinitionName,
+        domain: Domain,
         auth: AuthCtx,
-    ) -> ApiResult<Json<HttpApiDefinition>> {
+    ) -> ApiResult<Json<HttpApiDeployment>> {
         let http_api_definition = self
-            .http_api_definition_service
-            .get_in_deployment_by_name(
-                &environment_id,
-                deployment_revision,
-                &http_api_definition_name,
-                &auth,
-            )
+            .http_api_deployment_service
+            .get_in_deployment_by_domain(&environment_id, deployment_revision, &domain, &auth)
             .await?;
 
         Ok(Json(http_api_definition))
     }
 
-    /// List http api definitions in the environment
+    /// List http api deployment by domain in the environment
     #[oai(
-        path = "/envs/:environment_id/http-api-definitions",
+        path = "/envs/:environment_id/http-api-deployments",
         method = "get",
-        operation_id = "list_environment_http_api_definitions",
-        tag = ApiTags::Environment,
+        operation_id = "list_http_api_deployments_in_environment",
+        tag = ApiTags::Environment
     )]
-    async fn list_environment_http_api_definitions(
+    async fn list_http_api_deployments_in_environment(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
+    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let record = recorded_http_api_request!(
-            "list_environment_http_api_definitions",
+            "list_http_api_deployments_in_environment",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_environment_http_api_definitions_internal(environment_id.0, auth)
+            .list_http_api_deployments_in_environment_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn list_environment_http_api_definitions_internal(
+    async fn list_http_api_deployments_in_environment_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
+    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let values = self
-            .http_api_definition_service
+            .http_api_deployment_service
             .list_staged(&environment_id, &auth)
             .await?;
 
         Ok(Json(Page { values }))
     }
 
-    /// List http api definitions in the deployment
+    /// Get http api deployment by domain in the deployment
     #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions",
+        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-deployments",
         method = "get",
-        operation_id = "list_deployment_http_api_definitions",
+        operation_id = "list_http_api_deployments_in_deployment",
         tag = ApiTags::Environment,
+        tag = ApiTags::Deployment,
     )]
-    async fn list_deployment_http_api_definitions(
+    async fn list_http_api_deployments_in_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
+    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let record = recorded_http_api_request!(
-            "list_deployment_http_api_definitions",
+            "list_http_api_deployments_in_deployment",
             environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.to_string()
+            deployment_revision = deployment_revision.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_deployment_http_api_definitions_internal(
+            .list_http_api_deployments_in_deployment_internal(
                 environment_id.0,
                 deployment_revision.0,
                 auth,
@@ -394,14 +386,14 @@ impl HttpApiDefinitionsApi {
         record.result(response)
     }
 
-    async fn list_deployment_http_api_definitions_internal(
+    async fn list_http_api_deployments_in_deployment_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<HttpApiDefinition>>> {
+    ) -> ApiResult<Json<Page<HttpApiDeployment>>> {
         let values = self
-            .http_api_definition_service
+            .http_api_deployment_service
             .list_in_deployment(&environment_id, deployment_revision, &auth)
             .await?;
 

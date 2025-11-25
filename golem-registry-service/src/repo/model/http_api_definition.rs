@@ -18,13 +18,13 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::api_definition::{
-    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision,
-    HttpApiDefinitionVersion, HttpApiRoute,
-};
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision,
+    HttpApiDefinitionVersion, HttpApiRoute,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -54,10 +54,27 @@ pub struct HttpApiDefinitionRecord {
 }
 
 // Definition field of the HttpApiDefinitionRevisionRecord record. Must be kept backwards compatible
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec, PartialEq)]
 #[desert(evolution())]
 pub struct HttpApiDefinitionDefinitionBlob {
     routes: Vec<HttpApiRoute>,
+}
+
+impl HttpApiDefinitionDefinitionBlob {
+    pub fn serialize(&self) -> Result<Vec<u8>, HttpApiDefinitionRepoError> {
+        let serialized_blob = desert_rust::serialize_to_byte_vec(self).map_err(|e| {
+            anyhow::Error::from(e).context("serializing api definition blob failed")
+        })?;
+        Ok(serialized_blob)
+    }
+
+    pub fn deserialze(data: &[u8]) -> Result<Self, HttpApiDefinitionRepoError> {
+        let deserialzed_blob: HttpApiDefinitionDefinitionBlob = desert_rust::deserialize(data)
+            .map_err(|e| {
+                anyhow::Error::from(e).context("deserializing api definition blob failed")
+            })?;
+        Ok(deserialzed_blob)
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -95,13 +112,11 @@ impl HttpApiDefinitionRevisionRecord {
         actor: AccountId,
     ) -> Result<Self, HttpApiDefinitionRepoError> {
         let blob = HttpApiDefinitionDefinitionBlob { routes };
-        let serialized_blob = desert_rust::serialize_to_byte_vec(&blob).map_err(|e| {
-            anyhow::Error::from(e).context("serializing api definition blob failed")
-        })?;
+        let serialized_blob = blob.serialize()?;
 
         Ok(Self {
             http_api_definition_id: http_api_definition_id.0,
-            revision_id: HttpApiDefinitionRevision::INITIAL.0 as i64,
+            revision_id: HttpApiDefinitionRevision::INITIAL.into(),
             version: version.0,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
@@ -116,9 +131,7 @@ impl HttpApiDefinitionRevisionRecord {
         let blob = HttpApiDefinitionDefinitionBlob {
             routes: value.routes,
         };
-        let serialized_blob = desert_rust::serialize_to_byte_vec(&blob).map_err(|e| {
-            anyhow::Error::from(e).context("serializing api definition blob failed")
-        })?;
+        let serialized_blob = blob.serialize()?;
 
         Ok(Self {
             http_api_definition_id: value.id.0,
@@ -189,10 +202,8 @@ impl HttpApiDefinitionExtRevisionRecord {
 impl TryFrom<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
     type Error = HttpApiDefinitionRepoError;
     fn try_from(value: HttpApiDefinitionExtRevisionRecord) -> Result<Self, Self::Error> {
-        let deserialzed_blob: HttpApiDefinitionDefinitionBlob =
-            desert_rust::deserialize(&value.revision.definition).map_err(|e| {
-                anyhow::Error::from(e).context("deserializing api definition blob failed")
-            })?;
+        let deserialzed_blob =
+            HttpApiDefinitionDefinitionBlob::deserialze(&value.revision.definition)?;
 
         Ok(Self {
             id: HttpApiDefinitionId(value.revision.http_api_definition_id),
@@ -226,5 +237,78 @@ impl HttpApiDefinitionRevisionIdentityRecord {
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HttpApiDefinitionDefinitionBlob;
+    use desert_rust::BinaryCodec;
+    use goldenfile::Mint;
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::http_api_definition::{
+        GatewayBinding, HttpApiRoute, RouteMethod, WorkerGatewayBinding,
+    };
+    use std::fmt::Debug;
+    use std::io::Write;
+    use test_r::test;
+
+    #[allow(clippy::type_complexity)]
+    fn assert_old_decodes_as<T: BinaryCodec + PartialEq + Debug + 'static>(
+        expected: T,
+    ) -> Box<dyn Fn(&std::path::Path, &std::path::Path)> {
+        Box::new(move |old, _new| {
+            let old_bytes = std::fs::read(old).unwrap();
+
+            let old_decoded: T =
+                desert_rust::deserialize(&old_bytes).expect("Failed to decode old version");
+
+            assert_eq!(
+                old_decoded, expected,
+                "Decoded value from old file does not match expected"
+            );
+        })
+    }
+
+    #[test]
+    fn blob_version_1_serialization() -> anyhow::Result<()> {
+        let blob = HttpApiDefinitionDefinitionBlob {
+            routes: vec![HttpApiRoute {
+                method: RouteMethod::Post,
+                path: "/{user-id}/test-path-1".to_string(),
+                binding: GatewayBinding::Worker(WorkerGatewayBinding {
+                    component_name: ComponentName("test-component".to_string()),
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: r#"
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
+                                {
+                                    headers: {ContentType: "json", userid: "foo"},
+                                    body: contents,
+                                    status: 201
+                                }
+                            "#
+                    .to_string(),
+                }),
+                security: None,
+            }],
+        };
+
+        let serialized = blob.serialize()?;
+
+        let mut mint = Mint::new("tests/goldenfiles");
+
+        let mut file = mint.new_goldenfile_with_differ(
+            "http_api_definition_repo_blob_v1.bin",
+            assert_old_decodes_as(blob),
+        )?;
+
+        file.write_all(&serialized)?;
+
+        Ok(())
     }
 }

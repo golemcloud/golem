@@ -39,6 +39,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::deployment::DeploymentCreation;
+use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
@@ -594,6 +595,21 @@ pub trait TestDslExtended: TestDsl {
             .await?;
 
         Ok(environment_share)
+    }
+
+    async fn register_domain(&self, environment_id: &EnvironmentId) -> anyhow::Result<Domain> {
+        let client = self.registry_service_client().await;
+
+        let domain = Domain(format!(
+            "{}.api.golem.cloud",
+            Uuid::new_v4().to_string().to_lowercase()
+        ));
+
+        let domain_registration = client
+            .create_domain_registration(&environment_id.0, &DomainRegistrationCreation { domain })
+            .await?;
+
+        Ok(domain_registration.domain)
     }
 
     async fn get_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<Environment> {

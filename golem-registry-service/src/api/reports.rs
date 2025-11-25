@@ -15,7 +15,7 @@
 use crate::api::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::reports::ReportsService;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::reports::{AccountCounts, AccountSummary};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;

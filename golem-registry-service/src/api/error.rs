@@ -23,6 +23,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::http_api_definition::HttpApiDefinitionError;
+use crate::services::http_api_deployment::HttpApiDeploymentError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
@@ -472,7 +473,8 @@ impl From<DomainRegistrationError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             DomainRegistrationError::ParentEnvironmentNotFound(_)
-            | DomainRegistrationError::DomainRegistrationByIdNotFound(_) => {
+            | DomainRegistrationError::DomainRegistrationNotFound(_)
+            | DomainRegistrationError::DomainRegistrationByDomainNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -541,7 +543,8 @@ impl From<HttpApiDefinitionError> for ApiError {
                 cause: None,
             })),
 
-            HttpApiDefinitionError::HttpApiDefinitionVersionAlreadyExists(_)
+            HttpApiDefinitionError::SecuritySchemeDoesNotExist(_)
+            | HttpApiDefinitionError::HttpApiDefinitionVersionAlreadyExists(_)
             | HttpApiDefinitionError::HttpApiDefinitionWithNameAlreadyExists(_)
             | HttpApiDefinitionError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
@@ -549,6 +552,32 @@ impl From<HttpApiDefinitionError> for ApiError {
 
             HttpApiDefinitionError::Unauthorized(inner) => inner.into(),
             HttpApiDefinitionError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<HttpApiDeploymentError> for ApiError {
+    fn from(value: HttpApiDeploymentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            HttpApiDeploymentError::ParentEnvironmentNotFound(_)
+            | HttpApiDeploymentError::DeploymentRevisionNotFound(_)
+            | HttpApiDeploymentError::HttpApiDeploymentNotFound(_)
+            | HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            HttpApiDeploymentError::DomainNotRegistered(_)
+            | HttpApiDeploymentError::HttpApiDeploymentForDomainAlreadyExists(_)
+            | HttpApiDeploymentError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            HttpApiDeploymentError::Unauthorized(inner) => inner.into(),
+            HttpApiDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),
