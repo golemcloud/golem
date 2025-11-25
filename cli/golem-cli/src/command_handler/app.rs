@@ -35,6 +35,7 @@ use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
+use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -562,7 +563,7 @@ impl AppCommandHandler {
         if let Some(diff) = &mut diff_stage {
             for (component_name, component_diff) in &diff.components {
                 match component_diff {
-                    diff::BTreeMapDiffValue::Add => {
+                    diff::BTreeMapDiffValue::Create => {
                         // NOP
                     }
                     diff::BTreeMapDiffValue::Delete => {
@@ -692,6 +693,18 @@ impl AppCommandHandler {
         }
 
         if plan {
+            return Ok(());
+        }
+
+        if !self.ctx.interactive_handler().confirm_deploy_by_plan(
+            &environment.application_name,
+            &environment.environment_name,
+            &self
+                .ctx
+                .manifest_environment()
+                .map(|env| env.environment.to_formatted_server_context())
+                .unwrap_or("???".to_string()),
+        )? {
             return Ok(());
         }
 

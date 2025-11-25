@@ -20,13 +20,13 @@ use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf
 impl TextView for DeploymentDiff {
     fn log(&self) {
         if !self.components.is_empty() {
-            logln("Component changes:");
+            logln("Component changes:".log_color_help_group().to_string());
             for (component_name, component_diff) in &self.components {
                 match component_diff {
-                    BTreeMapDiffValue::Add => {
+                    BTreeMapDiffValue::Create => {
                         logln(format!(
                             "  - {} component {}",
-                            "add".green(),
+                            "create".green(),
                             component_name.log_color_highlight()
                         ));
                     }
@@ -69,11 +69,19 @@ impl TextView for DeploymentDiff {
                 }
             }
             if !self.http_api_definitions.is_empty() {
-                logln("HTTP API definition changes:");
+                logln(
+                    "HTTP API definition changes:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
                 // TODO: atomic
             }
             if !self.http_api_deployments.is_empty() {
-                logln("HTTP API deployment changes:");
+                logln(
+                    "HTTP API deployment changes:"
+                        .log_color_help_group()
+                        .to_string(),
+                );
                 // TODO: atomic
             }
         }

@@ -78,7 +78,7 @@ pub trait Diffable {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BTreeMapDiffValue<ValueDiff> {
-    Add,
+    Create,
     Delete,
     Update(Option<ValueDiff>),
 }
@@ -89,7 +89,7 @@ impl<ValueDiff: Serialize> Serialize for BTreeMapDiffValue<ValueDiff> {
         S: Serializer,
     {
         match self {
-            BTreeMapDiffValue::Add => serializer.serialize_str("add"),
+            BTreeMapDiffValue::Create => serializer.serialize_str("create"),
             BTreeMapDiffValue::Delete => serializer.serialize_str("delete"),
             BTreeMapDiffValue::Update(diff) => match diff {
                 Some(diff) => diff.serialize(serializer),
@@ -122,7 +122,7 @@ where
                     }
                 }
                 (Some(_), None) => {
-                    diff.insert(key.clone(), BTreeMapDiffValue::Add);
+                    diff.insert(key.clone(), BTreeMapDiffValue::Create);
                 }
                 (None, Some(_)) => {
                     diff.insert(key.clone(), BTreeMapDiffValue::Delete);
@@ -144,7 +144,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BTreeSetDiffValue {
-    Add,
+    Create,
     Delete,
 }
 
@@ -167,7 +167,7 @@ where
                     // NOP, same
                 }
                 (true, false) => {
-                    diff.insert(key.clone(), BTreeSetDiffValue::Add);
+                    diff.insert(key.clone(), BTreeSetDiffValue::Create);
                 }
                 (false, true) => {
                     diff.insert(key.clone(), BTreeSetDiffValue::Delete);
@@ -183,339 +183,5 @@ where
         } else {
             Some(diff)
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::model::diff::component::{Component, ComponentFile};
-    use crate::model::diff::deployment::Deployment;
-    use crate::model::diff::hash::Hashable;
-    use crate::model::diff::http_api_definition::{
-        HttpApiDefinition, HttpApiDefinitionBinding, HttpApiRoute,
-    };
-    use crate::model::diff::http_api_deployment::{HttpApiDeployment, NO_SUBDOMAIN};
-    use crate::model::diff::ser::{
-        to_json_pretty_with_mode, to_json_with_mode, to_yaml_with_mode, SerializeMode,
-        ToSerializableWithModeExt,
-    };
-    use crate::model::diff::{ComponentMetadata, Diffable};
-    use crate::model::ComponentFilePermissions;
-    use std::collections::{BTreeMap, BTreeSet};
-    use test_r::test;
-
-    // TODO: proper test
-    #[test]
-    fn test() {
-        fn new_component(name: &str) -> Component {
-            Component {
-                metadata: ComponentMetadata {
-                    version: Some("1.0.0".to_string()),
-                    env: BTreeMap::from([
-                        ("LOL".to_string(), "LOL".to_string()),
-                        ("X".to_string(), "Y".to_string()),
-                    ]),
-                    dynamic_linking_wasm_rpc: Default::default(),
-                }
-                .into(),
-                wasm_hash: blake3::hash(name.as_bytes()).into(),
-                files_by_path: BTreeMap::from([
-                    (
-                        "lol".to_string(),
-                        ComponentFile {
-                            hash: blake3::hash("xycyxc".as_bytes()).into(),
-                            permissions: ComponentFilePermissions::ReadOnly,
-                        }
-                        .into(),
-                    ),
-                    (
-                        "lol-2".to_string(),
-                        ComponentFile {
-                            hash: blake3::hash("xycyxc-sdsd".as_bytes()).into(),
-                            permissions: ComponentFilePermissions::ReadOnly,
-                        }
-                        .into(),
-                    ),
-                ]),
-                plugins_by_priority: Default::default(),
-            }
-        }
-
-        let deployment = Deployment {
-            components: BTreeMap::from([
-                ("comp1".to_string(), new_component("comp1").into()),
-                ("comp2".to_string(), new_component("comp2").into()),
-            ]),
-            http_api_definitions: BTreeMap::from([
-                (
-                    "main-api".to_string(),
-                    HttpApiDefinition {
-                        routes: BTreeMap::from([
-                            (
-                                ("GET", "/users").into(),
-                                HttpApiRoute {
-                                    binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
-                                        component_name: None,
-                                        worker_name: None,
-                                        idempotency_key: None,
-                                        response: Some("fake rib".to_string()),
-                                    },
-                                    security: None,
-                                },
-                            ),
-                            (
-                                ("GET", "/posts").into(),
-                                HttpApiRoute {
-                                    binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
-                                        component_name: None,
-                                        worker_name: None,
-                                        idempotency_key: None,
-                                        response: None,
-                                    },
-                                    security: None,
-                                },
-                            ),
-                            (
-                                ("POST", "/users").into(),
-                                HttpApiRoute {
-                                    binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
-                                        component_name: None,
-                                        worker_name: None,
-                                        idempotency_key: None,
-                                        response: None,
-                                    },
-                                    security: None,
-                                },
-                            ),
-                        ]),
-                        version: "1.0.0".to_string(),
-                    }
-                    .into(),
-                ),
-                (
-                    "admin-api".to_string(),
-                    HttpApiDefinition {
-                        routes: BTreeMap::default(),
-                        version: "1.0.2".to_string(),
-                    }
-                    .into(),
-                ),
-            ]),
-            http_api_deployments: BTreeMap::from([
-                (
-                    (NO_SUBDOMAIN, "localhost").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string()]),
-                    }
-                    .into(),
-                ),
-                (
-                    (NO_SUBDOMAIN, "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string()]),
-                    }
-                    .into(),
-                ),
-                (
-                    (Some("api"), "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string()]),
-                    }
-                    .into(),
-                ),
-                (
-                    (Some("admin"), "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string()]),
-                    }
-                    .into(),
-                ),
-            ]),
-        };
-
-        println!("{}", deployment.hash());
-
-        println!(
-            "{}",
-            to_json_with_mode(&deployment, SerializeMode::HashOnly).unwrap()
-        );
-        println!(
-            "{}",
-            to_yaml_with_mode(&deployment, SerializeMode::HashOnly).unwrap()
-        );
-
-        println!(
-            "{}",
-            to_json_pretty_with_mode(&deployment, SerializeMode::ValueIfAvailable).unwrap()
-        );
-        println!(
-            "{}",
-            to_yaml_with_mode(&deployment, SerializeMode::ValueIfAvailable).unwrap()
-        );
-
-        for component in deployment.components.values() {
-            println!("----");
-            println!("{}", component.hash());
-            println!(
-                "{}",
-                component
-                    .to_json_with_mode(SerializeMode::HashOnly)
-                    .unwrap()
-            );
-            println!(
-                "{}",
-                component
-                    .to_pretty_json_with_mode(SerializeMode::HashOnly)
-                    .unwrap()
-            );
-            println!(
-                "{}",
-                component
-                    .to_yaml_with_mode(SerializeMode::HashOnly)
-                    .unwrap()
-            );
-            println!(
-                "{}",
-                component
-                    .to_pretty_json_with_mode(SerializeMode::ValueIfAvailable)
-                    .unwrap()
-            );
-            println!(
-                "{}",
-                component
-                    .to_yaml_with_mode(SerializeMode::ValueIfAvailable)
-                    .unwrap()
-            );
-        }
-
-        let server_deployment = {
-            let mut deployment = deployment.clone();
-
-            deployment
-                .components
-                .insert("comp3".to_string(), new_component("comp3").into());
-
-            deployment.components.remove("comp1");
-
-            {
-                let comp = deployment
-                    .components
-                    .get("comp2")
-                    .unwrap()
-                    .as_value()
-                    .unwrap();
-                let mut comp = comp.clone();
-                comp.files_by_path.insert(
-                    "new_file".to_string(),
-                    ComponentFile {
-                        hash: blake3::hash("xxx".as_bytes()).into(),
-                        permissions: ComponentFilePermissions::ReadOnly,
-                    }
-                    .into(),
-                );
-                deployment
-                    .components
-                    .insert("comp2".to_string(), comp.into());
-            }
-
-            deployment.http_api_definitions.remove("admin-api");
-
-            {
-                let mut api = deployment
-                    .http_api_definitions
-                    .get("main-api")
-                    .unwrap()
-                    .as_value()
-                    .unwrap()
-                    .clone();
-                api.routes.insert(
-                    ("POST", "/posts").into(),
-                    HttpApiRoute {
-                        binding: HttpApiDefinitionBinding {
-                            binding_type: None,
-                            component_name: None,
-                            worker_name: None,
-                            idempotency_key: None,
-                            response: None,
-                        },
-                        security: Some("lol".to_string()),
-                    },
-                );
-                api.routes.insert(
-                    ("GET", "/users").into(),
-                    HttpApiRoute {
-                        binding: HttpApiDefinitionBinding {
-                            binding_type: None,
-                            component_name: Some("comp3".to_string()),
-                            worker_name: None,
-                            idempotency_key: None,
-                            response: None,
-                        },
-                        security: Some("xxx".to_string()),
-                    },
-                );
-
-                deployment
-                    .http_api_definitions
-                    .insert("main-api".to_string(), api.into());
-            }
-
-            deployment.http_api_deployments = BTreeMap::from([
-                (
-                    (NO_SUBDOMAIN, "localhost").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["other-api".to_string()]),
-                    }
-                    .into(),
-                ),
-                (
-                    (NO_SUBDOMAIN, "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::default(),
-                    }
-                    .into(),
-                ),
-                (
-                    (Some("api"), "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string(), "other-api".to_string()]),
-                    }
-                    .into(),
-                ),
-                (
-                    (Some("admin"), "app.com").into(),
-                    HttpApiDeployment {
-                        apis: BTreeSet::from(["main-api".to_string()]),
-                    }
-                    .into(),
-                ),
-            ]);
-
-            deployment
-        };
-
-        println!(
-            "{}",
-            serde_yaml::to_string(&deployment.diff_with_server(&server_deployment)).unwrap()
-        );
-
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&deployment.diff_with_server(&server_deployment)).unwrap()
-        );
-
-        println!(
-            "{}",
-            deployment.unified_yaml_diff_with_server(&server_deployment, SerializeMode::HashOnly)
-        );
-
-        println!(
-            "{}",
-            deployment
-                .unified_yaml_diff_with_server(&server_deployment, SerializeMode::ValueIfAvailable)
-        );
     }
 }
