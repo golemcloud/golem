@@ -394,9 +394,8 @@ fn get_agent_type_with_remote_client(
     })
 }
 
-
 fn extract_description(attrs: &[syn::Attribute]) -> Option<String> {
-   extract_meta(attrs, "description")
+    extract_meta(attrs, "description")
 }
 
 fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
@@ -406,10 +405,8 @@ fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
 fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
     for attr in attrs {
         if attr.path().is_ident(key) {
-            if let Ok(lit) = attr.parse_args::<syn::Lit>() {
-                if let syn::Lit::Str(lit_str) = lit {
-                    return Some(lit_str.value());
-                }
+            if let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>() {
+                return Some(lit_str.value());
             }
         }
     }
