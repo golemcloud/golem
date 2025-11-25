@@ -14,6 +14,7 @@
 
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
+use crate::model::app::ComponentLayerId;
 use crate::model::deploy_diff::DiffSerialize;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
@@ -655,4 +656,18 @@ pub fn to_colored_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
     }
 
     Ok(output)
+}
+
+pub fn format_component_applied_layers(
+    applied_layers: &[(ComponentLayerId, Option<String>)],
+) -> String {
+    applied_layers
+        .iter()
+        .map(|(id, selection)| match selection {
+            Some(selection) => {
+                format!("{}[{}]", id.name(), selection.as_str())
+            }
+            None => id.name().to_string(),
+        })
+        .join(", ")
 }

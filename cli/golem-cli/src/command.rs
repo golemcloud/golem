@@ -981,7 +981,6 @@ pub mod component {
             #[command(flatten)]
             build: BuildArgs,
         },
-        // TODO: atomic: drop this one, we only support global clean
         /// Clean component(s) based on the current directory or by selection
         Clean {
             #[command(flatten)]

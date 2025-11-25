@@ -26,7 +26,7 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
-use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::fmt::{
     log_error, log_fuzzy_matches, log_text_view, log_unified_diff, log_warn,
@@ -654,10 +654,27 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
+        let any_component_requested = !component_names.is_empty();
+
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
-        app_ctx.some_or_err()?.clean()
+
+        let clean_mode = {
+            if any_component_requested {
+                CleanMode::SelectedComponentsOnly
+            } else {
+                match &default_component_select_mode {
+                    ApplicationComponentSelectMode::CurrentDir
+                    | ApplicationComponentSelectMode::Explicit(_) => {
+                        CleanMode::SelectedComponentsOnly
+                    }
+                    ApplicationComponentSelectMode::All => CleanMode::All,
+                }
+            }
+        };
+
+        app_ctx.some_or_err()?.clean(clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {

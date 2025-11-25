@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::context::check_http_response_success;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::{ComponentFilePathWithPermissions, InitialComponentFile};
 use anyhow::{anyhow, bail, Context};
@@ -27,6 +26,7 @@ use tokio::fs::File;
 use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
 use url::Url;
+use crate::http::check_http_response_success;
 
 // TODO: atomic
 #[allow(unused)]
