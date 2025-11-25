@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
+use crate::agentic::Agent;
 use golem_wasm::AgentId;
-use crate::{agentic::Agent};
+use std::cell::RefCell;
 
 pub struct ResolvedAgent {
     pub agent: RefCell<Box<dyn Agent>>,
