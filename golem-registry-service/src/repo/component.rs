@@ -428,7 +428,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .bind(revision.audit.created_by),
                 )
                 .await
-                .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)?;
+                .to_error_on_unique_violation(ComponentRepoError::ComponentViolatesUniqueness)?;
 
                 let revision = Self::insert_revision(
                     tx,
@@ -480,7 +480,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .fetch_one(
                         sqlx::query(indoc! { r#"
                             UPDATE components
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            SET updated_at = $1, modified_by = $2, current_revision_id = $3, deleted_at = NULL
                             WHERE component_id = $4
                             RETURNING name, environment_id
                         "#})

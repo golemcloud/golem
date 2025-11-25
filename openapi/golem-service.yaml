@@ -2424,9 +2424,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              type: array
-              items:
-                $ref: '#/components/schemas/AccountRole'
+              $ref: '#/components/schemas/AccountSetRoles'
         required: true
       responses:
         '200':
@@ -2588,296 +2586,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/PluginRegistrationDto'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/api-definitions/{api_definition_id}:
-    get:
-      tags:
-      - RegistryService
-      - ApiDefinition
-      summary: Get api-definition by id
-      operationId: get_api_definition
-      parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    patch:
-      tags:
-      - RegistryService
-      - ApiDefinition
-      summary: update api-definition
-      operationId: update_api_definition
-      parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/UpdateHttpApiDefinitionRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/api-definitions/{api_definition_id}/revisions:
-    get:
-      tags:
-      - RegistryService
-      - ApiDefinition
-      summary: Get revisions of the api definition
-      operationId: get_api_definition_revisions
-      parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/api-definitions/{api_definition_id}/revisions/{revision}:
-    get:
-      tags:
-      - RegistryService
-      - ApiDefinition
-      summary: Get specific revision of an api definition
-      operationId: get_api_definition_revision
-      parameters:
-      - in: path
-        name: api_definition_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: revision
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3298,6 +3006,15 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
       responses:
         '204':
           description: ''
@@ -4091,12 +3808,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components:
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/components:
     get:
       tags:
       - RegistryService
       - Component
       - Environment
+      - Deployment
       summary: Get all components in a specific deployment
       operationId: get_deployment_components
       parameters:
@@ -4110,7 +3828,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: deployment_revision_id
+        name: deployment_revision
         required: true
         deprecated: false
         schema:
@@ -4170,12 +3888,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/components/{component_name}:
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/components/{component_name}:
     get:
       tags:
       - RegistryService
       - Component
       - Environment
+      - Deployment
       summary: Get component in a deployment by name
       operationId: get_deployment_component
       parameters:
@@ -4189,7 +3908,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: deployment_revision_id
+        name: deployment_revision
         required: true
         deprecated: false
         schema:
@@ -4281,6 +4000,79 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ComponentDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Component
+      summary: Update the component
+      operationId: delete_component
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      responses:
+        '204':
+          description: ''
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4802,788 +4594,6 @@ paths:
       responses:
         '204':
           description: ''
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/api-definitions:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDefinition
-      summary: Get all api-definitions in the environment
-      operationId: get_environment_api_definitions
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    post:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDefinition
-      summary: Create a new api-definition in the environment
-      operationId: create_api_definition
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreateHttpApiDefinitionRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/api-definitions/{api_definition_name}:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDefinition
-      summary: Get api-definition by name
-      operationId: get_environment_api_definition
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: api_definition_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDefinition
-      - Deployment
-      summary: Get all api-definitions in a specific deployment
-      operationId: get_deployment_api_definitions
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-definitions/{api_definition_name}:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDefinition
-      - Deployment
-      summary: Get api-definition in a deployment by name
-      operationId: get_deployment_api_definition
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
-      - in: path
-        name: api_definition_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/HttpApiDefinitionResponseView'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/api-deployments:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDeployment
-      summary: Get all api-deployments in the environment
-      operationId: get_environment_api_deployments
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_ApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-    post:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDeployment
-      summary: Create a new api deployment
-      operationId: create_api_deployment
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/CreateApiDeploymentRequest'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/api-deployments/{site}:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDeployment
-      summary: Get api-deployment by site
-      operationId: get_environment_api_deployment
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: site
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDeployment
-      - Deployment
-      summary: Get all api-deployments in a specific deployment
-      operationId: get_deployment_api_deployments
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_ApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_revision_id}/api-deployments/{site}:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      - ApiDeployment
-      - Deployment
-      summary: Get api-deployment in a deployment by site
-      operationId: get_deployment_api_deployment
-      parameters:
-      - in: path
-        name: environment_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: deployment_revision_id
-        required: true
-        deprecated: false
-        schema:
-          type: integer
-          format: uint64
-        explode: true
-        style: simple
-      - in: path
-        name: site
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ApiDeployment'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6222,6 +5232,15 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
       responses:
         '204':
           description: ''
@@ -6866,6 +5885,15 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -6947,6 +5975,612 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/EnvironmentShare'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/http-api-definitions:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      summary: List http api definitions in the environment
+      operationId: list_environment_http_api_definitions
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      summary: Create a new api-definition in the environment
+      operationId: create_http_api_definition
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/http-api-definitions/{http_api_definition_id}:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      summary: Get http api definition
+      operationId: get_http_api_definition
+      parameters:
+      - in: path
+        name: http_api_definition_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      summary: Delete http api definition
+      operationId: delete_http_api_definition
+      parameters:
+      - in: path
+        name: http_api_definition_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    patch:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      summary: Update http api definition
+      operationId: update_http_api_definition
+      parameters:
+      - in: path
+        name: http_api_definition_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/http-api-definitions/{http_api_definition_name}:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      summary: Get http api definition by name in the environment
+      operationId: get_http_api_definition_in_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: http_api_definition_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      - Deployment
+      summary: Get http api definition by name in the deployment
+      operationId: get_http_api_definition_in_deployment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: http_api_definition_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/HttpApiDefinition'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      summary: List http api definitions in the deployment
+      operationId: list_deployment_http_api_definitions
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_HttpApiDefinition'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -7993,6 +7627,15 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -11158,6 +10801,20 @@ components:
       enum:
       - admin
       - marketing-admin
+    AccountSetRoles:
+      title: AccountSetRoles
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountRole'
+      required:
+      - currentRevision
+      - roles
     AccountSummary:
       title: AccountSummary
       type: object
@@ -11189,11 +10846,15 @@ components:
       title: AccountUpdate
       type: object
       properties:
+        currentRevision:
+          type: integer
+          format: uint64
         name:
           type: string
         email:
           type: string
       required:
+      - currentRevision
       - name
       - email
     AgentConstructor:
@@ -11423,8 +11084,13 @@ components:
       title: ApplicationUpdate
       type: object
       properties:
+        currentRevision:
+          type: integer
+          format: uint64
         newName:
           type: string
+      required:
+      - currentRevision
     BinaryDescriptor:
       title: BinaryDescriptor
       type: object
@@ -11617,22 +11283,6 @@ components:
           $ref: '#/components/schemas/AnalysedType'
       required:
       - elementType
-    ComponentReference:
-      title: ComponentReference
-      type: object
-      properties:
-        name:
-          type: string
-        revision:
-          type: integer
-          format: uint64
-        id:
-          type: string
-          format: uuid
-      required:
-      - name
-      - revision
-      - id
     ComponentTransformerPluginSpec:
       title: ComponentTransformerPluginSpec
       type: object
@@ -11684,38 +11334,14 @@ components:
             $ref: '#/components/schemas/PluginInstallationAction'
       required:
       - currentRevision
-    CorsConfiguration:
-      title: CorsConfiguration
+    CorsPreflightBinding:
+      title: CorsPreflightBinding
       type: object
       properties:
-        allowOrigin:
+        response:
           type: string
-        allowMethods:
-          type: string
-        allowHeaders:
-          type: string
-        exposeHeaders:
-          type: string
-        allowCredentials:
-          type: boolean
-        maxAge:
-          type: integer
-          format: uint64
       required:
-      - allowOrigin
-      - allowMethods
-      - allowHeaders
-    CreateApiDeploymentRequest:
-      title: CreateApiDeploymentRequest
-      type: object
-      properties:
-        apiDefinitions:
-          type: array
-          items:
-            type: string
-            format: uuid
-      required:
-      - apiDefinitions
+      - response
     CreateCertificateRequest:
       title: CreateCertificateRequest
       type: object
@@ -11733,19 +11359,6 @@ components:
       - domainName
       - certificateBody
       - certificatePrivateKey
-    CreateHttpApiDefinitionRequest:
-      title: CreateHttpApiDefinitionRequest
-      type: object
-      properties:
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteRequestView'
-        version:
-          type: string
-      required:
-      - routes
-      - version
     DataSchema:
       discriminator:
         propertyName: type
@@ -12108,89 +11721,209 @@ components:
       title: EnvironmentShareUpdate
       type: object
       properties:
+        currentRevision:
+          type: integer
+          format: uint64
         newRoles:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
       required:
+      - currentRevision
       - newRoles
     EnvironmentUpdate:
       title: EnvironmentUpdate
       type: object
       properties:
+        currentRevision:
+          type: integer
+          format: uint64
         newName:
           type: string
-    GatewayBindingRequestView:
-      title: GatewayBindingRequestView
+      required:
+      - currentRevision
+    FileServerBinding:
+      title: FileServerBinding
       type: object
       properties:
-        bindingType:
-          $ref: '#/components/schemas/GatewayBindingType'
-        component:
-          $ref: '#/components/schemas/ComponentReference'
-        idempotencyKey:
+        componentName:
           type: string
         response:
           type: string
-        invocationContext:
-          type: string
-    GatewayBindingResponseView:
-      title: GatewayBindingResponseView
+      required:
+      - componentName
+      - response
+    GatewayBinding:
+      discriminator:
+        propertyName: type
+        mapping:
+          Worker: '#/components/schemas/GatewayBinding_WorkerGatewayBinding'
+          FileServer: '#/components/schemas/GatewayBinding_FileServerBinding'
+          HttpHandler: '#/components/schemas/GatewayBinding_HttpHandlerBinding'
+          CorsPreflight: '#/components/schemas/GatewayBinding_CorsPreflightBinding'
+          SwaggerUi: '#/components/schemas/GatewayBinding_Empty'
       type: object
-      properties:
-        component:
-          $ref: '#/components/schemas/ComponentReference'
-        workerName:
-          type: string
-        idempotencyKey:
-          type: string
-        invocationContext:
-          type: string
-        response:
-          type: string
-        bindingType:
-          $ref: '#/components/schemas/GatewayBindingType'
-        responseMappingInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        workerNameInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        idempotencyKeyInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        corsPreflight:
-          $ref: '#/components/schemas/CorsConfiguration'
-        responseMappingOutput:
-          $ref: '#/components/schemas/RibOutputTypeInfo'
-        openapiSpecJson:
-          type: string
-    GatewayBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
-      - http-handler
-      - cors-preflight
-      - swagger-ui
-    HttpApiDefinitionResponseView:
-      title: HttpApiDefinitionResponseView
+      oneOf:
+      - $ref: '#/components/schemas/GatewayBinding_WorkerGatewayBinding'
+      - $ref: '#/components/schemas/GatewayBinding_FileServerBinding'
+      - $ref: '#/components/schemas/GatewayBinding_HttpHandlerBinding'
+      - $ref: '#/components/schemas/GatewayBinding_CorsPreflightBinding'
+      - $ref: '#/components/schemas/GatewayBinding_Empty'
+    GatewayBinding_CorsPreflightBinding:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CorsPreflight
+            type: string
+            enum:
+            - CorsPreflight
+        required:
+        - type
+      - $ref: '#/components/schemas/CorsPreflightBinding'
+    GatewayBinding_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SwaggerUi
+            type: string
+            enum:
+            - SwaggerUi
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    GatewayBinding_FileServerBinding:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FileServer
+            type: string
+            enum:
+            - FileServer
+        required:
+        - type
+      - $ref: '#/components/schemas/FileServerBinding'
+    GatewayBinding_HttpHandlerBinding:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HttpHandler
+            type: string
+            enum:
+            - HttpHandler
+        required:
+        - type
+      - $ref: '#/components/schemas/HttpHandlerBinding'
+    GatewayBinding_WorkerGatewayBinding:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Worker
+            type: string
+            enum:
+            - Worker
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerGatewayBinding'
+    HttpApiDefinition:
+      title: HttpApiDefinition
       type: object
       properties:
         id:
           type: string
           format: uuid
+        revision:
+          type: integer
+          format: uint64
+        environmentId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/RouteResponseView'
-        version:
-          type: string
+            $ref: '#/components/schemas/HttpApiRoute'
         createdAt:
+          type: string
+          format: date-time
+        updatedAt:
           type: string
           format: date-time
       required:
       - id
-      - routes
+      - revision
+      - environmentId
+      - name
       - version
+      - routes
       - createdAt
+      - updatedAt
+    HttpApiDefinitionCreation:
+      title: HttpApiDefinitionCreation
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/HttpApiRoute'
+      required:
+      - name
+      - version
+      - routes
+    HttpApiDefinitionUpdate:
+      title: HttpApiDefinitionUpdate
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        version:
+          type: string
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/HttpApiRoute'
+      required:
+      - currentRevision
+    HttpApiRoute:
+      title: HttpApiRoute
+      type: object
+      properties:
+        method:
+          $ref: '#/components/schemas/RouteMethod'
+        path:
+          type: string
+        binding:
+          $ref: '#/components/schemas/GatewayBinding'
+        security:
+          type: string
+      required:
+      - method
+      - path
+      - binding
+    HttpHandlerBinding:
+      title: HttpHandlerBinding
+      type: object
+      properties:
+        componentName:
+          type: string
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+      required:
+      - componentName
     InitialComponentFile:
       title: InitialComponentFile
       type: object
@@ -12420,14 +12153,14 @@ components:
             $ref: '#/components/schemas/EnvironmentShare'
       required:
       - values
-    Page_HttpApiDefinitionResponseView:
-      title: Page_HttpApiDefinitionResponseView
+    Page_HttpApiDefinition:
+      title: Page_HttpApiDefinition
       type: object
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/HttpApiDefinitionResponseView'
+            $ref: '#/components/schemas/HttpApiDefinition'
       required:
       - values
     Page_PluginRegistrationDto:
@@ -12750,24 +12483,6 @@ components:
       - facebook
       - microsoft
       - gitlab
-    RibInputTypeInfo:
-      title: RibInputTypeInfo
-      type: object
-      properties:
-        types:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/AnalysedType'
-      required:
-      - types
-    RibOutputTypeInfo:
-      title: RibOutputTypeInfo
-      type: object
-      properties:
-        analysedType:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - analysedType
     RouteMethod:
       type: string
       enum:
@@ -12780,38 +12495,6 @@ components:
       - options
       - trace
       - head
-    RouteRequestView:
-      title: RouteRequestView
-      type: object
-      properties:
-        method:
-          $ref: '#/components/schemas/RouteMethod'
-        path:
-          type: string
-        binding:
-          $ref: '#/components/schemas/GatewayBindingRequestView'
-        security:
-          type: string
-      required:
-      - method
-      - path
-      - binding
-    RouteResponseView:
-      title: RouteResponseView
-      type: object
-      properties:
-        method:
-          $ref: '#/components/schemas/RouteMethod'
-        path:
-          type: string
-        binding:
-          $ref: '#/components/schemas/GatewayBindingResponseView'
-        security:
-          type: string
-      required:
-      - method
-      - path
-      - binding
     SecuritySchemeCreation:
       title: SecuritySchemeCreation
       type: object
@@ -12875,6 +12558,9 @@ components:
       title: SecuritySchemeUpdate
       type: object
       properties:
+        currentRevision:
+          type: integer
+          format: uint64
         providerType:
           $ref: '#/components/schemas/Provider'
         clientId:
@@ -12887,6 +12573,8 @@ components:
           type: array
           items:
             type: string
+      required:
+      - currentRevision
     TextDescriptor:
       title: TextDescriptor
       type: object
@@ -12980,19 +12668,6 @@ components:
       required:
       - certificateBody
       - certificatePrivateKey
-    UpdateHttpApiDefinitionRequest:
-      title: UpdateHttpApiDefinitionRequest
-      type: object
-      properties:
-        routes:
-          type: array
-          items:
-            $ref: '#/components/schemas/RouteRequestView'
-        version:
-          type: string
-      required:
-      - routes
-      - version
     VersionedName:
       title: VersionedName
       type: object
@@ -13015,6 +12690,21 @@ components:
       required:
       - interfaceName
       - componentName
+    WorkerGatewayBinding:
+      title: WorkerGatewayBinding
+      type: object
+      properties:
+        componentName:
+          type: string
+        idempotencyKey:
+          type: string
+        response:
+          type: string
+        invocationContext:
+          type: string
+      required:
+      - componentName
+      - response
   securitySchemes:
     Cookie:
       type: apiKey
@@ -13030,7 +12720,6 @@ tags:
 - name: AgentTypes
   description: API working on registered agent types
 - name: ApiCertificate
-- name: ApiDefinition
 - name: ApiDeployment
 - name: ApiDomain
 - name: ApiSecurity
@@ -13043,6 +12732,7 @@ tags:
 - name: EnvironmentShares
 - name: Grant
 - name: HealthCheck
+- name: HttpApiDefinition
 - name: Limits
   description: The limits API allows users to query their current resource limits.
 - name: Login

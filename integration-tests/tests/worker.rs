@@ -20,7 +20,6 @@ use axum::routing::get;
 use axum::Router;
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
-use golem_client::model::AnalysedType;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, WorkerResourceId};
@@ -34,6 +33,7 @@ use golem_common::model::{
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{update_counts, TestDsl, TestDslExtended, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::{IntoValue, IntoValueAndType, Record, Value, ValueAndType};

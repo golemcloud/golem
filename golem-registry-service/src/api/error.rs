@@ -22,15 +22,16 @@ use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
+use crate::services::http_api_definition::HttpApiDefinitionError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
-use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
@@ -140,9 +141,9 @@ impl From<AuthError> for ApiError {
             AuthError::CouldNotAuthenticate => {
                 Self::Unauthorized(Json(ErrorBody { error, cause: None }))
             }
-            AuthError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            AuthError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("AuthError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -162,9 +163,9 @@ impl From<AccountError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
-            AccountError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            AccountError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("AccountError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -189,9 +190,9 @@ impl From<ApplicationError> for ApiError {
 
             ApplicationError::LimitExceeded(inner) => inner.into(),
 
-            ApplicationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            ApplicationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("ApplicationError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -216,9 +217,9 @@ impl From<EnvironmentError> for ApiError {
 
             EnvironmentError::LimitExceeded(inner) => inner.into(),
 
-            EnvironmentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            EnvironmentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("EnvironmentError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -232,9 +233,9 @@ impl From<PlanError> for ApiError {
 
             PlanError::Unauthorized(inner) => inner.into(),
 
-            PlanError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            PlanError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("PlanError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -250,7 +251,6 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidComponentName { .. }
             | ComponentError::InvalidOplogProcessorPlugin
             | ComponentError::InvalidPluginScope { .. }
-            | ComponentError::InvalidCurrentRevision
             | ComponentError::MalformedComponentArchive { .. }
             | ComponentError::PluginInstallationNotFound { .. }
             | ComponentError::EnvironmentPluginNotFound(_)
@@ -268,11 +268,17 @@ impl From<ComponentError> for ApiError {
                 }))
             }
 
-            ComponentError::AlreadyExists(_) | ComponentError::ConcurrentUpdate => {
+            ComponentError::ComponentWithNameAlreadyExists(_)
+            | ComponentError::ComponentVersionAlreadyExists(_)
+            | ComponentError::ConcurrentUpdate => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::NotFound | ComponentError::ParentEnvironmentNotFound(_) => {
+            ComponentError::ParentEnvironmentNotFound(_)
+            | ComponentError::DeploymentRevisionNotFound(_)
+            | ComponentError::ComponentNotFound(_)
+            | ComponentError::ComponentByNameNotFound(_)
+            | ComponentError::AgentTypeForNameNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -280,9 +286,9 @@ impl From<ComponentError> for ApiError {
 
             ComponentError::LimitExceeded(inner) => inner.into(),
 
-            ComponentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            ComponentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("ComponentError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -301,9 +307,9 @@ impl From<TokenError> for ApiError {
             TokenError::TokenSecretAlreadyExists => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
-            TokenError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            TokenError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("TokenError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -320,9 +326,9 @@ impl From<OAuth2Error> for ApiError {
             OAuth2Error::OAuth2WebflowStateNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
-            OAuth2Error::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            OAuth2Error::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("OAuth2Error")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -337,13 +343,14 @@ impl From<EnvironmentShareError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
             EnvironmentShareError::EnvironmentShareNotFound(_)
-            | EnvironmentShareError::ParentEnvironmentNotFound(_) => {
+            | EnvironmentShareError::ParentEnvironmentNotFound(_)
+            | EnvironmentShareError::EnvironmentShareForGranteeNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
             EnvironmentShareError::Unauthorized(inner) => inner.into(),
-            EnvironmentShareError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            EnvironmentShareError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("EnvironmentShareError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -354,9 +361,9 @@ impl From<ReportsError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             ReportsError::Unauthorized(inner) => inner.into(),
-            ReportsError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            ReportsError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("ReportsError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -384,9 +391,9 @@ impl From<PluginRegistrationError> for ApiError {
             }
 
             PluginRegistrationError::Unauthorized(inner) => inner.into(),
-            PluginRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            PluginRegistrationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("PluginRegistrationError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -413,12 +420,10 @@ impl From<EnvironmentPluginGrantError> for ApiError {
             }
 
             EnvironmentPluginGrantError::Unauthorized(inner) => inner.into(),
-            EnvironmentPluginGrantError::InternalError(inner) => {
-                Self::InternalError(Json(ErrorBody {
-                    error,
-                    cause: Some(inner.context("EnvironmentPluginGrantError")),
-                }))
-            }
+            EnvironmentPluginGrantError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
         }
     }
 }
@@ -454,9 +459,9 @@ impl From<DeploymentError> for ApiError {
             }
 
             DeploymentError::Unauthorized(inner) => inner.into(),
-            DeploymentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            DeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("EnvironmentPluginGrantError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -483,9 +488,9 @@ impl From<DomainRegistrationError> for ApiError {
             }
 
             DomainRegistrationError::Unauthorized(inner) => inner.into(),
-            DomainRegistrationError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            DomainRegistrationError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("DomainRegistrationError")),
+                cause: Some(value.into_anyhow()),
             })),
         }
     }
@@ -496,7 +501,8 @@ impl From<SecuritySchemeError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             SecuritySchemeError::ParentEnvironmentNotFound(_)
-            | SecuritySchemeError::SecuritySchemeNotFound(_) => {
+            | SecuritySchemeError::SecuritySchemeNotFound(_)
+            | SecuritySchemeError::SecuritySchemeForNameNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -511,9 +517,40 @@ impl From<SecuritySchemeError> for ApiError {
             }
 
             SecuritySchemeError::Unauthorized(inner) => inner.into(),
-            SecuritySchemeError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+            SecuritySchemeError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
-                cause: Some(inner.context("DomainRegistrationError")),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<HttpApiDefinitionError> for ApiError {
+    fn from(value: HttpApiDefinitionError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            HttpApiDefinitionError::ParentEnvironmentNotFound(_)
+            | HttpApiDefinitionError::DeploymentRevisionNotFound(_)
+            | HttpApiDefinitionError::HttpApiDefinitionNotFound(_)
+            | HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            HttpApiDefinitionError::InvalidDefinition(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
+
+            HttpApiDefinitionError::HttpApiDefinitionVersionAlreadyExists(_)
+            | HttpApiDefinitionError::HttpApiDefinitionWithNameAlreadyExists(_)
+            | HttpApiDefinitionError::ConcurrentUpdate => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            HttpApiDefinitionError::Unauthorized(inner) => inner.into(),
+            HttpApiDefinitionError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
             })),
         }
     }

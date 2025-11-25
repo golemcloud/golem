@@ -48,6 +48,12 @@ pub trait DeploymentRepo: Send + Sync {
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Option<DeploymentRevisionRecord>>;
+
+    async fn get_currently_deployed_revision(
+        &self,
+        environment_id: &Uuid,
     ) -> RepoResult<Option<DeploymentRevisionRecord>>;
 
     async fn list_deployment_revisions(
@@ -161,9 +167,20 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
+        revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.repo
-            .get_deployed_revision(environment_id)
+            .get_deployed_revision(environment_id, revision_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_currently_deployed_revision(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<Option<DeploymentRevisionRecord>> {
+        self.repo
+            .get_currently_deployed_revision(environment_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -331,8 +348,24 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn get_deployed_revision(
         &self,
         environment_id: &Uuid,
+        revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.with_ro("get_deployed_revision").fetch_optional_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
+                FROM deployment_revisions dr
+                WHERE dr.environment_id = $1 AND dr.revision_id = $2
+            "#})
+                .bind(environment_id)
+                .bind(revision_id),
+        ).await
+    }
+
+    async fn get_currently_deployed_revision(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<Option<DeploymentRevisionRecord>> {
+        self.with_ro("get_currently_deployed_revision").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM current_deployments cd
@@ -404,7 +437,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 self.get_deployment_revision(environment_id, revision_id)
                     .await?
             }
-            None => self.get_deployed_revision(environment_id).await?,
+            None => self.get_currently_deployed_revision(environment_id).await?,
         };
 
         let Some(deployment_revision) = deployment_revision else {

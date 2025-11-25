@@ -47,8 +47,14 @@ declare_structs! {
     }
 
     pub struct AccountUpdate {
+        pub current_revision: AccountRevision,
         pub name: String,
         pub email: String,
+    }
+
+    pub struct AccountSetRoles {
+        pub current_revision: AccountRevision,
+        pub roles: Vec<AccountRole>
     }
 
     pub struct Plan {

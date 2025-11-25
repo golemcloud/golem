@@ -27,6 +27,7 @@ use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
 };
 use crate::repo::environment_share::{DbEnvironmentShareRepo, EnvironmentShareRepo};
+use crate::repo::http_api_definition::{DbHttpApiDefinitionRepo, HttpApiDefinitionRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
 use crate::repo::oauth2_webflow_state::{DbOAuth2WebflowStateRepo, OAuth2WebflowStateRepo};
 use crate::repo::plan::{DbPlanRepo, PlanRepo};
@@ -48,6 +49,7 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
+use crate::services::http_api_definition::HttpApiDefinitionService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::reports::ReportsService;
@@ -86,6 +88,7 @@ pub struct Services {
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_share_service: Arc<EnvironmentShareService>,
+    pub http_api_definition_service: Arc<HttpApiDefinitionService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
@@ -104,6 +107,7 @@ struct Repos {
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     environment_share_repo: Arc<dyn EnvironmentShareRepo>,
+    http_api_definition_repo: Arc<dyn HttpApiDefinitionRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_webflow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
     plan_repo: Arc<dyn PlanRepo>,
@@ -172,10 +176,16 @@ impl Services {
             environment_service.clone(),
         ));
 
+        let deployment_service = Arc::new(DeploymentService::new(
+            environment_service.clone(),
+            repos.deployment_repo.clone(),
+        ));
+
         let component_service = Arc::new(ComponentService::new(
             repos.component_repo.clone(),
             component_object_store.clone(),
             environment_service.clone(),
+            deployment_service.clone(),
         ));
 
         let plugin_registration_service = Arc::new(PluginRegistrationService::new(
@@ -219,11 +229,6 @@ impl Services {
 
         let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
 
-        let deployment_service = Arc::new(DeploymentService::new(
-            environment_service.clone(),
-            repos.deployment_repo.clone(),
-        ));
-
         let component_resolver_service = Arc::new(ComponentResolverService::new(
             account_service.clone(),
             application_service.clone(),
@@ -249,6 +254,13 @@ impl Services {
             environment_service.clone(),
         ));
 
+        let http_api_definition_service = Arc::new(HttpApiDefinitionService::new(
+            repos.http_api_definition_repo.clone(),
+            environment_service.clone(),
+            security_scheme_service.clone(),
+            deployment_service.clone(),
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -263,6 +275,7 @@ impl Services {
             environment_plugin_grant_service,
             environment_service,
             environment_share_service,
+            http_api_definition_service,
             login_system,
             plan_service,
             plugin_registration_service,
@@ -303,6 +316,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
+            let http_api_definition_repo =
+                Arc::new(DbHttpApiDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -314,6 +329,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_plugin_grant_repo,
                 environment_repo,
                 environment_share_repo,
+                http_api_definition_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 plan_repo,
@@ -349,6 +365,8 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
+            let http_api_definition_repo =
+                Arc::new(DbHttpApiDefinitionRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -360,6 +378,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 environment_plugin_grant_repo,
                 environment_repo,
                 environment_share_repo,
+                http_api_definition_repo,
                 oauth2_token_repo,
                 oauth2_webflow_state_repo,
                 plan_repo,

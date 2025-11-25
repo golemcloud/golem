@@ -56,7 +56,9 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
         assert!(env_ids == HashSet::from_iter([env_1.id.clone(), env_2.id.clone()]));
     }
 
-    client.delete_environment(&env_2.id.0).await?;
+    client
+        .delete_environment(&env_2.id.0, env_2.revision.0)
+        .await?;
 
     {
         let result = client
@@ -158,7 +160,7 @@ async fn deleting_application_hides_environments(
 
     let (app, env) = user.app_and_env().await?;
 
-    client.delete_application(&app.id.0).await?;
+    client.delete_application(&app.id.0, app.revision.0).await?;
 
     {
         let result = client.list_application_environments(&app.id.0).await;
@@ -219,6 +221,7 @@ async fn cannot_create_two_environments_with_same_name(
             .update_environment(
                 &env_2.id.0,
                 &EnvironmentUpdate {
+                    current_revision: env_2.revision,
                     new_name: Some(env_1.name.clone()),
                 },
             )
@@ -232,7 +235,9 @@ async fn cannot_create_two_environments_with_same_name(
     }
 
     // delete the environment, now creating a new one will succeed
-    client.delete_environment(&env_1.id.0).await?;
+    client
+        .delete_environment(&env_1.id.0, env_1.revision.0)
+        .await?;
 
     // create environment with reused name
     {
@@ -248,7 +253,9 @@ async fn cannot_create_two_environments_with_same_name(
             )
             .await?;
 
-        client.delete_environment(&env_3.id.0).await?;
+        client
+            .delete_environment(&env_3.id.0, env_3.revision.0)
+            .await?;
     }
 
     // update environment to reused name
@@ -256,6 +263,7 @@ async fn cannot_create_two_environments_with_same_name(
         .update_environment(
             &env_2.id.0,
             &EnvironmentUpdate {
+                current_revision: env_2.revision,
                 new_name: Some(env_1.name.clone()),
             },
         )

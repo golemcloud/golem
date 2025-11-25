@@ -432,7 +432,7 @@ impl RegistryServiceGrpcApi {
             .await?;
 
         Ok(ResolveComponentSuccessResponse {
-            component: component.map(|c| ComponentDto::from(c).into()),
+            component: Some(ComponentDto::from(component).into()),
         })
     }
 }

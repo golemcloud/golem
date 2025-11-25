@@ -17,6 +17,7 @@ use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid,
 };
 use derive_more::Display;
+use desert_rust::BinaryCodec;
 use openidconnect::IssuerUrl;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -26,7 +27,8 @@ newtype_uuid!(SecuritySchemeId);
 declare_revision!(SecuritySchemeRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct SecuritySchemeName(pub String);
 }
 
@@ -41,6 +43,7 @@ declare_structs! {
     }
 
     pub struct SecuritySchemeUpdate {
+        pub current_revision: SecuritySchemeRevision,
         pub provider_type: Option<Provider>,
         pub client_id: Option<String>,
         pub client_secret: Option<String>,

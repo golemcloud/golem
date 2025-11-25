@@ -57,6 +57,7 @@ declare_structs! {
     }
 
     pub struct ApplicationUpdate {
+        pub current_revision: ApplicationRevision,
         pub new_name: Option<ApplicationName>,
     }
 }

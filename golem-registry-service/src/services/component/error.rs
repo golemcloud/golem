@@ -16,13 +16,15 @@ use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::{AccountUsageError, LimitExceededError};
 use crate::services::application::ApplicationError;
 use crate::services::component_transformer_plugin_caller::TransformationFailedReason;
+use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
-use golem_common::model::component::ComponentId;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
+use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentProcessingError;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
@@ -31,8 +33,10 @@ use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
-    #[error("Component already exists: {0}")]
-    AlreadyExists(ComponentId),
+    #[error("Component with this name already exists in the environment: {0}")]
+    ComponentWithNameAlreadyExists(ComponentName),
+    #[error("This version already exists for the component: {0}")]
+    ComponentVersionAlreadyExists(String),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
     #[error("Malformed component archive: {message}")]
@@ -58,12 +62,14 @@ pub enum ComponentError {
     },
     #[error("Concurrent update of component")]
     ConcurrentUpdate,
-    #[error("Current revision for update is incorrect")]
-    InvalidCurrentRevision,
     #[error("Environment not found: {0}")]
     ParentEnvironmentNotFound(EnvironmentId),
-    #[error("Requested component not found")]
-    NotFound,
+    #[error("Deployment revision {0} not found")]
+    DeploymentRevisionNotFound(DeploymentRevision),
+    #[error("Component for id {0} not found")]
+    ComponentNotFound(ComponentId),
+    #[error("Component for name {0} not found in environment")]
+    ComponentByNameNotFound(ComponentName),
     #[error("Plugin not found in the environment for id: {0}")]
     EnvironmentPluginNotFound(EnvironmentPluginGrantId),
     #[error("Referenced plugin installation with priority {0} not found")]
@@ -80,6 +86,8 @@ pub enum ComponentError {
         plugin_priority: PluginPriority,
         reason: TransformationFailedReason,
     },
+    #[error("agent type for name {0} not found in environment")]
+    AgentTypeForNameNotFound(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -91,7 +99,8 @@ pub enum ComponentError {
 impl SafeDisplay for ComponentError {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::AlreadyExists(_) => self.to_string(),
+            Self::ComponentWithNameAlreadyExists(_) => self.to_string(),
+            Self::ComponentVersionAlreadyExists(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::InitialComponentFileNotFound { .. } => self.to_string(),
@@ -102,13 +111,15 @@ impl SafeDisplay for ComponentError {
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
-            Self::InvalidCurrentRevision => self.to_string(),
             Self::PluginInstallationNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::DeploymentRevisionNotFound(_) => self.to_string(),
             Self::ConflictingPluginPriority(_) => self.to_string(),
             Self::PluginCompositionFailed { .. } => self.to_string(),
             Self::ComponentTransformerPluginFailed { .. } => self.to_string(),
-            Self::NotFound => self.to_string(),
+            Self::ComponentNotFound(_) => self.to_string(),
+            Self::ComponentByNameNotFound(_) => self.to_string(),
+            Self::AgentTypeForNameNotFound(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -123,6 +134,7 @@ error_forwarding!(
     EnvironmentError,
     EnvironmentPluginGrantError,
     PluginRegistrationError,
+    DeploymentError,
 );
 
 impl From<AccountUsageError> for ComponentError {

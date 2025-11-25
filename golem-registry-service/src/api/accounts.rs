@@ -19,8 +19,9 @@ use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate, Plan};
-use golem_common::model::auth::AccountRole;
+use golem_common::model::account::{
+    Account, AccountCreation, AccountId, AccountSetRoles, AccountUpdate, Plan,
+};
 use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -205,7 +206,7 @@ impl AccountsApi {
     async fn set_account_roles(
         &self,
         account_id: Path<AccountId>,
-        roles: Json<Vec<AccountRole>>,
+        payload: Json<AccountSetRoles>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record =
@@ -214,7 +215,7 @@ impl AccountsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .set_account_roles_internal(account_id.0, roles.0, auth)
+            .set_account_roles_internal(account_id.0, payload.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -224,12 +225,12 @@ impl AccountsApi {
     async fn set_account_roles_internal(
         &self,
         account_id: AccountId,
-        roles: Vec<AccountRole>,
+        payload: AccountSetRoles,
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         let result = self
             .account_service
-            .set_roles(&account_id, roles, &auth)
+            .set_roles(&account_id, payload, &auth)
             .await?;
         Ok(Json(result))
     }

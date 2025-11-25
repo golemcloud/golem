@@ -19,6 +19,7 @@ use golem_common::model::component::{
     ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -169,7 +170,9 @@ impl PluginsService for PluginsRegistryService {
             .client
             .get_component_metadata(component_id, component_version, &AuthCtx::System)
             .await
-            .map_err(|e| WorkerExecutorError::runtime(format!("Failed getting component: {e}")))?;
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!("Failed getting component: {}", e))
+            })?;
         component
             .installed_plugins
             .into_iter()
@@ -187,7 +190,10 @@ impl PluginsService for PluginsRegistryService {
             .get_plugin_registration_by_id(plugin_id, &AuthCtx::System)
             .await
             .map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed getting plugin registration: {e}"))
+                WorkerExecutorError::runtime(format!(
+                    "Failed getting plugin registration: {}",
+                    e.to_safe_string()
+                ))
             })
     }
 }

@@ -23,7 +23,8 @@ use golem_common::model::component::{
     CachableComponent, ComponentDto, ComponentId, ComponentRevision,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::clients::registry::RegistryService;
+use golem_common::SafeDisplay;
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
@@ -177,7 +178,7 @@ impl ComponentService for ComponentServiceDefault {
                                 .map_err(|e| WorkerExecutorError::ComponentDownloadFailed {
                                     component_id: component_id_clone.clone(),
                                     component_version,
-                                    reason: format!("{e}"),
+                                    reason: e.to_safe_string(),
                                 })?;
 
                             let start = Instant::now();
@@ -258,7 +259,8 @@ impl ComponentService for ComponentServiceDefault {
                                     .await
                                     .map_err(|e| {
                                         WorkerExecutorError::runtime(format!(
-                                            "Failed getting component metadata: {e}"
+                                            "Failed getting component metadata: {}",
+                                            e.to_safe_string()
                                         ))
                                     })?;
                                 Ok(metadata.into())
@@ -274,7 +276,8 @@ impl ComponentService for ComponentServiceDefault {
                     .await
                     .map_err(|e| {
                         WorkerExecutorError::runtime(format!(
-                            "Failed getting component metadata: {e}"
+                            "Failed getting component metadata: {}",
+                            e.to_safe_string()
                         ))
                     })?;
 
@@ -304,7 +307,10 @@ impl ComponentService for ComponentServiceDefault {
             .get_latest_component_metadata(component_id, auth_ctx)
             .await
             .map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed getting component metadata: {e}"))
+                WorkerExecutorError::runtime(format!(
+                    "Failed getting component metadata: {}",
+                    e.to_safe_string()
+                ))
             })?;
 
         let metadata_clone = metadata.clone();
@@ -329,7 +335,7 @@ impl ComponentService for ComponentServiceDefault {
         resolving_application: ApplicationId,
         resolving_account: AccountId,
     ) -> Result<Option<ComponentId>, WorkerExecutorError> {
-        let component = self
+        let result = self
             .registry_client
             .resolve_component(
                 &resolving_account,
@@ -338,12 +344,16 @@ impl ComponentService for ComponentServiceDefault {
                 &component_slug,
                 &AuthCtx::System,
             )
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::runtime(format!("Resolving component failed: {e}"))
-            })?;
+            .await;
 
-        Ok(component.map(|c| c.id))
+        match result {
+            Ok(component) => Ok(Some(component.id)),
+            Err(RegistryServiceError::NotFound(_)) => Ok(None),
+            Err(other) => Err(WorkerExecutorError::runtime(format!(
+                "Resolving component failed: {}",
+                other.to_safe_string()
+            ))),
+        }
     }
 
     async fn all_cached_metadata(&self) -> Vec<CachableComponent> {

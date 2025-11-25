@@ -30,13 +30,13 @@ use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::run_cpu_bound_work;
 use anyhow::{Context, anyhow};
 use golem_common::model::account::AccountId;
-use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
+use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
@@ -108,29 +108,29 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                environment_id,
-                EnvironmentAction::CreateComponent,
-                false,
-                auth,
-            )
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
                     ComponentError::ParentEnvironmentNotFound(environment_id)
                 }
-                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::CreateComponent,
+        )?;
 
         // Fast path check to avoid processing the component if we are going to reject it anyway
         self.component_repo
             .get_staged_by_name(&environment_id.0, &component_creation.component_name.0)
             .await?
-            .map_or(Ok(()), |rec| {
-                Err(ComponentError::AlreadyExists(ComponentId(
-                    rec.revision.component_id,
-                )))
+            .map_or(Ok(()), |_| {
+                Err(ComponentError::ComponentWithNameAlreadyExists(
+                    component_creation.component_name.clone(),
+                ))
             })?;
 
         self.account_usage_service
@@ -188,6 +188,11 @@ impl ComponentWriteService {
                 | ComponentRepoError::VersionAlreadyExists { .. } => {
                     ComponentError::ConcurrentUpdate
                 }
+                ComponentRepoError::ComponentViolatesUniqueness => {
+                    ComponentError::ComponentWithNameAlreadyExists(
+                        component_creation.component_name,
+                    )
+                }
                 other => other.into(),
             })?
             .try_into_model(
@@ -217,24 +222,31 @@ impl ComponentWriteService {
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::NotFound)?;
-
-        let environment_id = EnvironmentId(component_record.environment_id);
+            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                &environment_id,
-                EnvironmentAction::UpdateComponent,
-                false,
-                auth,
-            )
+            .get(&EnvironmentId(component_record.environment_id), false, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
-                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::UpdateComponent,
+        )?;
 
         let component = component_record.try_into_model(
             environment.application_id.clone(),
@@ -242,9 +254,8 @@ impl ComponentWriteService {
             environment.roles_from_active_shares.clone(),
         )?;
 
-        // Fast path. If the current revision does not match we will reject it later anyway
-        if component.revision != component_update.current_revision {
-            Err(ComponentError::InvalidCurrentRevision)?
+        if component_update.current_revision != component.revision {
+            Err(ComponentError::ConcurrentUpdate)?
         };
 
         let environment_id = component.environment_id.clone();
@@ -318,9 +329,9 @@ impl ComponentWriteService {
             .update(component_update.current_revision.0 as i64, record)
             .await
             .map_err(|err| match err {
-                ComponentRepoError::ConcurrentModification
-                | ComponentRepoError::VersionAlreadyExists { .. } => {
-                    ComponentError::ConcurrentUpdate
+                ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
+                ComponentRepoError::VersionAlreadyExists { version } => {
+                    ComponentError::ComponentVersionAlreadyExists(version)
                 }
                 other => other.into(),
             })?
@@ -335,6 +346,67 @@ impl ComponentWriteService {
             .await;
 
         Ok(stored_component)
+    }
+
+    pub async fn delete(
+        &self,
+        component_id: &ComponentId,
+        current_revision: ComponentRevision,
+        auth: &AuthCtx,
+    ) -> Result<(), ComponentError> {
+        let component_record = self
+            .component_repo
+            .get_staged_by_id(&component_id.0)
+            .await?
+            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
+
+        let environment = self
+            .environment_service
+            .get(&EnvironmentId(component_record.environment_id), false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::UpdateComponent,
+        )?;
+
+        let component = component_record.try_into_model(
+            environment.application_id.clone(),
+            environment.owner_account_id.clone(),
+            environment.roles_from_active_shares.clone(),
+        )?;
+
+        if current_revision != component.revision {
+            Err(ComponentError::ConcurrentUpdate)?
+        };
+
+        self.component_repo
+            .delete(
+                &auth.account_id().0,
+                &component_id.0,
+                current_revision.into(),
+            )
+            .await
+            .map_err(|err| match err {
+                ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
+                other => other.into(),
+            })?;
+
+        Ok(())
     }
 
     async fn upload_and_hash_component_wasm(

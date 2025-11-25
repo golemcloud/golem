@@ -1641,7 +1641,7 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, BinaryCodec)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]

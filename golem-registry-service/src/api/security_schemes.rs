@@ -18,14 +18,15 @@ use crate::services::security_scheme::SecuritySchemeService;
 use golem_common::api::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeUpdate,
+    SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeRevision,
+    SecuritySchemeUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -222,6 +223,7 @@ impl SecuritySchemesApi {
     pub async fn delete_security_scheme(
         &self,
         security_scheme_id: Path<SecuritySchemeId>,
+        current_revision: Query<SecuritySchemeRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let record = recorded_http_api_request!(
@@ -232,7 +234,7 @@ impl SecuritySchemesApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_security_scheme_internal(security_scheme_id.0, auth)
+            .delete_security_scheme_internal(security_scheme_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -242,11 +244,12 @@ impl SecuritySchemesApi {
     async fn delete_security_scheme_internal(
         &self,
         security_scheme_id: SecuritySchemeId,
+        current_revision: SecuritySchemeRevision,
         auth: AuthCtx,
     ) -> ApiResult<Json<SecuritySchemeDto>> {
         let security_scheme = self
             .security_scheme_service
-            .delete(&security_scheme_id, &auth)
+            .delete(&security_scheme_id, current_revision, &auth)
             .await?;
         Ok(Json(security_scheme.into()))
     }

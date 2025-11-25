@@ -10,7 +10,6 @@ tags:
 - name: AgentTypes
   description: API working on registered agent types
 - name: ApiCertificate
-- name: ApiDefinition
 - name: ApiDeployment
 - name: ApiDomain
 - name: ApiSecurity
@@ -23,6 +22,7 @@ tags:
 - name: EnvironmentShares
 - name: Grant
 - name: HealthCheck
+- name: HttpApiDefinition
 - name: Limits
   description: The limits API allows users to query their current resource limits.
 - name: Login

@@ -179,7 +179,7 @@ message GetComponentMetadataResponse {
 }
 
 message GetComponentMetadataSuccessResponse {
-  optional golem.component.Component component = 1;
+  golem.component.Component component = 1;
 }
 
 message GetLatestComponentMetadataRequest {
@@ -195,7 +195,7 @@ message GetLatestComponentMetadataResponse {
 }
 
 message GetLatestComponentMetadataSuccessResponse {
-  optional golem.component.Component component = 1;
+  golem.component.Component component = 1;
 }
 
 message GetAllComponentVersionsRequest {
@@ -230,7 +230,7 @@ message ResolveComponentResponse {
 }
 
 message ResolveComponentSuccessResponse {
-  optional golem.component.Component component = 1;
+  golem.component.Component component = 1;
 }
 
 message GetAllAgentTypesRequest {
@@ -263,5 +263,5 @@ message GetAgentTypeResponse {
 }
 
 message GetAgentTypeSuccessResponse {
-  optional RegisteredAgentType agent_type = 1;
+  RegisteredAgentType agent_type = 1;
 }

@@ -46,6 +46,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
             ),
+            (
+                "AccountSetRoles",
+                "golem_common::model::account::AccountSetRoles",
+            ),
             ("Plan", "golem_common::model::account::Plan"),
             // Application
             (
@@ -224,6 +228,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "PublicOplogEntryWithIndex",
                 "golem_common::model::oplog::PublicOplogEntryWithIndex",
+            ),
+            // Http api definition
+            (
+                "HttpApiDefinitionCreation",
+                "golem_common::model::api_definition::HttpApiDefinitionCreation",
+            ),
+            (
+                "HttpApiDefinitionUpdate",
+                "golem_common::model::api_definition::HttpApiDefinitionUpdate",
+            ),
+            (
+                "HttpApiDefinition",
+                "golem_common::model::api_definition::HttpApiDefinition",
             ),
             // TODO: Leftovers
             ("PluginScope", "golem_common::model::plugin::PluginScope"),

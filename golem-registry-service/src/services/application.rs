@@ -152,9 +152,11 @@ impl ApplicationService {
 
         auth.authorize_account_action(&application.account_id, AccountAction::UpdateApplication)?;
 
-        let current_revision = application.revision;
-        application.revision = current_revision.next()?;
+        if update.current_revision != application.revision {
+            return Err(ApplicationError::ConcurrentModification);
+        };
 
+        application.revision = application.revision.next()?;
         if let Some(new_name) = update.new_name {
             application.name = new_name
         };
@@ -164,7 +166,7 @@ impl ApplicationService {
 
         let result = self
             .application_repo
-            .update(current_revision.into(), record)
+            .update(update.current_revision.into(), record)
             .await
             .map_err(|err| match err {
                 ApplicationRepoError::ConcurrentModification => {
@@ -183,14 +185,18 @@ impl ApplicationService {
     pub async fn delete(
         &self,
         application_id: &ApplicationId,
+        current_revision: ApplicationRevision,
         auth: &AuthCtx,
     ) -> Result<(), ApplicationError> {
         let mut application = self.get(application_id, auth).await?;
 
         auth.authorize_account_action(&application.account_id, AccountAction::DeleteApplication)?;
 
-        let current_revision = application.revision;
-        application.revision = current_revision.next()?;
+        if current_revision != application.revision {
+            return Err(ApplicationError::ConcurrentModification);
+        };
+
+        application.revision = application.revision.next()?;
 
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
         let record = ApplicationRevisionRecord::from_model(application, audit);

@@ -45,11 +45,12 @@ use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentRepoError {
+    #[error("There is already a component with this name in the environment")]
+    ComponentViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
-
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

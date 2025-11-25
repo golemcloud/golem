@@ -17,20 +17,19 @@ use crate::model::wave::function_wave_compatible;
 use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
-use golem_client::model::{AnalysedType, ComponentDto};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InitialComponentFile};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
 use golem_wasm::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
-    NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
+    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, AnalysedType,
+    NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};

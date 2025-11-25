@@ -21,7 +21,8 @@ use crate::repo::model::environment::EnvironmentRepoError;
 use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::{
-    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    EnvironmentUpdate,
 };
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
@@ -155,9 +156,11 @@ impl EnvironmentService {
             EnvironmentAction::UpdateEnvironment,
         )?;
 
-        let current_revision = environment.revision;
-        environment.revision = current_revision.next()?;
+        if update.current_revision != environment.revision {
+            return Err(EnvironmentError::ConcurrentModification);
+        };
 
+        environment.revision = environment.revision.next()?;
         if let Some(new_name) = update.new_name {
             environment.name = new_name
         };
@@ -167,7 +170,7 @@ impl EnvironmentService {
 
         let result = self
             .environment_repo
-            .update(current_revision.into(), record)
+            .update(update.current_revision.into(), record)
             .await
             .map_err(|err| match err {
                 EnvironmentRepoError::ConcurrentModification => {
@@ -186,6 +189,7 @@ impl EnvironmentService {
     pub async fn delete(
         &self,
         environment_id: EnvironmentId,
+        current_revision: EnvironmentRevision,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentError> {
         let mut environment = self.get(&environment_id, false, auth).await?;
@@ -196,7 +200,10 @@ impl EnvironmentService {
             EnvironmentAction::DeleteEnvironment,
         )?;
 
-        let current_revision = environment.revision;
+        if current_revision != environment.revision {
+            return Err(EnvironmentError::ConcurrentModification);
+        };
+
         environment.revision = current_revision.next()?;
 
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
@@ -271,28 +278,6 @@ impl EnvironmentService {
         .map_err(|_| EnvironmentError::EnvironmentByNameNotFound(name.clone()))?;
 
         Ok(result)
-    }
-
-    /// Convenience method for fetching environment and checking permissions against it.
-    /// This is mostly for checking access to subresources of an enviornment.
-    /// Note that lack of permissions to see the parent is already mapped to EnvironmentNotFound here,
-    /// so an Unauthorized error comes purely from checking the provided action.
-    pub async fn get_and_authorize(
-        &self,
-        environment_id: &EnvironmentId,
-        action: EnvironmentAction,
-        include_deleted: bool,
-        auth: &AuthCtx,
-    ) -> Result<Environment, EnvironmentError> {
-        let environment: Environment = self.get(environment_id, include_deleted, auth).await?;
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            action,
-        )?;
-
-        Ok(environment)
     }
 
     pub async fn list_in_application(

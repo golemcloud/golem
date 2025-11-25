@@ -18,7 +18,7 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceGetAccountCountReportError,
     RegistryServiceGetAccountSummariesReportError,
 };
-use golem_client::model::AccountRole;
+use golem_common::model::auth::AccountRole;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 

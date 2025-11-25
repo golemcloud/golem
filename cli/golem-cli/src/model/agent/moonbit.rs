@@ -15,9 +15,9 @@
 use crate::model::agent::wit::AgentWrapperGeneratorContext;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
-use golem_client::model::AnalysedType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
+use golem_wasm::analysis::AnalysedType;
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, PackageName, Warning, WarningControl,

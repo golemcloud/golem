@@ -39,6 +39,7 @@ chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
 darling = { workspace = true }
+desert_rust.workspace = true
 figment = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }

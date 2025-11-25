@@ -14,7 +14,7 @@
 
 use super::ComponentReference;
 use crate::model::api_definition::cors::CorsConfiguration;
-use crate::model::api_definition::ApiDefinitionId;
+use crate::model::api_definition::HttpApiDefinitionId;
 use crate::model::api_definition::RouteMethod;
 use crate::model::security_scheme::Provider;
 use crate::{declare_enums, declare_structs};
@@ -43,7 +43,7 @@ declare_structs! {
     }
 
     pub struct HttpApiDefinitionResponseView {
-        pub id: ApiDefinitionId,
+        pub id: HttpApiDefinitionId,
         pub routes: Vec<RouteResponseView>,
         pub version: String,
         pub created_at: DateTime<Utc>,
