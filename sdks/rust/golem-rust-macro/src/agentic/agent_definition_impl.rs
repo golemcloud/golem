@@ -14,15 +14,12 @@
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ItemTrait, Type};
+use syn::ItemTrait;
 
-use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_async_trait_attr, is_constructor_method,
-    FunctionInputInfo, FunctionOutputInfo,
-};
+use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
 use crate::agentic::{
-    async_trait_in_agent_definition_error, get_remote_client, helpers::DefaultOrMultimodal,
-    multiple_constructor_methods_error, no_constructor_method_error,
+    async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
+    no_constructor_method_error,
 };
 
 fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
@@ -82,7 +79,7 @@ fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
 }
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
     let agent_mode = parse_agent_mode(attrs);
 
     let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
@@ -112,6 +109,12 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 });
             };
 
+            let load_snapshot_item = get_load_snapshot_item();
+            let save_snapshot_item = get_save_snapshot_item();
+
+            item_trait.items.push(load_snapshot_item);
+            item_trait.items.push(save_snapshot_item);
+
             let result = quote! {
                 #item_trait
                 #register_fn
@@ -122,6 +125,22 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         }
 
         Err(invalid_trait_error) => invalid_trait_error,
+    }
+}
+
+fn get_load_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
+            Err("load_snapshot not implemented".to_string())
+        }
+    }
+}
+
+fn get_save_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Err("save_snapshot not implemented".to_string())
+        }
     }
 }
 
@@ -159,9 +178,6 @@ fn get_agent_type_with_remote_client(
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            let fn_input_info = FunctionInputInfo::from_signature(&trait_fn.sig);
-            let fn_output_info = FunctionOutputInfo::from_signature(&trait_fn.sig);
-
             if is_constructor_method(&trait_fn.sig) {
                 return None;
             }
@@ -190,93 +206,79 @@ fn get_agent_type_with_remote_client(
                 }
             }
 
-            let mut input_parameters = vec![];
-            let mut output_parameters = vec![];
+            let mut input_schema_logic = vec![];
+            let mut output_schema_logic = vec![];
+            let input_schema_token = quote! {
+                let mut multi_modal_inputs = vec![];
+                let mut default_inputs = vec![];
+            };
+            let output_schema_token = quote! {
+               let mut multi_modal_outputs = vec![];
+               let mut default_outputs = vec![];
+            };
 
-            match fn_input_info.input_shape {
-                DefaultOrMultimodal::Default => {
-                    for input in &trait_fn.sig.inputs {
-                        if let syn::FnArg::Typed(pat_type) = input {
-                            let param_name = match &*pat_type.pat {
-                                syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
-                                _ => "_".to_string(), // fallback for patterns like destructuring
-                            };
-                            let ty = &pat_type.ty;
-                            input_parameters.push(quote! {
-                                (#param_name.to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
-                            });
-                        }
-                    }
-                }
-                DefaultOrMultimodal::Multimodal => {
-                    for input in &trait_fn.sig.inputs {
-                        if let syn::FnArg::Typed(pat_type) = input {
-                            let ty = &pat_type.ty;
-
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
-
-                            input_parameters.push(quote! {
-                                golem_rust::agentic::Multimodal::<#inner_type>::get_schema()
-                            });
-                        }
-                    }
-                }
-            }
-
-            match fn_output_info.output_shape {
-                DefaultOrMultimodal::Default => {
-                    match &trait_fn.sig.output {
-                        syn::ReturnType::Default => (),
-                        syn::ReturnType::Type(_, ty) => {
-                            let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
-
-                            if !is_unit {
-                                output_parameters.push(quote! {
-                                    ("return-value".to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
-                                });
+            for input in &trait_fn.sig.inputs {
+                if let syn::FnArg::Typed(pat_type) = input {
+                    let param_name = match &*pat_type.pat {
+                        syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
+                        _ => "_".to_string(), // fallback for patterns like destructuring
+                    };
+                    let ty = &pat_type.ty;
+                    input_schema_logic.push(quote! {
+                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                        match schema {
+                            golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                default_inputs.push((#param_name.to_string(), element_schema));
+                            },
+                            golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                multi_modal_inputs.extend(name_and_types);
                             }
                         }
-                    };
-                }
-                DefaultOrMultimodal::Multimodal => {
-                    match &trait_fn.sig.output {
-                        syn::ReturnType::Default => (),
-                        syn::ReturnType::Type(_, ty) => {
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
-                            output_parameters.push(quote! {
-                                <#inner_type as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
-                            });
-                        }
-                    };
+                    });
                 }
             }
 
-            let input_schema = match fn_input_info.input_shape {
-                DefaultOrMultimodal::Default => quote! {
-                    golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#input_parameters),*])
-                },
-                DefaultOrMultimodal::Multimodal => {
-                    let multimodal_param = &input_parameters[0];
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
+            match &trait_fn.sig.output {
+                syn::ReturnType::Default => (),
+                syn::ReturnType::Type(_, ty) => {
+                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
+
+                    if !is_unit {
+                        output_schema_logic.push(quote! {
+                            let schema = <#ty as golem_rust::agentic::Schema>::get_type();
+                            match schema {
+                                golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                    default_outputs.push(("return-value".to_string(), element_schema));
+                                },
+                                golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                    multi_modal_outputs.extend(name_and_types)
+                                }
+                            }
+                        });
                     }
                 }
             };
 
-            let output_schema = match fn_output_info.output_shape {
-                DefaultOrMultimodal::Default =>
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
-                    },
-                DefaultOrMultimodal::Multimodal => {
-                    let multimodal_param = &output_parameters[0];
+            let input_schema = quote! {
+                {
+                    #input_schema_token
+                    #(#input_schema_logic)*
+                    if !multi_modal_inputs.is_empty() {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(multi_modal_inputs)
+                    } else {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(default_inputs)
+                    }
+                }
+            };
 
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
+            let output_schema = quote! {
+                {
+                    #output_schema_token
+                    #(#output_schema_logic)*
+                    if !multi_modal_outputs.is_empty() {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(multi_modal_outputs)
+                    } else {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(default_outputs)
                     }
                 }
             };
@@ -295,16 +297,16 @@ fn get_agent_type_with_remote_client(
         }
     });
 
-    // It holds the name and type of the constructor parmeters with schema
+    let constructor_schema_init = quote! {
+        let mut constructor_multi_modal_inputs = vec![];
+        let mut constructor_default_inputs = vec![];
+    };
+
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    let mut constructor_input_info = DefaultOrMultimodal::Default;
-
-    // name and type of the constructor params
     let mut constructor_param_defs = vec![];
 
-    // just the parmaeter identities
-    let mut constructor_param_idents = vec![];
+    let mut constructor_param_names = vec![];
 
     if constructor_methods.is_empty() {
         return Err(no_constructor_method_error(item_trait).into());
@@ -315,63 +317,73 @@ fn get_agent_type_with_remote_client(
     }
 
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
-        constructor_input_info = FunctionInputInfo::from_signature(&ctor_fn.sig).input_shape;
-
-        match constructor_input_info {
-            DefaultOrMultimodal::Default => {
-                for input in &ctor_fn.sig.inputs {
-                    if let syn::FnArg::Typed(pat_type) = input {
-                        let param_name = match &*pat_type.pat {
-                            syn::Pat::Ident(pat_ident) => {
-                                let param_ident = &pat_ident.ident;
-                                let ty = &pat_type.ty;
-                                constructor_param_defs.push(quote! {
-                                    #param_ident: #ty
-                                });
-
-                                constructor_param_idents.push(quote! {
-                                    #param_ident
-                                });
-
-                                pat_ident.ident.to_string()
-                            }
-                            _ => "_".to_string(),
-                        };
-
+        for input in &ctor_fn.sig.inputs {
+            if let syn::FnArg::Typed(pat_type) = input {
+                let param_name = match &*pat_type.pat {
+                    syn::Pat::Ident(pat_ident) => {
+                        let param_ident = &pat_ident.ident;
                         let ty = &pat_type.ty;
-                        constructor_parameters_with_schema.push(quote! {
-                            (#param_name.to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
+                        constructor_param_defs.push(quote! {
+                            #param_ident: #ty
                         });
+
+                        constructor_param_names.push(quote! {
+                            #param_ident
+                        });
+
+                        pat_ident.ident.to_string()
                     }
-                }
-            }
-            DefaultOrMultimodal::Multimodal => {
-                todo!("Multimodal constructor parameters are not yet supported")
+                    _ => "_".to_string(),
+                };
+
+                let ty = &pat_type.ty;
+                constructor_parameters_with_schema.push(quote! {
+
+                    let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                    match schema {
+                        golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                            constructor_default_inputs.push((#param_name.to_string(), element_schema));
+                        },
+                        golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                            constructor_multi_modal_inputs.extend(name_and_types);
+                        }
+                    }
+                });
             }
         }
     }
 
-    let remote_client = get_remote_client(
-        item_trait,
-        &constructor_input_info,
-        constructor_param_defs,
-        constructor_param_idents,
-    );
-
-    let agent_constructor_input_schema = match constructor_input_info {
-        DefaultOrMultimodal::Default => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameters_with_schema),*])
-        },
-        DefaultOrMultimodal::Multimodal => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameters_with_schema),*])
-        },
+    let agent_constructor_input_schema = quote! {
+        {
+            #constructor_schema_init
+            #(#constructor_parameters_with_schema)*
+            if !constructor_multi_modal_inputs.is_empty() {
+                golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(constructor_multi_modal_inputs)
+            } else {
+                golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(constructor_default_inputs)
+            }
+        }
     };
 
-    let agent_constructor = quote! { golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
+    let constructor_data_schema_token = quote! {
+        let constructor_data_schema = {
+            #agent_constructor_input_schema
+        };
+    };
+
+    let remote_client =
+        get_remote_client(item_trait, constructor_param_defs, constructor_param_names);
+
+    let agent_constructor = quote! {
+        {
+         #constructor_data_schema_token
+
+         golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
             name: None,
             description: "".to_string(),
             prompt_hint: None,
-            input_schema: #agent_constructor_input_schema,
+            input_schema: constructor_data_schema,
+         }
         }
     };
 
