@@ -38,4 +38,8 @@ pub trait Agent {
         let (_, _, phantom_id) = parse_agent_id(&self.get_agent_id()).unwrap(); // Not user-provided string so we can assume it's always correct
         phantom_id.map(|id| id.into())
     }
+
+    async fn load_snapshot_base(&self, bytes: Vec<u8>) -> Result<(), String>;
+
+    async fn save_snapshot_base(&self) -> Result<Vec<u8>, String>;
 }
