@@ -16,11 +16,12 @@ use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
     golem_agentic::{
         exports::golem::agent::guest::AgentType,
-        golem::{agent::common::ElementSchema, api::host::AgentId},
+        golem::{agent::common::ElementSchema},
     },
 };
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
+use golem_wasm::AgentId;
 use wstd::runtime::block_on;
 
 #[derive(Default)]

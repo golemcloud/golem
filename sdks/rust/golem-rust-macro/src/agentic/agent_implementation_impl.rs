@@ -78,7 +78,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
             quote! {
                 let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_params),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
-                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
                 );
@@ -88,7 +88,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Asyncness::Immediate => {
             quote! {
                 let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
-                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
                 );

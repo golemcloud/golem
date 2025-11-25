@@ -356,6 +356,7 @@ impl Expr {
             .map_err(|err| format!("{err}"))
     }
 
+
     pub fn lookup(&self, source_span: &SourceSpan) -> Option<Expr> {
         let mut expr = self.clone();
         find_expr(&mut expr, source_span)
