@@ -27,7 +27,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -143,6 +143,7 @@ impl EnvironmentsApi {
     pub async fn delete_environment(
         &self,
         environment_id: Path<EnvironmentId>,
+        current_revision: Query<EnvironmentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<NoContentResponse> {
         let record = recorded_http_api_request!(
@@ -153,7 +154,7 @@ impl EnvironmentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_environment_internal(environment_id.0, auth)
+            .delete_environment_internal(environment_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -163,10 +164,11 @@ impl EnvironmentsApi {
     async fn delete_environment_internal(
         &self,
         environment_id: EnvironmentId,
+        current_revision: EnvironmentRevision,
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.environment_service
-            .delete(environment_id, &auth)
+            .delete(environment_id, current_revision, &auth)
             .await?;
         Ok(NoContentResponse::NoContent)
     }

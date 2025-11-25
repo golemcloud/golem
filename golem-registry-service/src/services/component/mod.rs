@@ -20,9 +20,11 @@ pub use self::error::ComponentError;
 pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::component_transformer_plugin_caller::{self};
+use super::deployment::DeploymentService;
 use super::environment::EnvironmentService;
 use crate::model::component::Component;
 use crate::repo::component::ComponentRepo;
+use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
 use golem_common::model::agent::RegisteredAgentType;
@@ -39,6 +41,7 @@ pub struct ComponentService {
     component_repo: Arc<dyn ComponentRepo>,
     object_store: Arc<ComponentObjectStore>,
     environment_service: Arc<EnvironmentService>,
+    deployment_service: Arc<DeploymentService>,
 }
 
 impl ComponentService {
@@ -46,11 +49,13 @@ impl ComponentService {
         component_repo: Arc<dyn ComponentRepo>,
         object_store: Arc<ComponentObjectStore>,
         environment_service: Arc<EnvironmentService>,
+        deployment_service: Arc<DeploymentService>,
     ) -> Self {
         Self {
             component_repo,
             object_store,
             environment_service,
+            deployment_service,
         }
     }
 
@@ -65,22 +70,25 @@ impl ComponentService {
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::NotFound)?;
+            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
 
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id).clone(),
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+        let environment = self
+            .environment_service
+            .get(&EnvironmentId(record.environment_id), false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -100,22 +108,25 @@ impl ComponentService {
             .component_repo
             .get_deployed_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::NotFound)?;
+            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
 
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id).clone(),
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+        let environment = self
+            .environment_service
+            .get(&EnvironmentId(record.environment_id), false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -140,23 +151,26 @@ impl ComponentService {
             if let Some(environment_id) = records.first().map(|r| &r.environment_id) {
                 (*environment_id).into()
             } else {
-                return Err(ComponentError::NotFound);
+                return Err(ComponentError::ComponentNotFound(component_id.clone()));
             };
 
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &environment_id,
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+        let environment = self
+            .environment_service
+            .get(&environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
 
         let components = records
             .into_iter()
@@ -185,22 +199,25 @@ impl ComponentService {
             .component_repo
             .get_by_id_and_revision(&component_id.0, revision.0 as i64, include_deleted)
             .await?
-            .ok_or(ComponentError::NotFound)?;
+            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
 
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id),
-                    EnvironmentAction::ViewComponent,
-                    include_deleted,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+        let environment = self
+            .environment_service
+            .get(&EnvironmentId(record.environment_id), include_deleted, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ComponentNotFound(component_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -216,20 +233,22 @@ impl ComponentService {
     ) -> Result<Vec<Component>, ComponentError> {
         info!(environment_id = %environment_id, "Get staged components");
 
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    environment_id,
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id.clone())
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )?;
 
         let result = self
             .component_repo
@@ -250,8 +269,8 @@ impl ComponentService {
 
     pub async fn get_staged_component_by_name(
         &self,
-        environment_id: EnvironmentId,
-        component_name: ComponentName,
+        environment_id: &EnvironmentId,
+        component_name: &ComponentName,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(
@@ -260,26 +279,31 @@ impl ComponentService {
             "Get staged component"
         );
 
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
+
         let record = self
             .component_repo
             .get_staged_by_name(&environment_id.0, &component_name.0)
             .await?
-            .ok_or(ComponentError::NotFound)?;
-
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id),
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+            .ok_or(ComponentError::ComponentByNameNotFound(
+                component_name.clone(),
+            ))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -300,20 +324,20 @@ impl ComponentService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                environment_id,
-                EnvironmentAction::ViewComponent,
-                false,
-                auth,
-            )
+            .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
                     ComponentError::ParentEnvironmentNotFound(environment_id)
                 }
-                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )?;
 
         let result = self
             .component_repo
@@ -335,41 +359,40 @@ impl ComponentService {
     pub async fn get_deployed_component_by_name(
         &self,
         environment_id: &EnvironmentId,
-        component_name: ComponentName,
+        component_name: &ComponentName,
         auth: &AuthCtx,
-    ) -> Result<Option<Component>, ComponentError> {
+    ) -> Result<Component, ComponentError> {
         info!(
             environment_id = %environment_id,
             component_name = %component_name,
             "Get staged component"
         );
 
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
+
         let record = self
             .component_repo
             .get_deployed_by_name(&environment_id.0, &component_name.0)
             .await?
-            .ok_or(ComponentError::NotFound)?;
-
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id),
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => None,
-                    other => Some(other),
-                });
-
-        let environment = match environment {
-            Ok(env) => env,
-            Err(None) => return Ok(None),
-            Err(Some(err)) => return Err(err.into()),
-        };
+            .ok_or(ComponentError::ComponentByNameNotFound(
+                component_name.clone(),
+            ))?;
 
         let converted = record.try_into_model(
             environment.application_id,
@@ -377,7 +400,7 @@ impl ComponentService {
             environment.roles_from_active_shares,
         )?;
 
-        Ok(Some(converted))
+        Ok(converted)
     }
 
     pub async fn get_deployed_agent_types(
@@ -405,38 +428,59 @@ impl ComponentService {
         Ok(agent_types)
     }
 
+    pub async fn get_deployed_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        agent_type_name: &str,
+        auth: &AuthCtx,
+    ) -> Result<RegisteredAgentType, ComponentError> {
+        let agent_types = self.get_deployed_agent_types(environment_id, auth).await?;
+
+        let agent_type = agent_types
+            .into_iter()
+            .find(|at| at.agent_type.type_name == agent_type_name)
+            .ok_or(ComponentError::AgentTypeForNameNotFound(
+                agent_type_name.to_string(),
+            ))?;
+
+        Ok(agent_type)
+    }
+
     pub async fn list_deployment_components(
         &self,
         environment_id: &EnvironmentId,
-        deployment_revision_id: DeploymentRevision,
+        deployment_revision: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
         info!(
             environment_id = %environment_id,
-            deployment_revision_id = %deployment_revision_id.0.to_string(),
-            "Get deployed components"
+            deployment_revision = %deployment_revision.0.to_string(),
+            "Get deployment components"
         );
 
-        let environment = self
-            .environment_service
-            .get_and_authorize(
-                environment_id,
-                EnvironmentAction::ViewComponent,
-                false,
-                auth,
-            )
+        let (_, environment) = self
+            .deployment_service
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                DeploymentError::ParentEnvironmentNotFound(environment_id) => {
                     ComponentError::ParentEnvironmentNotFound(environment_id)
                 }
-                EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
+                DeploymentError::DeploymentNotFound(deployment_revision) => {
+                    ComponentError::DeploymentRevisionNotFound(deployment_revision)
+                }
                 other => other.into(),
             })?;
 
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )?;
+
         let result = self
             .component_repo
-            .list_by_deployment(&environment_id.0, deployment_revision_id.0 as i64)
+            .list_by_deployment(&environment_id.0, deployment_revision.0 as i64)
             .await?
             .into_iter()
             .map(|r| {
@@ -453,42 +497,50 @@ impl ComponentService {
 
     pub async fn get_deployment_component_by_name(
         &self,
-        environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevision,
-        component_name: ComponentName,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        component_name: &ComponentName,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {
         info!(
             environment_id = %environment_id,
-            deployment_revision_id = %deployment_revision_id,
+            deployment_revision = %deployment_revision,
             component_name = %component_name,
             "Get deployed component"
         );
+
+        let (_, environment) = self
+            .deployment_service
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await
+            .map_err(|err| match err {
+                DeploymentError::ParentEnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
+                }
+                DeploymentError::DeploymentNotFound(deployment_revision) => {
+                    ComponentError::DeploymentRevisionNotFound(deployment_revision)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewComponent,
+        )
+        .map_err(|_| ComponentError::ComponentByNameNotFound(component_name.clone()))?;
 
         let record = self
             .component_repo
             .get_by_deployment_and_name(
                 &environment_id.0,
-                deployment_revision_id.0 as i64,
+                deployment_revision.0 as i64,
                 &component_name.0,
             )
             .await?
-            .ok_or(ComponentError::NotFound)?;
-
-        let environment =
-            self.environment_service
-                .get_and_authorize(
-                    &EnvironmentId(record.environment_id),
-                    EnvironmentAction::ViewComponent,
-                    false,
-                    auth,
-                )
-                .await
-                .map_err(|err| match err {
-                    EnvironmentError::EnvironmentNotFound(_)
-                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                    other => other.into(),
-                })?;
+            .ok_or(ComponentError::ComponentByNameNotFound(
+                component_name.clone(),
+            ))?;
 
         Ok(record.try_into_model(
             environment.application_id,

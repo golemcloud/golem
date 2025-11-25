@@ -63,6 +63,12 @@ use tracing::{debug, info, Instrument};
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
 
+pub struct EnvironmentOptions {
+    pub compatibility_check: bool,
+    pub version_check: bool,
+    pub security_overrides: bool,
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
@@ -531,6 +537,18 @@ pub trait TestDslExtended: TestDsl {
     }
 
     async fn app_and_env(&self) -> anyhow::Result<(Application, Environment)> {
+        self.app_and_env_custom(&EnvironmentOptions {
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+        })
+        .await
+    }
+
+    async fn app_and_env_custom(
+        &self,
+        environment_options: &EnvironmentOptions,
+    ) -> anyhow::Result<(Application, Environment)> {
         let client = self.registry_service_client().await;
         let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
         let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
@@ -547,9 +565,9 @@ pub trait TestDslExtended: TestDsl {
                 &application.id.0,
                 &EnvironmentCreation {
                     name: env_name,
-                    compatibility_check: false,
-                    version_check: false,
-                    security_overrides: false,
+                    compatibility_check: environment_options.compatibility_check,
+                    version_check: environment_options.version_check,
+                    security_overrides: environment_options.security_overrides,
                 },
             )
             .await?;

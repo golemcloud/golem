@@ -33,6 +33,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
+use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -268,7 +269,8 @@ impl RemoteWorkerProxy {
                     .await
                     .map_err(|e| {
                         WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
-                            "failed getting auth ctx for account_id: {e}"
+                            "failed getting auth ctx for account_id: {}",
+                            e.to_safe_string()
                         )))
                     })?;
                 Ok(auth_ctx)

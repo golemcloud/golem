@@ -45,7 +45,8 @@ newtype_uuid!(
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display, Eq, Hash, PartialOrd, Ord)]
+    #[derive(Display, Eq, Hash, PartialOrd, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct ComponentName(pub String);
 
     /// Key that can be used to identify a component file.

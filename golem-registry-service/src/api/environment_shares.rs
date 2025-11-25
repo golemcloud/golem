@@ -18,14 +18,15 @@ use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate,
+    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareRevision,
+    EnvironmentShareUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -220,6 +221,7 @@ impl EnvironmentSharesApi {
     pub async fn delete_environment_share(
         &self,
         environment_share_id: Path<EnvironmentShareId>,
+        current_revision: Query<EnvironmentShareRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -230,7 +232,7 @@ impl EnvironmentSharesApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_environment_share_internal(environment_share_id.0, auth)
+            .delete_environment_share_internal(environment_share_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -240,11 +242,12 @@ impl EnvironmentSharesApi {
     async fn delete_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
+        current_revision: EnvironmentShareRevision,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self
             .environment_share_service
-            .delete(&environment_share_id, &auth)
+            .delete(&environment_share_id, current_revision, &auth)
             .await?;
         Ok(Json(share))
     }

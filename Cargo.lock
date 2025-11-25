@@ -4459,6 +4459,7 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "darling 0.20.11",
+ "desert_rust",
  "figment",
  "futures",
  "golem-api-grpc",

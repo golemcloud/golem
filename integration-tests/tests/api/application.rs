@@ -56,7 +56,9 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
         assert!(app_ids == HashSet::from_iter([app_1.id.clone(), app_2.id.clone()]));
     }
 
-    client.delete_application(&app_2.id.0).await?;
+    client
+        .delete_application(&app_2.id.0, app_2.revision.0)
+        .await?;
 
     {
         let result = client
@@ -179,6 +181,7 @@ async fn cannot_create_two_applications_with_same_name(
             .update_application(
                 &app_2.id.0,
                 &ApplicationUpdate {
+                    current_revision: app_2.revision,
                     new_name: Some(app_1.name.clone()),
                 },
             )
@@ -192,7 +195,9 @@ async fn cannot_create_two_applications_with_same_name(
     }
 
     // delete the environment, now creating a new one will succeed
-    client.delete_application(&app_1.id.0).await?;
+    client
+        .delete_application(&app_1.id.0, app_1.revision.0)
+        .await?;
 
     // create environment with reused name
     {
@@ -205,7 +210,9 @@ async fn cannot_create_two_applications_with_same_name(
             )
             .await?;
 
-        client.delete_application(&app_3.id.0).await?;
+        client
+            .delete_application(&app_3.id.0, app_3.revision.0)
+            .await?;
     }
 
     // update environment to reused name
@@ -213,6 +220,7 @@ async fn cannot_create_two_applications_with_same_name(
         .update_application(
             &app_2.id.0,
             &ApplicationUpdate {
+                current_revision: app_2.revision,
                 new_name: Some(app_1.name.clone()),
             },
         )

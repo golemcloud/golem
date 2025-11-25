@@ -17,7 +17,7 @@ pub mod api_domain;
 pub mod certificate;
 
 use crate::declare_structs;
-use crate::model::api_definition::ApiDefinitionId;
+use crate::model::api_definition::HttpApiDefinitionId;
 use crate::model::component::ComponentId;
 use crate::model::component::ComponentRevision;
 use serde::{Deserialize, Serialize};
@@ -31,11 +31,11 @@ pub struct Page<
 
 declare_structs! {
     pub struct CreateApiDeploymentRequest {
-        pub api_definitions: Vec<ApiDefinitionId>,
+        pub api_definitions: Vec<HttpApiDefinitionId>,
     }
 
     pub struct UpdateApiDeploymentRequest {
-        pub api_definitions: Vec<ApiDefinitionId>,
+        pub api_definitions: Vec<HttpApiDefinitionId>,
     }
 
     pub struct ComponentReference {

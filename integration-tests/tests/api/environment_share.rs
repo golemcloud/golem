@@ -80,7 +80,9 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
         )
         .await?;
 
-    client_1.delete_environment_share(&share.id.0).await?;
+    client_1
+        .delete_environment_share(&share.id.0, share.revision.0)
+        .await?;
 
     {
         let result = client_1.get_environment_share(&share.id.0).await;
@@ -124,6 +126,7 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
         .update_environment_share(
             &share.id.0,
             &EnvironmentShareUpdate {
+                current_revision: share.revision,
                 new_roles: vec![EnvironmentRole::Viewer],
             },
         )

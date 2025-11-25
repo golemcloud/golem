@@ -250,8 +250,7 @@ CREATE TABLE components
 );
 
 CREATE UNIQUE INDEX components_name_uk
-    ON components (environment_id, name)
-    WHERE deleted_at IS NULL;
+    ON components (environment_id, name);
 
 CREATE TABLE component_revisions
 (
@@ -412,8 +411,7 @@ CREATE TABLE http_api_definitions
 );
 
 CREATE UNIQUE INDEX http_api_definitions_name_uk
-    ON http_api_definitions (environment_id, name)
-    WHERE deleted_at IS NULL;
+    ON http_api_definitions (environment_id, name);
 
 CREATE TABLE http_api_definition_revisions
 (
@@ -460,8 +458,7 @@ CREATE TABLE http_api_deployments
 );
 
 CREATE UNIQUE INDEX http_api_deployments_name_uk
-    ON components (environment_id, name)
-    WHERE deleted_at IS NULL;
+    ON components (environment_id, name);
 
 CREATE TABLE http_api_deployment_revisions
 (

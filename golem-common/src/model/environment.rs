@@ -51,6 +51,18 @@ impl FromStr for EnvironmentName {
 }
 
 declare_structs! {
+    pub struct EnvironmentCreation {
+        pub name: EnvironmentName,
+        pub compatibility_check: bool,
+        pub version_check: bool,
+        pub security_overrides: bool,
+    }
+
+    pub struct EnvironmentUpdate {
+        pub current_revision: EnvironmentRevision,
+        pub new_name: Option<EnvironmentName>
+    }
+
     pub struct EnvironmentCurrentDeploymentView {
         pub revision: DeploymentRevision,
         pub hash: Hash
@@ -71,16 +83,5 @@ declare_structs! {
         pub roles_from_active_shares: HashSet<EnvironmentRole>,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
-    }
-
-    pub struct EnvironmentCreation {
-        pub name: EnvironmentName,
-        pub compatibility_check: bool,
-        pub version_check: bool,
-        pub security_overrides: bool,
-    }
-
-    pub struct EnvironmentUpdate {
-        pub new_name: Option<EnvironmentName>
     }
 }

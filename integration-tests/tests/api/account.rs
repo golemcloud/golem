@@ -17,9 +17,9 @@ use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
-use golem_client::model::AccountRole;
 use golem_client::model::AccountUpdate;
-use golem_common::model::account::{AccountCreation, AccountRevision};
+use golem_common::model::account::{AccountCreation, AccountRevision, AccountSetRoles};
+use golem_common::model::auth::AccountRole;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -66,24 +66,25 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let new_name = Uuid::new_v4().to_string();
     let new_email = format!("{new_name}@golem.cloud");
 
-    let account = client
+    let updated_account = client
         .update_account(
             &user.account_id.0,
             &AccountUpdate {
+                current_revision: AccountRevision::INITIAL,
                 name: new_name.clone(),
                 email: new_email.clone(),
             },
         )
         .await?;
 
-    assert!(account.id == user.account_id);
-    assert!(account.name == new_name);
-    assert!(account.email == new_email);
-    assert!(account.revision == AccountRevision(1));
+    assert!(updated_account.id == user.account_id);
+    assert!(updated_account.name == new_name);
+    assert!(updated_account.email == new_email);
+    assert!(updated_account.revision == AccountRevision(1));
 
     {
         let account_from_get = client.get_account(&user.account_id.0).await?;
-        assert!(account_from_get == account);
+        assert!(account_from_get == updated_account);
     }
     Ok(())
 }
@@ -98,7 +99,10 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         let account = client
             .set_account_roles(
                 &user.account_id.0,
-                &[AccountRole::MarketingAdmin, AccountRole::Admin],
+                &AccountSetRoles {
+                    current_revision: AccountRevision::INITIAL,
+                    roles: vec![AccountRole::MarketingAdmin, AccountRole::Admin],
+                },
             )
             .await?;
 
@@ -109,7 +113,13 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
     {
         let account = client
-            .set_account_roles(&user.account_id.0, &[AccountRole::Admin])
+            .set_account_roles(
+                &user.account_id.0,
+                &AccountSetRoles {
+                    current_revision: AccountRevision(1),
+                    roles: vec![AccountRole::Admin],
+                },
+            )
             .await?;
 
         assert!(account.roles == vec![AccountRole::Admin]);
@@ -190,6 +200,7 @@ async fn update_account_with_duplicate_email_fails(
             .update_account(
                 &account.id.0,
                 &AccountUpdate {
+                    current_revision: account.revision,
                     name: account.name,
                     email: conflicting_email.clone(),
                 },
@@ -232,6 +243,7 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
         .update_account(
             &account_1.id.0,
             &AccountUpdate {
+                current_revision: account_1.revision,
                 name: account_1.name,
                 email: format!("{}@golem.cloud", Uuid::new_v4()),
             },
@@ -242,6 +254,7 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
         .update_account(
             &account_2.id.0,
             &AccountUpdate {
+                current_revision: account_2.revision,
                 name: account_2.name,
                 email: conflicting_email.clone(),
             },

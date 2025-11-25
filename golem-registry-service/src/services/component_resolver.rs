@@ -31,6 +31,8 @@ use tracing::error;
 pub enum ComponentResolverError {
     #[error("Invalid component reference: {error}")]
     InvalidComponentReference { error: String },
+    #[error("Component for reference not found")]
+    ComponentNotFound,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -39,6 +41,7 @@ impl SafeDisplay for ComponentResolverError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InvalidComponentReference { .. } => self.to_string(),
+            Self::ComponentNotFound => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
     }
@@ -81,12 +84,15 @@ impl ComponentResolverService {
         resolving_application: &ApplicationId,
         resolving_account: &AccountId,
         auth: &AuthCtx,
-    ) -> Result<Option<Component>, ComponentResolverError> {
+    ) -> Result<Component, ComponentResolverError> {
         let component_slug = ComponentSlug::parse(&component_reference)
             .map_err(|e| ComponentResolverError::InvalidComponentReference { error: e })?;
 
+        // Note checking for parent resources using system authctx does not leak existence here.
+        // We don't return them directly to the user and the final call to get the component using the user authctx checks for permissions.
+
         // TODO: push these down to the database
-        let component = match component_slug.into_parts() {
+        match component_slug.into_parts() {
             (
                 Some(account_email),
                 Some(application_name),
@@ -107,8 +113,14 @@ impl ComponentResolverService {
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, component_name, auth)
-                    .await?
+                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .await
+                    .map_err(|err| match err {
+                        ComponentError::ComponentByNameNotFound(_) => {
+                            ComponentResolverError::ComponentNotFound
+                        }
+                        other => other.into(),
+                    })
             }
             (None, Some(application_name), Some(environment_name), component_name) => {
                 let application = self
@@ -121,8 +133,14 @@ impl ComponentResolverService {
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, component_name, auth)
-                    .await?
+                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .await
+                    .map_err(|err| match err {
+                        ComponentError::ComponentByNameNotFound(_) => {
+                            ComponentResolverError::ComponentNotFound
+                        }
+                        other => other.into(),
+                    })
             }
             (None, None, Some(environment_name), component_name) => {
                 let environment = self
@@ -131,17 +149,26 @@ impl ComponentResolverService {
                     .await?;
 
                 self.component_service
-                    .get_deployed_component_by_name(&environment.id, component_name, auth)
-                    .await?
+                    .get_deployed_component_by_name(&environment.id, &component_name, auth)
+                    .await
+                    .map_err(|err| match err {
+                        ComponentError::ComponentByNameNotFound(_) => {
+                            ComponentResolverError::ComponentNotFound
+                        }
+                        other => other.into(),
+                    })
             }
-            (None, None, None, component_name) => {
-                self.component_service
-                    .get_deployed_component_by_name(resolving_environment, component_name, auth)
-                    .await?
-            }
+            (None, None, None, component_name) => self
+                .component_service
+                .get_deployed_component_by_name(resolving_environment, &component_name, auth)
+                .await
+                .map_err(|err| match err {
+                    ComponentError::ComponentByNameNotFound(_) => {
+                        ComponentResolverError::ComponentNotFound
+                    }
+                    other => other.into(),
+                }),
             _ => panic!("Received malformed parts from ComponentSlug::into_parts()"),
-        };
-
-        Ok(component)
+        }
     }
 }

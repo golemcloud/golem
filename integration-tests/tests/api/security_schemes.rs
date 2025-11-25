@@ -85,7 +85,9 @@ async fn delete_security_scheme(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await?;
 
-    client.delete_security_scheme(&security_scheme.id.0).await?;
+    client
+        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.0)
+        .await?;
 
     {
         let result = client.get_security_scheme(&security_scheme.id.0).await;
@@ -243,7 +245,9 @@ async fn security_scheme_name_can_be_reused_after_deletion(
         .create_security_scheme(&env.id.0, &security_scheme_creation)
         .await?;
 
-    client.delete_security_scheme(&security_scheme.id.0).await?;
+    client
+        .delete_security_scheme(&security_scheme.id.0, security_scheme.revision.0)
+        .await?;
 
     let recreated_security_scheme = client
         .create_security_scheme(&env.id.0, &security_scheme_creation)
@@ -278,6 +282,7 @@ async fn security_scheme_update(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         .await?;
 
     let security_scheme_update = SecuritySchemeUpdate {
+        current_revision: security_scheme.revision,
         provider_type: Some(Provider::Gitlab),
         client_id: Some("client_id_1".to_string()),
         client_secret: Some("client_secret_1".to_string()),

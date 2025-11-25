@@ -17,6 +17,7 @@ use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
+use golem_common::model::environment::Environment;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{
@@ -193,6 +194,52 @@ impl DeploymentService {
             .collect();
 
         Ok(deployments)
+    }
+
+    pub async fn get_deployment(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Deployment, DeploymentError> {
+        let (deployment, _) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        Ok(deployment)
+    }
+
+    pub async fn get_deployment_and_environment(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<(Deployment, Environment), DeploymentError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewDeployment,
+        )
+        .map_err(|_| DeploymentError::DeploymentNotFound(deployment_revision))?;
+
+        let deployment: Deployment = self
+            .deployment_repo
+            .get_deployed_revision(&environment_id.0, deployment_revision.into())
+            .await?
+            .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
+            .into();
+
+        Ok((deployment, environment))
     }
 
     pub async fn get_current_deployment_plan(

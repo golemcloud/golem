@@ -18,8 +18,8 @@ use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
-use golem_common::model::account::PlanId;
 use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
+use golem_common::model::account::{AccountSetRoles, PlanId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, GlobalAction};
@@ -133,6 +133,10 @@ impl AccountService {
 
         auth.authorize_account_action(account_id, AccountAction::UpdateAccount)?;
 
+        if update.current_revision != account.revision {
+            return Err(AccountError::ConcurrentUpdate);
+        };
+
         info!("Updating account: {}", account_id);
 
         account.name = update.name;
@@ -144,16 +148,20 @@ impl AccountService {
     pub async fn set_roles(
         &self,
         account_id: &AccountId,
-        roles: Vec<AccountRole>,
+        update: AccountSetRoles,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.get(account_id, auth).await?;
 
         auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
 
+        if update.current_revision != account.revision {
+            return Err(AccountError::ConcurrentUpdate);
+        };
+
         info!("Updating account: {}", account_id);
 
-        account.roles = roles;
+        account.roles = update.roles;
 
         self.update_internal(account, auth).await
     }

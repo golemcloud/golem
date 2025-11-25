@@ -17,7 +17,7 @@ use super::http_middlewares::HttpMiddlewares;
 use super::path_pattern::AllPathPatterns;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::api_definition::{ApiDefinitionId, ApiDefinitionRevision};
+use golem_common::model::api_definition::{HttpApiDefinitionId, HttpApiDefinitionRevision};
 use golem_common::model::environment::EnvironmentId;
 use poem_openapi::Enum;
 use serde::de::Error;
@@ -32,8 +32,8 @@ use std::str::FromStr;
 // CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledHttpApiDefinition {
-    pub id: ApiDefinitionId,
-    pub revision: ApiDefinitionRevision,
+    pub id: HttpApiDefinitionId,
+    pub revision: HttpApiDefinitionRevision,
     pub routes: Vec<CompiledRoute>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub account_id: AccountId,

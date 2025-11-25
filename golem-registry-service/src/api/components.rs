@@ -23,13 +23,14 @@ use golem_common::model::component::ComponentUpdate;
 use golem_common::model::component::{ComponentCreation, ComponentDto, ComponentName};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::poem::TempFileUpload;
 use poem::Body;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::{Multipart, OpenApi};
@@ -194,7 +195,7 @@ impl ComponentsApi {
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
-            .get_staged_component_by_name(environment_id, component_name, &auth)
+            .get_staged_component_by_name(&environment_id, &component_name, &auth)
             .await?
             .into();
 
@@ -203,27 +204,28 @@ impl ComponentsApi {
 
     /// Get all components in a specific deployment
     #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision_id/components",
+        path = "/envs/:environment_id/deployments/:deployment_revision/components",
         method = "get",
         operation_id = "get_deployment_components",
-        tag = ApiTags::Environment
+        tag = ApiTags::Environment,
+        tag = ApiTags::Deployment
     )]
     async fn get_deployment_components(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevision>,
+        deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
             "get_deployment_components",
             environment_id = environment_id.0.to_string(),
-            deployment_revision_id = deployment_revision_id.0.0,
+            deployment_revision = deployment_revision.0.0,
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_deployment_components_internal(environment_id.0, deployment_revision_id.0, auth)
+            .get_deployment_components_internal(environment_id.0, deployment_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -233,12 +235,12 @@ impl ComponentsApi {
     async fn get_deployment_components_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevision,
+        deployment_revision: DeploymentRevision,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let components: Vec<ComponentDto> = self
             .component_service
-            .list_deployment_components(&environment_id, deployment_revision_id, &auth)
+            .list_deployment_components(&environment_id, deployment_revision, &auth)
             .await?
             .into_iter()
             .map(ComponentDto::from)
@@ -249,22 +251,23 @@ impl ComponentsApi {
 
     /// Get component in a deployment by name
     #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision_id/components/:component_name",
+        path = "/envs/:environment_id/deployments/:deployment_revision/components/:component_name",
         method = "get",
         operation_id = "get_deployment_component",
-        tag = ApiTags::Environment
+        tag = ApiTags::Environment,
+        tag = ApiTags::Deployment
     )]
     async fn get_deployment_component(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevision>,
+        deployment_revision: Path<DeploymentRevision>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "get_deployment_component",
             environment_id = environment_id.0.to_string(),
-            deployment_revision_id = deployment_revision_id.0.0,
+            deployment_revision = deployment_revision.0.0,
             component_name = component_name.0.to_string()
         );
 
@@ -273,7 +276,7 @@ impl ComponentsApi {
         let response = self
             .get_deployment_component_internal(
                 environment_id.0,
-                deployment_revision_id.0,
+                deployment_revision.0,
                 component_name.0,
                 auth,
             )
@@ -286,16 +289,16 @@ impl ComponentsApi {
     async fn get_deployment_component_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevision,
+        deployment_revision: DeploymentRevision,
         component_name: ComponentName,
         auth: AuthCtx,
     ) -> ApiResult<Json<ComponentDto>> {
         let component: ComponentDto = self
             .component_service
             .get_deployment_component_by_name(
-                environment_id,
-                deployment_revision_id,
-                component_name,
+                &environment_id,
+                deployment_revision,
+                &component_name,
                 &auth,
             )
             .await?
@@ -483,6 +486,46 @@ impl ComponentsApi {
             .into();
 
         Ok(Json(component))
+    }
+
+    /// Update the component
+    #[oai(
+        path = "/components/:component_id",
+        method = "delete",
+        operation_id = "delete_component"
+    )]
+    async fn delete_component(
+        &self,
+        component_id: Path<ComponentId>,
+        current_revision: Query<ComponentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<NoContentResponse> {
+        let record = recorded_http_api_request!(
+            "delete_component",
+            component_id = component_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .delete_component_internal(component_id.0, current_revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn delete_component_internal(
+        &self,
+        component_id: ComponentId,
+        current_revision: ComponentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<NoContentResponse> {
+        self.component_write_service
+            .delete(&component_id, current_revision, &auth)
+            .await?;
+
+        Ok(NoContentResponse::NoContent)
     }
 }
 

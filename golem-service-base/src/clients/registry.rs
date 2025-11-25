@@ -32,7 +32,6 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_resource_limits_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
-use golem_common::IntoAnyhow;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
@@ -43,6 +42,7 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_common::{IntoAnyhow, SafeDisplay};
 use std::collections::HashMap;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -138,7 +138,7 @@ pub trait RegistryService: Send + Sync {
         resolving_environment_id: &EnvironmentId,
         component_slug: &str,
         auth_ctx: &AuthCtx,
-    ) -> Result<Option<ComponentDto>, RegistryServiceError>;
+    ) -> Result<ComponentDto, RegistryServiceError>;
 
     // agent types api
     // will only return agent types provided by non-deleted components
@@ -154,7 +154,7 @@ pub trait RegistryService: Send + Sync {
         environment_id: &EnvironmentId,
         name: &str,
         auth_ctx: &AuthCtx,
-    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError>;
+    ) -> Result<RegisteredAgentType, RegistryServiceError>;
 }
 
 #[derive(Clone)]
@@ -528,7 +528,7 @@ impl RegistryService for GrpcRegistryService {
         resolving_environment_id: &EnvironmentId,
         component_slug: &str,
         auth_ctx: &AuthCtx,
-    ) -> Result<Option<ComponentDto>, RegistryServiceError> {
+    ) -> Result<ComponentDto, RegistryServiceError> {
         let response = self
             .client
             .call("resolve-component", move |client| {
@@ -548,7 +548,10 @@ impl RegistryService for GrpcRegistryService {
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
             Some(resolve_component_response::Result::Success(payload)) => {
-                let converted = payload.component.map(ComponentDto::try_from).transpose()?;
+                let converted = payload
+                    .component
+                    .ok_or("missing component field")?
+                    .try_into()?;
                 Ok(converted)
             }
             Some(resolve_component_response::Result::Error(error)) => Err(error.into()),
@@ -592,7 +595,7 @@ impl RegistryService for GrpcRegistryService {
         environment_id: &EnvironmentId,
         name: &str,
         auth_ctx: &AuthCtx,
-    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
         let response = self
             .client
             .call("get-all-agent-types", move |client| {
@@ -611,16 +614,11 @@ impl RegistryService for GrpcRegistryService {
             Some(get_agent_type_response::Result::Success(payload)) => {
                 let converted = payload
                     .agent_type
-                    .map(RegisteredAgentType::try_from)
-                    .transpose()?;
+                    .ok_or("missing agent_type field")?
+                    .try_into()?;
                 Ok(converted)
-            },
-            Some(get_agent_type_response::Result::Error(golem_api_grpc::proto::golem::registry::v1::RegistryServiceError {
-                error: Some(golem_api_grpc::proto::golem::registry::v1::registry_service_error::Error::NotFound(_))
-            })) => Ok(None),
-            Some(get_agent_type_response::Result::Error(error)) => {
-                Err(error.into())
             }
+            Some(get_agent_type_response::Result::Error(error)) => Err(error.into()),
         }
     }
 }
@@ -633,8 +631,6 @@ pub enum RegistryServiceError {
     Unauthorized(String),
     #[error("Forbidden: {0}")]
     LimitExceeded(String),
-    #[error("Forbidden: {0}")]
-    Forbidden(String),
     #[error("NotFound: {0}")]
     NotFound(String),
     #[error("AlreadyExists: {0}")]
@@ -654,6 +650,21 @@ impl RegistryServiceError {
 
     pub fn empty_response() -> Self {
         Self::internal_client_error("empty response")
+    }
+}
+
+impl SafeDisplay for RegistryServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::AlreadyExists(_) => self.to_string(),
+            Self::BadRequest(_) => self.to_string(),
+            Self::CouldNotAuthenticate(_) => self.to_string(),
+            Self::LimitExceeded(_) => self.to_string(),
+            Self::NotFound(_) => self.to_string(),
+            Self::Unauthorized(_) => self.to_string(),
+            Self::InternalClientError(_) => "Internal error".to_string(),
+            Self::InternalError(_) => "Internal error".to_string(),
+        }
     }
 }
 

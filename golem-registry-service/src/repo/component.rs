@@ -428,7 +428,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .bind(revision.audit.created_by),
                 )
                 .await
-                .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)?;
+                .to_error_on_unique_violation(ComponentRepoError::ComponentViolatesUniqueness)?;
 
                 let revision = Self::insert_revision(
                     tx,

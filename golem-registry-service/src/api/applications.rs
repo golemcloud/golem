@@ -17,7 +17,9 @@ use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
 use crate::services::environment::EnvironmentService;
 use golem_common::api::Page;
-use golem_common::model::application::{Application, ApplicationId, ApplicationUpdate};
+use golem_common::model::application::{
+    Application, ApplicationId, ApplicationRevision, ApplicationUpdate,
+};
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -25,7 +27,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -138,6 +140,7 @@ impl ApplicationsApi {
     pub async fn delete_application(
         &self,
         application_id: Path<ApplicationId>,
+        current_revision: Query<ApplicationRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<NoContentResponse> {
         let record = recorded_http_api_request!(
@@ -148,7 +151,7 @@ impl ApplicationsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_application_internal(application_id.0, auth)
+            .delete_application_internal(application_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -158,10 +161,11 @@ impl ApplicationsApi {
     async fn delete_application_internal(
         &self,
         application_id: ApplicationId,
+        current_revision: ApplicationRevision,
         auth: AuthCtx,
     ) -> ApiResult<NoContentResponse> {
         self.application_service
-            .delete(&application_id, &auth)
+            .delete(&application_id, current_revision, &auth)
             .await?;
 
         Ok(NoContentResponse::NoContent)

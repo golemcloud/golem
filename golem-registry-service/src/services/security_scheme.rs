@@ -18,7 +18,8 @@ use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchem
 use crate::repo::security_scheme::SecuritySchemeRepo;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::security_scheme::{
-    SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeUpdate,
+    SecuritySchemeCreation, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
+    SecuritySchemeUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::security_scheme::SecurityScheme;
@@ -39,6 +40,8 @@ pub enum SecuritySchemeError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Security scheme {0} not found")]
     SecuritySchemeNotFound(SecuritySchemeId),
+    #[error("Security scheme for name {0} not found in environment")]
+    SecuritySchemeForNameNotFound(SecuritySchemeName),
     #[error("Concurrent update attempt")]
     ConcurrentUpdateAttempt,
     #[error(transparent)]
@@ -52,6 +55,7 @@ impl SafeDisplay for SecuritySchemeError {
         match self {
             Self::InvalidRedirectUrl => self.to_string(),
             Self::SecuritySchemeWithNameAlreadyExists(_) => self.to_string(),
+            Self::SecuritySchemeForNameNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::SecuritySchemeNotFound(_) => self.to_string(),
             Self::ConcurrentUpdateAttempt => self.to_string(),
@@ -89,21 +93,22 @@ impl SecuritySchemeService {
         data: SecuritySchemeCreation,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
-        self.environment_service
-            .get_and_authorize(
-                &environment_id,
-                EnvironmentAction::CreateSecurityScheme,
-                false,
-                auth,
-            )
+        let environment = self
+            .environment_service
+            .get(&environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
                     SecuritySchemeError::ParentEnvironmentNotFound(environment_id.clone())
                 }
-                EnvironmentError::Unauthorized(inner) => SecuritySchemeError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::CreateSecurityScheme,
+        )?;
 
         let id = SecuritySchemeId::new_v4();
 
@@ -150,10 +155,11 @@ impl SecuritySchemeService {
             EnvironmentAction::UpdateSecurityScheme,
         )?;
 
-        let current_revision = security_scheme.revision;
+        if update.current_revision != security_scheme.revision {
+            return Err(SecuritySchemeError::ConcurrentUpdateAttempt);
+        };
 
-        security_scheme.revision = current_revision.next()?;
-
+        security_scheme.revision = security_scheme.revision.next()?;
         if let Some(provider_type) = update.provider_type {
             security_scheme.provider_type = provider_type;
         };
@@ -178,7 +184,7 @@ impl SecuritySchemeService {
         let result = self
             .security_scheme_repo
             .update(
-                current_revision.into(),
+                update.current_revision.into(),
                 SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
             )
             .await;
@@ -195,6 +201,7 @@ impl SecuritySchemeService {
     pub async fn delete(
         &self,
         security_scheme_id: &SecuritySchemeId,
+        current_revision: SecuritySchemeRevision,
         auth: &AuthCtx,
     ) -> Result<SecurityScheme, SecuritySchemeError> {
         let (mut security_scheme, environment) =
@@ -206,9 +213,11 @@ impl SecuritySchemeService {
             EnvironmentAction::DeleteSecurityScheme,
         )?;
 
-        let current_revision = security_scheme.revision;
+        if current_revision != security_scheme.revision {
+            return Err(SecuritySchemeError::ConcurrentUpdateAttempt);
+        };
 
-        security_scheme.revision = current_revision.next()?;
+        security_scheme.revision = security_scheme.revision.next()?;
 
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
 
@@ -243,21 +252,22 @@ impl SecuritySchemeService {
         environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<SecurityScheme>, SecuritySchemeError> {
-        self.environment_service
-            .get_and_authorize(
-                &environment_id,
-                EnvironmentAction::ViewSecurityScheme,
-                false,
-                auth,
-            )
+        let environment = self
+            .environment_service
+            .get(&environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
                     SecuritySchemeError::ParentEnvironmentNotFound(environment_id.clone())
                 }
-                EnvironmentError::Unauthorized(inner) => SecuritySchemeError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewSecurityScheme,
+        )?;
 
         let result = self
             .security_scheme_repo
@@ -272,32 +282,24 @@ impl SecuritySchemeService {
 
     pub async fn get_security_scheme_for_environment_and_name(
         &self,
-        environment_id: &EnvironmentId,
+        environment: &Environment,
         name: &SecuritySchemeName,
         auth: &AuthCtx,
-    ) -> Result<Option<SecurityScheme>, SecuritySchemeError> {
-        self.environment_service
-            .get_and_authorize(
-                environment_id,
-                EnvironmentAction::ViewSecurityScheme,
-                false,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id.clone())
-                }
-                EnvironmentError::Unauthorized(inner) => SecuritySchemeError::Unauthorized(inner),
-                other => other.into(),
-            })?;
+    ) -> Result<SecurityScheme, SecuritySchemeError> {
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewSecurityScheme,
+        )?;
 
         let result = self
             .security_scheme_repo
-            .get_for_environment_and_name(&environment_id.0, &name.0)
+            .get_for_environment_and_name(&environment.id.0, &name.0)
             .await?
-            .map(|r| r.try_into())
-            .transpose()?;
+            .ok_or(SecuritySchemeError::SecuritySchemeForNameNotFound(
+                name.clone(),
+            ))?
+            .try_into()?;
 
         Ok(result)
     }
@@ -318,19 +320,21 @@ impl SecuritySchemeService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                &security_scheme.environment_id,
-                EnvironmentAction::ViewSecurityScheme,
-                false,
-                auth,
-            )
+            .get(&security_scheme.environment_id, false, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => {
+                EnvironmentError::EnvironmentNotFound(_) => {
                     SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id.clone())
                 }
                 other => other.into(),
             })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewSecurityScheme,
+        )
+        .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id.clone()))?;
 
         Ok((security_scheme, environment))
     }

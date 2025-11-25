@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::environment::EnvironmentId;
-use crate::model::api_definition::ApiDefinitionId;
+use crate::model::api_definition::HttpApiDefinitionId;
 use crate::{declare_structs, declare_transparent_newtypes, newtype_uuid};
 use chrono::DateTime;
 
@@ -29,7 +29,7 @@ declare_structs! {
     pub struct ApiDeployment {
         pub id: ApiDeploymentId,
         pub revision: ApiDeploymentRevision,
-        pub api_definitions: Vec<ApiDefinitionId>,
+        pub api_definitions: Vec<HttpApiDefinitionId>,
         pub environment_id: EnvironmentId,
         pub site: ApiSiteString,
         pub created_at: DateTime<chrono::Utc>,

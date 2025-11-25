@@ -36,6 +36,7 @@ declare_structs! {
     }
 
     pub struct EnvironmentShareUpdate {
+        pub current_revision: EnvironmentShareRevision,
         pub new_roles: Vec<EnvironmentRole>
     }
 }

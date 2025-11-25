@@ -185,18 +185,21 @@ pub enum EnvironmentAction {
     CreateComponent,
     CreateDomainRegistration,
     CreateEnvironmentPluginGrant,
+    CreateHttpApiDefinition,
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
     DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
+    DeleteHttpApiDefinition,
     DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
     DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
+    UpdateHttpApiDefinition,
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
@@ -206,6 +209,7 @@ pub enum EnvironmentAction {
     ViewDomainRegistration,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
+    ViewHttpApiDefinition,
     ViewSecurityScheme,
     ViewShares,
     ViewWorker,
@@ -368,6 +372,7 @@ impl AuthCtx {
         };
 
         let is_allowed = match action {
+            // environments
             EnvironmentAction::ViewEnvironment => has_any_role(
                 roles_from_shares,
                 &[
@@ -376,16 +381,17 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            EnvironmentAction::UpdateEnvironment => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteEnvironment => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            // Components
             EnvironmentAction::CreateComponent => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
-            EnvironmentAction::CreateDomainRegistration => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteDomainRegistration => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
             EnvironmentAction::UpdateComponent => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
@@ -398,6 +404,7 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            // Environment shares
             EnvironmentAction::ViewShares => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
@@ -410,34 +417,7 @@ impl AuthCtx {
             EnvironmentAction::DeleteShare => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
-            EnvironmentAction::UpdateEnvironment => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::DeleteEnvironment => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::CreateEnvironmentPluginGrant => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
-            EnvironmentAction::ViewDomainRegistration => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
-                roles_from_shares,
-                &[
-                    EnvironmentRole::Admin,
-                    EnvironmentRole::Deployer,
-                    EnvironmentRole::Viewer,
-                ],
-            ),
-            EnvironmentAction::DeleteEnvironmentPluginGrant => {
-                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
-            }
+            // Deployments
             EnvironmentAction::DeployEnvironment => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
@@ -458,6 +438,37 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            // Environment plugin grants
+            EnvironmentAction::CreateEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::DeleteEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            // Domain registrations
+            EnvironmentAction::CreateDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteDomainRegistration => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewDomainRegistration => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            // Workers
             EnvironmentAction::CreateWorker => has_any_role(
                 roles_from_shares,
                 &[
@@ -482,6 +493,7 @@ impl AuthCtx {
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
+            // Security Schemes
             EnvironmentAction::CreateSecurityScheme => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
@@ -492,6 +504,27 @@ impl AuthCtx {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
             EnvironmentAction::ViewSecurityScheme => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            // Http api definitions
+            EnvironmentAction::CreateHttpApiDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateHttpApiDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteHttpApiDefinition => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewHttpApiDefinition => has_any_role(
                 roles_from_shares,
                 &[
                     EnvironmentRole::Admin,

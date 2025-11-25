@@ -28,8 +28,9 @@ use clap::ValueEnum;
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::{AccountRole, TokenCreation};
+use golem_client::model::{AccountSetRoles, TokenCreation};
 use golem_common::model::account::AccountCreation;
+use golem_common::model::auth::AccountRole;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -139,17 +140,44 @@ pub trait TestDependencies: Send + Sync {
     {
         let registry_service = self.registry_service();
 
-        let user_dsl = self.into_user().await?;
-
         let client = registry_service
             .client(&registry_service.admin_account_token())
             .await;
 
+        let name = Uuid::new_v4().to_string();
+        let account_data = AccountCreation {
+            email: format!("{name}@golem.cloud"),
+            name,
+        };
+
+        let account = client.create_account(&account_data).await?;
+
         client
-            .set_account_roles(&user_dsl.account_id.0, roles)
+            .set_account_roles(
+                &account.id.0,
+                &AccountSetRoles {
+                    current_revision: account.revision,
+                    roles: roles.to_vec(),
+                },
+            )
             .await?;
 
-        Ok(user_dsl)
+        let token = client
+            .create_token(
+                &account.id.0,
+                &TokenCreation {
+                    expires_at: DateTime::<Utc>::MAX_UTC,
+                },
+            )
+            .await?;
+
+        Ok(TestDependenciesTestDsl {
+            account_id: account.id,
+            account_email: account.email,
+            token: token.secret,
+            deps: self,
+            auto_deploy_enabled: true,
+        })
     }
 
     async fn kill_all(&self) {

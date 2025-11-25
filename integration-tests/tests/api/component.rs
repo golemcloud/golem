@@ -15,7 +15,10 @@
 use super::Tracing;
 use anyhow::anyhow;
 use assert2::assert;
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceGetComponentError,
+    RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
+};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
@@ -32,6 +35,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
+use tokio::fs::File;
 use tracing::{debug, info};
 
 inherit_test_dep!(Tracing);
@@ -46,9 +50,22 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 
     let component = user.component(&env.id, "shopping-cart").store().await?;
 
-    let component_from_get = client.get_component(&component.id.0).await?;
+    {
+        let fetched_component = client.get_component(&component.id.0).await?;
+        assert!(fetched_component == component);
+    }
 
-    assert!(component_from_get == component);
+    {
+        let fetched_component = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await?;
+        assert!(fetched_component == component);
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![component]);
+    }
 
     Ok(())
 }
@@ -57,13 +74,14 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 #[tracing::instrument]
 async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component_1 = user.component(&env.id, "update-test-v1").store().await?;
-    let component_2 = user
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let updated_component = user
         .update_component_with(
-            &component_1.id,
-            component_1.revision,
+            &component.id,
+            component.revision,
             Some("update-test-v2"),
             vec![],
             vec![],
@@ -72,8 +90,98 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         )
         .await?;
 
-    assert!(component_2.id == component_1.id);
-    assert!(component_2.wasm_hash != component_1.wasm_hash);
+    assert!(updated_component.id == component.id);
+    assert!(updated_component.wasm_hash != component.wasm_hash);
+
+    {
+        let fetched_component = client.get_component(&component.id.0).await?;
+        assert!(fetched_component == updated_component);
+    }
+
+    {
+        let fetched_component = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await?;
+        assert!(fetched_component == updated_component);
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![updated_component]);
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_update_with_wrong_revision_is_rejected(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    let result = client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision.next()?,
+                removed_files: Vec::new(),
+                new_file_options: BTreeMap::new(),
+                dynamic_linking: None,
+                env: None,
+                agent_types: None,
+                plugin_updates: Vec::new(),
+            },
+            None::<File>,
+            None::<File>,
+        )
+        .await;
+
+    assert!(
+        let Err(golem_client::Error::Item(RegistryServiceUpdateComponentError::Error409(_))) = result
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    client
+        .delete_component(&component.id.0, component.revision.0)
+        .await?;
+
+    {
+        let result = client.get_component(&component.id.0).await;
+        assert!(
+            let Err(golem_client::Error::Item(
+                RegistryServiceGetComponentError::Error404(_)
+            )) = result
+        );
+    }
+
+    {
+        let result = client
+            .get_environment_component(&env.id.0, &component.component_name.0)
+            .await;
+        assert!(
+            let Err(golem_client::Error::Item(
+                RegistryServiceGetEnvironmentComponentError::Error404(_)
+            )) = result
+        );
+    }
+
+    {
+        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        assert!(fetched_components.values == vec![]);
+    }
     Ok(())
 }
 
@@ -408,6 +516,29 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
             .count()
             == 1
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "update-test-v1").store().await?;
+    client
+        .delete_component(&component.id.0, component.revision.0)
+        .await?;
+
+    let recreated_component = user.component(&env.id, "update-test-v1").store().await?;
+    assert!(recreated_component.id == component.id);
+    assert!(recreated_component.revision == component.revision.next()?.next()?);
+
+    client
+        .delete_component(&component.id.0, recreated_component.revision.0)
+        .await?;
 
     Ok(())
 }

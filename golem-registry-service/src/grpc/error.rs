@@ -17,9 +17,9 @@ use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::plugin_registration::PluginRegistrationError;
+use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
-use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
 
 #[derive(Debug)]
@@ -106,7 +106,7 @@ impl From<LimitExceededError> for GrpcApiError {
 
 impl From<AuthError> for GrpcApiError {
     fn from(value: AuthError) -> Self {
-        let error: String = value.to_safe_string();
+        let error: String = value.to_string();
         match value {
             AuthError::CouldNotAuthenticate => {
                 Self::CouldNotAuthenticate(ErrorBody { error, cause: None })
@@ -121,7 +121,7 @@ impl From<AuthError> for GrpcApiError {
 
 impl From<AccountUsageError> for GrpcApiError {
     fn from(value: AccountUsageError) -> Self {
-        let error: String = value.to_safe_string();
+        let error: String = value.to_string();
         match value {
             AccountUsageError::AccountNotfound(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
@@ -138,7 +138,7 @@ impl From<AccountUsageError> for GrpcApiError {
 
 impl From<PluginRegistrationError> for GrpcApiError {
     fn from(value: PluginRegistrationError) -> Self {
-        let error: String = value.to_safe_string();
+        let error: String = value.to_string();
         match value {
             PluginRegistrationError::Unauthorized(inner) => inner.into(),
             PluginRegistrationError::ParentAccountNotFound(_)
@@ -155,11 +155,19 @@ impl From<PluginRegistrationError> for GrpcApiError {
 
 impl From<ComponentError> for GrpcApiError {
     fn from(value: ComponentError) -> Self {
-        let error: String = value.to_safe_string();
+        let error: String = value.to_string();
         match value {
             ComponentError::Unauthorized(inner) => inner.into(),
             ComponentError::LimitExceeded(inner) => inner.into(),
-            ComponentError::NotFound => Self::NotFound(ErrorBody { error, cause: None }),
+
+            ComponentError::ParentEnvironmentNotFound(_)
+            | ComponentError::DeploymentRevisionNotFound(_)
+            | ComponentError::ComponentNotFound(_)
+            | ComponentError::ComponentByNameNotFound(_)
+            | ComponentError::AgentTypeForNameNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+
             _ => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
@@ -170,13 +178,16 @@ impl From<ComponentError> for GrpcApiError {
 
 impl From<ComponentResolverError> for GrpcApiError {
     fn from(value: ComponentResolverError) -> Self {
-        let error: String = value.to_safe_string();
+        let error: String = value.to_string();
         match value {
             ComponentResolverError::InvalidComponentReference { .. } => {
                 Self::BadRequest(ErrorsBody {
                     errors: vec![error],
                     cause: None,
                 })
+            }
+            ComponentResolverError::ComponentNotFound => {
+                Self::NotFound(ErrorBody { error, cause: None })
             }
             _ => Self::InternalError(ErrorBody {
                 error,

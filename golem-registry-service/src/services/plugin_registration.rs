@@ -266,7 +266,7 @@ impl PluginRegistrationService {
             )
             .await
             .map_err(|err| match err {
-                ComponentError::NotFound => {
+                ComponentError::ComponentNotFound(_) => {
                     PluginRegistrationError::OplogProcessorComponentDoesNotExist
                 }
                 other => other.into(),

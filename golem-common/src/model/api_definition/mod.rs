@@ -16,17 +16,33 @@ pub mod cors;
 pub mod oas;
 
 use super::component::ComponentName;
-use super::security_scheme::SecuritySchemeId;
+use super::environment::EnvironmentId;
+use super::security_scheme::SecuritySchemeName;
 use crate::model::Empty;
-use crate::{declare_enums, declare_revision, declare_structs, declare_unions, newtype_uuid};
+use crate::{
+    declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
+    newtype_uuid,
+};
+use derive_more::Display;
+use desert_rust::BinaryCodec;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(ApiDefinitionId);
+newtype_uuid!(HttpApiDefinitionId);
 
-declare_revision!(ApiDefinitionRevision);
+declare_revision!(HttpApiDefinitionRevision);
+
+declare_transparent_newtypes! {
+    #[derive(Display)]
+    pub struct HttpApiDefinitionName(pub String);
+
+    // User provided version. See HttpApiDefinitionRevision for the "proper" golem version.
+    #[derive(Display)]
+    pub struct HttpApiDefinitionVersion(pub String);
+}
 
 declare_enums! {
+    #[derive(BinaryCodec)]
     pub enum RouteMethod {
         Get,
         Connect,
@@ -85,28 +101,39 @@ impl FromStr for RouteMethod {
 
 declare_structs! {
     pub struct HttpApiDefinitionCreation {
-        pub routes: Vec<Route>,
+        pub name: HttpApiDefinitionName,
+        pub version: HttpApiDefinitionVersion,
+        pub routes: Vec<HttpApiRoute>,
+    }
+
+    pub struct HttpApiDefinitionUpdate {
+        pub current_revision: HttpApiDefinitionRevision,
+        pub version: Option<HttpApiDefinitionVersion>,
+        pub routes: Option<Vec<HttpApiRoute>>,
     }
 
     pub struct HttpApiDefinition {
-        pub id: ApiDefinitionId,
-        pub revision: ApiDefinitionRevision,
-        pub routes: Vec<Route>,
+        pub id: HttpApiDefinitionId,
+        pub revision: HttpApiDefinitionRevision,
+        pub environment_id: EnvironmentId,
+        pub name: HttpApiDefinitionName,
+        pub version: HttpApiDefinitionVersion,
+        pub routes: Vec<HttpApiRoute>,
         pub created_at: chrono::DateTime<chrono::Utc>,
+        pub updated_at: chrono::DateTime<chrono::Utc>
     }
 
-    pub struct Route {
+    #[derive(BinaryCodec)]
+    #[desert(evolution())]
+    pub struct HttpApiRoute {
         pub method: RouteMethod,
         pub path: String,
         pub binding: GatewayBinding,
-        pub security: Option<SecuritySchemeId>
+        pub security: Option<SecuritySchemeName>
     }
 
-    pub struct SecuritySchemeConfiguration {
-        security_scheme: SecuritySchemeId,
-        // Additional scope support can go in future
-    }
-
+    #[derive(BinaryCodec)]
+    #[desert(evolution())]
     pub struct WorkerGatewayBinding {
         pub component_name: ComponentName,
         pub idempotency_key: Option<String>,
@@ -114,23 +141,30 @@ declare_structs! {
         pub invocation_context: Option<String>,
     }
 
+    #[derive(BinaryCodec)]
+    #[desert(evolution())]
     pub struct FileServerBinding {
         pub component_name: ComponentName,
         pub response: String,
     }
 
+    #[derive(BinaryCodec)]
+    #[desert(evolution())]
     pub struct HttpHandlerBinding {
         pub component_name: ComponentName,
         pub worker_name: Option<String>,
         pub idempotency_key: Option<String>,
     }
 
+    #[derive(BinaryCodec)]
+    #[desert(evolution())]
     pub struct CorsPreflightBinding {
         pub response: String,
     }
 }
 
 declare_unions! {
+    #[derive(BinaryCodec)]
     pub enum GatewayBinding {
         Worker(WorkerGatewayBinding),
         FileServer(FileServerBinding),

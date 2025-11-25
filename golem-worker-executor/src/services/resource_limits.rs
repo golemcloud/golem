@@ -17,6 +17,7 @@ use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -100,7 +101,12 @@ impl ResourceLimitsGrpc {
         self.client
             .batch_update_fuel_usage(updates, &AuthCtx::System)
             .await
-            .map_err(|e| WorkerExecutorError::runtime(format!("Failed updating fuel usage: {e}")))
+            .map_err(|e| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed updating fuel usage: {}",
+                    e.to_safe_string()
+                ))
+            })
     }
 
     async fn fetch_resource_limits(
@@ -112,7 +118,10 @@ impl ResourceLimitsGrpc {
             .get_resource_limits(account_id, &AuthCtx::System)
             .await
             .map_err(|e| {
-                WorkerExecutorError::runtime(format!("Failed fetching resource limits: {e}"))
+                WorkerExecutorError::runtime(format!(
+                    "Failed fetching resource limits: {}",
+                    e.to_safe_string()
+                ))
             })?;
         const _: () = {
             assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");

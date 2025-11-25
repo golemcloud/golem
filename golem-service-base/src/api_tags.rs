@@ -22,7 +22,6 @@ pub enum ApiTags {
     Account,
     AccountSummary,
     ApiCertificate,
-    ApiDefinition,
     ApiDeployment,
     ApiDomain,
     ApiSecurity,
@@ -35,6 +34,7 @@ pub enum ApiTags {
     Debugging,
     Grant,
     HealthCheck,
+    HttpApiDefinition,
     /// The limits API allows users to query their current resource limits.
     Limits,
     /// The login endpoints are implementing an OAuth2 flow.

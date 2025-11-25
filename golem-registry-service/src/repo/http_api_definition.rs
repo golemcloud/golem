@@ -27,7 +27,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
-use sqlx::{Database, Row};
+use sqlx::Database;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -73,6 +73,13 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
     async fn get_deployed_by_name(
         &self,
         environment_id: &Uuid,
+        name: &str,
+    ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
+
+    async fn get_in_deployment_by_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
         name: &str,
     ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>>;
 
@@ -222,6 +229,21 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
             .await
     }
 
+    async fn get_in_deployment_by_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.repo
+            .get_in_deployment_by_name(environment_id, deployment_revision_id, name)
+            .instrument(Self::span_env_and_deployment(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
     async fn get_by_id_and_revision(
         &self,
         http_api_definition_id: &Uuid,
@@ -365,13 +387,14 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
         self.with_tx_err("create", |tx| {
             async move {
-                tx.execute(
-                    sqlx::query(indoc! { r#"
+                let main_record: HttpApiDefinitionRecord = tx.fetch_one_as(
+                    sqlx::query_as(indoc! { r#"
                         INSERT INTO http_api_definitions
                         (http_api_definition_id, name, environment_id,
                             created_at, updated_at, deleted_at, modified_by,
                             current_revision_id)
                         VALUES ($1, $2, $3, $4, $5, NULL, $6, 0)
+                        RETURNING http_api_definition_id, name, environment_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "# })
                     .bind(revision.http_api_definition_id)
                     .bind(&name)
@@ -381,7 +404,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     .bind(revision.audit.created_by),
                 )
                 .await
-                .to_error_on_unique_violation(HttpApiDefinitionRepoError::ConcurrentModification)?;
+                .to_error_on_unique_violation(HttpApiDefinitionRepoError::ApiDefinitionViolatesUniqueness)?;
 
                 let revision = Self::insert_revision(
                     tx,
@@ -395,6 +418,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     name,
                     environment_id,
                     revision,
+                    entity_created_at: main_record.audit.created_at,
                 })
             }
             .boxed()
@@ -429,13 +453,13 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 )
                 .await?;
 
-                let ext = tx
-                    .fetch_one(
-                        sqlx::query(indoc! { r#"
+                let main_record: HttpApiDefinitionRecord = tx
+                    .fetch_one_as(
+                        sqlx::query_as(indoc! { r#"
                             UPDATE http_api_definitions
-                            SET updated_at = $1, modified_by = $2, current_revision_id = $3
+                            SET updated_at = $1, modified_by = $2, current_revision_id = $3, deleted_at = NULL
                             WHERE http_api_definition_id = $4
-                            RETURNING name, environment_id
+                            RETURNING http_api_definition_id, name, environment_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                         .bind(&revision.audit.created_at)
                         .bind(revision.audit.created_by)
@@ -445,9 +469,10 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                     .await?;
 
                 Ok(HttpApiDefinitionExtRevisionRecord {
-                    name: ext.try_get("name").map_err(RepoError::from)?,
-                    environment_id: ext.try_get("environment_id").map_err(RepoError::from)?,
+                    name: main_record.name,
+                    environment_id: main_record.environment_id,
                     revision,
+                    entity_created_at: main_record.audit.created_at
                 })
             }
             .boxed()
@@ -514,7 +539,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT d.name, d.environment_id,
                            dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
-                           dr.created_at, dr.created_by, dr.deleted, dr.definition
+                           dr.created_at, dr.created_by, dr.deleted, dr.definition,
+                           d.created_at as entity_created_at
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
                         ON d.http_api_definition_id = dr.http_api_definition_id
@@ -536,7 +562,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT d.name, d.environment_id,
                            dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
-                           dr.created_at, dr.created_by, dr.deleted, dr.definition
+                           dr.created_at, dr.created_by, dr.deleted, dr.definition,
+                           d.created_at as entity_created_at
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
                         ON d.http_api_definition_id = dr.http_api_definition_id
@@ -558,7 +585,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
                            hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
-                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
                     JOIN current_deployments cd ON had.environment_id = cd.environment_id
@@ -586,7 +614,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
                            hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
-                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
                     JOIN current_deployments cd ON had.environment_id = cd.environment_id
@@ -605,6 +634,40 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             .await
     }
 
+    async fn get_in_deployment_by_name(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        name: &str,
+    ) -> RepoResult<Option<HttpApiDefinitionExtRevisionRecord>> {
+        self.with_ro("get_in_deployment_by_name")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT had.name, had.environment_id,
+                           hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
+                    FROM deployment_revisions dr
+                    JOIN deployment_http_api_definition_revisions dhadr
+                        ON dhadr.environment_id = dr.environment_id
+                            AND dhadr.deployment_revision_id = dr.revision_id
+                    JOIN http_api_definition_revisions hadr
+                        ON hadr.http_api_definition_id = dhadr.http_api_definition_id
+                            AND hadr.revision_id = dhadr.http_api_definition_revision_id
+                    JOIN http_api_definitions had
+                        ON had.http_api_definition_id = hadr.http_api_definition_id
+                    WHERE
+                        dr.environment_id = $1
+                        AND dr.revision_id = $2
+                        AND had.name = $3
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(name),
+            )
+            .await
+    }
+
     async fn get_by_id_and_revision(
         &self,
         http_api_definition_id: &Uuid,
@@ -615,7 +678,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT d.name, d.environment_id,
                            dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
-                           dr.created_at, dr.created_by, dr.deleted, dr.definition
+                           dr.created_at, dr.created_by, dr.deleted, dr.definition,
+                           d.created_at as entity_created_at
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
                         ON d.http_api_definition_id = dr.http_api_definition_id
@@ -638,7 +702,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
                            hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
-                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr
                         ON had.http_api_definition_id = hadr.http_api_definition_id
@@ -660,7 +725,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT d.name, d.environment_id,
                            dr.http_api_definition_id, dr.revision_id, dr.version, dr.hash,
-                           dr.created_at, dr.created_by, dr.deleted, dr.definition
+                           dr.created_at, dr.created_by, dr.deleted, dr.definition,
+                           d.created_at as entity_created_at
                     FROM http_api_definitions d
                     JOIN http_api_definition_revisions dr
                         ON d.http_api_definition_id = dr.http_api_definition_id AND d.current_revision_id = dr.revision_id
@@ -681,7 +747,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
                            hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
-                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
                     JOIN current_deployments cd ON had.environment_id = cd.environment_id
@@ -710,7 +777,8 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     SELECT had.name, had.environment_id,
                            hadr.http_api_definition_id, hadr.revision_id, hadr.version, hadr.hash,
-                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition
+                           hadr.created_at, hadr.created_by, hadr.deleted, hadr.definition,
+                           had.created_at as entity_created_at
                     FROM http_api_definitions had
                     JOIN http_api_definition_revisions hadr ON had.http_api_definition_id = hadr.http_api_definition_id
                     JOIN deployment_http_api_definition_revisions dhadr
