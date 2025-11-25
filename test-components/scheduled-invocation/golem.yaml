@@ -3,6 +3,8 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
+app: scheduled-invocation
+
 witDeps:
 - wit/deps
 componentTemplates:
@@ -26,3 +28,11 @@ componentTemplates:
           - command: cp ../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm ../../{{ component_name | to_snake_case }}_stubless.wasm
         clean:
         - src/bindings.rs
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+  cloud:
+    server: cloud
+    componentPresets: release

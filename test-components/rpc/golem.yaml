@@ -3,9 +3,20 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
+app: rpc
+
 witDeps:
 - wit/deps
 tempDir: target/golem-temp
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release
+
 componentTemplates:
   rust:
     presets:

@@ -505,6 +505,9 @@ fn add_client_deps(
 
         let _indent = LogIndent::new();
 
+        let component = ctx.application.component(component_name);
+        let component_generated_wit = component.generated_wit();
+
         for dep_component in dependencies {
             if dep_component.dep_type.is_wasm_rpc() {
                 if let Some(dep_component) = dep_component.as_dependent_app_component() {
@@ -521,7 +524,7 @@ fn add_client_deps(
                     let dep_component = ctx.application.component(&dep_component.name);
                     add_client_as_dependency_to_wit_dir(AddClientAsDepConfig {
                         client_wit_root: dep_component.client_wit(),
-                        dest_wit_root: dep_component.generated_wit(),
+                        dest_wit_root: component_generated_wit.clone(),
                         update_cargo_toml: UpdateCargoToml::NoUpdate,
                     })?
                 }

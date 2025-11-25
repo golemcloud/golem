@@ -3,6 +3,8 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
+app: auction-example
+
 tempDir: target/golem-temp
 componentTemplates:
   rust:
@@ -41,3 +43,11 @@ componentTemplates:
           - command: cp ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm ../..
         clean:
         - src/bindings.rs
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

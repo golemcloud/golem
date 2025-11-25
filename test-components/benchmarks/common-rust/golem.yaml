@@ -72,6 +72,7 @@ componentTemplates:
           copy:
             - command: cp ../../golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm ../../..
       release:
+        default: true
         build:
           - command: cargo component build --release
             sources:

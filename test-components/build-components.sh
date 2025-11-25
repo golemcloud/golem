@@ -8,36 +8,36 @@ rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopp
 
 rust_test_apps=("auction-example" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging" "ifs-update" "ifs-update-inside-exported-function" "agent-counters"  "rpc" )
 c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc" "benchmarks")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc" "agent-rpc")
+benchmark_apps=("benchmarks")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
-# - update-wit: update the wit/deps directories
-# - rust / c / ts: build only the specified language
+# - rust / c / ts / benchmarks: build only the specified group
 
 rebuild=false
-single_lang=false
-update_wit=false
-lang=""
+single_group=false
+group=""
 for arg in "$@"; do
   case $arg in
     rebuild)
       rebuild=true
       ;;
-    update-wit)
-      update_wit=true
-      ;;
     rust)
-      single_lang=true
-      lang="rust"
+      single_group=true
+      group="rust"
       ;;
     c)
-      single_lang=true
-      lang="c"
+      single_group=true
+      group="c"
       ;;
     ts)
-      single_lang=true
-      lang="ts"
+      single_group=true
+      group="ts"
+      ;;
+    benchmarks)
+      single_group=true
+      group="benchmarks"
       ;;
     *)
       echo "Unknown argument: $arg"
@@ -46,15 +46,11 @@ for arg in "$@"; do
   esac
 done
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   echo "Building the Rust test components"
   for subdir in "${rust_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
-
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
 
     if [ "$rebuild" = true ]; then
       cargo clean
@@ -71,7 +67,7 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   echo "Building the Rust test apps"
   TEST_COMP_DIR="$(pwd)"
   export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
@@ -79,31 +75,23 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
-
     if [ "$rebuild" = true ]; then
-      golem-cli app clean
+      golem-cli app --preset release clean
       cargo clean
     fi
 
-    golem-cli app -b release build
-    golem-cli app -b release copy
+    golem-cli app --preset release build
+    golem-cli app --preset release copy
 
     popd || exit
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "c" ]; then
   echo "Building the C test components"
   for subdir in "${c_test_components[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
-
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
 
     if [ "$rebuild" = true ]; then
       rm *.wasm
@@ -122,19 +110,36 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "c" ]; then
   done
 fi
 
-if [ "$single_lang" = "false" ] || [ "$lang" = "ts" ]; then
+if [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   echo "Building the TS test apps"
   for subdir in "${ts_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
 
-    if [ "$update_wit" = true ]; then
-      golem-cli app update-wit-deps
+    if [ "$rebuild" = true ]; then
+      rm -rf node_modules
+      npm install
+      golem-cli app clean
     fi
 
+    golem-cli app build
+    golem-cli app copy
+
+    popd || exit
+  done
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
+  echo "Building benchmark apps"
+  for subdir in "${benchmark_apps[@]}"; do
+    echo "Building $subdir..."
+    pushd "$subdir" || exit
+
     if [ "$rebuild" = true ]; then
-      golem-cli app clean
       rm -rf node_modules
+      npm install
+      golem-cli app clean
+      cargo clean
     fi
 
     golem-cli app build
