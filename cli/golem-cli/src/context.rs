@@ -220,14 +220,6 @@ impl Context {
                     deploy_args.redeploy_agents = true;
                 }
 
-                if cli.redeploy_http_api == Some(Marker) {
-                    deploy_args.redeploy_http_api = true;
-                }
-
-                if cli.redeploy_all == Some(Marker) {
-                    deploy_args.redeploy_all = true;
-                }
-
                 if cli.reset == Some(Marker) {
                     deploy_args.reset = true;
                 }

@@ -15,12 +15,11 @@
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ComponentLayerId;
-use crate::model::deploy_diff::DiffSerialize;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::WorkerNameMatch;
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
@@ -29,7 +28,6 @@ use golem_common::model::WorkerStatus;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
-use similar::TextDiff;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
@@ -400,39 +398,6 @@ pub fn log_fuzzy_match(m: &Match) {
             m.option.log_color_ok_highlight()
         ),
     );
-}
-
-pub fn log_deploy_diff<T: DiffSerialize>(server: &T, manifest: &T) -> anyhow::Result<()> {
-    let server = server
-        .to_diffable_string()
-        .context("failed to serialize server entity")?;
-    let manifest = manifest
-        .to_diffable_string()
-        .context("failed to serialize manifest entity")?;
-
-    log_unified_diff(
-        &TextDiff::from_lines(&server, &manifest)
-            .unified_diff()
-            .context_radius(4)
-            .header("sever", "manifest")
-            .to_string(),
-    );
-
-    Ok(())
-}
-
-pub fn log_unified_diff(diff: &str) {
-    for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            logln(line.green().bold().to_string());
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            logln(line.red().bold().to_string());
-        } else if line.starts_with("@@") {
-            logln(line.bold().to_string());
-        } else {
-            logln(line);
-        }
-    }
 }
 
 pub fn format_rib_source_for_error(source: &str, error: &str) -> String {

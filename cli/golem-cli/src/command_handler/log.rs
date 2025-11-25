@@ -16,7 +16,6 @@ use crate::context::Context;
 use crate::log::logln;
 use crate::model::format::Format;
 use crate::model::text::fmt::{to_colored_json, to_colored_yaml, NestedTextViewIndent, TextView};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -64,7 +63,7 @@ impl LogHandler {
         }
     }
 
-    pub fn log_view<View: TextView + Serialize + DeserializeOwned>(&self, view: &View) {
+    pub fn log_view<View: TextView + Serialize>(&self, view: &View) {
         match self.ctx.format() {
             Format::Json => {
                 println!("{}", serde_json::to_string(view).unwrap());

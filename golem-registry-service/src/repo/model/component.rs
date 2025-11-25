@@ -26,9 +26,7 @@ use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
     InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
 };
-use golem_common::model::component_metadata::{
-    ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
-};
+use golem_common::model::component_metadata::{ComponentMetadata, dynamic_linking_to_diffable};
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
@@ -353,28 +351,9 @@ impl ComponentRevisionRecord {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: self
-                    .metadata
-                    .dynamic_linking()
-                    .iter()
-                    .map(|(name, link)| match link {
-                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
-                            name.clone(),
-                            targets
-                                .iter()
-                                .map(|(name, target)| {
-                                    (
-                                        name.clone(),
-                                        diff::ComponentWasmRpcTarget {
-                                            interface_name: target.interface_name.clone(),
-                                            component_name: target.component_name.clone(),
-                                        },
-                                    )
-                                })
-                                .collect::<BTreeMap<_, _>>(),
-                        ),
-                    })
-                    .collect(),
+                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
+                    self.metadata.dynamic_linking(),
+                ),
             }
             .into(),
             wasm_hash: self.binary_hash.into_blake3_hash().into(),

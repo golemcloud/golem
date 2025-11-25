@@ -762,64 +762,37 @@ pub mod shared_args {
     #[derive(Debug, Args, Clone)]
     pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"])]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents"])]
         pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
         pub redeploy_agents: bool,
-        /// Delete and recreate HTTP API definitions and deployment
-        #[clap(long, conflicts_with_all = ["redeploy_all"])]
-        pub redeploy_http_api: bool,
-        /// Delete and recreate agents and HTTP APIs
-        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
-        pub redeploy_all: bool,
-        /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
+        /// Delete agents and the environment, then deploy
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents"])]
         pub reset: bool,
     }
 
     impl DeployArgs {
         pub fn is_any_set(&self) -> bool {
-            self.update_agents.is_some()
-                || self.redeploy_agents
-                || self.redeploy_http_api
-                || self.redeploy_all
-                || self.reset
+            self.update_agents.is_some() || self.redeploy_agents || self.reset
         }
 
         pub fn none() -> Self {
             DeployArgs {
                 update_agents: None,
                 redeploy_agents: false,
-                redeploy_http_api: false,
-                redeploy_all: false,
                 reset: false,
             }
         }
 
-        pub fn delete_agents(&self, profile_args: &DeployArgs) -> bool {
-            (profile_args.reset || self.reset)
-                && !self.redeploy_agents
-                && !self.redeploy_all
-                && self.update_agents.is_none()
+        pub fn delete_agents(&self, env_args: &DeployArgs) -> bool {
+            (env_args.reset || self.reset) && !self.redeploy_agents && self.update_agents.is_none()
         }
 
-        pub fn redeploy_agents(&self, profile_args: &DeployArgs) -> bool {
-            (profile_args.redeploy_all
-                || profile_args.redeploy_agents
-                || self.redeploy_all
-                || self.redeploy_agents)
+        pub fn redeploy_agents(&self, env_args: &DeployArgs) -> bool {
+            (env_args.redeploy_agents || self.redeploy_agents)
                 && !self.reset
                 && self.update_agents.is_none()
-        }
-
-        pub fn redeploy_http_api(&self, profile_args: &DeployArgs) -> bool {
-            profile_args.redeploy_all
-                || profile_args.redeploy_http_api
-                || profile_args.reset
-                || self.redeploy_all
-                || self.redeploy_http_api
-                || self.reset
         }
     }
 

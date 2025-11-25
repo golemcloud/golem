@@ -14,13 +14,14 @@
 
 use super::agent::AgentType;
 use super::auth::EnvironmentRole;
-use super::component_metadata::DynamicLinkedInstance;
+use super::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
 use super::plugin_registration::PluginRegistrationId;
 use crate::model::account::AccountId;
 use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
+use crate::model::diff;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -199,6 +200,53 @@ declare_structs! {
         pub key: InitialComponentFileKey,
         pub path: ComponentFilePath,
         pub permissions: ComponentFilePermissions,
+    }
+}
+
+impl ComponentDto {
+    pub fn to_diffable(&self) -> diff::Component {
+        diff::Component {
+            metadata: diff::ComponentMetadata {
+                version: None, // TODO: atomic
+                env: self
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
+                    self.metadata.dynamic_linking(),
+                ),
+            }
+            .into(),
+            wasm_hash: self.wasm_hash,
+            files_by_path: self
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.path.to_rel_string(),
+                        diff::ComponentFile {
+                            hash: diff::Hash::empty(), // TODO: atomic: this is missing from ICF, and the key is SHA, not blake
+                            permissions: file.permissions,
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
+            plugins_by_priority: self
+                .installed_plugins
+                .iter()
+                .map(|plugin| {
+                    (
+                        plugin.priority.to_string(),
+                        diff::PluginInstallation {
+                            plugin_id: plugin.plugin_registration_id.0,
+                            parameters: plugin.parameters.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 }
 

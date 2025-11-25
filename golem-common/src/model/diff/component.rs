@@ -99,11 +99,11 @@ pub struct Component {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDiff {
-    binary_changed: bool,
-    metadata_changed: bool,
+    pub binary_changed: bool,
+    pub metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
-    plugins_changed: bool,
+    pub file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
+    pub plugins_changed: bool,
 }
 
 impl Diffable for Component {

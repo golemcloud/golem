@@ -35,7 +35,7 @@ use heck::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -1270,7 +1270,10 @@ impl<'a> Component<'a> {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentLayerProperties {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        serialize_with = "ComponentLayerProperties::serialize_applied_layers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
 
     pub source_wit: OptionalProperty<ComponentLayer, String>,
@@ -1336,6 +1339,25 @@ impl ComponentLayerProperties {
         let mut props = self.clone();
         props.compact_traces();
         props
+    }
+
+    pub fn serialize_applied_layers<S>(
+        applied_layers: &Vec<(ComponentLayerId, Option<String>)>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        applied_layers
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => {
+                    format!("{}[{}]", id.name(), selection.as_str())
+                }
+                None => id.name().to_string(),
+            })
+            .collect::<Vec<_>>()
+            .serialize(serializer)
     }
 }
 
