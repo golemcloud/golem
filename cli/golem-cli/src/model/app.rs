@@ -2583,7 +2583,7 @@ mod app_builder {
                                                         validation.add_error(
                                                             format!(
                                                                 "Property {} contains unknown component name: {}\n\n{}",
-                                                                "component_name".log_color_highlight(),
+                                                                "componentName".log_color_highlight(),
                                                                 name.log_color_error_highlight(),
                                                                 self.available_components(name)
                                                             )
@@ -2594,7 +2594,7 @@ mod app_builder {
                                                     validation.add_error(
                                                         format!(
                                                             "Property {} is required for binding type {}",
-                                                            "component_name".log_color_highlight(),
+                                                            "componentName".log_color_highlight(),
                                                             binding_type_as_string.log_color_highlight(),
                                                         )
                                                     );
@@ -2635,32 +2635,32 @@ mod app_builder {
                                     match route.binding.type_.unwrap_or_default() {
                                         app_raw::HttpApiDefinitionBindingType::Default => {
                                             check_component_name_and_version(validation);
-                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
-                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_rib(validation, "response", &route.binding.response, false);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::FileServer => {
                                             check_component_name_and_version(validation);
-                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::HttpHandler => {
                                             check_component_name_and_version(validation);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
-                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                     }

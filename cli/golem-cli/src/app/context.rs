@@ -393,7 +393,7 @@ impl ApplicationContext {
         }
 
         {
-            log_action("Selected", "components:");
+            log_action("Selected", "components and layers:");
             let _indent = LogIndent::new();
 
             let padding = selected_component_names
