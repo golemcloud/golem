@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::{DateTime, Utc};
-use golem_client::model::HttpApiDefinitionResponseView;
+use golem_common::model::api_definition::HttpApiDefinition;
 use golem_common::model::security_scheme::Provider;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -143,7 +143,7 @@ impl From<String> for ApiDefinitionVersion {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiDeployment {
     #[serde(rename = "apiDefinitions")]
-    pub api_definitions: Vec<HttpApiDefinitionResponseView>,
+    pub api_definitions: Vec<HttpApiDefinition>,
     #[serde(rename = "projectId")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]

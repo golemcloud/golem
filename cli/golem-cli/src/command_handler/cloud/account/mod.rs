@@ -94,6 +94,7 @@ impl CloudAccountCommandHandler {
             .update_account(
                 &account.id.0,
                 &AccountUpdate {
+                    current_revision: account.revision,
                     name: account_name.unwrap_or(account.name),
                     email: account_email.unwrap_or(account.email),
                 },

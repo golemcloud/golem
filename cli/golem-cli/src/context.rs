@@ -38,10 +38,10 @@ use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use golem_client::api::{
     AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
-    ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
-    ApplicationClientLive, ComponentClientLive, DeploymentClientLive, EnvironmentClientLive,
-    GrantClientLive, HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive,
-    TokenClientLive, WorkerClientLive,
+    ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
+    ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, GrantClientLive,
+    HealthCheckClientLive, HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive,
+    PluginClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::model::account::AccountId;
@@ -692,7 +692,7 @@ pub struct GolemClients {
     pub account_summary: AccountSummaryClientLive,
     pub agent_types: AgentTypesClientLive,
     pub api_certificate: ApiCertificateClientLive,
-    pub api_definition: ApiDefinitionClientLive,
+    pub api_definition: HttpApiDefinitionClientLive,
     pub api_deployment: ApiDeploymentClientLive,
     pub api_domain: ApiDomainClientLive,
     pub api_security: ApiSecurityClientLive,
@@ -780,7 +780,7 @@ impl GolemClients {
             api_certificate: ApiCertificateClientLive {
                 context: registry_context(),
             },
-            api_definition: ApiDefinitionClientLive {
+            api_definition: HttpApiDefinitionClientLive {
                 context: registry_context(),
             },
             api_deployment: ApiDeploymentClientLive {
