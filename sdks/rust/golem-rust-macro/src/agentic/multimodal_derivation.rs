@@ -32,8 +32,9 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     let mut get_type_pairs = Vec::new();
     let mut serialize_match_arms = Vec::new();
     let mut get_name_match_arms = Vec::new();
-    let mut deserialize_match_arms = Vec::new();
-    let mut wit_value_match_arms = Vec::new();
+    let mut from_element_value_match_arms = Vec::new();
+    let mut to_wit_value_match_arms = Vec::new();
+    let mut from_wit_value_match_arms = Vec::new();
 
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
@@ -45,16 +46,18 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 let field_type = &fields.unnamed[0].ty;
 
                 get_type_pairs.push(quote! {
-                    (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::get_type())
+                    (#variant_name.to_string(),  <#field_type as golem_rust::agentic::Schema>::get_type().get_element_schema().expect("multimodal types cannot be nested"))
                 });
 
                 serialize_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
-                        (#variant_name.to_string(), <#field_type as golem_rust::agentic::Schema>::to_element_value(inner)?)
+                        let value_type = <#field_type as golem_rust::agentic::Schema>::to_structured_value(inner)?;
+                        let element_value = value_type.get_element_value().ok_or_else(|| "multimodal types cannot be nested".to_string())?;
+                        (#variant_name.to_string(), element_value)
                     }
                 });
 
-                wit_value_match_arms.push(quote! {
+                to_wit_value_match_arms.push(quote! {
                     #enum_name::#variant_ident(inner) => {
                         <#field_type as golem_rust::agentic::Schema>::to_wit_value(inner)
                     }
@@ -64,9 +67,16 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                     #enum_name::#variant_ident(_) => #variant_name.to_string()
                 });
 
-                deserialize_match_arms.push(quote! {
+                from_element_value_match_arms.push(quote! {
                     #variant_name => {
-                        let val = <#field_type as golem_rust::agentic::Schema>::from_element_value(elem.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_structured_value(golem_rust::agentic::StructuredValue::Default(elem.clone()), <#field_type as golem_rust::agentic::Schema>::get_type())?;
+                        Ok(#enum_name::#variant_ident(val))
+                    }
+                });
+
+                from_wit_value_match_arms.push(quote! {
+                    #variant_name => {
+                        let val = <#field_type as golem_rust::agentic::Schema>::from_wit_value(wit_value.clone(), <#field_type as golem_rust::agentic::Schema>::get_type())?;
                         Ok(#enum_name::#variant_ident(val))
                     }
                 });
@@ -105,7 +115,7 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
 
             fn to_wit_value(self) -> Result<golem_rust::wasm_rpc::WitValue, String> {
                 match self {
-                    #(#wit_value_match_arms),*
+                    #(#to_wit_value_match_arms),*
                 }
             }
 
@@ -113,7 +123,16 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
                 let (name, elem) = elem;
 
                  match name.as_str() {
-                    #(#deserialize_match_arms),*,
+                    #(#from_element_value_match_arms),*,
+                    _ => return Err(format!("Unknown modality: {}", name))
+                 }
+            }
+
+            fn from_wit_value(wit_value: (String, golem_rust::wasm_rpc::WitValue)) -> Result<Self, String> {
+                let (name, wit_value) = wit_value;
+
+                 match name.as_str() {
+                    #(#from_wit_value_match_arms),*,
                     _ => return Err(format!("Unknown modality: {}", name))
                  }
             }
