@@ -84,7 +84,7 @@ declare module 'golem:api/host@1.3.0' {
    * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
    * not waiting for the agent to get updated.
    */
-  export function updateAgent(agentId: AgentId, targetVersion: ComponentVersion, mode: UpdateMode): void;
+  export function updateAgent(agentId: AgentId, targetRevision: ComponentRevision, mode: UpdateMode): void;
   /**
    * Get the current agent's metadata
    */
@@ -173,17 +173,17 @@ declare module 'golem:api/host@1.3.0' {
   /**
    * Represents a Golem component's version
    */
-  export type ComponentVersion = bigint;
+  export type ComponentRevision = bigint;
   /**
    * Represents a Golem Cloud account
    */
   export type AccountId = {
-    value: string;
+    uuid: Uuid;
   };
   /**
-   * Represents a Golem project
+   * Represents a Golem environment
    */
-  export type ProjectId = {
+  export type EnvironmentId = {
     uuid: Uuid;
   };
   /**
@@ -329,7 +329,7 @@ declare module 'golem:api/host@1.3.0' {
     /** The current agent status */
     status: AgentStatus;
     /** The component version the agent is running with */
-    componentVersion: bigint;
+    componentRevision: bigint;
     /** The agent's current retry count */
     retryCount: bigint;
   };

@@ -17,10 +17,10 @@ declare module 'golem:api/oplog@1.3.0' {
   export type Datetime = wasiClocks023WallClock.Datetime;
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type AccountId = golemApi130Host.AccountId;
-  export type ComponentVersion = golemApi130Host.ComponentVersion;
+  export type ComponentRevision = golemApi130Host.ComponentRevision;
   export type OplogIndex = golemApi130Host.OplogIndex;
   export type PersistenceLevel = golemApi130Host.PersistenceLevel;
-  export type ProjectId = golemApi130Host.ProjectId;
+  export type EnvironmentId = golemApi130Host.EnvironmentId;
   export type RetryPolicy = golemApi130Host.RetryPolicy;
   export type Uuid = golemApi130Host.Uuid;
   export type AgentId = golemApi130Host.AgentId;
@@ -65,7 +65,6 @@ declare module 'golem:api/oplog@1.3.0' {
     val: OplogIndex | undefined
   };
   export type PluginInstallationDescription = {
-    installationId: Uuid;
     name: string;
     version: string;
     parameters: [string, string][];
@@ -73,11 +72,11 @@ declare module 'golem:api/oplog@1.3.0' {
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
-    componentVersion: ComponentVersion;
+    componentRevision: ComponentRevision;
     args: string[];
     env: [string, string][];
     createdBy: AccountId;
-    projectId: ProjectId;
+    environmentId: EnvironmentId;
     parent?: AgentId;
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
@@ -174,7 +173,7 @@ declare module 'golem:api/oplog@1.3.0' {
   } |
   {
     tag: 'manual-update'
-    val: ComponentVersion
+    val: ComponentRevision
   };
   export type PendingAgentInvocationParameters = {
     timestamp: Datetime;
@@ -192,18 +191,18 @@ declare module 'golem:api/oplog@1.3.0' {
   };
   export type PendingUpdateParameters = {
     timestamp: Datetime;
-    targetVersion: ComponentVersion;
+    targetRevision: ComponentRevision;
     updateDescription: UpdateDescription;
   };
   export type SuccessfulUpdateParameters = {
     timestamp: Datetime;
-    targetVersion: ComponentVersion;
+    targetRevision: ComponentRevision;
     newComponentSize: bigint;
     newActivePlugins: PluginInstallationDescription[];
   };
   export type FailedUpdateParameters = {
     timestamp: Datetime;
-    targetVersion: ComponentVersion;
+    targetRevision: ComponentRevision;
     details?: string;
   };
   export type GrowMemoryParameters = {
