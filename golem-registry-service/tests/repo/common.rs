@@ -681,7 +681,7 @@ pub async fn test_component_stage(deps: &Deps) {
             revision_0.clone(),
         )
         .await;
-    let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreate);
+    let_assert!(Err(ComponentRepoError::ComponentViolatesUniqueness) = recreate);
 
     let get_revision_0 = deps
         .component_repo
@@ -885,7 +885,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             revision_0.clone(),
         )
         .await;
-    let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = recreate);
+    let_assert!(Err(HttpApiDefinitionRepoError::ApiDefinitionViolatesUniqueness) = recreate);
 
     let get_revision_0 = deps
         .http_api_definition_repo
