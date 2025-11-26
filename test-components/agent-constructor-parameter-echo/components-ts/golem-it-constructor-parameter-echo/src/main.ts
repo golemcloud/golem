@@ -16,6 +16,10 @@ class EchoAgent extends BaseAgent {
         return this.name
     }
 
+    async returnInput(input: string): Promise<string> {
+        return input;
+    }
+
     /// A method that appends a '!' to the returned string every time it's called.
     async changeAndGet(): Promise<string> {
         this.name = this.name + "!";

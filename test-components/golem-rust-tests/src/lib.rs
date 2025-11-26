@@ -145,16 +145,19 @@ impl Guest for Component {
 
         let part1: String = serde_json::from_str(&part1_raw).unwrap();
 
-        let url = match fork("forked-worker") {
-            ForkResult::Original => {
-                format!("http://localhost:{port}/fork-test/step2/{self_name}/original/{input}")
+        let url = match fork() {
+            ForkResult::Original(details) => {
+                let uuid: golem_rust::Uuid = Into::into(details.forked_phantom_id);
+                format!("http://localhost:{port}/fork-test/step2/{self_name}/original/{uuid}")
             }
-            ForkResult::Forked => {
+            ForkResult::Forked(details) => {
                 let self_name = get_self_metadata().agent_id.agent_id;
-                format!("http://localhost:{port}/fork-test/step2/{self_name}/forked/{input}")
+                let uuid: golem_rust::Uuid = Into::into(details.forked_phantom_id);
+                format!("http://localhost:{port}/fork-test/step2/{self_name}/forked/{uuid}")
             }
         };
 
+        println!("Trying to call {url}");
         let response2: Response = client.get(&url).send().expect("Request failed");
         let part2_raw = response2.text().expect("Invalid response");
         println!("Received {part2_raw}");

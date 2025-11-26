@@ -374,6 +374,7 @@ install_crate = "clippy"
 command = "cargo"
 args = [
     "clippy",
+    "--all-targets",
     "--fix",
     "--allow-dirty",
     "--allow-staged",

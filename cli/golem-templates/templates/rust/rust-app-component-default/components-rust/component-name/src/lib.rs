@@ -1,28 +1,23 @@
-use golem_rust::{Schema, agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
-trait Counter {
-    fn new(init: CounterId) -> Self;
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
     fn increment(&mut self) -> u32;
 }
 
 struct CounterImpl {
     count: u32,
-    _id: CounterId,
+    _name: String,
 }
 
 #[agent_implementation]
-impl Counter for CounterImpl {
-    fn new(id: CounterId) -> Self {
-        CounterImpl { _id: id, count: 0 }
+impl CounterAgent for CounterImpl {
+    fn new(name: String) -> Self {
+        CounterImpl {_name: name, count: 0 }
     }
     fn increment(&mut self) -> u32 {
         self.count += 1;
         self.count
     }
-}
-
-#[derive(Schema)]
-struct CounterId {
-    id: String,
 }

@@ -588,14 +588,31 @@ pub mod golem {
                     }
                 }
             }
-            /// Indicates which agent the code is running on after `fork`
-            #[repr(u8)]
-            #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+            /// Details about the fork result
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct ForkDetails {
+                pub forked_phantom_id: Uuid,
+            }
+            impl ::core::fmt::Debug for ForkDetails {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("ForkDetails")
+                        .field("forked-phantom-id", &self.forked_phantom_id)
+                        .finish()
+                }
+            }
+            /// Indicates which agent the code is running on after `fork`.
+            /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+            /// created agent.
+            #[derive(Clone, Copy)]
             pub enum ForkResult {
                 /// The original agent that called `fork`
-                Original,
+                Original(ForkDetails),
                 /// The new agent
-                Forked,
+                Forked(ForkDetails),
             }
             impl ::core::fmt::Debug for ForkResult {
                 fn fmt(
@@ -603,25 +620,12 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        ForkResult::Original => {
-                            f.debug_tuple("ForkResult::Original").finish()
+                        ForkResult::Original(e) => {
+                            f.debug_tuple("ForkResult::Original").field(e).finish()
                         }
-                        ForkResult::Forked => {
-                            f.debug_tuple("ForkResult::Forked").finish()
+                        ForkResult::Forked(e) => {
+                            f.debug_tuple("ForkResult::Forked").field(e).finish()
                         }
-                    }
-                }
-            }
-            impl ForkResult {
-                #[doc(hidden)]
-                pub unsafe fn _lift(val: u8) -> ForkResult {
-                    if !cfg!(debug_assertions) {
-                        return ::core::mem::transmute(val);
-                    }
-                    match val {
-                        0 => ForkResult::Original,
-                        1 => ForkResult::Forked,
-                        _ => panic!("invalid enum discriminant"),
                     }
                 }
             }
@@ -2502,26 +2506,59 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-            /// and this agent continues running as well. The return value is going to be different in this agent and
-            /// the forked agent.
-            pub fn fork(new_name: &str) -> ForkResult {
+            /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+            /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+            /// both sides. The newly created agent continues running from the same point, but the return value is
+            /// going to be different in this agent and the forked agent.
+            pub fn fork() -> ForkResult {
                 unsafe {
-                    let vec0 = new_name;
-                    let ptr0 = vec0.as_ptr().cast::<u8>();
-                    let len0 = vec0.len();
+                    #[repr(align(8))]
+                    struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                    let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                    let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.3.0")]
                     unsafe extern "C" {
                         #[link_name = "fork"]
-                        fn wit_import1(_: *mut u8, _: usize) -> i32;
+                        fn wit_import1(_: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import1(_: *mut u8, _: usize) -> i32 {
+                    unsafe extern "C" fn wit_import1(_: *mut u8) {
                         unreachable!()
                     }
-                    let ret = unsafe { wit_import1(ptr0.cast_mut(), len0) };
-                    ForkResult::_lift(ret as u8)
+                    unsafe { wit_import1(ptr0) };
+                    let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                    let v7 = match l2 {
+                        0 => {
+                            let e7 = {
+                                let l3 = *ptr0.add(8).cast::<i64>();
+                                let l4 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l3 as u64,
+                                        low_bits: l4 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Original(e7)
+                        }
+                        n => {
+                            debug_assert_eq!(n, 1, "invalid enum discriminant");
+                            let e7 = {
+                                let l5 = *ptr0.add(8).cast::<i64>();
+                                let l6 = *ptr0.add(16).cast::<i64>();
+                                ForkDetails {
+                                    forked_phantom_id: super::super::super::golem::rpc::types::Uuid {
+                                        high_bits: l5 as u64,
+                                        low_bits: l6 as u64,
+                                    },
+                                }
+                            };
+                            ForkResult::Forked(e7)
+                        }
+                    };
+                    let result8 = v7;
+                    result8
                 }
             }
         }
@@ -6451,8 +6488,8 @@ pub(crate) use __export_component_resolve_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5532] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x94*\x01A\x02\x01A\x15\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5570] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xba*\x01A\x02\x01A\x15\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -6506,7 +6543,7 @@ ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0
 \x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x03\
 \0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0cc\
 omponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\x03\0\x03\x08\
-agent-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+agent-id\x01B\x87\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
 \x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\
 \x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\
 \x08agent-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\
@@ -6534,38 +6571,39 @@ rs4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\x08agent-id
 \x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x11component-versionw\x0bretry\
 -countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01q\x02\x15r\
 evert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\x13revert\
--agent-target\x03\0=\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0?\x04\
-\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\x06fil\
-ter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]get-agents\x01D\x01h<\x01\
-p;\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[method]get-agents.get-nex\
-t\x01H\x01hA\x01i\x0b\x01@\x01\x04self\xc9\0\0\xca\0\x04\0$[method]get-promise-r\
-esult.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[m\
-ethod]get-promise-result.get\x01N\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01O\x01i\
-A\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\0\x0bget-promise\x01Q\x01@\x02\x0apromi\
-se-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01@\0\0\x0d\x04\0\x0f\
-get-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01\
-T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\x14mark-begin-ope\
-ration\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\x01@\0\0\
-\x18\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-policy\x18\x01\0\x04\0\
-\x10set-retry-policy\x01X\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01Y\
-\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-leve\
-l\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
-\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
-tency-key\x01]\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
-\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\x01\
-\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource-age\
+-agent-target\x03\0=\x01r\x01\x11forked-phantom-id\x05\x04\0\x0cfork-details\x03\
+\0?\x01q\x02\x08original\x01\xc0\0\0\x06forked\x01\xc0\0\0\x04\0\x0bfork-result\x03\
+\0A\x04\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\
+\x06filter\xc4\0\x07precise\x7f\0\xc5\0\x04\0\x17[constructor]get-agents\x01F\x01\
+h<\x01p;\x01k\xc8\0\x01@\x01\x04self\xc7\0\0\xc9\0\x04\0\x1b[method]get-agents.g\
+et-next\x01J\x01hC\x01i\x0b\x01@\x01\x04self\xcb\0\0\xcc\0\x04\0$[method]get-pro\
+mise-result.subscribe\x01M\x01p}\x01k\xce\0\x01@\x01\x04self\xcb\0\0\xcf\0\x04\0\
+\x1e[method]get-promise-result.get\x01P\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01\
+Q\x01iC\x01@\x01\x0apromise-id\x0f\0\xd2\0\x04\0\x0bget-promise\x01S\x01@\x02\x0a\
+promise-id\x0f\x04data\xce\0\0\x7f\x04\0\x10complete-promise\x01T\x01@\0\0\x0d\x04\
+\0\x0fget-oplog-index\x01U\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-in\
+dex\x01V\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01W\x04\0\x14mark-be\
+gin-operation\x01U\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01X\x01\
+@\0\0\x18\x04\0\x10get-retry-policy\x01Y\x01@\x01\x10new-retry-policy\x18\x01\0\x04\
+\0\x10set-retry-policy\x01Z\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01\
+[\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-lev\
+el\x01\\\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01]\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01^\x01@\0\0\x05\x04\0\x18generate-idempot\
+ency-key\x01_\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
+\0\x0cupdate-agent\x01`\x01@\0\0;\x04\0\x11get-self-metadata\x01a\x01k;\x01@\x01\
+\x08agent-id\x09\0\xe2\0\x04\0\x12get-agent-metadata\x01c\x01@\x03\x0fsource-age\
 nt-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afork-ag\
-ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
-c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
-d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
-resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
-s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.3.0\x05\x0b\x02\x03\0\x04\
-\x08agent-id\x02\x03\0\x04\x0ccomponent-id\x01B\x09\x02\x03\x02\x01\x0c\x04\0\x08\
-agent-id\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x0ccomponent-id\x03\0\x02\x01k\x03\x01\
-k\x01\x01o\x03\x04\x05\x05\x01@\0\0\x06\x04\0\x03run\x01\x07\x04\0\x1egolem:it/c\
-omponent-resolve-api\x05\x0e\x04\0\x1agolem:it/component-resolve\x04\0\x0b\x17\x01\
-\0\x11component-resolve\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-c\
-omponent\x070.227.1\x10wit-bindgen-rust\x060.41.0";
+ent\x01d\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
+e\x01k\x03\x01@\x01\x13component-references\0\xe6\0\x04\0\x14resolve-component-i\
+d\x01g\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe8\0\x04\0\x10\
+resolve-agent-id\x01i\x04\0\x17resolve-agent-id-strict\x01i\x01@\0\0\xc2\0\x04\0\
+\x04fork\x01j\x03\0\x14golem:api/host@1.3.0\x05\x0b\x02\x03\0\x04\x08agent-id\x02\
+\x03\0\x04\x0ccomponent-id\x01B\x09\x02\x03\x02\x01\x0c\x04\0\x08agent-id\x03\0\0\
+\x02\x03\x02\x01\x0d\x04\0\x0ccomponent-id\x03\0\x02\x01k\x03\x01k\x01\x01o\x03\x04\
+\x05\x05\x01@\0\0\x06\x04\0\x03run\x01\x07\x04\0\x1egolem:it/component-resolve-a\
+pi\x05\x0e\x04\0\x1agolem:it/component-resolve\x04\0\x0b\x17\x01\0\x11component-\
+resolve\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.22\
+7.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

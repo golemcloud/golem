@@ -196,12 +196,19 @@ interface host {
         revert-last-invocations(u64)
     }
 
-    /// Indicates which agent the code is running on after `fork`
-    enum fork-result {
+    /// Details about the fork result
+    record fork-details {
+        forked-phantom-id: uuid,
+    }
+
+    /// Indicates which agent the code is running on after `fork`.
+    /// The parameter contains details about the fork result, such as the phantom-ID of the newly
+    /// created agent.
+    variant fork-result {
         /// The original agent that called `fork`
-        original,
+        original(fork-details),
         /// The new agent
-        forked
+        forked(fork-details)
     }
 
     resource get-promise-result {
@@ -305,10 +312,11 @@ interface host {
     /// Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
     resolve-agent-id-strict: func(component-reference: string, agent-name: string) -> option<agent-id>;
 
-    /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
-    /// and this agent continues running as well. The return value is going to be different in this agent and
-    /// the forked agent.
-    fork: func(new-name: string) -> fork-result;
+    /// Forks the current agent at the current execution point. The new agent gets the same base agent ID but
+    /// with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+    /// both sides. The newly created agent continues running from the same point, but the return value is
+    /// going to be different in this agent and the forked agent.
+    fork: func() -> fork-result;
 }
 
 /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents

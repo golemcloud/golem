@@ -65,6 +65,7 @@ mod cmd {
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
     pub static GET: &str = "get";
+    pub static LIST: &str = "list";
     pub static INVOKE: &str = "invoke";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";

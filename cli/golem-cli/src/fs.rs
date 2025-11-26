@@ -48,8 +48,10 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u6
 
     let bytes = std::fs::copy(&from, &to).with_context(context)?;
 
-    std::fs::File::open(&to)
-        .and_then(|to| to.set_modified(SystemTime::now()))
+    OpenOptions::new()
+        .write(true)
+        .open(&to)
+        .and_then(|file| file.set_modified(SystemTime::now()))
         .context("Failed to update target modification time")
         .with_context(context)?;
 
@@ -529,9 +531,10 @@ pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Ve
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .map(|(root_dir, pattern)| {
-            Glob::new(pattern)
+            let normalized_pattern = normalize_pattern(pattern);
+            Glob::new(&normalized_pattern)
                 .with_context(|| anyhow!("Failed to compile glob expression: {}", pattern))
-                .map(|pattern| (root_dir, pattern))
+                .map(|pattern| (root_dir, pattern.into_owned()))
         })
         .collect::<Result<Vec<_>, _>>()?
         .iter()
@@ -547,6 +550,17 @@ pub fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Ve
             .map(|walk_item| walk_item.path().to_path_buf())
         })
         .collect::<Vec<_>>())
+}
+
+#[cfg(not(windows))]
+fn normalize_pattern(pattern: &str) -> String {
+    pattern.to_string()
+}
+
+#[cfg(windows)]
+fn normalize_pattern(pattern: &str) -> String {
+    // Replacing \ with / to make it work as a glob pattern
+    pattern.replace('\\', "/")
 }
 
 #[cfg(test)]

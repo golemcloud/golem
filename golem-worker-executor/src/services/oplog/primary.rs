@@ -27,6 +27,7 @@ use golem_common::model::{
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;
@@ -602,6 +603,47 @@ impl PrimaryOplogState {
             .1
     }
 
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        record_oplog_call("read_many");
+
+        let last_idx = oplog_index.range_end(n);
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = self
+            .indexed_storage
+            .with_entity("oplog", "read", "entry")
+            .read(
+                IndexedStorageNamespace::OpLog,
+                &self.key,
+                oplog_index.into(),
+                last_idx.into(),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to read {n} oplog entries from index {oplog_index} from {} from indexed storage: {err}",
+                    self.key
+                )
+            }).into_iter().map(|(idx, entry)| (OplogIndex::from_u64(idx), entry)).collect();
+
+        if last_idx < self.last_committed_idx {
+            // The whole range is already committed, no further action needed
+            result
+        } else {
+            // There can be some uncommitted entries in the buffer
+            let uncommitted_count = last_idx.distance_from(self.last_committed_idx);
+            let buffered_to_take =
+                min(max(0, uncommitted_count), self.buffer.len() as i64) as usize;
+
+            let mut current = self.last_committed_idx;
+            for idx in 0..buffered_to_take {
+                current = current.next();
+                let entry = self.buffer[idx].clone();
+                result.insert(current, entry);
+            }
+
+            result
+        }
+    }
+
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
 
@@ -704,6 +746,11 @@ impl Oplog for PrimaryOplog {
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         let state = self.state.lock().await;
         state.read(oplog_index).await
+    }
+
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        let state = self.state.lock().await;
+        state.read_many(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {

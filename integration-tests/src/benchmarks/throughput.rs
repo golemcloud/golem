@@ -76,8 +76,8 @@ impl Benchmark for ThroughputEcho {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{echo}",
-            "benchmark:agent-rust/benchmark-agent.{echo}",
-            "benchmark:agent-rust/rpc-benchmark-agent.{echo}",
+            "benchmark:agent-rust/rust-benchmark-agent.{echo}",
+            "benchmark:agent-rust/rust-rpc-benchmark-agent.{echo}",
             "benchmark:agent-ts/benchmark-agent.{echo}",
             "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
             Box::new(|_| vec!["benchmark".into_value_and_type()]),
@@ -171,8 +171,8 @@ impl Benchmark for ThroughputLargeInput {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{large-input}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{large-input}",
-            "benchmark:agent-rust/benchmark-agent.{large-input}",
-            "benchmark:agent-rust/rpc-benchmark-agent.{large-input}",
+            "benchmark:agent-rust/rust-benchmark-agent.{large-input}",
+            "benchmark:agent-rust/rust-rpc-benchmark-agent.{large-input}",
             "benchmark:agent-ts/benchmark-agent.{large-input}",
             "benchmark:agent-ts/rpc-benchmark-agent.{large-input}",
             Box::new(|length| {
@@ -272,8 +272,8 @@ impl Benchmark for ThroughputCpuIntensive {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{cpu-intensive}",
             "benchmark:direct-rust-rpc-parent-exports/benchmark-direct-rust-rpc-parent-api.{cpu-intensive}",
-            "benchmark:agent-rust/benchmark-agent.{cpu-intensive}",
-            "benchmark:agent-rust/rpc-benchmark-agent.{cpu-intensive}",
+            "benchmark:agent-rust/rust-benchmark-agent.{cpu-intensive}",
+            "benchmark:agent-rust/rust-rpc-benchmark-agent.{cpu-intensive}",
             "benchmark:agent-ts/benchmark-agent.{cpu-intensive}",
             "benchmark:agent-ts/rpc-benchmark-agent.{cpu-intensive}",
             Box::new(|length| vec![(length as f64).into_value_and_type()]),
@@ -549,7 +549,7 @@ impl ThroughputBenchmark {
             });
             rust_agent_worker_ids.push(WorkerId {
                 component_id: rust_agent_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}\")"),
+                worker_name: format!("rust-benchmark-agent(\"test-{n}\")"),
             });
             ts_agent_worker_ids.push(WorkerId {
                 component_id: ts_agent_component_id.clone(),
@@ -584,12 +584,12 @@ impl ThroughputBenchmark {
                 child: ts_agent_rpc_child,
             });
             let rust_agent_rpc_parent = WorkerId {
-                component_id: rust_rpc_parent_component_id.clone(),
-                worker_name: format!("rpc-benchmark-agent(\"rpc-test-{n}\")"),
+                component_id: rust_agent_component_id.clone(),
+                worker_name: format!("rust-rpc-benchmark-agent(\"rpc-test-{n}\")"),
             };
             let rust_agent_rpc_child = WorkerId {
-                component_id: rust_rpc_child_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"rpc-test-{n}\")"),
+                component_id: rust_agent_component_id.clone(),
+                worker_name: format!("rust-benchmark-agent(\"rpc-test-{n}\")"),
             };
             rust_rpc_agent_worker_id_pairs.push(WorkerIdPair {
                 parent: rust_agent_rpc_parent,
@@ -822,7 +822,7 @@ impl ThroughputBenchmark {
                 .cloned()
                 .map(|pair| pair.parent)
                 .collect::<Vec<_>>(),
-            &self.rust_rpc_function_name,
+            &self.rust_agent_rpc_function_name,
             &self.function_params,
         )
         .await;
@@ -1008,7 +1008,7 @@ impl ThroughputBenchmark {
         )
         .await;
 
-        info!("Measuring TS agent RPC throughput...");
+        info!("Measuring Rust agent RPC throughput...");
         measure_workers(
             &self.deps,
             &iteration.routing_table,

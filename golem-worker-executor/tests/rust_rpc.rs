@@ -845,3 +845,48 @@ async fn ephemeral_worker_invocation_via_rpc1(
 
     assert_eq!(result, Ok(vec![Value::U32(1)]));
 }
+
+#[test]
+#[tracing::instrument]
+async fn ephemeral_worker_invocation_via_rpc2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
+
+    let component_id = executor
+        .component("it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await;
+    let worker_id = WorkerId {
+        component_id,
+        worker_name: "counter(\"ephemeral_worker_invocation_via_rpc2\")".to_string(),
+    };
+
+    let _ = executor
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
+            vec![],
+        )
+        .await;
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
+            vec![],
+        )
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
+    assert_eq!(result, Ok(vec![Value::U32(1)]));
+}

@@ -20,11 +20,10 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
-    to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
+    to_moonbit_ident, MoonBitComponent, MoonBitPackage, PackageName, Warning, WarningControl,
 };
 use std::fmt::Write;
 use std::path::Path;
-use wit_parser::PackageName;
 
 pub fn generate_moonbit_wrapper(
     ctx: AgentWrapperGeneratorContext,

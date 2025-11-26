@@ -391,6 +391,7 @@ name = "golem-rust"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "ctor",
  "golem-rust-macro",
  "golem-wasm",
  "serde",

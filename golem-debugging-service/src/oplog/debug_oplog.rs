@@ -117,8 +117,12 @@ impl Oplog for DebugOplog {
             .get(&self.oplog_state.debug_session_id)
             .await
             .expect("Internal Error. Read failed. Debug session not found");
-
         let playback_overrides = debug_session_data.playback_overrides.clone();
+
+        self.oplog_state
+            .debug_session
+            .update_oplog_index(&self.oplog_state.debug_session_id, oplog_index)
+            .await;
 
         Self::get_oplog_entry_applying_overrides(
             playback_overrides.overrides,
@@ -126,6 +130,16 @@ impl Oplog for DebugOplog {
             self.inner.clone(),
         )
         .await
+    }
+
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut result = BTreeMap::new();
+        let mut current = oplog_index;
+        for _ in 0..n {
+            result.insert(current, self.read(current).await);
+            current = current.next();
+        }
+        result
     }
 
     async fn length(&self) -> u64 {

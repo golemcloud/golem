@@ -13,7 +13,6 @@ path = "wit-generated"
 "golem:api" = { path = "wit-generated/deps/golem-1.x" }
 "rpc:counters-exports" = { path = "wit-generated/deps/rpc_counters-exports" }
 "rpc:counters-client" = { path = "wit-generated/deps/rpc_counters-client" }
-"rpc:ephemeral-client" = { path = "wit-generated/deps/rpc_ephemeral-client" }
 "rpc:caller-exports" = { path = "wit-generated/deps/rpc_caller-exports" }
 
 [package.metadata.component.bindings]

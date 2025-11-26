@@ -147,7 +147,7 @@ pub trait AllowedMimeTypes {
 
 impl AllowedMimeTypes for String {
     fn all() -> &'static [&'static str] {
-        &["*"] // in the schema, it would imply you can pass any mime type
+        &[]
     }
 
     fn from_string(mime_type: &str) -> Option<Self> {
