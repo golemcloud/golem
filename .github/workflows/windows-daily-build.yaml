@@ -35,4 +35,4 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 60
+        timeout-minutes: 120

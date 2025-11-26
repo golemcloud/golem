@@ -14,11 +14,9 @@
 
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{
-        exports::golem::agent::guest::AgentType,
-        golem::{agent::common::ElementSchema, api::host::AgentId},
-    },
+    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
+use golem_wasm::AgentId;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
