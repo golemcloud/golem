@@ -18,7 +18,7 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::agentic::{
-        Multimodal, MultimodalAdvanced, UnstructuredBinary, UnstructuredText,
+        Multimodal, MultimodalAdvanced, MultimodalCustom, UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::golem_ai::golem::llm::llm::Config;
@@ -37,11 +37,15 @@ mod tests {
         fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
         fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         fn echo_option(&self, option: Option<String>) -> Option<String>;
-        fn echo_multimodal_custom(
+        fn echo_multimodal_advanced(
             &self,
             input: MultimodalAdvanced<TextOrImage>,
         ) -> MultimodalAdvanced<TextOrImage>;
         fn echo_multimodal(&self, input: Multimodal) -> Multimodal;
+        fn echo_multimodal_custom(
+            &self,
+            input: MultimodalCustom<TextOrImage>,
+        ) -> MultimodalCustom<TextOrImage>;
 
         fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
         fn echo_unstructured_text_lc(
@@ -57,7 +61,7 @@ mod tests {
 
     struct EchoImpl {
         _id: UserId,
-        llm_config: Config,
+        _llm_config: Config,
     }
 
     #[derive(AllowedLanguages)]
@@ -80,7 +84,7 @@ mod tests {
         fn new(id: UserId, llm_config: Config) -> Self {
             EchoImpl {
                 _id: id,
-                llm_config: llm_config,
+                _llm_config: llm_config,
             }
         }
         fn echo_mut(&mut self, message: String) -> String {
@@ -111,7 +115,7 @@ mod tests {
             option
         }
 
-        fn echo_multimodal_custom(
+        fn echo_multimodal_advanced(
             &self,
             input: MultimodalAdvanced<TextOrImage>,
         ) -> MultimodalAdvanced<TextOrImage> {
@@ -119,6 +123,13 @@ mod tests {
         }
 
         fn echo_multimodal(&self, input: Multimodal) -> Multimodal {
+            input
+        }
+
+        fn echo_multimodal_custom(
+            &self,
+            input: MultimodalCustom<TextOrImage>,
+        ) -> MultimodalCustom<TextOrImage> {
             input
         }
 
@@ -339,7 +350,7 @@ mod tests {
         }
     }
 
-    #[derive(MultimodalSchema)]
+    #[derive(Schema, MultimodalSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
