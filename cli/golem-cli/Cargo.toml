@@ -79,6 +79,7 @@ nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }
 proc-macro2 = { workspace = true }
+
 quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
@@ -123,6 +124,9 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
+rmcp-actix-web = "0.8.13"
+actix-web = "4.12.0"
+rmcp = { version = "0.8.5", features = ["server"] }
 
 [dev-dependencies]
 axum = { workspace = true }

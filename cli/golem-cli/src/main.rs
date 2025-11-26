@@ -13,7 +13,11 @@
 // limitations under the License.
 
 use crate::hooks::NoHooks;
+use golem_cli::command::GolemCliCommand;
+use golem_cli::command::GolemCliCommandParseResult;
 use golem_cli::command_handler::CommandHandler;
+use golem_cli::mcp::context::McpContext;
+use golem_cli::mcp::server;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -65,6 +69,36 @@ mod hooks {
 }
 
 fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().collect();
+    let parse_result = GolemCliCommand::try_parse_from_lenient(&args, true);
+    // Try to parse to check for serve mode
+    if let GolemCliCommandParseResult::FullMatch(cli) = parse_result {
+        if cli.global_flags.serve {
+            let port = cli.global_flags.serve_port.unwrap_or(1232);
+            println!("golem-cli running MCP Server at port {}", port);
+
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build tokio runtime for MCP server")
+                .block_on(async {
+                    match server::serve(
+                        Arc::new(McpContext::new(std::env::current_dir().unwrap())),
+                        std::env::current_dir().unwrap(),
+                        port,
+                    )
+                    .await
+                    {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(e) => {
+                            eprintln!("MCP server error: {}", e);
+                            ExitCode::FAILURE
+                        }
+                    }
+                });
+        }
+    }
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
