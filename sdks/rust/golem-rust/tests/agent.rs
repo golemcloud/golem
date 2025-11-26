@@ -57,7 +57,7 @@ mod tests {
 
     struct EchoImpl {
         _id: UserId,
-        _llm_config: Config,
+        llm_config: Config,
     }
 
     #[derive(AllowedLanguages)]
@@ -80,7 +80,7 @@ mod tests {
         fn new(id: UserId, llm_config: Config) -> Self {
             EchoImpl {
                 _id: id,
-                _llm_config: llm_config,
+                llm_config: llm_config,
             }
         }
         fn echo_mut(&mut self, message: String) -> String {

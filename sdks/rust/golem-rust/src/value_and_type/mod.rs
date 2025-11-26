@@ -19,6 +19,7 @@ pub mod tuples;
 pub mod type_builder;
 
 use crate::value_and_type::type_builder::WitTypeBuilderExtensions;
+use golem_rust_macro::{FromValueAndType, IntoValue};
 use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
 use golem_wasm::{WitType, WitValue, WitValueBuilderExtensions};
 use std::collections::Bound;
@@ -554,96 +555,5 @@ impl<K: FromValueAndType + Eq + Hash, V: FromValueAndType> FromValueAndType for 
     ) -> Result<Self, String> {
         let items: Vec<(K, V)> = FromValueAndType::from_extractor(extractor)?;
         Ok(HashMap::from_iter(items))
-    }
-}
-
-// golem_wasm instances
-impl IntoValue for golem_wasm::ComponentId {
-    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
-        builder.string(&self.to_string())
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
-        builder.string()
-    }
-}
-
-impl FromValueAndType for golem_wasm::ComponentId {
-    fn from_extractor<'a, 'b>(
-        extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        extractor
-            .string()
-            .ok_or_else(|| "Expected ComponentId as string".to_string())
-            .and_then(|s| {
-                s.parse::<golem_wasm::ComponentId>()
-                    .map_err(|e| format!("Failed to parse ComponentId: {}", e))
-            })
-    }
-}
-
-impl IntoValue for ValueAndType {
-    fn add_to_builder<T: NodeBuilder>(self, _builder: T) -> T::Result {
-        panic!("add to builder is not needed to build ValueAndType")
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(_builder: T) -> T::Result {
-        panic!("add to type_builder is not needed to build ValueAndType")
-    }
-}
-
-impl FromValueAndType for ValueAndType {
-    fn from_value_and_type(value_and_type: ValueAndType) -> Result<Self, String> {
-        Ok(value_and_type)
-    }
-
-    fn from_extractor<'a, 'b>(
-        _extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        Err("Cannot extract ValueAndType from WitValueExtractor".to_string())
-    }
-}
-
-impl IntoValue for WitType {
-    fn add_to_builder<T: NodeBuilder>(self, _builder: T) -> T::Result {
-        panic!("cannot get value from wit-type")
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(_builder: T) -> T::Result {
-        panic!("add to type builder is not needed to build WitType")
-    }
-}
-
-impl FromValueAndType for WitType {
-    fn from_extractor<'a, 'b>(
-        _extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        Err("Cannot extract WitType from WitValueExtractor".to_string())
-    }
-}
-
-impl IntoValue for WitValue {
-    fn add_to_builder<T: NodeBuilder>(self, _builder: T) -> T::Result {
-        panic!("add to builder is not needed to build WitValue")
-    }
-
-    fn add_to_type_builder<T: TypeNodeBuilder>(_builder: T) -> T::Result {
-        panic!("cannot extract type from wit-value")
-    }
-
-    fn into_value(self) -> WitValue {
-        self
-    }
-}
-
-impl FromValueAndType for WitValue {
-    fn from_value_and_type(value_and_type: ValueAndType) -> Result<Self, String> {
-        Ok(value_and_type.value)
-    }
-
-    fn from_extractor<'a, 'b>(
-        _extractor: &'a impl WitValueExtractor<'a, 'b>,
-    ) -> Result<Self, String> {
-        Err("extractor is not needed to implement FromValueAndType for WitValue".to_string())
     }
 }

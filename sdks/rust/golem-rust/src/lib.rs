@@ -187,7 +187,6 @@ pub mod golem_ai {
         additional_derives: [crate::Schema],
         pub_export_macro: true,
         with: {
-            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
             "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
             "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
 
