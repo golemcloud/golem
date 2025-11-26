@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::ItemTrait;
 
 use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
@@ -95,18 +95,14 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 remote_client,
             } = agent_type_with_remote_client;
 
-            let register_fn_name = get_register_function_ident(&item_trait);
-
-            // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
-            // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
-            let register_fn = quote! {
-                ::golem_rust::ctor::__support::ctor_parse!(#[ctor]fn #register_fn_name() {
+            let my_registration_function: syn::TraitItem = syn::parse_quote! {
+                fn __register_agent_type() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
                     );
-                });
+                }
             };
 
             let load_snapshot_item = get_load_snapshot_item();
@@ -114,10 +110,11 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             item_trait.items.push(load_snapshot_item);
             item_trait.items.push(save_snapshot_item);
+            item_trait.items.push(my_registration_function);
 
             let result = quote! {
+                #[allow(async_fn_in_trait)]
                 #item_trait
-                #register_fn
                 #remote_client
             };
 
@@ -142,16 +139,6 @@ fn get_save_snapshot_item() -> syn::TraitItem {
             Err("save_snapshot not implemented".to_string())
         }
     }
-}
-
-fn get_register_function_ident(item_trait: &ItemTrait) -> proc_macro2::Ident {
-    let trait_name = item_trait.ident.clone();
-
-    let trait_name_str = trait_name.to_string();
-
-    let register_fn_suffix = &trait_name_str.to_lowercase();
-
-    format_ident!("__register_agent_type_{}", register_fn_suffix)
 }
 
 struct AgentTypeWithRemoteClient {
