@@ -194,7 +194,7 @@ mod test {
     use crate::model::diff::http_api_definition::{
         HttpApiDefinition, HttpApiDefinitionBinding, HttpApiRoute,
     };
-    use crate::model::diff::http_api_deployment::{HttpApiDeployment, NO_SUBDOMAIN};
+    use crate::model::diff::http_api_deployment::HttpApiDeployment;
     use crate::model::diff::ser::{
         to_json_pretty_with_mode, to_json_with_mode, to_yaml_with_mode, SerializeMode,
         ToSerializableWithModeExt,
@@ -306,28 +306,28 @@ mod test {
             ]),
             http_api_deployments: BTreeMap::from([
                 (
-                    (NO_SUBDOMAIN, "localhost").into(),
+                    "localhost".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string()]),
                     }
                     .into(),
                 ),
                 (
-                    (NO_SUBDOMAIN, "app.com").into(),
+                    "app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string()]),
                     }
                     .into(),
                 ),
                 (
-                    (Some("api"), "app.com").into(),
+                    "api.app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string()]),
                     }
                     .into(),
                 ),
                 (
-                    (Some("admin"), "app.com").into(),
+                    "admin.app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string()]),
                     }
@@ -465,28 +465,28 @@ mod test {
 
             deployment.http_api_deployments = BTreeMap::from([
                 (
-                    (NO_SUBDOMAIN, "localhost").into(),
+                    "localhost".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["other-api".to_string()]),
                     }
                     .into(),
                 ),
                 (
-                    (NO_SUBDOMAIN, "app.com").into(),
+                    "app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::default(),
                     }
                     .into(),
                 ),
                 (
-                    (Some("api"), "app.com").into(),
+                    "api.app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string(), "other-api".to_string()]),
                     }
                     .into(),
                 ),
                 (
-                    (Some("admin"), "app.com").into(),
+                    "admin.app.com".into(),
                     HttpApiDeployment {
                         apis: BTreeSet::from(["main-api".to_string()]),
                     }

@@ -21,13 +21,14 @@ use crate::repo::model::http_api_definition::{
     HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use crate::services::security_scheme::SecuritySchemeError;
-use golem_common::model::api_definition::{
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinition, HttpApiDefinitionCreation, HttpApiDefinitionId,
     HttpApiDefinitionName, HttpApiDefinitionRevision, HttpApiDefinitionUpdate,
     HttpApiDefinitionVersion, HttpApiRoute,
 };
-use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAction};
@@ -46,6 +47,8 @@ pub enum HttpApiDefinitionError {
     DeploymentRevisionNotFound(DeploymentRevision),
     #[error("Invalid definition: {0}")]
     InvalidDefinition(String),
+    #[error("Referenced security scheme {0} does not exist")]
+    SecuritySchemeDoesNotExist(SecuritySchemeName),
     #[error("Http api definition with name {0} already exists in this environment")]
     HttpApiDefinitionWithNameAlreadyExists(HttpApiDefinitionName),
     #[error("Version {0} already exists for this http api definition")]
@@ -66,6 +69,7 @@ impl SafeDisplay for HttpApiDefinitionError {
             Self::HttpApiDefinitionByNameNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::InvalidDefinition(_) => self.to_string(),
+            Self::SecuritySchemeDoesNotExist(_) => self.to_string(),
             Self::HttpApiDefinitionWithNameAlreadyExists(_) => self.to_string(),
             Self::HttpApiDefinitionVersionAlreadyExists(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
@@ -126,7 +130,7 @@ impl HttpApiDefinitionService {
         auth.authorize_environment_action(
             &environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::CreateSecurityScheme,
+            EnvironmentAction::CreateHttpApiDefinition,
         )?;
 
         Self::validate_http_api_definition_version(&data.version)?;
@@ -227,7 +231,7 @@ impl HttpApiDefinitionService {
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .update(update.current_revision.0 as i64, record)
+            .update(update.current_revision.into(), record)
             .await
             .map_err(|err| match err {
                 HttpApiDefinitionRepoError::ConcurrentModification => {
@@ -653,9 +657,7 @@ impl HttpApiDefinitionService {
                     .await
                     .map_err(|err| match err {
                         SecuritySchemeError::SecuritySchemeForNameNotFound(name) => {
-                            HttpApiDefinitionError::InvalidDefinition(format!(
-                                "No security scheme for name {name} exists in environment"
-                            ))
+                            HttpApiDefinitionError::SecuritySchemeDoesNotExist(name)
                         }
                         other => other.into(),
                     })?;

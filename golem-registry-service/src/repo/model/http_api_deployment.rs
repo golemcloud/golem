@@ -12,20 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
-use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use golem_common::error_forwarding;
+use golem_common::model::account::AccountId;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpApiDeploymentRepoError {
-    #[error("Missing definitions: {missing_definitions:?}")]
-    MissingDefinitions { missing_definitions: Vec<String> },
+    #[error("Api deployment violates unique index")]
+    ApiDeploymentViolatesUniqueness,
     #[error("Concurrent modification")]
     ConcurrentModification,
     #[error(transparent)]
@@ -38,8 +45,7 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 pub struct HttpApiDeploymentRecord {
     pub http_api_deployment_id: Uuid,
     pub environment_id: Uuid,
-    pub host: String,
-    pub subdomain: Option<String>,
+    pub domain: String,
     #[sqlx(flatten)]
     pub audit: AuditFields,
     pub current_revision_id: i64,
@@ -53,9 +59,8 @@ pub struct HttpApiDeploymentRevisionRecord {
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
 
-    // NOTE: see HttpApiDefinitionRevisionIdentityRecord::for_deployment_insert
-    #[sqlx(skip)]
-    pub http_api_definitions: Vec<HttpApiDefinitionRevisionIdentityRecord>,
+    // json string array as string
+    pub http_api_definitions: String,
 }
 
 impl HttpApiDeploymentRevisionRecord {
@@ -75,6 +80,30 @@ impl HttpApiDeploymentRevisionRecord {
         }
     }
 
+    pub fn creation(
+        http_api_deployment_id: HttpApiDeploymentId,
+        http_api_definitions: &Vec<HttpApiDefinitionName>,
+        actor: AccountId,
+    ) -> Self {
+        Self {
+            http_api_deployment_id: http_api_deployment_id.0,
+            revision_id: HttpApiDeploymentRevision::INITIAL.into(),
+            hash: SqlBlake3Hash::empty(),
+            audit: DeletableRevisionAuditFields::new(actor.0),
+            http_api_definitions: serde_json::to_string(http_api_definitions).unwrap(),
+        }
+    }
+
+    pub fn from_model(value: HttpApiDeployment, audit: DeletableRevisionAuditFields) -> Self {
+        Self {
+            http_api_deployment_id: value.id.0,
+            revision_id: value.revision.into(),
+            hash: SqlBlake3Hash::empty(),
+            audit,
+            http_api_definitions: serde_json::to_string(&value.api_definitions).unwrap(),
+        }
+    }
+
     pub fn deletion(
         created_by: Uuid,
         http_api_deployment_id: Uuid,
@@ -85,54 +114,65 @@ impl HttpApiDeploymentRevisionRecord {
             revision_id: current_revision_id + 1,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            http_api_definitions: vec![],
+            http_api_definitions: serde_json::to_string::<Vec<HttpApiDefinitionName>>(&Vec::new())
+                .unwrap(),
         }
     }
 
-    pub fn to_diffable(&self) -> diff::HttpApiDeployment {
-        diff::HttpApiDeployment {
-            apis: self
-                .http_api_definitions
-                .iter()
-                .map(|def| def.name.clone())
-                .collect(),
-        }
+    pub fn to_diffable(&self) -> anyhow::Result<diff::HttpApiDeployment> {
+        let http_api_definitions: Vec<HttpApiDefinitionName> =
+            serde_json::from_str(&self.http_api_definitions)?;
+
+        Ok(diff::HttpApiDeployment {
+            apis: http_api_definitions.into_iter().map(|had| had.0).collect(),
+        })
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
+    pub fn update_hash(&mut self) -> anyhow::Result<()> {
+        self.hash = self.to_diffable()?.hash().into_blake3().into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> anyhow::Result<Self> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentExtRevisionRecord {
     pub environment_id: Uuid,
-    pub host: String,
-    pub subdomain: Option<String>,
+    pub domain: String,
+
+    pub entity_created_at: SqlDateTime,
+
     #[sqlx(flatten)]
     pub revision: HttpApiDeploymentRevisionRecord,
 }
 
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct HttpApiDeploymentDefinitionRecord {
-    pub http_api_deployment_id: Uuid,
-    pub revision_id: i64,
-    pub http_definition_id: Uuid,
+impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
+    type Error = HttpApiDeploymentRepoError;
+    fn try_from(value: HttpApiDeploymentExtRevisionRecord) -> Result<Self, Self::Error> {
+        let http_api_definitions: Vec<HttpApiDefinitionName> =
+            serde_json::from_str(&value.revision.http_api_definitions).map_err(|err| {
+                anyhow::Error::from(err).context("Failed parsing persisted http_api_definitions")
+            })?;
+
+        Ok(Self {
+            id: HttpApiDeploymentId(value.revision.http_api_deployment_id),
+            revision: HttpApiDeploymentRevision(value.revision.revision_id as u64),
+            environment_id: EnvironmentId(value.environment_id),
+            domain: Domain(value.domain),
+            api_definitions: http_api_definitions,
+            created_at: value.entity_created_at.into(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct HttpApiDeploymentRevisionIdentityRecord {
     pub http_api_deployment_id: Uuid,
-    pub host: String,
-    pub subdomain: Option<String>,
+    pub domain: String,
     pub revision_id: i64,
     pub hash: SqlBlake3Hash,
-
-    #[sqlx(skip)]
-    pub http_api_definitions: Vec<Uuid>,
 }

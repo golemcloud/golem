@@ -20,11 +20,11 @@ use golem_client::api::{
     RegistryServiceGetHttpApiDefinitionInEnvironmentError,
     RegistryServiceUpdateHttpApiDefinitionError,
 };
-use golem_common::model::api_definition::{
+use golem_common::model::component::ComponentName;
+use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionUpdate,
     HttpApiDefinitionVersion, HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
-use golem_common::model::component::ComponentName;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{EnvironmentOptions, TestDslExtended};
 use test_r::{inherit_test_dep, test};

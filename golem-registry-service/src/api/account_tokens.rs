@@ -15,7 +15,7 @@
 use crate::api::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::recorded_http_api_request;

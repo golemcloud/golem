@@ -16,7 +16,7 @@ use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::component::{ComponentService, ComponentWriteService};
 use futures::TryStreamExt;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::ComponentUpdate;

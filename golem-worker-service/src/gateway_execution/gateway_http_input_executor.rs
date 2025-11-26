@@ -36,8 +36,8 @@ use crate::gateway_middleware::{
 use crate::gateway_security::IdentityProvider;
 use crate::http_invocation_context::{extract_request_attributes, invocation_context_from_request};
 use golem_common::model::account::AccountId;
-use golem_common::model::api_deployment::ApiSiteString;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -108,7 +108,7 @@ impl GatewayHttpInputExecutor {
 
         let possible_api_definitions = self
             .api_definition_lookup_service
-            .get(&ApiSiteString(authority.clone()))
+            .get(&Domain(authority.clone()))
             .await;
 
         let possible_api_definitions = match possible_api_definitions {

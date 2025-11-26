@@ -4462,6 +4462,7 @@ dependencies = [
  "desert_rust",
  "figment",
  "futures",
+ "goldenfile",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",

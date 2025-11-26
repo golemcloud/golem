@@ -228,7 +228,7 @@ impl DeploymentIdentity {
                 .iter()
                 .map(|deployment| {
                     (
-                        (deployment.subdomain.as_ref(), &deployment.host).into(),
+                        (&deployment.domain).into(),
                         diff::HashOf::from_blake3_hash(deployment.hash.into()),
                     )
                 })

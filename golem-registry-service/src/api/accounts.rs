@@ -17,8 +17,8 @@ use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
-use golem_common::api::Page;
 use golem_common::model::Empty;
+use golem_common::model::Page;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountSetRoles, AccountUpdate, Plan,
 };

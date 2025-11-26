@@ -12,40 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account_applications;
 pub mod account_tokens;
 pub mod accounts;
-pub mod api_deployments;
 pub mod applications;
-pub mod certificates;
 pub mod components;
 pub mod domain_registrations;
-pub mod environment_certificates;
 pub mod environment_plugin_grants;
 pub mod environment_shares;
 pub mod environments;
 pub mod error;
 pub mod http_api_definitions;
+pub mod http_api_deployments;
 pub mod login;
 pub mod plugin_registrations;
 pub mod reports;
 pub mod security_schemes;
 pub mod tokens;
 
-use self::account_applications::AccountApplicationsApi;
 use self::account_tokens::AccountTokensApi;
 use self::accounts::AccountsApi;
-use self::api_deployments::ApiDeploymentsApi;
 use self::applications::ApplicationsApi;
-use self::certificates::CertificatesApi;
 use self::components::ComponentsApi;
 use self::domain_registrations::DomainRegistrationsApi;
-use self::environment_certificates::EnvironmentCertificatesApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
 use self::environment_shares::EnvironmentSharesApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::http_api_definitions::HttpApiDefinitionsApi;
+use self::http_api_deployments::HttpApiDeploymentsApi;
 use self::login::LoginApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
@@ -57,19 +51,17 @@ use poem_openapi::OpenApiService;
 
 pub type Apis = (
     HealthcheckApi,
-    (AccountApplicationsApi, AccountTokensApi, AccountsApi),
-    ApiDeploymentsApi,
+    (AccountTokensApi, AccountsApi),
     ApplicationsApi,
-    CertificatesApi,
     ComponentsApi,
     DomainRegistrationsApi,
     (
-        EnvironmentCertificatesApi,
         EnvironmentPluginGrantsApi,
         EnvironmentsApi,
         EnvironmentSharesApi,
     ),
     HttpApiDefinitionsApi,
+    HttpApiDeploymentsApi,
     LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
@@ -82,10 +74,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
         (
             HealthcheckApi,
             (
-                AccountApplicationsApi::new(
-                    services.application_service.clone(),
-                    services.auth_service.clone(),
-                ),
                 AccountTokensApi::new(
                     services.token_service.clone(),
                     services.auth_service.clone(),
@@ -97,13 +85,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.plugin_registration_service.clone(),
                 ),
             ),
-            ApiDeploymentsApi::new(services.auth_service.clone()),
             ApplicationsApi::new(
                 services.application_service.clone(),
-                services.environment_service.clone(),
                 services.auth_service.clone(),
             ),
-            CertificatesApi::new(services.auth_service.clone()),
             ComponentsApi::new(
                 services.component_service.clone(),
                 services.component_write_service.clone(),
@@ -114,7 +99,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.auth_service.clone(),
             ),
             (
-                EnvironmentCertificatesApi::new(services.auth_service.clone()),
                 EnvironmentPluginGrantsApi::new(
                     services.environment_plugin_grant_service.clone(),
                     services.auth_service.clone(),
@@ -131,6 +115,10 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             ),
             HttpApiDefinitionsApi::new(
                 services.http_api_definition_service.clone(),
+                services.auth_service.clone(),
+            ),
+            HttpApiDeploymentsApi::new(
+                services.http_api_deployment_service.clone(),
                 services.auth_service.clone(),
             ),
             LoginApi::new(

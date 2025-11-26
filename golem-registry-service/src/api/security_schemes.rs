@@ -15,7 +15,7 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::security_scheme::SecuritySchemeService;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
     SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeRevision,

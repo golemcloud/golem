@@ -14,6 +14,7 @@
 
 use crate::model::account::AccountId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use derive_more::Display;
 use std::str::FromStr;
 
 newtype_uuid!(
@@ -24,6 +25,7 @@ newtype_uuid!(
 declare_revision!(ApplicationRevision);
 
 declare_transparent_newtypes! {
+    #[derive(Display)]
     pub struct ApplicationName(pub String);
 }
 

@@ -19,19 +19,15 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HttpApiDeploymentTarget {
-    host: String,
-    subdomain: Option<String>,
+    domain: String,
 }
 
 pub static NO_SUBDOMAIN: Option<&str> = None;
 
-impl<Subdomain: Into<String>, Host: Into<String>> From<(Option<Subdomain>, Host)>
-    for HttpApiDeploymentTarget
-{
-    fn from(value: (Option<Subdomain>, Host)) -> Self {
+impl<Domain: Into<String>> From<Domain> for HttpApiDeploymentTarget {
+    fn from(value: Domain) -> Self {
         HttpApiDeploymentTarget {
-            host: value.1.into(),
-            subdomain: value.0.map(|v| v.into()),
+            domain: value.into(),
         }
     }
 }
@@ -47,18 +43,13 @@ impl Serialize for HttpApiDeploymentTarget {
 
 impl From<&HttpApiDeploymentTarget> for String {
     fn from(value: &HttpApiDeploymentTarget) -> Self {
-        match &value.subdomain {
-            Some(subdomain) => {
-                format!("{}.{}", subdomain, value.host)
-            }
-            None => value.host.to_string(),
-        }
+        value.domain.clone()
     }
 }
 
 impl Display for HttpApiDeploymentTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", String::from(self))
+        write!(f, "{}", self.domain)
     }
 }
 

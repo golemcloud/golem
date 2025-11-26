@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_common::model::api_deployment::ApiSiteString;
+use golem_common::model::domain_registration::Domain;
 use golem_common::SafeDisplay;
 use golem_service_base::custom_api::compiled_http_api_definition::CompiledHttpApiDefinition;
 
@@ -21,12 +21,12 @@ use golem_service_base::custom_api::compiled_http_api_definition::CompiledHttpAp
 pub trait HttpApiDefinitionsLookup: Send + Sync {
     async fn get(
         &self,
-        host: &ApiSiteString,
+        domain: &Domain,
     ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError>;
 }
 
 pub enum ApiDefinitionLookupError {
-    UnknownSite(ApiSiteString),
+    UnknownSite(Domain),
     InternalError(anyhow::Error),
 }
 
@@ -45,7 +45,7 @@ pub struct StubHttpApiDefinitionsLookup;
 impl HttpApiDefinitionsLookup for StubHttpApiDefinitionsLookup {
     async fn get(
         &self,
-        _host: &ApiSiteString,
+        _domain: &Domain,
     ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError> {
         unimplemented!()
     }

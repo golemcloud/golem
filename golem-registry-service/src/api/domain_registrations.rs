@@ -15,7 +15,7 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::domain_registration::DomainRegistrationService;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::domain_registration::{
     DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };

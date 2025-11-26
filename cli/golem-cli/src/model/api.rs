@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use chrono::{DateTime, Utc};
-use golem_common::model::api_definition::HttpApiDefinition;
+use golem_common::model::http_api_definition::HttpApiDefinition;
 use golem_common::model::security_scheme::Provider;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
