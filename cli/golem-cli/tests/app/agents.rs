@@ -31,7 +31,7 @@ async fn test_rust_counter() {
             flag::YES,
             cmd::AGENT,
             cmd::INVOKE,
-            &format!("app:counter/counter({{ id: \"{uuid}\" }})"),
+            &format!("app:counter/counter-agent(\"{uuid}\")"),
             "increment",
         ])
         .await;
