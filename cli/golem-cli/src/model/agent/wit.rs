@@ -763,8 +763,9 @@ mod tests {
     };
 
     use golem_common::model::agent::{
-        AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
-        DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
+        AgentConstructor, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+        NamedElementSchemas, TextDescriptor,
     };
     use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
@@ -942,6 +943,7 @@ mod tests {
                 },
             ],
             dependencies: vec![],
+            mode: AgentMode::Durable,
         }];
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()

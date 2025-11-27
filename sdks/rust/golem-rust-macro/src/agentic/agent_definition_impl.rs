@@ -13,32 +13,90 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use syn::{ItemTrait, Type};
+use quote::quote;
+use syn::ItemTrait;
 
-use crate::agentic::helpers::{
-    extract_inner_type_if_multimodal, is_constructor_method, FunctionInputInfo, FunctionOutputInfo,
-};
+use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
 use crate::agentic::{
-    get_remote_client, helpers::DefaultOrMultimodal, multiple_constructor_methods_error,
+    async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
     no_constructor_method_error,
 };
 
-pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let item_trait = syn::parse_macro_input!(item as ItemTrait);
+fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
+    if attrs.is_empty() {
+        return quote! {
+            golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+        };
+    }
 
-    match get_agent_type_with_remote_client(&item_trait) {
+    if let Ok(ident) = syn::parse2::<syn::Ident>(attrs.clone().into()) {
+        // Shorthand case: just "ephemeral"
+        if ident == "ephemeral" {
+            return quote! {
+                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+            };
+        }
+    }
+
+    // Try parsing the full expression: mode = "..." or mode = ...
+    if let Ok(expr) = syn::parse2::<syn::ExprAssign>(attrs.into()) {
+        if let syn::Expr::Path(left) = &*expr.left {
+            if left.path.is_ident("mode") {
+                // Extract the right side
+                match &*expr.right {
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(lit_str),
+                        ..
+                    }) => {
+                        if lit_str.value() == "ephemeral" {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+                            };
+                        } else if lit_str.value() == "durable" {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+                            };
+                        }
+                    }
+                    syn::Expr::Path(path) => {
+                        if path.path.is_ident("ephemeral") {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Ephemeral
+                            };
+                        } else if path.path.is_ident("durable") {
+                            return quote! {
+                                golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
+                            };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    panic!("Invalid agent mode - use `mode = ephemeral` or `mode = durable`");
+}
+
+pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
+    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let agent_mode = parse_agent_mode(attrs);
+
+    let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
+
+    if has_async_trait_attribute {
+        return async_trait_in_agent_definition_error(&item_trait).into();
+    }
+
+    match get_agent_type_with_remote_client(&item_trait, agent_mode) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,
                 remote_client,
             } = agent_type_with_remote_client;
 
-            let register_fn_name = get_register_function_ident(&item_trait);
-
-            let register_fn = quote! {
-                #[::ctor::ctor]
-                fn #register_fn_name() {
+            let my_registration_function: syn::TraitItem = syn::parse_quote! {
+                fn __register_agent_type() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
@@ -47,9 +105,16 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
                 }
             };
 
+            let load_snapshot_item = get_load_snapshot_item();
+            let save_snapshot_item = get_save_snapshot_item();
+
+            item_trait.items.push(load_snapshot_item);
+            item_trait.items.push(save_snapshot_item);
+            item_trait.items.push(my_registration_function);
+
             let result = quote! {
+                #[allow(async_fn_in_trait)]
                 #item_trait
-                #register_fn
                 #remote_client
             };
 
@@ -60,14 +125,20 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
     }
 }
 
-fn get_register_function_ident(item_trait: &ItemTrait) -> proc_macro2::Ident {
-    let trait_name = item_trait.ident.clone();
+fn get_load_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
+            Err("load_snapshot not implemented".to_string())
+        }
+    }
+}
 
-    let trait_name_str = trait_name.to_string();
-
-    let register_fn_suffix = &trait_name_str.to_lowercase();
-
-    format_ident!("__register_agent_type_{}", register_fn_suffix)
+fn get_save_snapshot_item() -> syn::TraitItem {
+    syn::parse_quote! {
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Err("save_snapshot not implemented".to_string())
+        }
+    }
 }
 
 struct AgentTypeWithRemoteClient {
@@ -77,6 +148,7 @@ struct AgentTypeWithRemoteClient {
 
 fn get_agent_type_with_remote_client(
     item_trait: &syn::ItemTrait,
+    mode_value: proc_macro2::TokenStream,
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
     let trait_ident = &item_trait.ident;
     let type_name = trait_ident.to_string();
@@ -93,9 +165,6 @@ fn get_agent_type_with_remote_client(
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            let fn_input_info = FunctionInputInfo::from_signature(&trait_fn.sig);
-            let fn_output_info = FunctionOutputInfo::from_signature(&trait_fn.sig);
-
             if is_constructor_method(&trait_fn.sig) {
                 return None;
             }
@@ -103,125 +172,97 @@ fn get_agent_type_with_remote_client(
             let name = &trait_fn.sig.ident;
             let method_name = &name.to_string();
 
-            let mut description = String::new();
+            let description = extract_description(&trait_fn.attrs).unwrap_or_default();
+            let prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
 
-            for attr in &trait_fn.attrs {
-                if attr.path().is_ident("description") {
-                    let mut found = None;
-                    attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("description") {
-                            let lit: syn::LitStr = meta.value()?.parse()?;
-                            found = Some(lit.value());
-                            Ok(())
-                        } else {
-                            Err(meta.error("expected `description = \"...\"`"))
-                        }
-                    })
-                    .ok();
-                    if let Some(val) = found {
-                        description = val;
-                    }
-                }
-            }
-
-            let mut input_parameters = vec![];
-            let mut output_parameters = vec![];
-
-            match fn_input_info.input_shape {
-                DefaultOrMultimodal::Default =>  {
-                    for input in &trait_fn.sig.inputs {
-                        if let syn::FnArg::Typed(pat_type) = input {
-                            let param_name = match &*pat_type.pat {
-                                syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
-                                _ => "_".to_string(), // fallback for patterns like destructuring
-                            };
-                            let ty = &pat_type.ty;
-                            input_parameters.push(quote! {
-                                (#param_name.to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
-                            });
-                        }
-                    }
-
-                },
-                DefaultOrMultimodal::Multimodal => {
-                    for input in &trait_fn.sig.inputs {
-                        if let syn::FnArg::Typed(pat_type) = input {
-                            let ty = &pat_type.ty;
-
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
-
-                            input_parameters.push(quote! {
-                                golem_rust::agentic::Multimodal::<#inner_type>::get_schema()
-                            });
-
-                        }
-                    }
-                }
-            }
-
-            match fn_output_info.output_shape {
-                DefaultOrMultimodal::Default => {
-                    match &trait_fn.sig.output {
-                        syn::ReturnType::Default => (),
-                        syn::ReturnType::Type(_, ty) => {
-                            let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
-
-                            if !is_unit {
-                                output_parameters.push(quote! {
-                                    ("return-value".to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
-                                });
-                            }
-                        }
-                    };
-                },
-                DefaultOrMultimodal::Multimodal => {
-                    match &trait_fn.sig.output {
-                        syn::ReturnType::Default => (),
-                        syn::ReturnType::Type(_, ty) => {
-                            let inner_type: &Type = extract_inner_type_if_multimodal(ty).expect(
-                                "Expected Multimodal type to have an inner type",
-                            );
-                            output_parameters.push(quote! {
-                                <#inner_type as golem_rust::agentic::MultimodalSchema>::get_multimodal_schema()
-                            });
-                        }
-                    };
-                }
-            }
-
-            let input_schema = match fn_input_info.input_shape {
-                DefaultOrMultimodal::Default => quote! {
-                    golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#input_parameters),*])
-                },
-                DefaultOrMultimodal::Multimodal => {
-                    let multimodal_param = &input_parameters[0];
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
-                    }
-                },
+            let mut input_schema_logic = vec![];
+            let mut output_schema_logic = vec![];
+            let input_schema_token = quote! {
+                let mut multi_modal_inputs = vec![];
+                let mut default_inputs = vec![];
+            };
+            let output_schema_token = quote! {
+               let mut multi_modal_outputs = vec![];
+               let mut default_outputs = vec![];
             };
 
-            let output_schema = match fn_output_info.output_shape {
-                DefaultOrMultimodal::Default =>
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#output_parameters),*])
-                    },
-                DefaultOrMultimodal::Multimodal => {
-                    let multimodal_param = &output_parameters[0];
+            for input in &trait_fn.sig.inputs {
+                if let syn::FnArg::Typed(pat_type) = input {
+                    let param_name = match &*pat_type.pat {
+                        syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
+                        _ => "_".to_string(), // fallback for patterns like destructuring
+                    };
+                    let ty = &pat_type.ty;
+                    input_schema_logic.push(quote! {
+                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                        match schema {
+                            golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                default_inputs.push((#param_name.to_string(), element_schema));
+                            },
+                            golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                multi_modal_inputs.extend(name_and_types);
+                            }
+                        }
+                    });
+                }
+            }
 
-                    quote! {
-                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(#multimodal_param)
+            match &trait_fn.sig.output {
+                syn::ReturnType::Default => (),
+                syn::ReturnType::Type(_, ty) => {
+                    let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
+
+                    if !is_unit {
+                        output_schema_logic.push(quote! {
+                            let schema = <#ty as golem_rust::agentic::Schema>::get_type();
+                            match schema {
+                                golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                                    default_outputs.push(("return-value".to_string(), element_schema));
+                                },
+                                golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                                    multi_modal_outputs.extend(name_and_types)
+                                }
+                            }
+                        });
                     }
-                },
+                }
+            };
+
+            let input_schema = quote! {
+                {
+                    #input_schema_token
+                    #(#input_schema_logic)*
+                    if !multi_modal_inputs.is_empty() {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(multi_modal_inputs)
+                    } else {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(default_inputs)
+                    }
+                }
+            };
+
+            let output_schema = quote! {
+                {
+                    #output_schema_token
+                    #(#output_schema_logic)*
+                    if !multi_modal_outputs.is_empty() {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(multi_modal_outputs)
+                    } else {
+                        golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(default_outputs)
+                    }
+                }
             };
 
             Some(quote! {
                 golem_rust::golem_agentic::golem::agent::common::AgentMethod {
                     name: #method_name.to_string(),
                     description: #description.to_string(),
-                    prompt_hint: None,
+                    prompt_hint: {
+                        if #prompt_hint.is_empty() {
+                            None
+                        } else {
+                            Some(#prompt_hint.to_string())
+                        }
+                    },
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                 }
@@ -231,16 +272,16 @@ fn get_agent_type_with_remote_client(
         }
     });
 
-    // It holds the name and type of the constructor parmeters with schema
+    let constructor_schema_init = quote! {
+        let mut constructor_multi_modal_inputs = vec![];
+        let mut constructor_default_inputs = vec![];
+    };
+
     let mut constructor_parameters_with_schema: Vec<proc_macro2::TokenStream> = vec![];
 
-    let mut constructor_input_info = DefaultOrMultimodal::Default;
-
-    // name and type of the constructor params
     let mut constructor_param_defs = vec![];
 
-    // just the parmaeter identities
-    let mut constructor_param_idents = vec![];
+    let mut constructor_param_names = vec![];
 
     if constructor_methods.is_empty() {
         return Err(no_constructor_method_error(item_trait).into());
@@ -250,64 +291,78 @@ fn get_agent_type_with_remote_client(
         return Err(multiple_constructor_methods_error(item_trait).into());
     }
 
+    let mut constructor_description = String::new();
+
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
-        constructor_input_info = FunctionInputInfo::from_signature(&ctor_fn.sig).input_shape;
+        constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
 
-        match constructor_input_info {
-            DefaultOrMultimodal::Default => {
-                for input in &ctor_fn.sig.inputs {
-                    if let syn::FnArg::Typed(pat_type) = input {
-                        let param_name = match &*pat_type.pat {
-                            syn::Pat::Ident(pat_ident) => {
-                                let param_ident = &pat_ident.ident;
-                                let ty = &pat_type.ty;
-                                constructor_param_defs.push(quote! {
-                                    #param_ident: #ty
-                                });
-
-                                constructor_param_idents.push(quote! {
-                                    #param_ident
-                                });
-
-                                pat_ident.ident.to_string()
-                            }
-                            _ => "_".to_string(),
-                        };
-
+        for input in &ctor_fn.sig.inputs {
+            if let syn::FnArg::Typed(pat_type) = input {
+                let param_name = match &*pat_type.pat {
+                    syn::Pat::Ident(pat_ident) => {
+                        let param_ident = &pat_ident.ident;
                         let ty = &pat_type.ty;
-                        constructor_parameters_with_schema.push(quote! {
-                            (#param_name.to_string(), <#ty as golem_rust::agentic::Schema>::get_type())
+                        constructor_param_defs.push(quote! {
+                            #param_ident: #ty
                         });
+
+                        constructor_param_names.push(quote! {
+                            #param_ident
+                        });
+
+                        pat_ident.ident.to_string()
                     }
-                }
-            }
-            DefaultOrMultimodal::Multimodal => {
-                todo!("Multimodal constructor parameters are not yet supported")
+                    _ => "_".to_string(),
+                };
+
+                let ty = &pat_type.ty;
+                constructor_parameters_with_schema.push(quote! {
+
+                    let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
+                    match schema {
+                        golem_rust::agentic::StructuredSchema::Default(element_schema) => {
+                            constructor_default_inputs.push((#param_name.to_string(), element_schema));
+                        },
+                        golem_rust::agentic::StructuredSchema::Multimodal(name_and_types) => {
+                            constructor_multi_modal_inputs.extend(name_and_types);
+                        }
+                    }
+                });
             }
         }
     }
 
-    let remote_client = get_remote_client(
-        item_trait,
-        &constructor_input_info,
-        constructor_param_defs,
-        constructor_param_idents,
-    );
-
-    let agent_constructor_input_schema = match constructor_input_info {
-        DefaultOrMultimodal::Default => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(vec![#(#constructor_parameters_with_schema),*])
-        },
-        DefaultOrMultimodal::Multimodal => quote! {
-            golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(vec![#(#constructor_parameters_with_schema),*])
-        },
+    let agent_constructor_input_schema = quote! {
+        {
+            #constructor_schema_init
+            #(#constructor_parameters_with_schema)*
+            if !constructor_multi_modal_inputs.is_empty() {
+                golem_rust::golem_agentic::golem::agent::common::DataSchema::Multimodal(constructor_multi_modal_inputs)
+            } else {
+                golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(constructor_default_inputs)
+            }
+        }
     };
 
-    let agent_constructor = quote! { golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
+    let constructor_data_schema_token = quote! {
+        let constructor_data_schema = {
+            #agent_constructor_input_schema
+        };
+    };
+
+    let remote_client =
+        get_remote_client(item_trait, constructor_param_defs, constructor_param_names);
+
+    let agent_constructor = quote! {
+        {
+         #constructor_data_schema_token
+
+         golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
             name: None,
-            description: "".to_string(),
+            description: #constructor_description.to_string(),
             prompt_hint: None,
-            input_schema: #agent_constructor_input_schema,
+            input_schema: constructor_data_schema,
+         }
         }
     };
 
@@ -315,12 +370,32 @@ fn get_agent_type_with_remote_client(
         agent_type: quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #type_name.to_string(),
-                description: "".to_string(),
+                description: #constructor_description.to_string(),
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
                 constructor: #agent_constructor,
+                mode: #mode_value,
             }
         },
         remote_client,
     })
+}
+
+fn extract_description(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_meta(attrs, "description")
+}
+
+fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_meta(attrs, "prompt")
+}
+
+fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident(key) {
+            if let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>() {
+                return Some(lit_str.value());
+            }
+        }
+    }
+    None
 }

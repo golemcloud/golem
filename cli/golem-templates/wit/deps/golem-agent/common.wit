@@ -5,12 +5,18 @@ interface common {
 
   type url = string;
 
+  enum agent-mode {
+    durable,
+    ephemeral
+  }
+
   record agent-type {
     type-name:    string,
     description:  string,
     %constructor: agent-constructor,
     methods:      list<agent-method>,
     dependencies: list<agent-dependency>,
+    mode:         agent-mode,
   }
 
   record agent-dependency {

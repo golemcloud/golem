@@ -14,11 +14,9 @@
 
 use crate::{
     agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
-    golem_agentic::{
-        exports::golem::agent::guest::AgentType,
-        golem::{agent::common::ElementSchema, api::host::AgentId},
-    },
+    golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
+use golem_wasm::AgentId;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
@@ -142,6 +140,10 @@ pub fn get_agent_id() -> AgentId {
     get_state().agent_id.borrow().clone().unwrap()
 }
 
+pub fn get_resolved_agent() -> Option<Arc<ResolvedAgent>> {
+    get_state().agent_instance.borrow().resolved_agent.clone()
+}
+
 pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
@@ -199,8 +201,6 @@ pub fn get_method_parameter_type(
     }
 }
 
-// A call to agent initiator is only from outside and should never be happening in any other part of the call
-// and hence it is safe to create a reactor and register forever
 pub fn with_agent_initiator<F, Fut, R>(f: F, agent_type_name: &AgentTypeName) -> R
 where
     F: FnOnce(Arc<dyn AgentInitiator>) -> Fut,

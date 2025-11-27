@@ -21,12 +21,12 @@ use crate::services::oplog::{
     downcast_oplog, CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService,
 };
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::{
-    ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
-    WorkerStatusRecord,
+    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -215,10 +215,10 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let component_type = self.execution_status.read().component_type();
+        let agent_mode = self.execution_status.read().agent_mode();
 
-        match component_type {
-            ComponentType::Durable => {
+        match agent_mode {
+            AgentMode::Durable => {
                 let primary = if let Some(initial_entry) = self.initial_entry {
                     self.primary
                         .create(
@@ -242,7 +242,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 };
                 MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await
             }
-            ComponentType::Ephemeral => {
+            AgentMode::Ephemeral => {
                 let primary = self
                     .primary
                     .open(
@@ -790,12 +790,54 @@ impl Oplog for MultiLayerOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        self.multi_layer_oplog_service
-            .read(&self.owned_worker_id, oplog_index, 1)
+        self.read_many(oplog_index, 1)
             .await
             .into_values()
             .next()
             .expect("Missing oplog entry")
+    }
+
+    async fn read_many(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut result = BTreeMap::new();
+        let mut remaining: u64 = min(
+            u64::from(self.primary.current_oplog_index().await.next())
+                .saturating_sub(u64::from(idx)),
+            n,
+        );
+        if remaining == 0 {
+            return result;
+        };
+
+        let partial_result = self.primary.read_many(idx, remaining).await;
+        let full_match = match partial_result.first_key_value() {
+            None => false,
+            Some((first_idx, _)) => {
+                remaining -= partial_result.len() as u64;
+                *first_idx == idx
+            }
+        };
+
+        result.extend(partial_result);
+
+        if !full_match {
+            for layer in &self.lower {
+                let partial_result = layer.read(idx, remaining).await;
+                let full_match = match partial_result.first_key_value() {
+                    None => false,
+                    Some((first_idx, _)) => {
+                        remaining -= partial_result.len() as u64;
+                        *first_idx == idx
+                    }
+                };
+
+                result.extend(partial_result.into_iter());
+
+                if full_match {
+                    break;
+                }
+            }
+        }
+        result
     }
 
     async fn length(&self) -> u64 {

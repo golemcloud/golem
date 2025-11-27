@@ -95,9 +95,6 @@ oplog_payload! {
             component_slug: String,
             agent_name: String
         },
-        GolemApiFork {
-            name: String,
-        },
         GolemApiForkAgent {
             source_agent_id: WorkerId,
             target_agent_id: WorkerId,
@@ -127,7 +124,9 @@ oplog_payload! {
             function_name: String,
             function_params: Vec<ValueAndType>,
             #[from_value(skip)]
+            #[transient(None::<String>)]
             remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
+            #[transient(None::<DataValue>)]
             #[from_value(skip)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
@@ -138,8 +137,10 @@ oplog_payload! {
             function_params: Vec<ValueAndType>,
             datetime: SerializableDateTime,
             #[from_value(skip)]
+            #[transient(None::<String>)]
             remote_agent_type: Option<String>, // enriched field, only filled when exposed as public oplog entry
             #[from_value(skip)]
+            #[transient(None::<DataValue>)]
             remote_agent_parameters: Option<DataValue>, // enriched field, only filled when exposed as public oplog entry
         },
         GolemRpcScheduledInvocationCancellation {
@@ -227,6 +228,7 @@ oplog_payload! {
             result: Result<Option<ComponentId>, String>
         },
         GolemApiFork {
+            forked_phantom_id: Uuid,
             result: Result<ForkResult, String>,
         },
         GolemApiIdempotencyKey {
@@ -417,7 +419,7 @@ pub mod host_functions {
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
         (GolemApiResolveWorkerIdStrict => "golem::api", "resolve_worker_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", GolemApiFork, GolemApiFork)
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
     }
 }
 

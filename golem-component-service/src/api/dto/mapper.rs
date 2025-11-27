@@ -63,7 +63,6 @@ impl ApiMapper {
             project_id: component.owner.project_id,
             metadata: component.metadata,
             created_at: component.created_at,
-            component_type: component.component_type,
             files: component.files,
             installed_plugins,
             env: component.env,

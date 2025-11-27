@@ -54,7 +54,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
     fields
         .fmt_field("Component name", &view.component_name, format_main_id)
         .fmt_field("Component ID", &view.component_id, format_id)
-        .fmt_field("Component type", &view.component_type, |t| t.to_string())
         .fmt_field("Component version", &view.component_version, format_id)
         .fmt_field_option("Project ID", &view.project_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)

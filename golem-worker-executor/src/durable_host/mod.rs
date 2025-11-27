@@ -81,7 +81,7 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -95,10 +95,9 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    ComponentFileSystemNodeDetails, ComponentId, ComponentVersion, GetFileSystemNodeResult,
+    IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -214,8 +213,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdout = ManagedStdOut::from_stdout(Stdout);
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
-        let last_oplog_index = oplog.current_oplog_index().await;
-
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
@@ -259,7 +256,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rpc,
                 worker_proxy,
                 worker_config.deleted_regions.clone(),
-                last_oplog_index,
                 component_metadata,
                 worker_config.total_linear_memory_size,
                 worker_fork,
@@ -341,6 +337,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn agent_id(&self) -> Option<AgentId> {
         self.state.agent_id.clone()
+    }
+
+    pub fn agent_mode(&self) -> AgentMode {
+        self.execution_status.read().unwrap().agent_mode()
     }
 
     pub fn component_metadata(&self) -> &golem_service_base::model::Component {
@@ -1288,25 +1288,27 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { .. } => {
+            ExecutionStatus::Running { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
-                await_interruption, ..
+                agent_mode,
+                await_interruption,
+                ..
             } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
                 await_interruption.send(()).ok();
             }
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1318,16 +1320,16 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let current_execution_status = execution_status.clone();
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended { .. } => {
+            ExecutionStatus::Suspended { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { .. } => {
+            ExecutionStatus::Loading { agent_mode, .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    component_type: self.component_metadata().component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
             }
@@ -1618,20 +1620,15 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
         let is_live = self.is_live();
 
-        // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
-        // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
-        // does not have the StartSpan/FinishSpan paris persisted.
         let span = if is_live {
             self.state
                 .invocation_context
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
-        } else if let Some((_, entry)) = self
-            .state
-            .replay_state
-            .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::StartSpan { .. }))
-            .await
-        {
+        } else {
+            let (_, entry) =
+                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
+
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
                     timestamp, span_id, ..
@@ -1646,11 +1643,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
-        } else {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
         };
 
         if current_span_id != parent
@@ -1813,14 +1805,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .set_replay_target(new_target);
         }
 
-        let (component_type, is_agent) = {
+        let (agent_mode, is_agent) = {
             let component = store.as_context().data().component_metadata();
-            (component.component_type, component.metadata.is_agent())
+            (
+                store.as_context().data().agent_mode(),
+                component.metadata.is_agent(),
+            )
         };
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                    (component_type == ComponentType::Durable || // durable components are fully replayed
+                    (agent_mode == AgentMode::Durable || // durable components are fully replayed
                         (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
@@ -2061,13 +2056,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        let prepare_result = if store
-            .as_context()
-            .data()
-            .component_metadata()
-            .component_type
-            == ComponentType::Ephemeral
-        {
+        let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
             // We have to replay the initialize call for agents:
@@ -2694,7 +2683,6 @@ impl PrivateDurableWorkerState {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
-        last_oplog_index: OplogIndex,
         component_metadata: golem_service_base::model::Component,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
@@ -2708,14 +2696,8 @@ impl PrivateDurableWorkerState {
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
     ) -> Self {
-        let replay_state = ReplayState::new(
-            owned_worker_id.clone(),
-            oplog_service.clone(),
-            oplog.clone(),
-            deleted_regions,
-            last_oplog_index,
-        )
-        .await;
+        let replay_state =
+            ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
@@ -3263,14 +3245,13 @@ fn effective_wasi_config_vars(
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
-    ($private_state:expr, $($cases:path),+) => {
+    ($replay_state:expr, $($cases:path),+) => {
         loop {
-            let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
+            let (oplog_index, oplog_entry) = $replay_state.get_oplog_entry().await;
             match oplog_entry {
                 $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
                 })+
-                entry if entry.is_hint() => {}
                 _ => {
                     break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
                         stringify!($($cases |)+),

@@ -1,6 +1,8 @@
 mod model;
 
-use golem_rust::agentic::{Agent, Multimodal, UnstructuredBinary, UnstructuredText};
+use std::collections::HashMap;
+
+use golem_rust::agentic::{Agent, MultimodalAdvanced, Multimodal, UnstructuredBinary, UnstructuredText};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
 
@@ -51,6 +53,11 @@ trait FooAgent {
         tuple: (String, f64, AllPrimitives, bool),
     ) -> (String, f64, AllPrimitives, bool);
 
+    async fn fun_map(
+        &mut self,
+        map: std::collections::HashMap<String, i32>,
+    ) -> std::collections::HashMap<String, i32>;
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     async fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -85,9 +92,14 @@ trait FooAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
+
+    async fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
+
     async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
+
     async fn fun_unstructured_text_lc(&self, input: UnstructuredText<MyLang>) -> UnstructuredText<MyLang>;
+
     async fn fun_unstructured_binary(&self, input: UnstructuredBinary<MyMimeType>) -> UnstructuredBinary<MyMimeType>;
 }
 
@@ -182,6 +194,13 @@ impl FooAgent for FooAgentImpl {
         self.client.fun_tuple_complex(tuple).await
     }
 
+    async fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32> {
+        self.client.fun_map(map).await
+    }
+
     async fn fun_collections(&mut self, collections: Collections) -> Collections {
         self.client.fun_collections(collections).await
     }
@@ -245,8 +264,12 @@ impl FooAgent for FooAgentImpl {
             .fun_enum_with_only_literals(enum_with_only_literals).await
     }
 
-    async fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+    async fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
         self.client.fun_multi_modal(input).await
+    }
+
+    async fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal {
+        self.client.fun_multi_modal_basic(input).await
     }
 
     async fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText {
@@ -303,6 +326,11 @@ trait BarAgent {
         tuple: (String, f64, AllPrimitives, bool),
     ) -> (String, f64, AllPrimitives, bool);
 
+    fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32>;
+
     fn fun_collections(&mut self, collections: Collections) -> Collections;
 
     fn fun_struct_simple(&mut self, simple_struct: SimpleStruct) -> SimpleStruct;
@@ -337,7 +365,9 @@ trait BarAgent {
         enum_with_only_literals: EnumWithOnlyLiterals,
     ) -> EnumWithOnlyLiterals;
 
-    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData>;
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData>;
+
+    fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal;
 
     fn fun_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
 
@@ -429,6 +459,13 @@ impl BarAgent for BarAgentImpl {
         tuple
     }
 
+    fn fun_map(
+        &mut self,
+        map: HashMap<String, i32>,
+    ) -> HashMap<String, i32> {
+        map
+    }
+
     fn fun_collections(&mut self, collections: Collections) -> Collections {
         collections
     }
@@ -491,7 +528,11 @@ impl BarAgent for BarAgentImpl {
         enum_with_only_literals
     }
 
-    fn fun_multi_modal(&self, input: Multimodal<TextImageData>) -> Multimodal<TextImageData> {
+    fn fun_multi_modal(&self, input: MultimodalAdvanced<TextImageData>) -> MultimodalAdvanced<TextImageData> {
+        input
+    }
+
+    fn fun_multi_modal_basic(&self, input: Multimodal) -> Multimodal {
         input
     }
 

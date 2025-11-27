@@ -589,7 +589,6 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();
@@ -606,7 +605,6 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         extract_source_exports_package: true,
         seal_cargo_workspace: false,
         component_name: AppComponentName::from("test:component"),
-        is_ephemeral: false,
     })
     .unwrap();
     let _ = generate_client_wit_dir(&def).unwrap();

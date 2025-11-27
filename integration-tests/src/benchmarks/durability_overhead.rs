@@ -102,42 +102,33 @@ impl Benchmark for DurabilityOverhead {
             .deps
             .admin()
             .await
-            .component("benchmark_direct_rust")
-            .name("benchmark:direct-rust")
-            .store()
-            .await;
-        let ephemeral_component_id = benchmark_context
-            .deps
-            .admin()
-            .await
-            .component("benchmark_direct_rust")
-            .unique()
-            .ephemeral()
+            .component("benchmark_agent_rust_release")
+            .name("benchmark:agent-rust")
             .store()
             .await;
 
         for n in 0..self.config.size {
             let worker_id = WorkerId {
                 component_id: durable_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}-persistent\")"),
+                worker_name: format!("rust-benchmark-agent(\"test-{n}-persistent\")"),
             };
             durable_persistent_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
                 component_id: durable_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}-nonpersistent\")"),
+                worker_name: format!("rust-benchmark-agent(\"test-{n}-nonpersistent\")"),
             };
             durable_nonpersistent_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
-                component_id: ephemeral_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}-ephemeral\")"),
+                component_id: durable_component_id.clone(),
+                worker_name: format!("rust-ephemeral-benchmark-agent(\"test-{n}-ephemeral\")"),
             };
             ephemeral_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
                 component_id: durable_component_id.clone(),
-                worker_name: format!("benchmark-agent(\"test-{n}-persistent-commit\")"),
+                worker_name: format!("rust-benchmark-agent(\"test-{n}-persistent-commit\")"),
             };
             durable_persistent_commit_worker_ids.push(worker_id);
         }
@@ -169,7 +160,7 @@ impl Benchmark for DurabilityOverhead {
                     invoke_and_await(
                         &deps_clone,
                         worker_id,
-                        "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
+                        "benchmark:agent-rust/rust-benchmark-agent.{echo}",
                         vec!["test".into_value_and_type()],
                     )
                     .await
@@ -212,7 +203,7 @@ impl Benchmark for DurabilityOverhead {
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
+                    "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
                         length.into_value_and_type(),
                         true.into_value_and_type(),
@@ -236,7 +227,7 @@ impl Benchmark for DurabilityOverhead {
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
+                    "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
                         length.into_value_and_type(),
                         false.into_value_and_type(),
@@ -264,7 +255,7 @@ impl Benchmark for DurabilityOverhead {
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
+                    "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
                         length.into_value_and_type(),
                         false.into_value_and_type(),
@@ -288,7 +279,7 @@ impl Benchmark for DurabilityOverhead {
                 invoke_and_await(
                     &deps_clone,
                     worker_id,
-                    "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
+                    "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
                         length.into_value_and_type(),
                         true.into_value_and_type(),
