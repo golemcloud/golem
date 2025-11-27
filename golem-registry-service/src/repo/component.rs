@@ -29,7 +29,7 @@ use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::fmt::Debug;
-use tracing::{Instrument, Span, info_span};
+use tracing::{Instrument, Span, debug, info_span};
 use uuid::Uuid;
 
 #[async_trait]

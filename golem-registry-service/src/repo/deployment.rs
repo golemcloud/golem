@@ -38,7 +38,7 @@ use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::HashSet;
 use std::fmt::Debug;
-use tracing::{Instrument, Span, info_span};
+use tracing::{Instrument, Span, debug, info, info_span};
 use uuid::Uuid;
 
 #[async_trait]
@@ -472,7 +472,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         let actual_current_staged_revision_id =
             self.get_next_revision_number(environment_id).await?;
         if current_staged_deployment_revision_id != actual_current_staged_revision_id {
-            tracing::info!(
+            info!(
                 "Failing deployment due to concurrent modification: expected_staged_deployment_revision_id: {current_staged_deployment_revision_id:?}; actual_current_staged_revision_id: {actual_current_staged_revision_id:?}"
             );
             return Err(DeployRepoError::ConcurrentModification);
@@ -512,6 +512,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 let diffable_deployment = staged_deployment.to_diffable();
 
                 let hash = diffable_deployment.hash();
+
+                debug!(?diffable_deployment, ?hash, "diffable staged deployment");
+
                 if hash.as_blake3_hash() != deployment_revision.hash.as_blake3_hash() {
                     return Err(DeployRepoError::DeploymentHashMismatch {
                         actual_hash: (*hash.as_blake3_hash()).into(),

@@ -481,6 +481,7 @@ impl AppCommandHandler {
 
         if deploy_args.reset {
             // TODO: atomic: delete env
+            todo!()
         }
 
         let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
@@ -497,11 +498,16 @@ impl AppCommandHandler {
             return Ok(());
         }
 
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
         log_action("Diffing", "");
+
         let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
         debug!("deploy_diff: {:#?}", deploy_diff);
+
         let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
         {
             let _indent = LogIndent::new();
             let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
@@ -812,14 +818,9 @@ impl AppCommandHandler {
             .deploy_environment(
                 &deploy_diff.environment.environment_id.0,
                 &DeploymentCreation {
-                    current_deployment_revision: deploy_diff
-                        .environment
-                        .remote_environment
-                        .current_deployment
-                        .as_ref()
-                        .map(|deployment| deployment.revision),
+                    current_deployment_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
-                    version: "TODO".to_string(), // TODO: atomic
+                    version: "".to_string(), // TODO: atomic
                 },
             )
             .await

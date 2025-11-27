@@ -17,7 +17,7 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::component::is_sensitive_env_var_name;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentPlanComponentEntry;
+use golem_common::model::deployment::{DeploymentPlanComponentEntry, DeploymentRevision};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use std::collections::BTreeMap;
@@ -50,6 +50,7 @@ pub struct DeployDiff {
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
+    #[allow(unused)] // For debug logs
     pub server_deployment: Option<DeploymentSummary>,
     pub diffable_server_deployment: diff::Deployment,
     pub server_staged_deployment: DeploymentPlan,
@@ -111,7 +112,15 @@ impl DeployDiff {
             })
     }
 
-    pub fn safe_diff_deployment(
+    pub fn current_deployment_revision(&self) -> Option<DeploymentRevision> {
+        self.environment
+            .remote_environment
+            .current_deployment
+            .as_ref()
+            .map(|deployment| deployment.revision)
+    }
+
+    fn safe_diff_deployment(
         show_sensitive: bool,
         deployment: &diff::Deployment,
     ) -> diff::Deployment {
