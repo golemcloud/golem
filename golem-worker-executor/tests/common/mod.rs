@@ -7,7 +7,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataSuccessResponse,
 };
 use golem_common::config::RedisConfig;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -685,6 +685,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.agent_id()
     }
 
+    fn agent_mode(&self) -> AgentMode {
+        self.durable_ctx.agent_mode()
+    }
+
     fn created_by(&self) -> &AccountId {
         self.durable_ctx.created_by()
     }
@@ -1210,6 +1214,10 @@ impl Oplog for TestOplog {
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.oplog.read(oplog_index).await
+    }
+
+    async fn read_many(&self, oplog_index: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.oplog.read_many(oplog_index, n).await
     }
 
     async fn length(&self) -> u64 {

@@ -24,7 +24,7 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
+    AccountId, ComponentId, ComponentVersion, InitialComponentFile, ProjectId,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +37,6 @@ pub struct LocalFileSystemComponentMetadata {
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
-    pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub component_name: String,
     pub wasm_filename: String,
@@ -76,7 +75,6 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.agent_types,
             ),
             created_at: Default::default(),
-            component_type: value.component_type,
             files: value.files,
             installed_plugins: vec![],
             env: value.env,

@@ -38,13 +38,13 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
-use golem_common::model::agent::AgentId;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::RevertWorkerTarget;
 use golem_common::model::{AccountId, RetryConfig};
-use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
+use golem_common::model::{ComponentFilePath, PluginInstallationId};
 use golem_common::model::{
     ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
@@ -352,10 +352,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub async fn stop(&self) {
-        self.stop_internal(false, None).await;
-    }
-
     /// This method is supposed to be called on a worker for what `is_currently_idle_but_running`
     /// previously returned true.
     ///
@@ -444,7 +440,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     fn mark_as_loading(&self) {
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::Loading {
-            component_type: execution_status.component_type(),
+            agent_mode: execution_status.agent_mode(),
             timestamp: Timestamp::now_utc(),
         };
     }
@@ -502,7 +498,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
                     await_interruption: Arc::new(sender),
-                    component_type: execution_status.component_type(),
+                    agent_mode: execution_status.agent_mode(),
                     timestamp: Timestamp::now_utc(),
                 };
                 Some(receiver)
@@ -712,8 +708,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         map.remove(key);
     }
 
-    pub fn component_type(&self) -> ComponentType {
-        self.execution_status.read().unwrap().component_type()
+    pub fn agent_mode(&self) -> AgentMode {
+        self.execution_status.read().unwrap().agent_mode()
     }
 
     /// Gets the estimated memory requirement of the worker
@@ -1265,6 +1261,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.fail_pending_invocation(error).await;
                 };
 
+                // Make sure the oplog is committed
+                self.oplog.commit(CommitLevel::Always).await;
+
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
                 if called_from_invocation_loop {
                     StopResult::Stopped
@@ -1428,9 +1427,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let current_oplog_idx = current_status.oplog_idx;
                 let current_status = Arc::new(tokio::sync::RwLock::new(current_status));
 
+                let agent_id = if initial_component.metadata.is_agent() {
+                    let agent_id = AgentId::parse(
+                        &owned_worker_id.worker_id.worker_name,
+                        &initial_component.metadata,
+                    )
+                    .map_err(|err| {
+                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
+                    })?;
+                    Some(agent_id)
+                } else {
+                    None
+                };
+
+                let agent_mode = if let Some(agent_id) = &agent_id {
+                    if let Ok(Some(agent_type)) = initial_component
+                        .metadata
+                        .find_agent_type_by_name(&agent_id.agent_type)
+                    {
+                        agent_type.mode
+                    } else {
+                        AgentMode::Durable
+                    }
+                } else {
+                    AgentMode::Durable
+                };
+
                 let execution_status =
                     Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
-                        component_type: initial_component.component_type,
+                        agent_mode,
                         timestamp: Timestamp::now_utc(),
                     }));
 
@@ -1444,19 +1469,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         read_only_lock::std::ReadOnlyLock::new(execution_status.clone()),
                     )
                     .await;
-
-                let agent_id = if initial_component.metadata.is_agent() {
-                    let agent_id = AgentId::parse(
-                        &owned_worker_id.worker_id.worker_name,
-                        &initial_component.metadata,
-                    )
-                    .map_err(|err| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
-                    })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
@@ -1487,8 +1499,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     None
                 };
 
+                let agent_mode = if let Some(agent_id) = &agent_id {
+                    if let Ok(Some(agent_type)) = component
+                        .metadata
+                        .find_agent_type_by_name(&agent_id.agent_type)
+                    {
+                        agent_type.mode
+                    } else {
+                        AgentMode::Durable
+                    }
+                } else {
+                    AgentMode::Durable
+                };
+
                 let execution_status = ExecutionStatus::Suspended {
-                    component_type: component.component_type,
+                    agent_mode,
                     timestamp: Timestamp::now_utc(),
                 };
 
@@ -1575,7 +1600,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .update_cached_status(
                         owned_worker_id,
                         &*initial_status.read().await,
-                        component.component_type,
+                        agent_mode,
                     )
                     .await;
 
@@ -1609,7 +1634,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             *self.last_known_status.write().await = worker_status.clone();
             self.worker_service()
-                .update_cached_status(&self.owned_worker_id, &worker_status, self.component_type())
+                .update_cached_status(&self.owned_worker_id, &worker_status, self.agent_mode())
                 .await;
         };
 
@@ -1642,7 +1667,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .update_cached_status(
                             &self.owned_worker_id,
                             &updated_status,
-                            self.component_type(),
+                            self.agent_mode(),
                         )
                         .await;
                 };
