@@ -426,7 +426,7 @@ async fn plugin_installation_test2(_tracing: &Tracing) {
             flag::YES,
             cmd::AGENT,
             cmd::INVOKE,
-            &format!("test:rust1/counter({{ id: \"{uuid}\" }})"),
+            &format!("test:rust1/counter-agent(\"{uuid}\")"),
             "increment",
         ])
         .await;

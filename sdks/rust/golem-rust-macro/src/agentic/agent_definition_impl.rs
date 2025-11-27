@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::ItemTrait;
 
 use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
@@ -95,18 +95,14 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 remote_client,
             } = agent_type_with_remote_client;
 
-            let register_fn_name = get_register_function_ident(&item_trait);
-
-            // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
-            // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
-            let register_fn = quote! {
-                ::golem_rust::ctor::__support::ctor_parse!(#[ctor]fn #register_fn_name() {
+            let my_registration_function: syn::TraitItem = syn::parse_quote! {
+                fn __register_agent_type() {
                     let agent_type = #agent_type;
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
                     );
-                });
+                }
             };
 
             let load_snapshot_item = get_load_snapshot_item();
@@ -114,10 +110,11 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             item_trait.items.push(load_snapshot_item);
             item_trait.items.push(save_snapshot_item);
+            item_trait.items.push(my_registration_function);
 
             let result = quote! {
+                #[allow(async_fn_in_trait)]
                 #item_trait
-                #register_fn
                 #remote_client
             };
 
@@ -142,16 +139,6 @@ fn get_save_snapshot_item() -> syn::TraitItem {
             Err("save_snapshot not implemented".to_string())
         }
     }
-}
-
-fn get_register_function_ident(item_trait: &ItemTrait) -> proc_macro2::Ident {
-    let trait_name = item_trait.ident.clone();
-
-    let trait_name_str = trait_name.to_string();
-
-    let register_fn_suffix = &trait_name_str.to_lowercase();
-
-    format_ident!("__register_agent_type_{}", register_fn_suffix)
 }
 
 struct AgentTypeWithRemoteClient {
@@ -185,26 +172,8 @@ fn get_agent_type_with_remote_client(
             let name = &trait_fn.sig.ident;
             let method_name = &name.to_string();
 
-            let mut description = String::new();
-
-            for attr in &trait_fn.attrs {
-                if attr.path().is_ident("description") {
-                    let mut found = None;
-                    attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("description") {
-                            let lit: syn::LitStr = meta.value()?.parse()?;
-                            found = Some(lit.value());
-                            Ok(())
-                        } else {
-                            Err(meta.error("expected `description = \"...\"`"))
-                        }
-                    })
-                        .ok();
-                    if let Some(val) = found {
-                        description = val;
-                    }
-                }
-            }
+            let description = extract_description(&trait_fn.attrs).unwrap_or_default();
+            let prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
 
             let mut input_schema_logic = vec![];
             let mut output_schema_logic = vec![];
@@ -287,7 +256,13 @@ fn get_agent_type_with_remote_client(
                 golem_rust::golem_agentic::golem::agent::common::AgentMethod {
                     name: #method_name.to_string(),
                     description: #description.to_string(),
-                    prompt_hint: None,
+                    prompt_hint: {
+                        if #prompt_hint.is_empty() {
+                            None
+                        } else {
+                            Some(#prompt_hint.to_string())
+                        }
+                    },
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                 }
@@ -316,7 +291,11 @@ fn get_agent_type_with_remote_client(
         return Err(multiple_constructor_methods_error(item_trait).into());
     }
 
+    let mut constructor_description = String::new();
+
     if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
+        constructor_description = extract_description(&ctor_fn.attrs).unwrap_or_default();
+
         for input in &ctor_fn.sig.inputs {
             if let syn::FnArg::Typed(pat_type) = input {
                 let param_name = match &*pat_type.pat {
@@ -380,7 +359,7 @@ fn get_agent_type_with_remote_client(
 
          golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
             name: None,
-            description: "".to_string(),
+            description: #constructor_description.to_string(),
             prompt_hint: None,
             input_schema: constructor_data_schema,
          }
@@ -391,7 +370,7 @@ fn get_agent_type_with_remote_client(
         agent_type: quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #type_name.to_string(),
-                description: "".to_string(),
+                description: #constructor_description.to_string(),
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
                 constructor: #agent_constructor,
@@ -400,4 +379,23 @@ fn get_agent_type_with_remote_client(
         },
         remote_client,
     })
+}
+
+fn extract_description(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_meta(attrs, "description")
+}
+
+fn extract_prompt_hint(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_meta(attrs, "prompt")
+}
+
+fn extract_meta(attrs: &[syn::Attribute], key: &str) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident(key) {
+            if let Ok(syn::Lit::Str(lit_str)) = attr.parse_args::<syn::Lit>() {
+                return Some(lit_str.value());
+            }
+        }
+    }
+    None
 }

@@ -78,7 +78,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
             quote! {
                 let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_params),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
-                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
                 );
@@ -88,7 +88,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         Asyncness::Immediate => {
             quote! {
                 let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
-                let agent_id = golem_rust::golem_agentic::golem::api::host::get_self_metadata().agent_id;
+                let agent_id = golem_rust::bindings::golem::api::host::get_self_metadata().agent_id;
                 golem_rust::agentic::register_agent_instance(
                     golem_rust::agentic::ResolvedAgent::new(agent_instance, agent_id)
                 );
@@ -109,7 +109,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
 
     let register_initiator_fn =
-        generate_register_initiator_fn(&trait_name_str_raw, &initiator_ident);
+        generate_register_initiator_fn(&impl_block.self_ty, &trait_name_str_raw, &initiator_ident);
 
     quote! {
         #impl_block
@@ -406,6 +406,7 @@ fn generate_initiator_impl(
 }
 
 fn generate_register_initiator_fn(
+    self_ty: &syn::Type,
     trait_name_str_raw: &str,
     initiator_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
@@ -416,9 +417,12 @@ fn generate_register_initiator_fn(
 
     // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
     // This is one level of indirection to ensure the usage of ctor that is re-exported by golem_rust
+    // When registering the initiator, we also register the agent type via the AgentTypeRegistrar
     quote! {
         ::golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_initiator_fn_name() {
+                #self_ty::__register_agent_type();
+
                 golem_rust::agentic::register_agent_initiator(
                     #trait_name_str_raw.to_string().as_str(),
                     std::sync::Arc::new(#initiator_ident)
