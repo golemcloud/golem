@@ -231,9 +231,7 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                         }
                     }
                 },
-                syn::ReturnType::Default => quote! {
-                    ()
-                },
+                syn::ReturnType::Default => quote! {},
             };
 
                   Some(quote!{

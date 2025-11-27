@@ -25,7 +25,6 @@ mod tests {
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
-    use golem_wasm::{WitType, WitValue};
     use test_r::test;
 
     #[agent_definition]
@@ -362,6 +361,7 @@ mod tests {
         id: String,
     }
 
+    #[allow(clippy::assertions_on_constants)]
     #[test] // only to verify that the agent compiles correctly
     fn test_agent_compilation() {
         assert!(true);
