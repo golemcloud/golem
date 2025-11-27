@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::agent::AgentType;
-use super::auth::EnvironmentRole;
-use super::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
-use super::diff;
-use super::environment::EnvironmentId;
-use super::environment_plugin_grant::EnvironmentPluginGrantId;
-use super::plugin_registration::PluginRegistrationId;
 use crate::model::account::AccountId;
+use crate::model::agent::AgentType;
 use crate::model::application::ApplicationId;
+use crate::model::auth::EnvironmentRole;
 use crate::model::component_metadata::ComponentMetadata;
+use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
+use crate::model::diff;
+use crate::model::environment::EnvironmentId;
+use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::model::plugin_registration::PluginRegistrationId;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -211,34 +211,15 @@ impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: self.metadata.root_package_version().clone(),
+                version: None, // TODO: atomic
                 env: self
                     .env
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: self
-                    .metadata
-                    .dynamic_linking()
-                    .iter()
-                    .map(|(name, link)| match link {
-                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
-                            name.clone(),
-                            targets
-                                .iter()
-                                .map(|(name, target)| {
-                                    (
-                                        name.clone(),
-                                        diff::ComponentWasmRpcTarget {
-                                            interface_name: target.interface_name.clone(),
-                                            component_name: target.component_name.clone(),
-                                        },
-                                    )
-                                })
-                                .collect::<BTreeMap<_, _>>(),
-                        ),
-                    })
-                    .collect(),
+                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
+                    self.metadata.dynamic_linking(),
+                ),
             }
             .into(),
             wasm_hash: self.wasm_hash,
@@ -247,7 +228,7 @@ impl ComponentDto {
                 .iter()
                 .map(|file| {
                     (
-                        file.path.0.to_string(),
+                        file.path.to_abs_string(),
                         diff::ComponentFile {
                             hash: file.content_hash.0,
                             permissions: file.permissions,
@@ -365,6 +346,10 @@ impl ComponentFilePath {
 
     pub fn as_path(&self) -> &Utf8UnixPathBuf {
         &self.0
+    }
+
+    pub fn as_abs_str(&self) -> &str {
+        self.0.as_str()
     }
 
     pub fn to_abs_string(&self) -> String {

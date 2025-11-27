@@ -24,6 +24,7 @@ pub mod environment;
 pub mod fmt;
 pub mod help;
 // TODO: atomic: pub mod plugin;
+pub mod diff;
 pub mod profile;
 pub mod server;
 pub mod template;

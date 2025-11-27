@@ -14,12 +14,12 @@
 
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
-use crate::model::deploy_diff::DiffSerialize;
+use crate::model::app::ComponentLayerId;
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::worker::WorkerNameMatch;
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
@@ -28,7 +28,6 @@ use golem_common::model::WorkerStatus;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
-use similar::TextDiff;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
@@ -323,7 +322,7 @@ pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
                 "{} {} {}",
                 file.permissions.as_compact_str(),
                 file.path.as_path().as_str().log_color_highlight(),
-                file.content_hash.0.as_str().black()
+                file.content_hash.0.to_string().black()
             )
         })
         .join("\n")
@@ -399,39 +398,6 @@ pub fn log_fuzzy_match(m: &Match) {
             m.option.log_color_ok_highlight()
         ),
     );
-}
-
-pub fn log_deploy_diff<T: DiffSerialize>(server: &T, manifest: &T) -> anyhow::Result<()> {
-    let server = server
-        .to_diffable_string()
-        .context("failed to serialize server entity")?;
-    let manifest = manifest
-        .to_diffable_string()
-        .context("failed to serialize manifest entity")?;
-
-    log_unified_diff(
-        &TextDiff::from_lines(&server, &manifest)
-            .unified_diff()
-            .context_radius(4)
-            .header("sever", "manifest")
-            .to_string(),
-    );
-
-    Ok(())
-}
-
-pub fn log_unified_diff(diff: &str) {
-    for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            logln(line.green().bold().to_string());
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            logln(line.red().bold().to_string());
-        } else if line.starts_with("@@") {
-            logln(line.bold().to_string());
-        } else {
-            logln(line);
-        }
-    }
 }
 
 pub fn format_rib_source_for_error(source: &str, error: &str) -> String {
@@ -655,4 +621,18 @@ pub fn to_colored_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
     }
 
     Ok(output)
+}
+
+pub fn format_component_applied_layers(
+    applied_layers: &[(ComponentLayerId, Option<String>)],
+) -> String {
+    applied_layers
+        .iter()
+        .map(|(id, selection)| match selection {
+            Some(selection) => {
+                format!("{}[{}]", id.name(), selection.as_str())
+            }
+            None => id.name().to_string(),
+        })
+        .join(", ")
 }

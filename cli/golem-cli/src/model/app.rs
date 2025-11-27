@@ -35,7 +35,7 @@ use heck::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -107,21 +107,27 @@ impl ApplicationComponentSelectMode {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CleanMode {
+    All,
+    SelectedComponentsOnly,
+}
+
 // TODO: atomic: environments
 #[derive(Debug, Clone)]
 pub struct DynamicHelpSections {
+    environments: bool,
     components: bool,
     custom_commands: bool,
     builtin_commands: BTreeSet<String>,
     api_definitions: bool,
-    // TODO: atomic
-    #[allow(unused)]
     api_deployments: bool,
 }
 
 impl DynamicHelpSections {
     pub fn show_all(builtin_commands: BTreeSet<String>) -> Self {
         Self {
+            environments: true,
             components: true,
             custom_commands: true,
             builtin_commands,
@@ -132,6 +138,7 @@ impl DynamicHelpSections {
 
     pub fn show_components() -> Self {
         Self {
+            environments: true,
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -142,6 +149,7 @@ impl DynamicHelpSections {
 
     pub fn show_custom_commands(builtin_commands: BTreeSet<String>) -> Self {
         Self {
+            environments: false,
             components: false,
             custom_commands: true,
             builtin_commands,
@@ -152,6 +160,7 @@ impl DynamicHelpSections {
 
     pub fn show_api_definitions() -> Self {
         Self {
+            environments: false,
             components: false,
             custom_commands: false,
             builtin_commands: Default::default(),
@@ -162,12 +171,17 @@ impl DynamicHelpSections {
 
     pub fn show_api_deployments() -> Self {
         Self {
+            environments: false,
             components: true,
             custom_commands: false,
             builtin_commands: Default::default(),
             api_definitions: true,
             api_deployments: false,
         }
+    }
+
+    pub fn environments(&self) -> bool {
+        self.environments
     }
 
     pub fn components(&self) -> bool {
@@ -186,14 +200,8 @@ impl DynamicHelpSections {
         self.api_definitions
     }
 
-    pub fn api_deployments_environment(&self) -> Option<&EnvironmentName> {
-        // TODO: atomic: should this be bool, and env always available?
-        /*
-        (self.api_deployments)
-            .then_some(self.profile.as_ref())
-            .flatten()
-        */
-        None
+    pub fn api_deployments(&self) -> bool {
+        self.api_deployments
     }
 }
 
@@ -470,11 +478,7 @@ pub struct ApplicationNameAndEnvironments {
 #[derive(Clone, Debug)]
 pub struct Application {
     application_name: WithSource<ApplicationName>,
-    // TODO: atomic
-    #[allow(unused)]
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
-    // TODO: atomic
-    #[allow(unused)]
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
     // TODO: atomic
@@ -505,6 +509,14 @@ impl Application {
 
     pub fn application_name(&self) -> &ApplicationName {
         &self.application_name.value
+    }
+
+    pub fn environment_name(&self) -> &EnvironmentName {
+        &self.component_preset_selector.environment
+    }
+
+    pub fn environments(&self) -> &BTreeMap<EnvironmentName, app_raw::Environment> {
+        &self.environments
     }
 
     pub fn from_raw_apps(
@@ -770,7 +782,7 @@ impl Display for ComponentLayerId {
 }
 
 impl ComponentLayerId {
-    fn is_template(&self) -> bool {
+    pub fn is_template(&self) -> bool {
         match self {
             ComponentLayerId::TemplateCommon(_)
             | ComponentLayerId::TemplateEnvironmentPresets(_)
@@ -781,7 +793,7 @@ impl ComponentLayerId {
         }
     }
 
-    fn is_environment_preset(&self) -> bool {
+    pub fn is_environment_preset(&self) -> bool {
         match self {
             ComponentLayerId::TemplateEnvironmentPresets(_)
             | ComponentLayerId::ComponentEnvironmentPresets(_) => true,
@@ -792,7 +804,7 @@ impl ComponentLayerId {
         }
     }
 
-    fn component_name(&self) -> Option<&ComponentName> {
+    pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             ComponentLayerId::TemplateCommon(_)
             | ComponentLayerId::TemplateEnvironmentPresets(_)
@@ -800,6 +812,28 @@ impl ComponentLayerId {
             ComponentLayerId::ComponentCommon(component_name)
             | ComponentLayerId::ComponentEnvironmentPresets(component_name)
             | ComponentLayerId::ComponentCustomPresets(component_name) => Some(component_name),
+        }
+    }
+
+    pub fn template_name(&self) -> Option<&TemplateName> {
+        match self {
+            ComponentLayerId::TemplateCommon(template_name)
+            | ComponentLayerId::TemplateEnvironmentPresets(template_name)
+            | ComponentLayerId::TemplateCustomPresets(template_name) => Some(template_name),
+            ComponentLayerId::ComponentCommon(_)
+            | ComponentLayerId::ComponentEnvironmentPresets(_)
+            | ComponentLayerId::ComponentCustomPresets(_) => None,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        match self {
+            ComponentLayerId::TemplateCommon(template_name)
+            | ComponentLayerId::TemplateEnvironmentPresets(template_name)
+            | ComponentLayerId::TemplateCustomPresets(template_name) => template_name.as_str(),
+            ComponentLayerId::ComponentCommon(component_name)
+            | ComponentLayerId::ComponentEnvironmentPresets(component_name)
+            | ComponentLayerId::ComponentCustomPresets(component_name) => component_name.as_str(),
         }
     }
 
@@ -944,6 +978,10 @@ impl Layer for ComponentLayer {
         };
         let selection = selection.as_ref();
         let id = self.id();
+
+        if !property_layers_to_apply.is_empty() {
+            value.applied_layers.push((id.clone(), selection.cloned()))
+        }
 
         for properties in property_layers_to_apply {
             let template_env = ctx.template_env();
@@ -1093,6 +1131,10 @@ impl<'a> Component<'a> {
         &self.properties.source
     }
 
+    pub fn applied_layers(&self) -> &[(ComponentLayerId, Option<String>)] {
+        self.layer_properties().applied_layers.as_slice()
+    }
+
     pub fn source_dir(&self) -> &Path {
         let parent = self.source().parent().unwrap_or_else(|| {
             panic!(
@@ -1228,6 +1270,12 @@ impl<'a> Component<'a> {
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentLayerProperties {
+    #[serde(
+        serialize_with = "ComponentLayerProperties::serialize_applied_layers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
+
     pub source_wit: OptionalProperty<ComponentLayer, String>,
     pub generated_wit: OptionalProperty<ComponentLayer, String>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
@@ -1252,6 +1300,7 @@ pub struct ComponentLayerProperties {
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
         Self {
+            applied_layers: vec![],
             source_wit: value.source_wit.into(),
             generated_wit: value.generated_wit.into(),
             component_wasm: value.component_wasm.into(),
@@ -1291,6 +1340,25 @@ impl ComponentLayerProperties {
         props.compact_traces();
         props
     }
+
+    pub fn serialize_applied_layers<S>(
+        applied_layers: &[(ComponentLayerId, Option<String>)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        applied_layers
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => {
+                    format!("{}[{}]", id.name(), selection.as_str())
+                }
+                None => id.name().to_string(),
+            })
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1302,7 +1370,7 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: AppComponentType,
+    pub component_type: AppComponentType, // TODO atomic: should be dropped?
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -2537,7 +2605,7 @@ mod app_builder {
                                                         validation.add_error(
                                                             format!(
                                                                 "Property {} contains unknown component name: {}\n\n{}",
-                                                                "component_name".log_color_highlight(),
+                                                                "componentName".log_color_highlight(),
                                                                 name.log_color_error_highlight(),
                                                                 self.available_components(name)
                                                             )
@@ -2548,7 +2616,7 @@ mod app_builder {
                                                     validation.add_error(
                                                         format!(
                                                             "Property {} is required for binding type {}",
-                                                            "component_name".log_color_highlight(),
+                                                            "componentName".log_color_highlight(),
                                                             binding_type_as_string.log_color_highlight(),
                                                         )
                                                     );
@@ -2589,32 +2657,32 @@ mod app_builder {
                                     match route.binding.type_.unwrap_or_default() {
                                         app_raw::HttpApiDefinitionBindingType::Default => {
                                             check_component_name_and_version(validation);
-                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
-                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_rib(validation, "response", &route.binding.response, false);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::FileServer => {
                                             check_component_name_and_version(validation);
-                                            check_rib(validation, "idempotency_key", &route.binding.idempotency_key, false);
-                                            check_rib(validation, "invocation_context", &route.binding.invocation_context, false);
+                                            check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
+                                            check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::HttpHandler => {
                                             check_component_name_and_version(validation);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
-                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
-                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "componentName", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                     }

@@ -581,7 +581,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &worker_id.worker_name,
                 &UpdateWorkerRequest {
                     mode: WorkerUpdateMode::Manual,
-                    target_revision: target_revision.0, // TODO: atomic: why is this not ComponentRevision?
+                    target_revision: target_revision.0,
                 },
             )
             .await?;

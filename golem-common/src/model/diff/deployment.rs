@@ -21,7 +21,7 @@ use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Deployment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]

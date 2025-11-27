@@ -18,6 +18,7 @@ use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
+use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
@@ -25,23 +26,26 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
-use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
-use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::fmt::{
-    log_error, log_fuzzy_matches, log_text_view, log_unified_diff, log_warn,
+use crate::log::{
+    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent, LogOutput,
+    Output,
 };
+use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
+use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::text::diff::log_unified_diff;
+use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
+use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::{ApplicationClient, EnvironmentClient};
-use golem_client::model::ApplicationCreation;
+use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
+use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::diff;
-use golem_common::model::diff::{Diffable, HashOf, Hashable, SerializeMode};
+use golem_common::model::diff::{Diffable, Hashable};
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
@@ -51,6 +55,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
+use tracing::debug;
+
+mod deploy_diff;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -414,6 +421,7 @@ impl AppCommandHandler {
         let result = clients
             .agent_types
             .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
+            .todo: map svc err
             .await?;
 
         self.ctx.log_handler().log_view(&result);
@@ -451,7 +459,7 @@ impl AppCommandHandler {
 
     pub async fn deploy(
         &self,
-        _plan: bool, // TODO: atomic
+        plan: bool,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
@@ -473,115 +481,354 @@ impl AppCommandHandler {
 
         if deploy_args.reset {
             // TODO: atomic: delete env
+            todo!()
         }
 
-        let components = self
+        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
+
+        if deploy_quick_diff.is_up_to_date() {
+            log_skipping_up_to_date(format!(
+                "deployment, no changes detected, deployment hash: {}",
+                deploy_quick_diff
+                    .local_deployment_hash
+                    .to_string()
+                    .log_color_highlight()
+            ));
+            // TODO: atomic: if there is a deployment, show details (version, revision...)
+            return Ok(());
+        }
+
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
+        log_action("Diffing", "");
+
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+
+        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
+        {
+            let _indent = LogIndent::new();
+            let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
+
+            match &unified_diffs.diff_stage {
+                Some(diff) => {
+                    log_action("Diffing", "with staging area");
+                    let _indent = self.ctx.log_handler().nested_text_view_indent();
+                    log_unified_diff(diff);
+                }
+                None => {
+                    log_skipping_up_to_date("diffing with staging area");
+                }
+            }
+
+            {
+                log_action("Diffing", "with current deployment");
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                log_unified_diff(&unified_diffs.diff);
+            }
+        }
+
+        {
+            log_action("Planning", "");
+            let _indent = LogIndent::new();
+
+            match &deploy_diff.diff_stage {
+                Some(diff_stage) => {
+                    log_warn_action("Planned", "changes to be applied to the staging area:");
+                    let _indent = self.ctx.log_handler().nested_text_view_indent();
+                    self.ctx.log_handler().log_view(diff_stage)
+                }
+                None => log_skipping_up_to_date("planning changes for staging area"),
+            }
+
+            {
+                log_warn_action("Planned", "changes to be applied to the environment:");
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                self.ctx.log_handler().log_view(&deploy_diff.diff)
+            }
+        }
+
+        if plan {
+            return Ok(());
+        }
+
+        if !self.ctx.interactive_handler().confirm_deploy_by_plan(
+            &deploy_diff.environment.application_name,
+            &deploy_diff.environment.environment_name,
+            &self
+                .ctx
+                .manifest_environment()
+                .map(|env| env.environment.to_formatted_server_context())
+                .unwrap_or("???".to_string()),
+        )? {
+            return Ok(());
+        }
+
+        self.apply_changes_to_stage(&deploy_diff).await?;
+        self.apply_staged_changes_to_environment(&deploy_diff)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deploy_quick_diff(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<DeployQuickDiff> {
+        let deployable_manifest_components = self
             .ctx
             .component_handler()
             .all_deployable_manifest_components()
             .await?;
 
-        let remote_deployment_hash = environment
-            .remote_environment
-            .current_deployment
-            .as_ref()
-            .map(|d| d.hash);
-
-        let diffable_local_deployment = {
-            let diffable_components = {
-                let mut diffable_components = BTreeMap::<String, HashOf<diff::Component>>::new();
-                for (component_name, component_deploy_properties) in &components {
-                    let diffable_component = self
-                        .ctx
-                        .component_handler()
-                        .diffable_local_component(component_name, component_deploy_properties)
-                        .await?;
-                    diffable_components.insert(component_name.0.clone(), diffable_component.into());
-                }
-                diffable_components
-            };
-
-            diff::Deployment {
-                components: diffable_components,
-                http_api_definitions: Default::default(), // TODO: atomic,
-                http_api_deployments: Default::default(), // TODO: atomic
+        let diffable_components = {
+            let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
+            for (component_name, component_deploy_properties) in &deployable_manifest_components {
+                let diffable_component = self
+                    .ctx
+                    .component_handler()
+                    .diffable_local_component(component_name, component_deploy_properties)
+                    .await?;
+                diffable_components.insert(component_name.0.clone(), diffable_component.into());
             }
+            diffable_components
+        };
+
+        let diffable_local_deployment = diff::Deployment {
+            components: diffable_components,
+            http_api_definitions: Default::default(), // TODO: atomic,
+            http_api_deployments: Default::default(), // TODO: atomic
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
 
-        if Some(local_deployment_hash) == remote_deployment_hash {
-            log_action(
-                "Skipping",
-                format!(
-                    "deployment, no changes detected, deployment hash: {}",
-                    local_deployment_hash.to_string().log_color_highlight()
-                ),
-            );
-            // TODO: atomic: if there is a deployment, show details (version, revision...)
-        }
+        Ok(DeployQuickDiff {
+            environment,
+            deployable_manifest_components,
+            diffable_local_deployment,
+            local_deployment_hash,
+        })
+    }
 
+    async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
         let clients = self.ctx.golem_clients().await?;
 
-        let server_deployment = match &environment.remote_environment.current_deployment {
+        let server_deployment = match &deploy_quick_diff
+            .environment
+            .remote_environment
+            .current_deployment
+        {
             Some(current_deployment) => Some(
                 clients
                     .environment
                     .get_environment_deployed_deployment_plan(
-                        &environment.environment_id.0,
+                        &deploy_quick_diff.environment.environment_id.0,
                         current_deployment.revision.0,
                     )
-                    .await?,
+                    .await
+                    .map_service_error()?,
             ),
             None => None,
         };
-        let diffable_server_deployment = server_deployment.as_ref().map(|d| d.to_diffable());
+
+        let diffable_server_deployment = server_deployment
+            .as_ref()
+            .map(|d| d.to_diffable())
+            .unwrap_or_default();
 
         let server_staged_deployment = clients
             .environment
-            .get_environment_deployment_plan(&environment.environment_id.0)
-            .await?;
+            .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?;
+
         let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
 
-        let diff = diffable_server_deployment
-            .as_ref()
-            .and_then(|d| d.diff_with_local(&diffable_local_deployment));
-        let diff_stage =
-            diffable_server_staged_deployment.diff_with_local(&diffable_local_deployment);
+        let Some(diff) = diffable_server_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment)
+        else {
+            bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
+        };
 
-        if diff.is_some() {
-            if let Some(diffable_server_deployment) = &diffable_server_deployment {
-                log_action("Diffing", "with current deployment");
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
-                log_unified_diff(&diffable_server_deployment.unified_yaml_diff_with_local(
-                    &diffable_local_deployment,
-                    SerializeMode::ValueIfAvailable,
-                ));
+        let diff_stage = diffable_server_staged_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment);
+
+        Ok(DeployDiff {
+            environment: deploy_quick_diff.environment,
+            deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
+            local_deployment_hash: deploy_quick_diff.local_deployment_hash,
+            server_deployment,
+            diffable_server_deployment,
+            server_staged_deployment,
+            diffable_server_staged_deployment,
+            diff,
+            diff_stage,
+        })
+    }
+
+    async fn detailed_deploy_diff(
+        &self,
+        mut deploy_diff: DeployDiff,
+    ) -> anyhow::Result<DeployDiff> {
+        let Some(diff_stage) = &deploy_diff.diff_stage else {
+            return Ok(deploy_diff);
+        };
+
+        let clients = self.ctx.golem_clients().await?;
+
+        for (component_name, component_diff) in &diff_stage.components {
+            let component_name = ComponentName(component_name.clone());
+
+            match component_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    let component_identity = deploy_diff.staged_component_identity(&component_name);
+
+                    let staged_component = clients
+                        .component
+                        .get_component_revision(
+                            &component_identity.id.0,
+                            component_identity.revision.0,
+                        )
+                        .await
+                        .map_service_error()?;
+
+                    deploy_diff
+                        .diffable_server_staged_deployment
+                        .components
+                        .insert(component_name.0, staged_component.to_diffable().into());
+                }
             }
         }
 
-        if diff_stage.is_some() {
-            log_action("Diffing", "with staging area");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
-            log_unified_diff(
-                &diffable_server_staged_deployment.unified_yaml_diff_with_local(
-                    &diffable_local_deployment,
-                    SerializeMode::ValueIfAvailable,
-                ),
-            );
-        }
-
-        if let Some(diff) = diff {
-            self.ctx.log_handler().log_serializable(&diff.components)
-        }
-        if let Some(diff_stage) = &diff_stage {
-            self.ctx
-                .log_handler()
-                .log_serializable(&diff_stage.components)
-        }
-
         // TODO: atomic
-        todo!()
+        /*
+        for (_http_api_definition_name, http_api_definition_diff) in
+            &diff_stage.http_api_definitions
+        {
+            match http_api_definition_diff {
+                diff::BTreeMapDiffValue::Add => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    // TODO: atomic: get detailed meta
+                }
+            }
+        }
+
+        for (_http_api_deployment_name, http_api_deployment_diff) in
+            &diff_stage.http_api_deployments
+        {
+            match http_api_deployment_diff {
+                diff::BTreeMapDiffValue::Add => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    // TODO: atomic: get detailed meta
+                }
+            }
+        }
+        */
+
+        // Update diff with details
+        deploy_diff.diff_stage = deploy_diff
+            .diffable_server_staged_deployment
+            .diff_with_local(&deploy_diff.diffable_local_deployment);
+
+        Ok(deploy_diff)
+    }
+
+    async fn apply_changes_to_stage(&self, deploy_diff: &DeployDiff) -> anyhow::Result<()> {
+        let Some(diff_stage) = &deploy_diff.diff_stage else {
+            log_skipping_up_to_date("changing staging area");
+            return Ok(());
+        };
+
+        log_action("Applying", "changes to the staging area");
+        let _indent = LogIndent::new();
+
+        let component_handler = self.ctx.component_handler();
+
+        for (component_name, component_diff) in &diff_stage.components {
+            let component_name = ComponentName(component_name.to_string());
+
+            match component_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    component_handler
+                        .create_staged_component(
+                            &deploy_diff.environment,
+                            &component_name,
+                            deploy_diff.deployable_manifest_component(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    component_handler
+                        .delete_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(component_diff) => {
+                    log_action(
+                        "Updating",
+                        format!("component {}", component_name.0.log_color_highlight()),
+                    );
+
+                    component_handler
+                        .update_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                            deploy_diff.deployable_manifest_component(&component_name),
+                            component_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        // TODO: atomic: http api and deployments
+
+        Ok(())
+    }
+
+    async fn apply_staged_changes_to_environment(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        log_action("Deploying", "staged changes to the environment");
+
+        clients
+            .environment
+            .deploy_environment(
+                &deploy_diff.environment.environment_id.0,
+                &DeploymentCreation {
+                    current_deployment_revision: deploy_diff.current_deployment_revision(),
+                    expected_deployment_hash: deploy_diff.local_deployment_hash,
+                    version: "".to_string(), // TODO: atomic
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        // TODO: atomic log details (version, revision etc..)
+
+        Ok(())
     }
 
     pub async fn get_remote_application(
@@ -624,7 +871,8 @@ impl AppCommandHandler {
                             name: application_name.clone(),
                         },
                     )
-                    .await?,
+                    .await
+                    .map_service_error()?,
             )),
         }
     }
@@ -654,10 +902,27 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
+        let any_component_requested = !component_names.is_empty();
+
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
-        app_ctx.some_or_err()?.clean()
+
+        let clean_mode = {
+            if any_component_requested {
+                CleanMode::SelectedComponentsOnly
+            } else {
+                match &default_component_select_mode {
+                    ApplicationComponentSelectMode::CurrentDir
+                    | ApplicationComponentSelectMode::Explicit(_) => {
+                        CleanMode::SelectedComponentsOnly
+                    }
+                    ApplicationComponentSelectMode::All => CleanMode::All,
+                }
+            }
+        };
+
+        app_ctx.some_or_err()?.clean(clean_mode)
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {

@@ -25,8 +25,11 @@ use crate::model::NewInteractiveApp;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::{Account, HttpApiDefinitionCreation};
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::environment::EnvironmentName;
 use golem_templates::model::{GuestLanguage, PackageName};
+use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, Select, Text};
@@ -68,6 +71,29 @@ impl InteractiveHandler {
             yes,
             true,
             "Application manifest was loaded with warnings.\nDo you want to continue?",
+            None,
+        )
+    }
+
+    pub fn confirm_deploy_by_plan(
+        &self,
+        application_name: &ApplicationName,
+        environment_name: &EnvironmentName,
+        server_formatted: &str,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            formatdoc! { "
+                The above plan will be applied to the following environment:
+                    Application Name: {}
+                    Environment Name: {}
+                    Server          : {}
+
+                Do you want to continue the deployment?",
+                application_name.0.log_color_highlight(),
+                environment_name.0.log_color_highlight(),
+                server_formatted.log_color_highlight(),
+            },
             None,
         )
     }

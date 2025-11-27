@@ -39,13 +39,6 @@ use uuid::Uuid;
 pub enum DeployRepoError {
     #[error("Concurrent modification")]
     ConcurrentModification,
-    #[error(
-        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}."
-    )]
-    DeploymentHashMismatch {
-        actual_hash: SqlBlake3Hash,
-        requested_hash: SqlBlake3Hash,
-    },
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]

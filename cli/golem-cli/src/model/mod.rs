@@ -19,7 +19,6 @@ pub mod app_raw;
 pub mod cascade;
 pub mod component;
 pub mod deploy;
-pub mod deploy_diff;
 pub mod environment;
 pub mod format;
 pub mod invoke_result_view;

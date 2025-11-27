@@ -99,27 +99,30 @@ pub struct Component {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDiff {
-    binary_changed: bool,
-    metadata_changed: bool,
+    pub wasm_changed: bool,
+    pub metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
-    plugins_changed: bool,
+    pub file_changes: BTreeMapDiff<String, HashOf<ComponentFile>>,
+    pub plugins_changed: bool,
 }
 
 impl Diffable for Component {
     type DiffResult = ComponentDiff;
 
     fn diff(local: &Self, remote: &Self) -> Option<Self::DiffResult> {
-        let update_metadata = local.metadata != remote.metadata;
-        let update_binary = local.wasm_hash != remote.wasm_hash;
-        let file_changes = local.files_by_path.diff_with_server(&remote.files_by_path);
-        let plugins_changed = local.plugins_by_priority == remote.plugins_by_priority;
+        let metadata_changed = local.metadata != remote.metadata;
+        let wasm_changed = local.wasm_hash != remote.wasm_hash;
+        let file_changes = local
+            .files_by_path
+            .diff_with_server(&remote.files_by_path)
+            .unwrap_or_default();
+        let plugins_changed = local.plugins_by_priority != remote.plugins_by_priority;
 
-        if update_metadata || update_binary || file_changes.is_some() || plugins_changed {
+        if metadata_changed || wasm_changed || !file_changes.is_empty() || plugins_changed {
             Some(ComponentDiff {
-                metadata_changed: update_metadata,
-                binary_changed: update_binary,
-                file_changes: file_changes.unwrap_or_default(),
+                metadata_changed,
+                wasm_changed,
+                file_changes,
                 plugins_changed,
             })
         } else {

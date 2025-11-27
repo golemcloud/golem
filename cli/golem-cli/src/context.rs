@@ -21,8 +21,9 @@ use crate::config::{
     ApplicationEnvironmentConfigId, AuthenticationConfig, AuthenticationConfigWithSource,
     AuthenticationSource, Config, NamedProfile, BUILTIN_LOCAL_URL,
 };
-use crate::config::{ClientConfig, HttpClientConfig, ProfileName};
+use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::http::new_reqwest_client;
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{
     AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
@@ -52,7 +53,6 @@ use golem_common::model::environment::EnvironmentName;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -218,14 +218,6 @@ impl Context {
 
                 if cli.redeploy_agents == Some(Marker) {
                     deploy_args.redeploy_agents = true;
-                }
-
-                if cli.redeploy_http_api == Some(Marker) {
-                    deploy_args.redeploy_http_api = true;
-                }
-
-                if cli.redeploy_all == Some(Marker) {
-                    deploy_args.redeploy_all = true;
                 }
 
                 if cli.reset == Some(Marker) {
@@ -1055,50 +1047,6 @@ impl Default for RibReplState {
             component_metadata: ComponentMetadata::default(),
         }
     }
-}
-
-// TODO: atomic: move to a http / client module?
-fn new_reqwest_client(config: &HttpClientConfig) -> anyhow::Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder();
-
-    if config.allow_insecure {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-
-    if let Some(timeout) = config.timeout {
-        builder = builder.timeout(timeout);
-    }
-    if let Some(connect_timeout) = config.connect_timeout {
-        builder = builder.connect_timeout(connect_timeout);
-    }
-    if let Some(read_timeout) = config.read_timeout {
-        builder = builder.read_timeout(read_timeout);
-    }
-
-    Ok(builder.connection_verbose(true).build()?)
-}
-
-// TODO: atomic: move to a http / client module?
-pub async fn check_http_response_success(
-    response: reqwest::Response,
-) -> anyhow::Result<reqwest::Response> {
-    if !response.status().is_success() {
-        let url = response.url().clone();
-        let status = response.status();
-        let bytes = response.bytes().await.ok();
-        let error_payload = bytes
-            .as_ref()
-            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()))
-            .unwrap_or_else(|| Cow::from(""));
-
-        bail!(
-            "Received unexpected response for {}: {}\n{}",
-            url,
-            status,
-            error_payload
-        );
-    }
-    Ok(response)
 }
 
 #[cfg(test)]

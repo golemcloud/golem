@@ -21,11 +21,13 @@ use crate::fs::{compile_and_collect_globs, PathExtra};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
 use crate::model::app::{
     includes_from_yaml_file, Application, ApplicationComponentSelectMode, ApplicationConfig,
-    ApplicationNameAndEnvironments, ApplicationSourceMode, BinaryComponentSource,
+    ApplicationNameAndEnvironments, ApplicationSourceMode, BinaryComponentSource, CleanMode,
     ComponentPresetSelector, ComponentStubInterfaces, DependentComponent, DynamicHelpSections,
     WithSource, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::model::app_raw;
+use crate::model::text::fmt::format_component_applied_layers;
+use crate::model::text::server::ToFormattedServerContext;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
@@ -391,7 +393,7 @@ impl ApplicationContext {
         }
 
         {
-            log_action("Selected", "components:");
+            log_action("Selected", "components and layers:");
             let _indent = LogIndent::new();
 
             let padding = selected_component_names
@@ -402,18 +404,17 @@ impl ApplicationContext {
                 + 1;
 
             for component_name in &selected_component_names {
-                // TODO: atomic: create layer level trace for showing templates and presets
-                let property_configuration = Some("TODO");
+                let component = self.application.component(component_name);
+                let applied_layers = component.applied_layers();
 
-                match property_configuration {
-                    Some(config) => logln(format!(
+                if applied_layers.is_empty() {
+                    logln(component_name.as_str().blue().to_string());
+                } else {
+                    logln(format!(
                         "{} {}",
                         format!("{:<padding$}", format!("{}:", component_name.as_str())).blue(),
-                        config
-                    )),
-                    None => {
-                        logln(component_name.as_str().blue().to_string());
-                    }
+                        format_component_applied_layers(applied_layers)
+                    ))
                 }
             }
         }
@@ -443,8 +444,8 @@ impl ApplicationContext {
         execute_custom_command(self, command_name).await
     }
 
-    pub fn clean(&self) -> anyhow::Result<()> {
-        clean_app(self)
+    pub fn clean(&self, mode: CleanMode) -> anyhow::Result<()> {
+        clean_app(self, mode)
     }
 
     pub async fn resolve_binary_component_source(
@@ -466,36 +467,71 @@ impl ApplicationContext {
     }
 
     pub fn log_dynamic_help(&self, config: &DynamicHelpSections) -> anyhow::Result<()> {
-        static LABEL_SOURCE: &str = "Source";
-        static LABEL_SELECTED: &str = "Selected";
-        static LABEL_COMPONENT_TYPE: &str = "Component Type";
-        static LABEL_DEPENDENCIES: &str = "Dependencies";
-
-        // TODO: atomic: show templates and presets based on layer trace
-        let label_padding = {
-            [
-                &LABEL_SOURCE,
-                &LABEL_SELECTED,
-                &LABEL_COMPONENT_TYPE,
-                &LABEL_DEPENDENCIES,
-            ]
-            .map(|label| label.len())
-            .into_iter()
-            .max()
-            .unwrap_or(0)
-                + 1
-        };
-
-        let print_field = |label: &'static str, value: String| {
+        fn print_field(label_padding: usize, label: &'static str, value: String) {
             logln(format!(
                 "    {:<label_padding$} {}",
                 format!("{}:", label),
                 value
-            ))
-        };
+            ));
+        }
+
+        fn padding(labels: &[&str]) -> usize {
+            labels.iter().map(|label| label.len()).max().unwrap_or(0) + 1
+        }
+
+        if config.environments() {
+            static LABEL_NAME: &str = "Name";
+            static LABEL_SELECTED: &str = "Selected";
+            static LABEL_SERVER: &str = "Server";
+            static LABEL_PRESETS: &str = "Presets";
+
+            let label_padding = padding(&[LABEL_NAME, LABEL_SELECTED, LABEL_SERVER, LABEL_PRESETS]);
+            let selected_environment_name = self.application.environment_name();
+
+            logln(format!(
+                "{}",
+                "Application environments:".log_color_help_group()
+            ));
+            for (environment_name, environment) in self.application.environments() {
+                logln(format!("  {}", environment_name.0.bold()));
+                print_field(
+                    label_padding,
+                    LABEL_SELECTED,
+                    if environment_name == selected_environment_name {
+                        "yes".green().bold().to_string()
+                    } else {
+                        "no".red().bold().to_string()
+                    },
+                );
+                print_field(
+                    label_padding,
+                    LABEL_SERVER,
+                    environment.to_formatted_server_context().bold().to_string(),
+                );
+                print_field(
+                    label_padding,
+                    LABEL_PRESETS,
+                    environment
+                        .component_presets
+                        .clone()
+                        .into_vec()
+                        .join(", ")
+                        .bold()
+                        .to_string(),
+                );
+                logln("")
+            }
+        }
 
         if config.components() {
             if self.application.has_any_component() {
+                static LABEL_SOURCE: &str = "Source";
+                static LABEL_SELECTED: &str = "Selected";
+                static LABEL_LAYERS: &str = "Layers";
+                static LABEL_DEPENDENCIES: &str = "Dependencies";
+
+                let label_padding = padding(&[LABEL_SOURCE, LABEL_LAYERS, LABEL_DEPENDENCIES]);
+
                 logln(format!(
                     "{}",
                     "Application components:".log_color_help_group()
@@ -505,6 +541,7 @@ impl ApplicationContext {
                     let selected = self.selected_component_names.contains(component_name);
                     logln(format!("  {}", component_name.as_str().bold()));
                     print_field(
+                        label_padding,
                         LABEL_SELECTED,
                         if selected {
                             "yes".green().bold().to_string()
@@ -513,6 +550,7 @@ impl ApplicationContext {
                         },
                     );
                     print_field(
+                        label_padding,
                         LABEL_SOURCE,
                         component
                             .source()
@@ -522,8 +560,9 @@ impl ApplicationContext {
                             .to_string(),
                     );
                     print_field(
-                        LABEL_COMPONENT_TYPE,
-                        component.component_type().to_string().bold().to_string(),
+                        label_padding,
+                        LABEL_LAYERS,
+                        format_component_applied_layers(component.applied_layers()),
                     );
 
                     let dependencies = self.application.component_dependencies(component_name);
@@ -537,8 +576,8 @@ impl ApplicationContext {
                             ))
                         }
                     }
+                    logln("")
                 }
-                logln("")
             } else {
                 logln("No components found in the application.\n");
             }
@@ -563,15 +602,18 @@ impl ApplicationContext {
             }
         }
 
-        if let Some(environment) = config.api_deployments_environment() {
-            let http_api_deployments = self.application.http_api_deployments(environment);
+        if config.api_deployments() {
+            let environment_name = self.application.environment_name();
+            let http_api_deployments = self
+                .application
+                .http_api_deployments(self.application.environment_name());
             match http_api_deployments {
                 Some(http_api_deployments) => {
                     logln(format!(
                         "{}",
                         format!(
                             "Application API deployments for environment {}:",
-                            environment.0
+                            environment_name.0
                         )
                         .log_color_help_group()
                     ));
@@ -587,7 +629,7 @@ impl ApplicationContext {
                 None => {
                     logln(format!(
                         "No API deployments found in the application for environment {}.\n",
-                        environment.0.log_color_highlight()
+                        environment_name.0.log_color_highlight()
                     ));
                 }
             }

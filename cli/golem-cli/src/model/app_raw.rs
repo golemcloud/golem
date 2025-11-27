@@ -233,10 +233,6 @@ pub struct CliOptions {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_agents: Option<Marker>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_http_api: Option<Marker>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_all: Option<Marker>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reset: Option<Marker>,
 }
 
