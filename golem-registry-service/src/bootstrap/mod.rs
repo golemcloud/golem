@@ -45,7 +45,7 @@ use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
-use crate::services::deployment::DeploymentService;
+use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
@@ -86,6 +86,7 @@ pub struct Services {
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
     pub deployment_service: Arc<DeploymentService>,
+    pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
     pub environment_service: Arc<EnvironmentService>,
@@ -272,6 +273,15 @@ impl Services {
             domain_registration_service.clone(),
         ));
 
+        let deployment_write_service = Arc::new(DeploymentWriteService::new(
+            environment_service.clone(),
+            deployment_service.clone(),
+            repos.deployment_repo.clone(),
+            component_service.clone(),
+            http_api_definition_service.clone(),
+            http_api_deployment_service.clone(),
+        ));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -282,6 +292,7 @@ impl Services {
             component_service,
             component_write_service,
             deployment_service,
+            deployment_write_service,
             domain_registration_service,
             environment_plugin_grant_service,
             environment_service,

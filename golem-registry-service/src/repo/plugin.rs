@@ -142,7 +142,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                  provided_wit_package,
                  json_schema, validate_url, transform_url,
                  component_id, component_revision_id,
-                 blob_storage_key)
+                 wasm_content_hash)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 RETURNING
                 plugin_id, account_id, name, version,
@@ -151,7 +151,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                 provided_wit_package,
                 json_schema, validate_url, transform_url,
                 component_id, component_revision_id,
-                blob_storage_key
+                wasm_content_hash
             "#})
                 .bind(plugin.plugin_id)
                 .bind(plugin.account_id)
@@ -168,7 +168,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                 .bind(plugin.transform_url)
                 .bind(plugin.component_id)
                 .bind(plugin.component_revision_id)
-                .bind(plugin.blob_storage_key),
+                .bind(plugin.wasm_content_hash),
         ).await.none_on_unique_violation()
     }
 
@@ -190,7 +190,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         provided_wit_package,
                         json_schema, validate_url, transform_url,
                         component_id, component_revision_id,
-                        blob_storage_key
+                        wasm_content_hash
                 "#})
                 .bind(plugin_id)
                 .bind(deleted_at)
@@ -214,7 +214,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.provided_wit_package,
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
-                        p.blob_storage_key
+                        p.wasm_content_hash
                     FROM accounts a
                     JOIN plugins p
                         ON p.account_id = a.account_id
@@ -247,7 +247,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.provided_wit_package,
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
-                        p.blob_storage_key
+                        p.wasm_content_hash
                     FROM accounts a
                     JOIN plugins p
                         ON p.account_id = a.account_id
@@ -276,7 +276,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         p.provided_wit_package,
                         p.json_schema, p.validate_url, p.transform_url,
                         p.component_id, p.component_revision_id,
-                        p.blob_storage_key
+                        p.wasm_content_hash
                     FROM accounts a
                     JOIN plugins p
                         ON p.account_id = a.account_id

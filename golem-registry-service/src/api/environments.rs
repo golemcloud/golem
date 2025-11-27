@@ -14,7 +14,7 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::deployment::DeploymentService;
+use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
 use golem_common::model::application::ApplicationId;
@@ -36,6 +36,7 @@ use tracing::Instrument;
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
+    deployment_write_service: Arc<DeploymentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -48,11 +49,13 @@ impl EnvironmentsApi {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
+        deployment_write_service: Arc<DeploymentWriteService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             deployment_service,
+            deployment_write_service,
             auth_service,
         }
     }
@@ -414,7 +417,7 @@ impl EnvironmentsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Deployment>> {
         let deployment = self
-            .deployment_service
+            .deployment_write_service
             .create_deployment(&environment_id, payload, &auth)
             .await?;
         Ok(Json(deployment))

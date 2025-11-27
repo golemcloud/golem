@@ -22,7 +22,7 @@ use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
 };
-use golem_common::model::diff::Hash;
+use golem_common::model::diff::{self, Hash};
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
@@ -31,8 +31,9 @@ use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
-    pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
+    pub component_revision: ComponentRevision,
+    pub environment_id: EnvironmentId,
     pub component_name: ComponentName,
     pub original_files: Vec<InitialComponentFile>,
     pub files: Vec<InitialComponentFile>,
@@ -48,8 +49,9 @@ pub struct NewComponentRevision {
 
 impl NewComponentRevision {
     pub fn new(
-        environment_id: EnvironmentId,
         component_id: ComponentId,
+        component_revision: ComponentRevision,
+        environment_id: EnvironmentId,
         component_name: ComponentName,
         files: Vec<InitialComponentFile>,
         env: BTreeMap<String, String>,
@@ -60,8 +62,9 @@ impl NewComponentRevision {
         agent_types: Vec<AgentType>,
     ) -> Self {
         Self {
-            environment_id,
             component_id,
+            component_revision,
+            environment_id,
             component_name,
             original_files: files.clone(),
             files,
@@ -87,8 +90,9 @@ impl NewComponentRevision {
         )?;
 
         Ok(FinalizedComponentRevision {
-            environment_id: self.environment_id,
             component_id: self.component_id,
+            component_revision: self.component_revision,
+            environment_id: self.environment_id,
             component_name: self.component_name,
             original_files: self.original_files,
             files: self.files,
@@ -108,6 +112,7 @@ impl NewComponentRevision {
 #[derive(Debug, Clone)]
 pub struct FinalizedComponentRevision {
     pub component_id: ComponentId,
+    pub component_revision: ComponentRevision,
     pub environment_id: EnvironmentId,
     pub component_name: ComponentName,
     pub original_files: Vec<InitialComponentFile>,
@@ -128,10 +133,11 @@ pub struct Component {
     pub id: ComponentId,
     pub revision: ComponentRevision,
     pub environment_id: EnvironmentId,
+    pub component_name: ComponentName,
+    pub hash: diff::Hash,
     pub application_id: ApplicationId,
     pub account_id: AccountId,
     pub environment_roles_from_shares: HashSet<EnvironmentRole>,
-    pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -140,7 +146,7 @@ pub struct Component {
     pub env: BTreeMap<String, String>,
 
     /// Hash of the wasm before any transformations
-    pub wasm_hash: golem_common::model::diff::Hash,
+    pub wasm_hash: diff::Hash,
 
     pub original_files: Vec<InitialComponentFile>,
     pub original_env: BTreeMap<String, String>,
@@ -149,9 +155,10 @@ pub struct Component {
 }
 
 impl Component {
-    pub fn into_new_revision(self) -> NewComponentRevision {
-        NewComponentRevision {
+    pub fn into_new_revision(self) -> anyhow::Result<NewComponentRevision> {
+        Ok(NewComponentRevision {
             component_id: self.id,
+            component_revision: self.revision.next()?,
             environment_id: self.environment_id,
             component_name: self.component_name,
             original_files: self.original_files,
@@ -164,7 +171,7 @@ impl Component {
 
             agent_types: self.metadata.agent_types().to_vec(),
             dynamic_linking: self.metadata.dynamic_linking().clone(),
-        }
+        })
     }
 }
 
@@ -180,11 +187,14 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             component_size: value.component_size,
             metadata: value.metadata,
             created_at: value.created_at,
+            original_files: value.original_files,
             files: value.files,
             installed_plugins: value.installed_plugins,
+            original_env: value.original_env,
             env: value.env,
             wasm_hash: value.wasm_hash,
             environment_roles_from_shares: value.environment_roles_from_shares,
+            hash: value.hash,
         }
     }
 }

@@ -368,7 +368,6 @@ args = [
     "clippy",
     "--all-targets",
     "--fix",
-    "--all-targets",
     "--allow-dirty",
     "--allow-staged",
     "--",

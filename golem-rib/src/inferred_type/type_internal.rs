@@ -14,9 +14,11 @@
 
 use crate::inferred_type::TypeOrigin;
 use crate::{ComponentDependencyKey, InferredType, InstanceType};
+use desert_rust::BinaryCodec;
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, Ord, PartialOrd)]
+#[derive(Debug, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum TypeInternal {
     Bool,
     S8,

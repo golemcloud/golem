@@ -37,13 +37,14 @@ use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::{
-    HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
+    HttpApiDefinitionDefinitionBlob, HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_service_base::repo::blob::Blob;
 use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -565,7 +566,7 @@ pub async fn test_component_stage(deps: &Deps) {
             transform_url: None,
             component_id: None,
             component_revision_id: None,
-            blob_storage_key: None,
+            wasm_content_hash: None,
         })
         .await
         .unwrap()
@@ -589,7 +590,7 @@ pub async fn test_component_stage(deps: &Deps) {
             transform_url: None,
             component_id: None,
             component_revision_id: None,
-            blob_storage_key: None,
+            wasm_content_hash: None,
         })
         .await
         .unwrap()
@@ -620,9 +621,8 @@ pub async fn test_component_stage(deps: &Deps) {
             component_id,
             revision_id: 0,
             file_path: "file1".to_string(),
-            hash: blake3::hash("test-2".as_bytes()).into(),
+            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
-            file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
         plugins: vec![
@@ -651,9 +651,8 @@ pub async fn test_component_stage(deps: &Deps) {
             component_id,
             revision_id: 0,
             file_path: "file".to_string(),
-            hash: blake3::hash("test-2".as_bytes()).into(),
+            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
-            file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
     }
@@ -859,7 +858,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        definition: "test-definition".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
     }
     .with_updated_hash();
 
@@ -921,7 +920,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         revision_id: 1,
         version: "1.1".to_string(),
         hash: SqlBlake3Hash::empty(),
-        definition: "test-definition-updated".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
         ..revision_0.clone()
     }
     .with_updated_hash();
@@ -1034,7 +1033,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        definition: "test-definition".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
     };
 
     let created_definition = deps

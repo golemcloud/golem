@@ -51,17 +51,17 @@ async fn create_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
                 idempotency_key: None,
                 invocation_context: None,
                 response: r#"
-                            let user-id = request.path.user-id;
-                            let worker = "shopping-cart-${user-id}";
-                            let inst = instance(worker);
-                            let res = inst.cart(user-id);
-                            let contents = res.get-cart-contents();
-                            {
-                                headers: {ContentType: "json", userid: "foo"},
-                                body: contents,
-                                status: 201
-                            }
-                        "#
+                    let user-id = request.path.user-id;
+                    let worker = "shopping-cart-${user-id}";
+                    let inst = instance(worker);
+                    let res = inst.cart(user-id);
+                    let contents = res.get-cart-contents();
+                    {
+                        headers: {ContentType: "json", userid: "foo"},
+                        body: contents,
+                        status: 201
+                    }
+                "#
                 .to_string(),
             }),
             security: None,

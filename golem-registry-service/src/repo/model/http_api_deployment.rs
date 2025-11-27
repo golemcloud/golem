@@ -17,6 +17,7 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_common::model::domain_registration::Domain;
@@ -163,6 +164,7 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             revision: HttpApiDeploymentRevision(value.revision.revision_id as u64),
             environment_id: EnvironmentId(value.environment_id),
             domain: Domain(value.domain),
+            hash: value.revision.hash.into(),
             api_definitions: http_api_definitions,
             created_at: value.entity_created_at.into(),
         })
@@ -175,4 +177,15 @@ pub struct HttpApiDeploymentRevisionIdentityRecord {
     pub domain: String,
     pub revision_id: i64,
     pub hash: SqlBlake3Hash,
+}
+
+impl From<HttpApiDeploymentRevisionIdentityRecord> for DeploymentPlanHttpApiDeploymentEntry {
+    fn from(value: HttpApiDeploymentRevisionIdentityRecord) -> Self {
+        Self {
+            id: HttpApiDeploymentId(value.http_api_deployment_id),
+            revision: value.revision_id.into(),
+            domain: Domain(value.domain),
+            hash: value.hash.into(),
+        }
+    }
 }

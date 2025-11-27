@@ -3024,7 +3024,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(environment_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3037,7 +3037,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(environment_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.content_hash, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -3113,13 +3113,13 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(environment_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.content_hash, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                 }
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
-                    if existing_file.key == file.key {
+                    if existing_file.content_hash == file.content_hash {
                         Ok(UpdateFileSystemResult::NoChanges)
                     } else {
                         debug!("updating ro file {}", path.display());
@@ -3130,7 +3130,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(environment_id, &file.key, &path)
+                            .get_read_only_to(environment_id, &file.content_hash, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -3168,7 +3168,7 @@ async fn update_filesystem(
                     }
 
                     file_loader
-                        .get_read_write_to(environment_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
@@ -3181,7 +3181,7 @@ async fn update_filesystem(
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(environment_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.content_hash, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }

@@ -1654,34 +1654,6 @@ impl Display for WorkerEvent {
 #[derive(Default)]
 pub struct Empty {}
 
-// Custom Deserialize is replaced with Simple Deserialize
-#[derive(
-    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum GatewayBindingType {
-    #[default]
-    Default,
-    FileServer,
-    HttpHandler,
-    CorsPreflight,
-    SwaggerUi,
-}
-
-impl TryFrom<String> for GatewayBindingType {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "default" => Ok(GatewayBindingType::Default),
-            "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {value}")),
-        }
-    }
-}
-
 impl From<WorkerId> for golem_wasm::AgentId {
     fn from(worker_id: WorkerId) -> Self {
         golem_wasm::AgentId {

@@ -28,12 +28,14 @@ use crate::rib_source_span::SourceSpan;
 use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::*;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-#[derive(Debug, Clone, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub struct InferredType {
     pub inner: Box<TypeInternal>,
     pub origin: TypeOrigin,

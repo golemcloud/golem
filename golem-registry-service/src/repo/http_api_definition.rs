@@ -866,8 +866,6 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
             });
         }
 
-        let revision = revision.with_updated_hash();
-
         let revision = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"

@@ -2487,7 +2487,7 @@ paths:
       - RegistryService
       - EnvironmentPluginGrants
       - EnvironmentPluginGrants
-      summary: Get environment grant by id
+      summary: Delete environment plugin grant
       parameters:
       - name: environment_plugin_grant_id
         schema:
@@ -6766,15 +6766,18 @@ components:
       - id
       - revision
       - environmentId
+      - componentName
+      - hash
       - applicationId
       - accountId
-      - componentName
       - componentSize
       - metadata
       - createdAt
       - files
+      - originalFiles
       - installedPlugins
       - env
+      - originalEnv
       - wasmHash
       - environmentRolesFromShares
       properties:
@@ -6787,14 +6790,17 @@ components:
         environmentId:
           type: string
           format: uuid
+        componentName:
+          type: string
+        hash:
+          type: string
+          format: hash
         applicationId:
           type: string
           format: uuid
         accountId:
           type: string
           format: uuid
-        componentName:
-          type: string
         componentSize:
           type: integer
           format: uint64
@@ -6807,11 +6813,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InitialComponentFile'
+        originalFiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFile'
         installedPlugins:
           type: array
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        originalEnv:
           type: object
           additionalProperties:
             type: string
@@ -6938,8 +6952,6 @@ components:
     CorsPreflightBinding:
       type: object
       title: CorsPreflightBinding
-      required:
-      - response
       properties:
         response:
           type: string
@@ -7352,9 +7364,12 @@ components:
       title: FileServerBinding
       required:
       - componentName
+      - workerName
       - response
       properties:
         componentName:
+          type: string
+        workerName:
           type: string
         response:
           type: string
@@ -7445,6 +7460,7 @@ components:
       - revision
       - environmentId
       - name
+      - hash
       - version
       - routes
       - createdAt
@@ -7461,6 +7477,9 @@ components:
           format: uuid
         name:
           type: string
+        hash:
+          type: string
+          format: hash
         version:
           type: string
         routes:
@@ -7512,6 +7531,7 @@ components:
       - revision
       - environmentId
       - domain
+      - hash
       - apiDefinitions
       - createdAt
       properties:
@@ -7526,6 +7546,9 @@ components:
           format: uuid
         domain:
           type: string
+        hash:
+          type: string
+          format: hash
         apiDefinitions:
           type: array
           items:
@@ -7580,6 +7603,8 @@ components:
       title: HttpHandlerBinding
       required:
       - componentName
+      - workerName
+      - response
       properties:
         componentName:
           type: string
@@ -7587,16 +7612,21 @@ components:
           type: string
         idempotencyKey:
           type: string
+        invocationContext:
+          type: string
+        response:
+          type: string
     InitialComponentFile:
       type: object
       title: InitialComponentFile
       required:
-      - key
+      - contentHash
       - path
       - permissions
       properties:
-        key:
+        contentHash:
           type: string
+          format: hash
           title: |-
             Key that can be used to identify a component file.
             All files with the same content will have the same key.
@@ -8522,9 +8552,9 @@ components:
           type: string
         idempotencyKey:
           type: string
-        response:
-          type: string
         invocationContext:
+          type: string
+        response:
           type: string
   securitySchemes:
     Cookie:

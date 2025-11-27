@@ -15,7 +15,7 @@
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
-use golem_common::model::component::InitialComponentFileKey;
+use golem_common::model::component::ComponentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -72,7 +72,7 @@ impl FileLoader {
     pub async fn get_read_only_to(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<FileUseToken, WorkerExecutorError> {
         self.get_read_only_to_impl(environment_id, key, target)
@@ -89,7 +89,7 @@ impl FileLoader {
     pub async fn get_read_write_to(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(environment_id, key, target)
@@ -105,7 +105,7 @@ impl FileLoader {
     async fn get_read_only_to_impl(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<FileUseToken, anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -140,7 +140,7 @@ impl FileLoader {
     async fn get_read_write_to_impl(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -187,7 +187,7 @@ impl FileLoader {
     async fn get_or_add_cache_entry(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
     ) -> Result<Arc<CacheEntry>, anyhow::Error> {
         let cache_entry;
         {
@@ -248,7 +248,7 @@ impl FileLoader {
         &self,
         environment_id: &EnvironmentId,
         path: &Path,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         self.download_file_to_path(environment_id, path, key)
             .await?;
@@ -260,7 +260,7 @@ impl FileLoader {
         &self,
         environment_id: &EnvironmentId,
         path: &Path,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         debug!("Downloading {} to {}", key, path.display());
 
@@ -298,7 +298,7 @@ impl FileLoader {
 // Mutex: The cache entry itself. This is used to ensure that no one is accessing the file while it is being downloaded.
 // Result: The result of the cache entry. This is used to store the file path and any errors that occurred while downloading the file.
 // InitializedCacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
-type Cache = Mutex<HashMap<InitialComponentFileKey, Weak<CacheEntry>>>;
+type Cache = Mutex<HashMap<ComponentFileContentHash, Weak<CacheEntry>>>;
 
 type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 

@@ -287,12 +287,10 @@ CREATE TABLE original_component_files
     revision_id      BIGINT    NOT NULL,
     file_path        TEXT      NOT NULL,
 
-    hash             BYTEA     NOT NULL,
-
     created_at       TIMESTAMP NOT NULL,
     created_by       UUID      NOT NULL,
 
-    file_key         TEXT      NOT NULL,
+    file_content_hash BYTEA      NOT NULL,
     file_permissions TEXT      NOT NULL,
 
     CONSTRAINT original_component_files_pk
@@ -307,12 +305,10 @@ CREATE TABLE component_files
     revision_id      BIGINT    NOT NULL,
     file_path        TEXT      NOT NULL,
 
-    hash             BYTEA     NOT NULL,
-
     created_at       TIMESTAMP NOT NULL,
     created_by       UUID      NOT NULL,
 
-    file_key         TEXT      NOT NULL,
+    file_content_hash BYTEA      NOT NULL,
     file_permissions TEXT      NOT NULL,
 
     CONSTRAINT component_files_pk
@@ -540,7 +536,7 @@ CREATE TABLE plugins
     transform_url         TEXT,
     component_id          UUID,
     component_revision_id BIGINT,
-    blob_storage_key      TEXT,
+    wasm_content_hash      BYTEA,
 
     CONSTRAINT plugins_pk
         PRIMARY KEY (plugin_id),
@@ -771,3 +767,21 @@ CREATE TABLE security_scheme_revisions
     CONSTRAINT security_schemes_revisions_security_schemes_fk
         FOREIGN KEY (security_scheme_id) REFERENCES security_schemes
 );
+
+CREATE TABLE deployment_compiled_http_api_definition_routes (
+    environment_id UUID NOT NULL,
+    deployment_revision_id BIGINT NOT NULL,
+    id INTEGER NOT NULL,  -- enumerated per deployment
+
+    domain TEXT NOT NULL,
+
+    security_scheme TEXT,         -- nullable if no security
+
+    compiled_route BYTEA NOT NULL, -- full compiled route as blob
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, id)
+);
+
+CREATE INDEX deployment_compiled_http_api_definition_routes_env_domain_idx
+    ON deployment_compiled_http_api_definition_routes(environment_id, domain);

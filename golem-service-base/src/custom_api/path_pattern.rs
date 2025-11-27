@@ -20,6 +20,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
 pub struct AllPathPatterns {
     pub path_patterns: Vec<PathPattern>,
     pub query_params: Vec<QueryInfo>,

@@ -803,17 +803,12 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::auth::UserAuthCtx,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
+                account_roles: value
+                    .account_roles()
+                    .map(AccountRole::try_from)
+                    .collect::<Result<_, _>>()?,
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
-                account_roles: value
-                    .account_roles
-                    .into_iter()
-                    .map(|ar| {
-                        golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar)
-                            .map_err(|e| format!("Failed converting account role: {e}"))
-                            .map(AccountRole::from)
-                    })
-                    .collect::<Result<_, _>>()?,
             })
         }
     }

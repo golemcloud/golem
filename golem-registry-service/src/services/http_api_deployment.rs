@@ -22,7 +22,7 @@ use crate::repo::model::http_api_deployment::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::http_api_deployment::{
     HttpApiDeployment, HttpApiDeploymentCreation, HttpApiDeploymentId, HttpApiDeploymentRevision,
     HttpApiDeploymentUpdate,
@@ -311,6 +311,14 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
+        self.list_staged_for_environment(&environment, auth).await
+    }
+
+    pub async fn list_staged_for_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<HttpApiDeployment>, HttpApiDeploymentError> {
         auth.authorize_environment_action(
             &environment.owner_account_id,
             &environment.roles_from_active_shares,
@@ -319,7 +327,7 @@ impl HttpApiDeploymentService {
 
         let http_api_deployments: Vec<HttpApiDeployment> = self
             .http_api_deployment_repo
-            .list_staged(&environment_id.0)
+            .list_staged(&environment.id.0)
             .await?
             .into_iter()
             .map(|r| r.try_into())

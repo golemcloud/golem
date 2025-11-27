@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
+use super::{diff, WorkerResourceDescription, WorkerWasiConfigVarsFilter};
 use crate::model::component::{
-    ComponentFilePath, ComponentRevision, InitialComponentFile, InitialComponentFileKey,
+    ComponentFileContentHash, ComponentFilePath, ComponentRevision, InitialComponentFile,
 };
 use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
@@ -23,6 +23,7 @@ use crate::model::{
     Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId,
     WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
+use applying::Apply;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
@@ -49,6 +50,35 @@ impl From<prost_types::Timestamp> for Timestamp {
             iso8601_timestamp::Timestamp::UNIX_EPOCH
                 .add(Duration::new(value.seconds as u64, value.nanos as u32)),
         )
+    }
+}
+
+impl From<diff::Hash> for golem_api_grpc::proto::golem::common::Hash {
+    fn from(value: diff::Hash) -> Self {
+        Self {
+            hash_bytes: value
+                .into_blake3()
+                .as_bytes()
+                .iter()
+                .map(|b| *b as u32)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::common::Hash> for diff::Hash {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::common::Hash) -> Result<Self, Self::Error> {
+        let hash = value
+            .hash_bytes
+            .into_iter()
+            .map(|b| b as u8)
+            .collect::<Vec<_>>()
+            .apply(|bs| blake3::Hash::from_slice(&bs))
+            .map_err(|e| format!("Invalid content hash bytes: {e}"))?;
+
+        Ok(diff::Hash::from(hash))
     }
 }
 
@@ -599,7 +629,7 @@ impl From<InitialComponentFile> for golem_api_grpc::proto::golem::component::Ini
         let permissions: golem_api_grpc::proto::golem::component::ComponentFilePermissions =
             value.permissions.into();
         Self {
-            key: value.key.0,
+            content_hash: Some(value.content_hash.0.into()),
             path: value.path.to_string(),
             permissions: permissions.into(),
         }
@@ -620,9 +650,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::InitialComponentFile>
             .map_err(|e| format!("Failed converting permissions {e}"))?;
         let permissions: ComponentFilePermissions = permissions.into();
         let path = ComponentFilePath::from_abs_str(&value.path).map_err(|e| e.to_string())?;
-        let key = InitialComponentFileKey(value.key);
+        let content_hash: diff::Hash = value
+            .content_hash
+            .ok_or("Missing content_hash field")?
+            .try_into()?;
+
         Ok(Self {
-            key,
+            content_hash: ComponentFileContentHash(content_hash),
             path,
             permissions,
         })
