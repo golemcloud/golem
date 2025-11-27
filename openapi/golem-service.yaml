@@ -11251,9 +11251,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanComponentEntry'
+        httpApiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDefintionEntry'
+        httpApiDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
       required:
       - deploymentHash
       - components
+      - httpApiDefinitions
+      - httpApiDeployments
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -11274,6 +11284,46 @@ components:
       - revision
       - name
       - hash
+    DeploymentPlanHttpApiDefintionEntry:
+      title: DeploymentPlanHttpApiDefintionEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - name
+      - hash
+    DeploymentPlanHttpApiDeploymentEntry:
+      title: DeploymentPlanHttpApiDeploymentEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        domain:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - domain
+      - hash
     DeploymentSummary:
       title: DeploymentSummary
       description: Summary of all entities tracked by the deployment
@@ -11286,9 +11336,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanComponentEntry'
+        httpApiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDefintionEntry'
+        httpApiDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
       required:
       - deploymentHash
       - components
+      - httpApiDefinitions
+      - httpApiDeployments
     DomainRegistration:
       title: DomainRegistration
       type: object
