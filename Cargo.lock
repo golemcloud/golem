@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f7b0a21988c1bf877cf4759ef5ddaac04c1c9fe808c9142ecb78ba97d97a28a"
 dependencies = [
  "bitflags 2.10.0",
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "futures-core",
  "futures-sink",
  "memchr",
@@ -32,7 +32,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.10.0",
  "brotli",
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "bytestring",
  "derive_more",
  "encoding_rs",
@@ -65,7 +65,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e01ed3140b2f8d422c68afa1ed2e85d996ea619c988ac834d255db32138655cb"
 dependencies = [
  "quote",
- "syn 2.0.109",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -146,7 +146,7 @@ dependencies = [
  "actix-service",
  "actix-utils",
  "actix-web-codegen",
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "bytestring",
  "cfg-if",
  "cookie 0.16.2",
@@ -183,7 +183,7 @@ dependencies = [
  "actix-router",
  "proc-macro2",
  "quote",
- "syn 2.0.109",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -1679,7 +1679,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
- "syn 2.0.109",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -1763,7 +1763,7 @@ version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "113b4343b5f6617e7ad401ced8de3cc8b012e73a594347c307b90db3e9271289"
 dependencies = [
- "bytes 1.10.1",
+ "bytes 1.11.0",
 ]
 
 [[package]]
@@ -9558,7 +9558,7 @@ checksum = "eaa07b85b779d1e1df52dd79f6c6bffbe005b191f07290136cc42a142da3409a"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "chrono",
  "futures",
  "http 1.3.1",
@@ -9591,7 +9591,7 @@ dependencies = [
  "actix-web",
  "async-stream",
  "bon",
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "futures",
  "http 1.3.1",
  "rmcp",
@@ -9614,7 +9614,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
- "syn 2.0.109",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -10156,7 +10156,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 2.0.109",
+ "syn 2.0.110",
 ]
 
 [[package]]
@@ -11056,7 +11056,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb4dc4d33c68ec1f27d386b5610a351922656e1fdf5c05bbaad930cd1519479a"
 dependencies = [
- "bytes 1.10.1",
+ "bytes 1.11.0",
  "futures-util",
  "http-body 1.0.1",
  "http-body-util",
