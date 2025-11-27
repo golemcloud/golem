@@ -15,7 +15,7 @@ default = []
 server-commands = []
 
 [lib]
-harness = false
+harness = true
 
 [[bin]]
 name = "golem-cli"
@@ -124,9 +124,11 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
-rmcp-actix-web = "0.8.13"
 actix-web = "4.12.0"
-rmcp = { version = "0.8.5", features = ["server"] }
+rmcp-actix-web = "0.8.17"
+rmcp = { version = "0.9.1", features = ["server", "transport-streamable-http-server-session"] }
+
+
 
 [dev-dependencies]
 axum = { workspace = true }

@@ -107,6 +107,7 @@ fn convert_to_rmcp_tool(mcp_tool: Mcptool) -> Tool {
         output_schema: None,
         annotations: None,
         icons: None,
+        meta: None,
     }
 }
 

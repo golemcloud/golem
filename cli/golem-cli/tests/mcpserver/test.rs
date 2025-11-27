@@ -636,6 +636,7 @@ fn test_mcp_multiple_sessions_parallel() {
     let (session2, _) = initialize_session(&client2, port);
     assert!(!session2.is_empty());
 
+    child.kill().expect("Failed to kill server");
     // Sessions must be different
     assert_ne!(
         session1, session2,
@@ -668,7 +669,7 @@ fn test_mcp_invalid_session_id() {
         .send()
         .unwrap();
 
-    child.kill().unwrap();
+    child.kill().expect("Failed to kill server");
 
     // Should fail or return error
     let status = response.status();
