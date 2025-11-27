@@ -176,7 +176,7 @@ pub mod golem_agentic {
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
 
-#[cfg(feature = "export_golem_ai")]
+#[cfg(feature = "golem_ai")]
 pub mod golem_ai {
     use wit_bindgen::generate;
     generate!({
@@ -187,6 +187,7 @@ pub mod golem_ai {
         additional_derives: [crate::Schema],
         pub_export_macro: true,
         with: {
+            "golem:rpc/types@0.2.2": golem_wasm::golem_rpc_0_2_x::types,
             "wasi:io/poll@0.2.3": golem_wasm::wasi::io::poll,
             "wasi:clocks/wall-clock@0.2.3": golem_wasm::wasi::clocks::wall_clock,
 

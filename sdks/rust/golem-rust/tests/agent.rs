@@ -25,6 +25,7 @@ mod tests {
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use golem_wasm::{WitType, WitValue};
     use test_r::test;
 
     #[agent_definition]
