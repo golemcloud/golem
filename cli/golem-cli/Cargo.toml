@@ -15,7 +15,7 @@ default = []
 server-commands = []
 
 [lib]
-harness = true
+harness = false
 
 [[bin]]
 name = "golem-cli"
