@@ -77,7 +77,7 @@ impl FileServerBindingHandler {
         if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
-                .get(environment_id, &file.key)
+                .get(environment_id, &file.content_hash)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(
@@ -86,7 +86,7 @@ impl FileServerBindingHandler {
                 })?
                 .ok_or(FileServerBindingError::InternalError(format!(
                     "File not found in file storage: {}",
-                    file.key
+                    file.content_hash
                 )))
                 .map(|stream| {
                     let mapped = stream.map_err(std::io::Error::other);

@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use futures::StreamExt;
 use futures::future::BoxFuture;
+use futures::pin_mut;
 use futures::stream::BoxStream;
 use futures::{Stream, TryStreamExt};
+use golem_common::model::diff;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display};
 use std::future::Future;
@@ -191,39 +194,29 @@ impl ReplayableStream for Arc<NamedTempFile> {
 pub trait ContentHash {
     type Error;
 
-    fn content_hash(&self) -> impl Future<Output = Result<String, Self::Error>> + Send;
+    fn content_hash(&self) -> impl Future<Output = Result<diff::Hash, Self::Error>> + Send;
 }
 
 impl<Error, Data, Stream> ContentHash for Stream
 where
-    Error: Debug + Display + Send + 'static,
-    Data: async_hash::Hash<async_hash::Sha256> + 'static,
+    Error: Debug + Display + Send,
+    Data: AsRef<[u8]>,
     Stream: ReplayableStream<Error = Error, Item = Result<Data, Error>>,
 {
     type Error = Error;
 
-    async fn content_hash(&self) -> Result<String, Self::Error> {
-        let stream = self
-            .map_item(|i| i.map_err(HashingError))
-            .make_stream()
-            .await?;
-        let hash = async_hash::hash_try_stream::<async_hash::Sha256, _, _, _>(stream)
-            .await
-            .map_err(|HashingError(inner)| inner)?;
-        Ok(hex::encode(hash))
+    async fn content_hash(&self) -> Result<diff::Hash, Self::Error> {
+        let mut hasher = blake3::Hasher::new();
+        let stream = self.make_stream().await?;
+        pin_mut!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            hasher.update(chunk?.as_ref());
+        }
+
+        Ok(hasher.finalize().into())
     }
 }
-
-#[derive(Debug)]
-struct HashingError<E>(E);
-
-impl<E: Display> std::fmt::Display for HashingError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "Hashing error: {}", self.0)
-    }
-}
-
-impl<E: Debug + Display> std::error::Error for HashingError<E> {}
 
 pub mod internal {
     use super::{ErasedReplayableStream, ReplayableStream};

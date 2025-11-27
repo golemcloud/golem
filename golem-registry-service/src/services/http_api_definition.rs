@@ -143,7 +143,7 @@ impl HttpApiDefinitionService {
             data.version,
             data.routes,
             auth.account_id().clone(),
-        )?;
+        );
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
@@ -159,7 +159,7 @@ impl HttpApiDefinitionService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .into();
 
         Ok(stored_http_api_definition)
     }
@@ -177,7 +177,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 http_api_definition_id.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -227,7 +227,7 @@ impl HttpApiDefinitionService {
         let record = HttpApiDefinitionRevisionRecord::from_model(
             http_api_definition,
             DeletableRevisionAuditFields::new(auth.account_id().0),
-        )?;
+        );
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
@@ -244,7 +244,7 @@ impl HttpApiDefinitionService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .into();
 
         Ok(stored_http_api_definition)
     }
@@ -262,7 +262,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 http_api_definition_id.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -329,6 +329,14 @@ impl HttpApiDefinitionService {
                 other => other.into(),
             })?;
 
+        self.list_staged_for_environment(&environment, auth).await
+    }
+
+    pub async fn list_staged_for_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<HttpApiDefinition>, HttpApiDefinitionError> {
         auth.authorize_environment_action(
             &environment.owner_account_id,
             &environment.roles_from_active_shares,
@@ -337,11 +345,11 @@ impl HttpApiDefinitionService {
 
         let http_api_definitions: Vec<HttpApiDefinition> = self
             .http_api_definition_repo
-            .list_staged(&environment_id.0)
+            .list_staged(&environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+            .map(|r| r.into())
+            .collect();
 
         Ok(http_api_definitions)
     }
@@ -373,8 +381,8 @@ impl HttpApiDefinitionService {
             .list_deployed(&environment_id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+            .map(|r| r.into())
+            .collect();
 
         Ok(http_api_definitions)
     }
@@ -410,8 +418,8 @@ impl HttpApiDefinitionService {
             .list_by_deployment(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+            .map(|r| r.into())
+            .collect();
 
         Ok(http_api_definitions)
     }
@@ -428,7 +436,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 http_api_definition_id.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -467,7 +475,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
                 http_api_definition_id.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -518,7 +526,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -558,7 +566,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -617,7 +625,7 @@ impl HttpApiDefinitionService {
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         Ok(http_api_definition)
     }
@@ -676,11 +684,13 @@ impl HttpApiDefinitionService {
     ) -> Result<(), HttpApiDefinitionError> {
         match binding {
             GatewayBinding::CorsPreflight(inner) => {
-                rib::Expr::from_text(&inner.response).map_err(|e| {
-                    HttpApiDefinitionError::InvalidDefinition(format!(
-                        "Invalid cors preflight response expr: {e}"
-                    ))
-                })?;
+                if let Some(response) = &inner.response {
+                    rib::Expr::from_text(response).map_err(|e| {
+                        HttpApiDefinitionError::InvalidDefinition(format!(
+                            "Invalid cors preflight response expr: {e}"
+                        ))
+                    })?;
+                }
             }
             GatewayBinding::FileServer(inner) => {
                 rib::Expr::from_text(&inner.response).map_err(|e| {
@@ -690,13 +700,11 @@ impl HttpApiDefinitionService {
                 })?;
             }
             GatewayBinding::HttpHandler(inner) => {
-                if let Some(worker_name) = &inner.worker_name {
-                    rib::Expr::from_text(worker_name).map_err(|e| {
-                        HttpApiDefinitionError::InvalidDefinition(format!(
-                            "Invalid http handler worker name expr: {e}"
-                        ))
-                    })?;
-                }
+                rib::Expr::from_text(&inner.worker_name).map_err(|e| {
+                    HttpApiDefinitionError::InvalidDefinition(format!(
+                        "Invalid http handler worker name expr: {e}"
+                    ))
+                })?;
                 if let Some(idempotency_key) = &inner.idempotency_key {
                     rib::Expr::from_text(idempotency_key).map_err(|e| {
                         HttpApiDefinitionError::InvalidDefinition(format!(

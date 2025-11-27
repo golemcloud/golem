@@ -133,7 +133,9 @@ impl PluginRegistrationService {
                     .put_if_not_exists(&account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
                     .await?;
 
-                PluginSpec::App(AppPluginSpec { blob_storage_key })
+                PluginSpec::App(AppPluginSpec {
+                    wasm_content_hash: blob_storage_key,
+                })
             }
             PluginSpecDto::Library(_) => {
                 let wasm_file =
@@ -145,7 +147,9 @@ impl PluginRegistrationService {
                     .put_if_not_exists(&account_id, wasm_file.map_item(|i| i.map(|b| b.to_vec())))
                     .await?;
 
-                PluginSpec::Library(LibraryPluginSpec { blob_storage_key })
+                PluginSpec::Library(LibraryPluginSpec {
+                    wasm_content_hash: blob_storage_key,
+                })
             }
         };
 

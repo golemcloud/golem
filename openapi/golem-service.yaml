@@ -4134,7 +4134,7 @@ paths:
       - RegistryService
       - EnvironmentPluginGrants
       - EnvironmentPluginGrants
-      summary: Get environment grant by id
+      summary: Delete environment plugin grant
       operationId: delete_environment_plugin_grant
       parameters:
       - in: path
@@ -11001,14 +11001,17 @@ components:
         environmentId:
           type: string
           format: uuid
+        componentName:
+          type: string
+        hash:
+          type: string
+          format: hash
         applicationId:
           type: string
           format: uuid
         accountId:
           type: string
           format: uuid
-        componentName:
-          type: string
         componentSize:
           type: integer
           format: uint64
@@ -11021,11 +11024,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/InitialComponentFile'
+        originalFiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFile'
         installedPlugins:
           type: array
           items:
             $ref: '#/components/schemas/InstalledPlugin'
         env:
+          type: object
+          additionalProperties:
+            type: string
+        originalEnv:
           type: object
           additionalProperties:
             type: string
@@ -11040,15 +11051,18 @@ components:
       - id
       - revision
       - environmentId
+      - componentName
+      - hash
       - applicationId
       - accountId
-      - componentName
       - componentSize
       - metadata
       - createdAt
       - files
+      - originalFiles
       - installedPlugins
       - env
+      - originalEnv
       - wasmHash
       - environmentRolesFromShares
     ComponentFileOptions:
@@ -11165,8 +11179,6 @@ components:
       properties:
         response:
           type: string
-      required:
-      - response
     DataSchema:
       discriminator:
         propertyName: type
@@ -11239,9 +11251,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanComponentEntry'
+        httpApiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDefintionEntry'
+        httpApiDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
       required:
       - deploymentHash
       - components
+      - httpApiDefinitions
+      - httpApiDeployments
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -11262,6 +11284,46 @@ components:
       - revision
       - name
       - hash
+    DeploymentPlanHttpApiDefintionEntry:
+      title: DeploymentPlanHttpApiDefintionEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - name
+      - hash
+    DeploymentPlanHttpApiDeploymentEntry:
+      title: DeploymentPlanHttpApiDeploymentEntry
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        domain:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - id
+      - revision
+      - domain
+      - hash
     DeploymentSummary:
       title: DeploymentSummary
       description: Summary of all entities tracked by the deployment
@@ -11274,9 +11336,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanComponentEntry'
+        httpApiDefinitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDefintionEntry'
+        httpApiDeployments:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
       required:
       - deploymentHash
       - components
+      - httpApiDefinitions
+      - httpApiDeployments
     DomainRegistration:
       title: DomainRegistration
       type: object
@@ -11556,10 +11628,13 @@ components:
       properties:
         componentName:
           type: string
+        workerName:
+          type: string
         response:
           type: string
       required:
       - componentName
+      - workerName
       - response
     GatewayBinding:
       discriminator:
@@ -11652,6 +11727,9 @@ components:
           format: uuid
         name:
           type: string
+        hash:
+          type: string
+          format: hash
         version:
           type: string
         routes:
@@ -11669,6 +11747,7 @@ components:
       - revision
       - environmentId
       - name
+      - hash
       - version
       - routes
       - createdAt
@@ -11719,6 +11798,9 @@ components:
           format: uuid
         domain:
           type: string
+        hash:
+          type: string
+          format: hash
         apiDefinitions:
           type: array
           items:
@@ -11731,6 +11813,7 @@ components:
       - revision
       - environmentId
       - domain
+      - hash
       - apiDefinitions
       - createdAt
     HttpApiDeploymentCreation:
@@ -11785,24 +11868,31 @@ components:
           type: string
         idempotencyKey:
           type: string
+        invocationContext:
+          type: string
+        response:
+          type: string
       required:
       - componentName
+      - workerName
+      - response
     InitialComponentFile:
       title: InitialComponentFile
       type: object
       properties:
-        key:
+        contentHash:
           title: |-
             Key that can be used to identify a component file.
             All files with the same content will have the same key.
           type: string
+          format: hash
         path:
           description: Path inside a component filesystem. Must be absolute.
           type: string
         permissions:
           $ref: '#/components/schemas/ComponentFilePermissions'
       required:
-      - key
+      - contentHash
       - path
       - permissions
     InstalledPlugin:
@@ -12529,9 +12619,9 @@ components:
           type: string
         idempotencyKey:
           type: string
-        response:
-          type: string
         invocationContext:
+          type: string
+        response:
           type: string
       required:
       - componentName

@@ -31,8 +31,8 @@ use crate::services::run_cpu_bound_work;
 use anyhow::{Context, anyhow};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
-    ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
-    ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
+    ComponentCreation, ComponentFileContentHash, ComponentFileOptions, ComponentFilePath,
+    ComponentFilePermissions, ComponentUpdate, InitialComponentFile, InstalledPlugin,
     PluginInstallationAction,
 };
 use golem_common::model::component::{ComponentId, PluginInstallation};
@@ -151,8 +151,9 @@ impl ComponentWriteService {
             .await?;
 
         let new_revision = NewComponentRevision::new(
-            environment_id.clone(),
             component_id.clone(),
+            ComponentRevision::INITIAL,
+            environment_id.clone(),
             component_creation.component_name.clone(),
             initial_component_files,
             component_creation.env,
@@ -289,8 +290,9 @@ impl ComponentWriteService {
         };
 
         let new_revision = NewComponentRevision::new(
-            environment_id.clone(),
             component_id.clone(),
+            component.revision.next()?,
+            environment_id.clone(),
             component.component_name,
             self.update_initial_component_files(
                 &environment_id,
@@ -414,6 +416,7 @@ impl ComponentWriteService {
         environment_id: &EnvironmentId,
         data: Arc<[u8]>,
     ) -> Result<(Hash, String), ComponentError> {
+        // TODO: use something like PluginWasmFilesService instead of raw object store
         let hash = self.object_store.put(environment_id, data).await?;
         Ok((hash, hash.to_string()))
     }
@@ -435,7 +438,7 @@ impl ComponentWriteService {
             let options = file_options.get(&path).cloned().unwrap_or_default();
             result.push(InitialComponentFile {
                 path,
-                key,
+                content_hash: key,
                 permissions: options.permissions,
             });
         }
@@ -469,7 +472,7 @@ impl ComponentWriteService {
             result.insert(
                 path.clone(),
                 InitialComponentFile {
-                    key,
+                    content_hash: key,
                     path,
                     permissions: ComponentFilePermissions::default(),
                 },
@@ -490,7 +493,7 @@ impl ComponentWriteService {
         &self,
         environment_id: &EnvironmentId,
         archive: NamedTempFile,
-    ) -> Result<HashMap<ComponentFilePath, InitialComponentFileKey>, ComponentError> {
+    ) -> Result<HashMap<ComponentFilePath, ComponentFileContentHash>, ComponentError> {
         let to_upload = super::utils::prepare_component_files_for_upload(archive).await?;
 
         let tasks = to_upload.into_iter().map(|(path, stream)| async move {
@@ -793,7 +796,7 @@ impl ComponentWriteService {
                 .await?;
 
             let item = InitialComponentFile {
-                key,
+                content_hash: key,
                 path: file.path,
                 permissions: file.permissions,
             };
@@ -815,11 +818,11 @@ impl ComponentWriteService {
     ) -> Result<Arc<[u8]>, ComponentError> {
         let plug_bytes = self
             .plugin_wasm_files_service
-            .get(plugin_owner, &plugin_spec.blob_storage_key)
+            .get(plugin_owner, &plugin_spec.wasm_content_hash)
             .await?
             .ok_or(anyhow!(
                 "Did not find plugin data for key {}",
-                plugin_spec.blob_storage_key.0
+                plugin_spec.wasm_content_hash.0
             ))?;
 
         let composed =
@@ -842,11 +845,11 @@ impl ComponentWriteService {
     ) -> Result<Arc<[u8]>, ComponentError> {
         let socket_bytes = self
             .plugin_wasm_files_service
-            .get(plugin_owner, &plugin_spec.blob_storage_key)
+            .get(plugin_owner, &plugin_spec.wasm_content_hash)
             .await?
             .ok_or(anyhow!(
                 "Did not find plugin data for key {}",
-                plugin_spec.blob_storage_key.0
+                plugin_spec.wasm_content_hash.0
             ))?;
 
         let composed =

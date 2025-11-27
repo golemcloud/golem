@@ -1025,8 +1025,8 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         self.with_ro("get_original_component_files")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT component_id, revision_id, file_path, hash,
-                           created_at, created_by, file_key, file_permissions
+                    SELECT component_id, revision_id, file_path,
+                           created_at, created_by, file_content_hash, file_permissions
                     FROM original_component_files
                     WHERE component_id = $1 AND revision_id = $2
                     ORDER BY file_path
@@ -1088,8 +1088,8 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         self.with_ro("get_component_files")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT component_id, revision_id, file_path, hash,
-                           created_at, created_by, file_key, file_permissions
+                    SELECT component_id, revision_id, file_path,
+                           created_at, created_by, file_content_hash, file_permissions
                     FROM component_files
                     WHERE component_id = $1 AND revision_id = $2
                     ORDER BY file_path
@@ -1221,16 +1221,15 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO original_component_files
-                (component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions
+                (component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions
             "#})
                 .bind(file.component_id)
                 .bind(file.revision_id)
                 .bind(file.file_path)
-                .bind(file.hash)
                 .bind_revision_audit(file.audit)
-                .bind(file.file_key)
+                .bind(file.file_content_hash)
                 .bind(file.file_permissions)
         ).await
     }
@@ -1242,16 +1241,15 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_files
-                (component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING component_id, revision_id, file_path, hash, created_at, created_by, file_key, file_permissions
+                (component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions
             "#})
                 .bind(file.component_id)
                 .bind(file.revision_id)
                 .bind(file.file_path)
-                .bind(file.hash)
                 .bind_revision_audit(file.audit)
-                .bind(file.file_key)
+                .bind(file.file_content_hash)
                 .bind(file.file_permissions)
         ).await
     }

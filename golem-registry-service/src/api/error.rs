@@ -455,7 +455,7 @@ impl From<DeploymentError> for ApiError {
                 }))
             }
 
-            DeploymentError::ConcurrentDeployment => {
+            DeploymentError::ConcurrentDeployment | DeploymentError::NoopDeployment => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 

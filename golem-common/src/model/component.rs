@@ -14,7 +14,8 @@
 
 use super::agent::AgentType;
 use super::auth::EnvironmentRole;
-use super::component_metadata::DynamicLinkedInstance;
+use super::component_metadata::{DynamicLinkedInstance, DynamicLinkedWasmRpc};
+use super::diff;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
 use super::plugin_registration::PluginRegistrationId;
@@ -52,7 +53,7 @@ declare_transparent_newtypes! {
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
     #[derive(Display, Eq, Hash)]
-    pub struct InitialComponentFileKey(pub String);
+    pub struct ComponentFileContentHash(pub diff::Hash);
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
@@ -132,15 +133,18 @@ declare_structs! {
         pub id: ComponentId,
         pub revision: ComponentRevision,
         pub environment_id: EnvironmentId,
+        pub component_name: ComponentName,
+        pub hash: diff::Hash,
         pub application_id: ApplicationId,
         pub account_id: AccountId,
-        pub component_name: ComponentName,
         pub component_size: u64,
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub files: Vec<InitialComponentFile>,
+        pub original_files: Vec<InitialComponentFile>,
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
+        pub original_env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
         // NOTE: This is caller specific and cannot be cached independently of the caller. Use CachableComponent if you need
         // to cache and share components between callers.
@@ -177,6 +181,7 @@ declare_structs! {
     }
 
     pub struct PluginInstallation {
+        // TODO: change this to be plugin registration id
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         /// Plugins will be applied in order of increasing priority
         pub priority: PluginPriority,
@@ -196,9 +201,75 @@ declare_structs! {
     }
 
     pub struct InitialComponentFile {
-        pub key: InitialComponentFileKey,
+        pub content_hash: ComponentFileContentHash,
         pub path: ComponentFilePath,
         pub permissions: ComponentFilePermissions,
+    }
+}
+
+impl ComponentDto {
+    pub fn to_diffable(&self) -> diff::Component {
+        diff::Component {
+            metadata: diff::ComponentMetadata {
+                version: self.metadata.root_package_version().clone(),
+                env: self
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                dynamic_linking_wasm_rpc: self
+                    .metadata
+                    .dynamic_linking()
+                    .iter()
+                    .map(|(name, link)| match link {
+                        DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc { targets }) => (
+                            name.clone(),
+                            targets
+                                .iter()
+                                .map(|(name, target)| {
+                                    (
+                                        name.clone(),
+                                        diff::ComponentWasmRpcTarget {
+                                            interface_name: target.interface_name.clone(),
+                                            component_name: target.component_name.clone(),
+                                        },
+                                    )
+                                })
+                                .collect::<BTreeMap<_, _>>(),
+                        ),
+                    })
+                    .collect(),
+            }
+            .into(),
+            wasm_hash: self.wasm_hash,
+            files_by_path: self
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.path.0.to_string(),
+                        diff::ComponentFile {
+                            hash: file.content_hash.0,
+                            permissions: file.permissions,
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
+            plugins_by_priority: self
+                .installed_plugins
+                .iter()
+                .map(|plugin| {
+                    (
+                        plugin.priority.to_string(),
+                        diff::PluginInstallation {
+                            plugin_id: plugin.plugin_registration_id.0,
+                            parameters: plugin.parameters.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 }
 
@@ -396,6 +467,11 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::component::Component,
         ) -> Result<Self, Self::Error> {
+            let environment_roles_from_shares = value
+                .environment_roles_from_shares()
+                .map(EnvironmentRole::try_from)
+                .collect::<Result<_, _>>()?;
+
             let id = value
                 .component_id
                 .ok_or("Missing component id")?
@@ -437,6 +513,12 @@ mod protobuf {
                 .map_err(|_| "Failed to convert timestamp".to_string())?
                 .into();
 
+            let original_files = value
+                .original_files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?;
+
             let files = value
                 .files
                 .into_iter()
@@ -449,26 +531,16 @@ mod protobuf {
                 .map(|p| p.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
 
+            let original_env = value.original_env.into_iter().collect::<BTreeMap<_, _>>();
+
             let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
 
-            let wasm_hash = value
-                .wasm_hash_bytes
-                .into_iter()
-                .map(|b| b as u8)
-                .collect::<Vec<_>>()
-                .apply(|bs| blake3::Hash::from_slice(&bs))
-                .map_err(|e| format!("Invalid wasm hash bytes: {e}"))?
-                .apply(crate::model::diff::Hash::from);
+            let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
 
-            let environment_roles_from_shares = value
-                .environment_roles_from_shares
-                .into_iter()
-                .map(|ar| {
-                    golem_api_grpc::proto::golem::auth::EnvironmentRole::try_from(ar)
-                        .map_err(|e| format!("Failed converting environment role: {e}"))
-                        .map(EnvironmentRole::from)
-                })
-                .collect::<Result<_, _>>()?;
+            let wasm_hash = value
+                .wasm_hash
+                .ok_or("Missing wasm hash field")?
+                .try_into()?;
 
             Ok(Self {
                 id,
@@ -480,11 +552,14 @@ mod protobuf {
                 component_size,
                 metadata,
                 created_at,
+                original_files,
                 files,
                 installed_plugins,
+                original_env,
                 env,
                 wasm_hash,
                 environment_roles_from_shares,
+                hash,
             })
         }
     }
@@ -508,20 +583,21 @@ mod protobuf {
                 created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                     value.created_at,
                 ))),
+                original_files: value
+                    .original_files
+                    .into_iter()
+                    .map(|file| file.into())
+                    .collect(),
                 files: value.files.into_iter().map(|file| file.into()).collect(),
                 installed_plugins: value
                     .installed_plugins
                     .into_iter()
                     .map(|plugin| plugin.into())
                     .collect(),
+                original_env: value.original_env.into_iter().collect(),
                 env: value.env.into_iter().collect(),
-                wasm_hash_bytes: value
-                    .wasm_hash
-                    .into_blake3()
-                    .as_bytes()
-                    .iter()
-                    .map(|b| *b as u32)
-                    .collect(),
+                wasm_hash: Some(value.wasm_hash.into()),
+                hash: Some(value.hash.into()),
             }
         }
     }

@@ -46,7 +46,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::custom_api::compiled_gateway_binding::{
     FileServerBindingCompiled, GatewayBindingCompiled, HttpHandlerBindingCompiled,
-    IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled, StaticBinding,
+    IdempotencyKeyCompiled, InvocationContextCompiled, ResponseMappingCompiled,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
 use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
@@ -155,16 +155,14 @@ impl GatewayHttpInputExecutor {
         };
 
         match binding {
-            GatewayBindingCompiled::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
+            GatewayBindingCompiled::HttpCorsPreflight(cors_preflight) => {
                 cors_preflight
                     .clone()
                     .to_response(&rich_request, &self.gateway_session_store)
                     .await
             }
 
-            GatewayBindingCompiled::Static(StaticBinding::HttpAuthCallBack(
-                security_scheme_with_metadata,
-            )) => {
+            GatewayBindingCompiled::HttpAuthCallBack(security_scheme_with_metadata) => {
                 let result = self
                     .handle_http_auth_callback_binding(
                         &security_scheme_with_metadata,
@@ -268,17 +266,17 @@ impl GatewayHttpInputExecutor {
             component_revision,
             worker_name_compiled,
             idempotency_key_compiled,
-            ..
+            invocation_context_compiled,
         } = binding;
 
         let worker_detail = self
             .get_worker_details(
                 request,
-                worker_name_compiled,
+                Some(worker_name_compiled),
                 idempotency_key_compiled,
                 component_id,
                 component_revision,
-                None,
+                invocation_context_compiled,
             )
             .await?;
 
@@ -310,17 +308,15 @@ impl GatewayHttpInputExecutor {
         let FileServerBindingCompiled {
             component_id,
             component_revision,
-            idempotency_key_compiled,
-            response_compiled,
             worker_name_compiled,
-            ..
+            response_compiled,
         } = binding;
 
         let worker_detail = self
             .get_worker_details(
                 request,
-                worker_name_compiled,
-                idempotency_key_compiled,
+                Some(worker_name_compiled),
+                None,
                 component_id.clone(),
                 component_revision,
                 None,

@@ -173,7 +173,7 @@ impl EnvironmentPluginGrantsApi {
         Ok(Json(grant))
     }
 
-    /// Get environment grant by id
+    /// Delete environment plugin grant
     #[oai(
         path = "/environment-plugins/:environment_plugin_grant_id",
         method = "delete",

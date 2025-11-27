@@ -200,6 +200,7 @@ mod test {
         ToSerializableWithModeExt,
     };
     use crate::model::diff::{ComponentMetadata, Diffable};
+    use crate::model::http_api_definition::GatewayBindingType;
     use crate::model::ComponentFilePermissions;
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
@@ -255,10 +256,11 @@ mod test {
                                 ("GET", "/users").into(),
                                 HttpApiRoute {
                                     binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
+                                        binding_type: GatewayBindingType::Worker,
                                         component_name: None,
                                         worker_name: None,
                                         idempotency_key: None,
+                                        invocation_context: None,
                                         response: Some("fake rib".to_string()),
                                     },
                                     security: None,
@@ -268,10 +270,11 @@ mod test {
                                 ("GET", "/posts").into(),
                                 HttpApiRoute {
                                     binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
+                                        binding_type: GatewayBindingType::Worker,
                                         component_name: None,
                                         worker_name: None,
                                         idempotency_key: None,
+                                        invocation_context: None,
                                         response: None,
                                     },
                                     security: None,
@@ -281,10 +284,11 @@ mod test {
                                 ("POST", "/users").into(),
                                 HttpApiRoute {
                                     binding: HttpApiDefinitionBinding {
-                                        binding_type: None,
+                                        binding_type: GatewayBindingType::Worker,
                                         component_name: None,
                                         worker_name: None,
                                         idempotency_key: None,
+                                        invocation_context: None,
                                         response: None,
                                     },
                                     security: None,
@@ -435,10 +439,11 @@ mod test {
                     ("POST", "/posts").into(),
                     HttpApiRoute {
                         binding: HttpApiDefinitionBinding {
-                            binding_type: None,
+                            binding_type: GatewayBindingType::Worker,
                             component_name: None,
                             worker_name: None,
                             idempotency_key: None,
+                            invocation_context: None,
                             response: None,
                         },
                         security: Some("lol".to_string()),
@@ -448,10 +453,11 @@ mod test {
                     ("GET", "/users").into(),
                     HttpApiRoute {
                         binding: HttpApiDefinitionBinding {
-                            binding_type: None,
+                            binding_type: GatewayBindingType::Worker,
                             component_name: Some("comp3".to_string()),
                             worker_name: None,
                             idempotency_key: None,
+                            invocation_context: None,
                             response: None,
                         },
                         security: Some("xxx".to_string()),

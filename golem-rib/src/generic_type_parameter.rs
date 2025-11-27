@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use desert_rust::BinaryCodec;
 use std::fmt::Display;
 
-#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct GenericTypeParameter {
     pub value: String,
 }

@@ -12,18 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::api_definition::{CompiledRoute, CompiledRouteWithContext};
+use crate::model::component::Component;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     Deployment, DeploymentPlan, DeploymentRevision, DeploymentSummary,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
+use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::blob::Blob;
+use rib::RibCompilationError;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -64,11 +72,23 @@ fn format_validation_errors(errors: &[DeployValidationError]) -> String {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
-    #[error("Missing HTTP API definitions for deployment: {http_api_deployment_id}")]
+    #[error(
+        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
+    )]
     HttpApiDeploymentMissingHttpApiDefinition {
-        http_api_deployment_id: Uuid,
-        missing_http_api_definition_ids: Vec<Uuid>,
+        http_api_deployment_domain: Domain,
+        missing_http_api_definition: HttpApiDefinitionName,
     },
+    #[error("Invalid path pattern: {0}")]
+    HttpApiDefinitionInvalidPathPattern(String),
+    #[error("Invalid rib expression: {0}")]
+    InvalidRibExpr(String),
+    #[error("Failed rib compilation: {0}")]
+    RibCompilationFailed(RibCompilationError),
+    #[error("Invalid http cors binding expression: {0}")]
+    InvalidHttpCorsBindingExpr(String),
+    #[error("Component {0} not found in deployment")]
+    ComponentNotFound(ComponentName),
 }
 
 impl SafeDisplay for DeployValidationError {
@@ -141,6 +161,21 @@ pub struct DeploymentComponentRevisionRecord {
     pub component_revision_id: i64,
 }
 
+impl DeploymentComponentRevisionRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        component: Component,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            component_id: component.id.0,
+            component_revision_id: component.revision.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct DeploymentHttpApiDefinitionRevisionRecord {
     pub environment_id: Uuid,
@@ -149,12 +184,42 @@ pub struct DeploymentHttpApiDefinitionRevisionRecord {
     pub http_api_definition_revision_id: i64,
 }
 
+impl DeploymentHttpApiDefinitionRevisionRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        http_api_definition: HttpApiDefinition,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            http_api_definition_id: http_api_definition.id.0,
+            http_api_definition_revision_id: http_api_definition.revision.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct DeploymentHttpApiDeploymentRevisionRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
     pub http_api_deployment_id: Uuid,
     pub http_api_deployment_revision_id: i64,
+}
+
+impl DeploymentHttpApiDeploymentRevisionRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        http_api_deployment: HttpApiDeployment,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            http_api_deployment_id: http_api_deployment.id.0,
+            http_api_deployment_revision_id: http_api_deployment.revision.into(),
+        }
+    }
 }
 
 pub struct DeploymentHashes {
@@ -177,6 +242,16 @@ impl DeploymentIdentity {
             current_deployment_revision,
             deployment_hash: self.to_diffable().hash(),
             components: self.components.into_iter().map(|c| c.into()).collect(),
+            http_api_definitions: self
+                .http_api_definitions
+                .into_iter()
+                .map(|had| had.into())
+                .collect(),
+            http_api_deployments: self
+                .http_api_deployments
+                .into_iter()
+                .map(|had| had.into())
+                .collect(),
         }
     }
 }
@@ -186,6 +261,16 @@ impl From<DeploymentIdentity> for DeploymentSummary {
         Self {
             deployment_hash: value.to_diffable().hash(),
             components: value.components.into_iter().map(|c| c.into()).collect(),
+            http_api_definitions: value
+                .http_api_definitions
+                .into_iter()
+                .map(|had| had.into())
+                .collect(),
+            http_api_deployments: value
+                .http_api_deployments
+                .into_iter()
+                .map(|had| had.into())
+                .collect(),
         }
     }
 }
@@ -230,6 +315,111 @@ impl DeploymentIdentity {
                     (
                         (&deployment.domain).into(),
                         diff::HashOf::from_blake3_hash(deployment.hash.into()),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentCompiledHttpApiRouteRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub id: i32,
+
+    pub domain: String,
+
+    pub security_scheme: Option<String>,
+    pub compiled_route: Blob<CompiledRoute>,
+}
+
+impl DeploymentCompiledHttpApiRouteRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        id: i32,
+        compiled_route: CompiledRouteWithContext,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            id,
+            domain: compiled_route.domain.0,
+            security_scheme: compiled_route.security_scheme.map(|scn| scn.0),
+            compiled_route: Blob::new(compiled_route.route),
+        }
+    }
+}
+
+pub struct DeploymentRevisionCreationRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+
+    pub version: String,
+    pub hash: SqlBlake3Hash,
+
+    pub components: Vec<DeploymentComponentRevisionRecord>,
+    pub http_api_definitions: Vec<DeploymentHttpApiDefinitionRevisionRecord>,
+    pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
+    pub compiled_http_api_routes: Vec<DeploymentCompiledHttpApiRouteRecord>,
+}
+
+impl DeploymentRevisionCreationRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        version: String,
+        hash: diff::Hash,
+        components: Vec<Component>,
+        http_api_definitions: Vec<HttpApiDefinition>,
+        http_api_deployments: Vec<HttpApiDeployment>,
+        compiled_routes: Vec<CompiledRouteWithContext>,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            version,
+            hash: hash.into(),
+            components: components
+                .into_iter()
+                .map(|c| {
+                    DeploymentComponentRevisionRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        c,
+                    )
+                })
+                .collect(),
+            http_api_definitions: http_api_definitions
+                .into_iter()
+                .map(|had| {
+                    DeploymentHttpApiDefinitionRevisionRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        had,
+                    )
+                })
+                .collect(),
+            http_api_deployments: http_api_deployments
+                .into_iter()
+                .map(|had| {
+                    DeploymentHttpApiDeploymentRevisionRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        had,
+                    )
+                })
+                .collect(),
+            compiled_http_api_routes: compiled_routes
+                .into_iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    DeploymentCompiledHttpApiRouteRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        i32::try_from(i).expect("too many routes for i32"),
+                        r,
                     )
                 })
                 .collect(),

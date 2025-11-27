@@ -15,7 +15,7 @@
 use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
-use golem_common::model::plugin_registration::PluginWasmFileKey;
+use golem_common::model::plugin_registration::WasmContentHash;
 use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec,
 };
@@ -53,12 +53,12 @@ impl From<PluginRegistration> for PluginRegistrationDto {
 
 #[derive(Debug, Clone)]
 pub struct AppPluginSpec {
-    pub blob_storage_key: PluginWasmFileKey,
+    pub wasm_content_hash: WasmContentHash,
 }
 
 #[derive(Debug, Clone)]
 pub struct LibraryPluginSpec {
-    pub blob_storage_key: PluginWasmFileKey,
+    pub wasm_content_hash: WasmContentHash,
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +122,7 @@ mod protobuf {
     impl From<LibraryPluginSpec> for golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
         fn from(value: LibraryPluginSpec) -> Self {
             golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
-                blob_storage_key: value.blob_storage_key.0,
+                wasm_content_hash: Some(value.wasm_content_hash.0.into()),
             }
         }
     }
@@ -136,7 +136,12 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::LibraryPluginDefinition,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
-                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
+                wasm_content_hash: WasmContentHash(
+                    value
+                        .wasm_content_hash
+                        .ok_or("Missing wasm_content_hash field".to_string())?
+                        .try_into()?,
+                ),
             })
         }
     }
@@ -144,7 +149,7 @@ mod protobuf {
     impl From<AppPluginSpec> for golem_api_grpc::proto::golem::component::AppPluginDefinition {
         fn from(value: AppPluginSpec) -> Self {
             golem_api_grpc::proto::golem::component::AppPluginDefinition {
-                blob_storage_key: value.blob_storage_key.0,
+                wasm_content_hash: Some(value.wasm_content_hash.0.into()),
             }
         }
     }
@@ -156,7 +161,12 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::AppPluginDefinition,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
-                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
+                wasm_content_hash: WasmContentHash(
+                    value
+                        .wasm_content_hash
+                        .ok_or("Missing wasm_content_hash field".to_string())?
+                        .try_into()?,
+                ),
             })
         }
     }

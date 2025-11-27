@@ -31,7 +31,7 @@ use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use std::sync::Arc;
@@ -231,18 +231,27 @@ impl ComponentService {
         environment_id: &EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
-        info!(environment_id = %environment_id, "Get staged components");
-
         let environment = self
             .environment_service
             .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ParentEnvironmentNotFound(environment_id.clone())
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    ComponentError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
+
+        self.list_staged_components_for_environment(&environment, auth)
+            .await
+    }
+
+    pub async fn list_staged_components_for_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Vec<Component>, ComponentError> {
+        info!(environment_id = %environment.id, "Get staged components");
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -252,7 +261,7 @@ impl ComponentService {
 
         let result = self
             .component_repo
-            .list_staged(&environment_id.0)
+            .list_staged(&environment.id.0)
             .await?
             .into_iter()
             .map(|r| {

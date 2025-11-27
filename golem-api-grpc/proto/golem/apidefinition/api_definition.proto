@@ -7,7 +7,7 @@ import "golem/rib/rib_input.proto";
 import "golem/rib/rib_output.proto";
 import "golem/rib/rib_byte_code.proto";
 import "golem/rib/worker_functions_in_rib.proto";
-import "golem/component/versioned_component_id.proto";
+import "golem/component/component_id.proto";
 import "google/protobuf/timestamp.proto";
 
 // Used in api definition repo and needs to be backward compatible
@@ -20,54 +20,54 @@ message CompiledHttpRoute {
    HttpMethod method = 1;
    string path = 2;
    CompiledGatewayBinding binding = 3;
-   Middleware middleware = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
 enum HttpMethod {
-  GET = 0;
-  CONNECT = 1;
-  POST = 2;
-  DELETE = 3;
-  PUT = 4;
-  PATCH = 5;
-  OPTIONS = 6;
-  TRACE = 7;
-  HEAD = 8;
+  HTTP_METHOD_UNSPECIFIED = 0;
+  HTTP_METHOD_GET = 1;
+  HTTP_METHOD_CONNECT = 2;
+  HTTP_METHOD_POST = 3;
+  HTTP_METHOD_DELETE = 4;
+  HTTP_METHOD_PUT = 5;
+  HTTP_METHOD_PATCH = 6;
+  HTTP_METHOD_OPTIONS = 7;
+  HTTP_METHOD_TRACE = 8;
+  HTTP_METHOD_HEAD = 9;
 }
 
 // Used in api definition repo and needs to be backward compatible
 message CompiledGatewayBinding {
-    // Optional field to keep backward compatibility
-    optional golem.component.VersionedComponentId component = 1;
-    optional golem.rib.Expr worker_name = 2;
-    optional golem.rib.RibByteCode compiled_worker_name_expr = 3;
-    optional golem.rib.RibInputType worker_name_rib_input = 4;
-    optional golem.rib.Expr response = 5;
-    optional golem.rib.RibByteCode compiled_response_expr = 6;
-    optional golem.rib.RibInputType response_rib_input = 7;
-    optional golem.rib.Expr idempotency_key = 8;
-    optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
-    optional golem.rib.RibInputType idempotency_key_rib_input = 10;
-    optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
+    optional golem.component.ComponentId component_id = 1;
+    optional uint64 component_revision = 2;
+    optional golem.rib.Expr worker_name = 3;
+    optional golem.rib.RibByteCode compiled_worker_name_expr = 4;
+    optional golem.rib.RibInputType worker_name_rib_input = 5;
+    optional golem.rib.Expr response = 6;
+    optional golem.rib.RibByteCode compiled_response_expr = 7;
+    optional golem.rib.RibInputType response_rib_input = 8;
+    optional golem.rib.Expr idempotency_key = 9;
+    optional golem.rib.RibByteCode compiled_idempotency_key_expr = 10;
+    optional golem.rib.RibInputType idempotency_key_rib_input = 11;
+    optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 12;
     // type discriminator to keep backward compatibility
-    optional GatewayBindingType binding_type = 12;
-    optional StaticBinding static_binding = 13;
-    optional golem.rib.RibOutputType response_rib_output = 14;
-    optional golem.rib.Expr invocation_context = 15;
-    optional golem.rib.RibByteCode compiled_invocation_context_expr = 16;
-    optional golem.rib.RibInputType invocation_context_rib_input = 17;
-    optional string openapi_spec_json = 18;
+    optional GatewayBindingType binding_type = 13;
+    optional StaticBinding static_binding = 14;
+    optional golem.rib.RibOutputType response_rib_output = 15;
+    optional golem.rib.Expr invocation_context = 16;
+    optional golem.rib.RibByteCode compiled_invocation_context_expr = 17;
+    optional golem.rib.RibInputType invocation_context_rib_input = 18;
+    optional string openapi_spec_json = 19;
 }
 
 // Used in api definition repo and needs to be backward compatible
 enum GatewayBindingType {
-  DEFAULT = 0;
-  FILE_SERVER = 1;
-  CORS_PREFLIGHT = 2;
-  AUTH_CALL_BACK = 3;
-  HTTP_HANDLER = 4;
-  SWAGGER_UI = 5;
+  GATEWAY_BINDING_TYPE_UNSPECIFIED = 0;
+  GATEWAY_BINDING_TYPE_WORKER = 1;
+  GATEWAY_BINDING_TYPE_FILE_SERVER = 2;
+  GATEWAY_BINDING_TYPE_CORS_PREFLIGHT = 3;
+  GATEWAY_BINDING_TYPE_HTTP_HANDLER = 4;
+  GATEWAY_BINDING_TYPE_SWAGGER_UI = 5;
 }
 
 // Used in api definition repo and needs to be backward compatible

@@ -5,19 +5,11 @@ package golem.component;
 import "golem/common/uuid.proto";
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/common/hash.proto";
 import "golem/component/component_id.proto";
 
 message PluginRegistrationId {
   golem.common.UUID value = 1;
-}
-
-message PluginRegistrationCreation {
-  string name = 1;
-  string version = 2;
-  string description = 3;
-  bytes icon = 4;
-  string homepage = 5;
-  golem.component.PluginTypeSpecificDefinition specs = 6;
 }
 
 message PluginRegistration {
@@ -54,9 +46,9 @@ message OplogProcessorDefinition {
 }
 
 message LibraryPluginDefinition {
-  string blob_storage_key = 1;
+  golem.common.Hash wasm_content_hash = 14;
 }
 
 message AppPluginDefinition {
-  string blob_storage_key = 1;
+  golem.common.Hash wasm_content_hash = 14;
 }

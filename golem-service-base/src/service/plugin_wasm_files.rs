@@ -18,7 +18,7 @@ use crate::replayable_stream::{ContentHash, ReplayableStream};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use golem_common::model::account::AccountId;
-use golem_common::model::plugin_registration::PluginWasmFileKey;
+use golem_common::model::plugin_registration::WasmContentHash;
 use tracing::debug;
 
 const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";
@@ -37,7 +37,7 @@ impl PluginWasmFilesService {
     pub async fn get(
         &self,
         account_id: &AccountId,
-        key: &PluginWasmFileKey,
+        key: &WasmContentHash,
     ) -> Result<Option<Vec<u8>>, Error> {
         self.blob_storage
             .get_raw(
@@ -46,7 +46,7 @@ impl PluginWasmFilesService {
                 BlobStorageNamespace::PluginWasmFiles {
                     account_id: account_id.clone(),
                 },
-                &PathBuf::from(key.0.clone()),
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
     }
@@ -55,10 +55,9 @@ impl PluginWasmFilesService {
         &self,
         account_id: &AccountId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<PluginWasmFileKey, Error> {
+    ) -> Result<WasmContentHash, Error> {
         let hash = data.content_hash().await?;
-
-        let key = PathBuf::from(hash.clone());
+        let key = PathBuf::from(hash.into_blake3().to_hex().to_string());
 
         let metadata = self
             .blob_storage
@@ -88,6 +87,6 @@ impl PluginWasmFilesService {
                 )
                 .await?;
         };
-        Ok(PluginWasmFileKey(hash))
+        Ok(WasmContentHash(hash))
     }
 }

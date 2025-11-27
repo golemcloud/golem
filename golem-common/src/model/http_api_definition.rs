@@ -15,6 +15,7 @@
 use super::component::ComponentName;
 use super::environment::EnvironmentId;
 use super::security_scheme::SecuritySchemeName;
+use crate::model::diff;
 use crate::model::Empty;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -30,7 +31,7 @@ newtype_uuid!(HttpApiDefinitionId);
 declare_revision!(HttpApiDefinitionRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display)]
+    #[derive(Display, PartialOrd, Eq, Ord)]
     pub struct HttpApiDefinitionName(pub String);
 
     // User provided version. See HttpApiDefinitionRevision for the "proper" golem version.
@@ -96,6 +97,32 @@ impl FromStr for RouteMethod {
     }
 }
 
+impl From<RouteMethod> for http::Method {
+    fn from(value: RouteMethod) -> Self {
+        match value {
+            RouteMethod::Get => Self::GET,
+            RouteMethod::Connect => Self::CONNECT,
+            RouteMethod::Post => Self::POST,
+            RouteMethod::Delete => Self::DELETE,
+            RouteMethod::Put => Self::PUT,
+            RouteMethod::Patch => Self::PATCH,
+            RouteMethod::Options => Self::OPTIONS,
+            RouteMethod::Trace => Self::TRACE,
+            RouteMethod::Head => Self::HEAD,
+        }
+    }
+}
+
+declare_enums! {
+    pub enum GatewayBindingType {
+        Worker,
+        FileServer,
+        HttpHandler,
+        CorsPreflight,
+        SwaggerUi,
+    }
+}
+
 declare_structs! {
     pub struct HttpApiDefinitionCreation {
         pub name: HttpApiDefinitionName,
@@ -114,6 +141,7 @@ declare_structs! {
         pub revision: HttpApiDefinitionRevision,
         pub environment_id: EnvironmentId,
         pub name: HttpApiDefinitionName,
+        pub hash: diff::Hash,
         pub version: HttpApiDefinitionVersion,
         pub routes: Vec<HttpApiRoute>,
         pub created_at: chrono::DateTime<chrono::Utc>,
@@ -134,14 +162,15 @@ declare_structs! {
     pub struct WorkerGatewayBinding {
         pub component_name: ComponentName,
         pub idempotency_key: Option<String>,
-        pub response: String,
         pub invocation_context: Option<String>,
+        pub response: String,
     }
 
     #[derive(BinaryCodec)]
     #[desert(evolution())]
     pub struct FileServerBinding {
         pub component_name: ComponentName,
+        pub worker_name: String,
         pub response: String,
     }
 
@@ -149,14 +178,16 @@ declare_structs! {
     #[desert(evolution())]
     pub struct HttpHandlerBinding {
         pub component_name: ComponentName,
-        pub worker_name: Option<String>,
+        pub worker_name: String,
         pub idempotency_key: Option<String>,
+        pub invocation_context: Option<String>,
+        pub response: String,
     }
 
     #[derive(BinaryCodec)]
     #[desert(evolution())]
     pub struct CorsPreflightBinding {
-        pub response: String,
+        pub response: Option<String>,
     }
 }
 
@@ -168,5 +199,81 @@ declare_unions! {
         HttpHandler(HttpHandlerBinding),
         CorsPreflight(CorsPreflightBinding),
         SwaggerUi(Empty)
+    }
+}
+
+mod protobuf {
+    use super::{GatewayBindingType, RouteMethod};
+
+    impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType>
+        for GatewayBindingType
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as GrpcGatewayBindingType;
+
+            match value {
+                GrpcGatewayBindingType::Worker => Ok(Self::Worker),
+                GrpcGatewayBindingType::CorsPreflight => Ok(Self::CorsPreflight),
+                GrpcGatewayBindingType::HttpHandler => Ok(Self::HttpHandler),
+                GrpcGatewayBindingType::SwaggerUi => Ok(Self::SwaggerUi),
+                GrpcGatewayBindingType::FileServer => Ok(Self::FileServer),
+                GrpcGatewayBindingType::Unspecified => {
+                    Err("unkown gateway binding type".to_string())
+                }
+            }
+        }
+    }
+
+    impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
+        fn from(value: GatewayBindingType) -> Self {
+            match value {
+                GatewayBindingType::Worker => Self::Worker,
+                GatewayBindingType::CorsPreflight => Self::CorsPreflight,
+                GatewayBindingType::HttpHandler => Self::HttpHandler,
+                GatewayBindingType::SwaggerUi => Self::SwaggerUi,
+                GatewayBindingType::FileServer => Self::FileServer,
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpMethod> for RouteMethod {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::apidefinition::HttpMethod,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::apidefinition::HttpMethod as GrpcHttpMethod;
+
+            match value {
+                GrpcHttpMethod::Get => Ok(Self::Get),
+                GrpcHttpMethod::Connect => Ok(Self::Connect),
+                GrpcHttpMethod::Post => Ok(Self::Post),
+                GrpcHttpMethod::Delete => Ok(Self::Delete),
+                GrpcHttpMethod::Put => Ok(Self::Put),
+                GrpcHttpMethod::Patch => Ok(Self::Patch),
+                GrpcHttpMethod::Options => Ok(Self::Options),
+                GrpcHttpMethod::Trace => Ok(Self::Trace),
+                GrpcHttpMethod::Head => Ok(Self::Head),
+                GrpcHttpMethod::Unspecified => Err("unkown http method".to_string()),
+            }
+        }
+    }
+
+    impl From<RouteMethod> for golem_api_grpc::proto::golem::apidefinition::HttpMethod {
+        fn from(value: RouteMethod) -> Self {
+            match value {
+                RouteMethod::Get => Self::Get,
+                RouteMethod::Connect => Self::Connect,
+                RouteMethod::Post => Self::Post,
+                RouteMethod::Delete => Self::Delete,
+                RouteMethod::Put => Self::Put,
+                RouteMethod::Patch => Self::Patch,
+                RouteMethod::Options => Self::Options,
+                RouteMethod::Trace => Self::Trace,
+                RouteMethod::Head => Self::Head,
+            }
+        }
     }
 }

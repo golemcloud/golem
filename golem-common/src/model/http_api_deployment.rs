@@ -15,6 +15,7 @@
 use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
 use super::http_api_definition::HttpApiDefinitionName;
+use crate::model::diff;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
 
@@ -38,6 +39,7 @@ declare_structs! {
         pub revision: HttpApiDeploymentRevision,
         pub environment_id: EnvironmentId,
         pub domain: Domain,
+        pub hash: diff::Hash,
         pub api_definitions: Vec<HttpApiDefinitionName>,
         pub created_at: DateTime<chrono::Utc>,
     }
