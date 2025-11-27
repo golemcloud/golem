@@ -230,11 +230,11 @@ impl<'a> ComponentStager<'a> {
     pub async fn agent_types(&self) -> anyhow::Result<Vec<AgentType>> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
-        if app_ctx.wit.is_agent(&self.component_name) {
+        if app_ctx.wit.is_agent(self.component_name) {
             let agent_types = app_ctx
                 .wit
                 .get_extracted_agent_types(
-                    &self.component_name,
+                    self.component_name,
                     &self.component_deploy_properties.linked_wasm_path,
                 )
                 .await?;

@@ -87,7 +87,7 @@ impl DeployDiff {
         component_name: &ComponentName,
     ) -> &ComponentDeployProperties {
         self.deployable_manifest_components
-            .get(&component_name)
+            .get(component_name)
             .unwrap_or_else(|| {
                 panic!(
                     "Illegal state, missing component {} from component deploy properties",
@@ -129,7 +129,7 @@ impl DeployDiff {
         }
 
         let safe_env = |env: &BTreeMap<String, String>| -> BTreeMap<String, String> {
-            env.into_iter()
+            env.iter()
                 .map(|(k, v)| {
                     (
                         k.clone(),
@@ -161,7 +161,7 @@ impl DeployDiff {
                                     .into(),
                                     None => component.metadata.hash().into(),
                                 },
-                                wasm_hash: component.wasm_hash.clone(),
+                                wasm_hash: component.wasm_hash,
                                 files_by_path: component.files_by_path.clone(),
                                 plugins_by_priority: component.plugins_by_priority.clone(),
                             }

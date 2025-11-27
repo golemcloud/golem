@@ -485,8 +485,7 @@ impl ApplicationContext {
             static LABEL_SERVER: &str = "Server";
             static LABEL_PRESETS: &str = "Presets";
 
-            let label_padding =
-                padding(&[&LABEL_NAME, &LABEL_SELECTED, &LABEL_SERVER, &LABEL_PRESETS]);
+            let label_padding = padding(&[LABEL_NAME, LABEL_SELECTED, LABEL_SERVER, LABEL_PRESETS]);
             let selected_environment_name = self.application.environment_name();
 
             logln(format!(
@@ -531,7 +530,7 @@ impl ApplicationContext {
                 static LABEL_LAYERS: &str = "Layers";
                 static LABEL_DEPENDENCIES: &str = "Dependencies";
 
-                let label_padding = padding(&[&LABEL_SOURCE, &LABEL_LAYERS, &LABEL_DEPENDENCIES]);
+                let label_padding = padding(&[LABEL_SOURCE, LABEL_LAYERS, LABEL_DEPENDENCIES]);
 
                 logln(format!(
                     "{}",

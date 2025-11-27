@@ -1342,7 +1342,7 @@ impl ComponentLayerProperties {
     }
 
     pub fn serialize_applied_layers<S>(
-        applied_layers: &Vec<(ComponentLayerId, Option<String>)>,
+        applied_layers: &[(ComponentLayerId, Option<String>)],
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::http::check_http_response_success;
 use crate::log::{log_action, log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
 use std::path::PathBuf;
 use url::Url;
-use crate::http::check_http_response_success;
 
 pub struct RemoteComponents {
     client: reqwest::Client,

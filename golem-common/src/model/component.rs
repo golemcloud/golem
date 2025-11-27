@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::account::AccountId;
 use crate::model::agent::AgentType;
+use crate::model::application::ApplicationId;
 use crate::model::auth::EnvironmentRole;
+use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
+use crate::model::diff;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
-use crate::model::account::AccountId;
-use crate::model::application::ApplicationId;
-use crate::model::component_metadata::ComponentMetadata;
-use crate::model::diff;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
