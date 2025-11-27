@@ -80,7 +80,7 @@ pub trait Diffable {
 pub enum BTreeMapDiffValue<ValueDiff> {
     Create,
     Delete,
-    Update(Option<ValueDiff>),
+    Update(ValueDiff),
 }
 
 impl<ValueDiff: Serialize> Serialize for BTreeMapDiffValue<ValueDiff> {
@@ -91,10 +91,7 @@ impl<ValueDiff: Serialize> Serialize for BTreeMapDiffValue<ValueDiff> {
         match self {
             BTreeMapDiffValue::Create => serializer.serialize_str("create"),
             BTreeMapDiffValue::Delete => serializer.serialize_str("delete"),
-            BTreeMapDiffValue::Update(diff) => match diff {
-                Some(diff) => diff.serialize(serializer),
-                None => serializer.serialize_str("update"),
-            },
+            BTreeMapDiffValue::Update(diff) => diff.serialize(serializer),
         }
     }
 }
@@ -118,7 +115,7 @@ where
             match (local.get(key), server.get(key)) {
                 (Some(local), Some(server)) => {
                     if let Some(value_diff) = local.diff_with_server(server) {
-                        diff.insert(key.clone(), BTreeMapDiffValue::Update(Some(value_diff)));
+                        diff.insert(key.clone(), BTreeMapDiffValue::Update(value_diff));
                     }
                 }
                 (Some(_), None) => {
@@ -128,7 +125,7 @@ where
                     diff.insert(key.clone(), BTreeMapDiffValue::Delete);
                 }
                 (None, None) => {
-                    panic!("unreachable");
+                    unreachable!("key must be present either in local or server");
                 }
             }
         }

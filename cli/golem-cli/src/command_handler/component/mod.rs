@@ -19,11 +19,12 @@ use crate::command::shared_args::{
     BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::component::ifs::IfsFileManager;
+use crate::command_handler::component::staging::ComponentStager;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::log::{log_action, logln, LogColorize, LogIndent};
+use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
@@ -36,14 +37,16 @@ use crate::model::text::fmt::log_error;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
-use golem_client::model::ComponentDto;
-use golem_common::model::component::ComponentName;
+use golem_client::model::{ComponentCreation, ComponentDto};
+use golem_common::model::agent::AgentType;
+use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::component_metadata::{
     dynamic_linking_to_diffable, DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
-use golem_common::model::diff::HashOf;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
@@ -56,6 +59,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod ifs;
+mod staging;
 // TODO: atomic: pub mod plugin;
 // TODO: atomic: pub mod plugin_installation;
 
@@ -1100,7 +1104,7 @@ impl ComponentCommandHandler {
         };
 
         // TODO: atomic: cache it with a TaskResultMarker (handling local vs http)?
-        let files: BTreeMap<String, HashOf<diff::ComponentFile>> = {
+        let files: BTreeMap<String, diff::HashOf<diff::ComponentFile>> = {
             IfsFileManager::new(self.ctx.file_download_client().clone())
                 .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
                 .await?
@@ -1126,11 +1130,7 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
-                dynamic_linking_wasm_rpc: properties
-                    .dynamic_linking
-                    .as_ref()
-                    .map(dynamic_linking_to_diffable)
-                    .unwrap_or_default(),
+                dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(&properties.dynamic_linking),
             }
             .into(),
             wasm_hash: component_binary_hash.into(),
@@ -1138,12 +1138,135 @@ impl ComponentCommandHandler {
             plugins_by_priority: Default::default(), // TODO: atomic: plugins
         })
     }
+
+    pub async fn create_staged_component(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
+        component_deploy_properties: &ComponentDeployProperties,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Creating",
+            format!("component {}", component_name.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        let component_stager = ComponentStager::new(
+            self.ctx.clone(),
+            component_name,
+            component_deploy_properties,
+            None,
+        );
+
+        let linked_wasm = component_stager.open_linked_wasm().await?;
+        let agent_types: Vec<AgentType> = component_stager.agent_types().await?;
+
+        // NOTE: do not drop until the component is created, keeps alive the temp archive
+        let files = component_stager.all_files().await?;
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .component
+            .create_component(
+                &environment.environment_id.0,
+                &ComponentCreation {
+                    component_name: component_name.clone(),
+                    file_options: files
+                        .as_ref()
+                        .map(|files| files.file_options.clone())
+                        .unwrap_or_default(),
+                    dynamic_linking: component_stager.dynamic_linking(),
+                    env: component_stager.env(),
+                    agent_types,
+                    plugins: Default::default(), // TODO: atomic, collect plugins from manifest
+                },
+                linked_wasm,
+                OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
+                    .await
+                    .transpose()?,
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn delete_staged_component(
+        &self,
+        component: &DeploymentPlanComponentEntry,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!("component {}", component.name.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .component
+            .delete_component(&component.id.0, component.revision.0)
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn update_staged_component(
+        &self,
+        component: &DeploymentPlanComponentEntry,
+        component_deploy_properties: &ComponentDeployProperties,
+        diff: &diff::DiffForHashOf<diff::Component>,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Updating",
+            format!("component {}", component.name.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        let component_stager = ComponentStager::new(
+            self.ctx.clone(),
+            &component.name,
+            component_deploy_properties,
+            Some(diff),
+        );
+
+        let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
+        let agent_types = component_stager.agent_types_if_changed().await?;
+
+        // NOTE: do not drop until the component is created, keeps alive the temp archive
+        let changed_files = component_stager.changed_files().await?;
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .component
+            .update_component(
+                &component.id.0,
+                &ComponentUpdate {
+                    current_revision: component.revision,
+                    removed_files: changed_files.removed.clone(),
+                    new_file_options: changed_files.merged_file_options(),
+                    dynamic_linking: component_stager.dynamic_linking_if_changed(),
+                    env: component_stager.env_if_changed(),
+                    agent_types,
+                    plugin_updates: Default::default(), // TODO: atomic, from diff
+                },
+                linked_wasm,
+                changed_files.open_archive().await?,
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
 }
 
 fn app_component_dynamic_linking(
     app_ctx: &mut ApplicationContext,
     component_name: &ComponentName,
-) -> anyhow::Result<Option<HashMap<String, DynamicLinkedInstance>>> {
+) -> anyhow::Result<HashMap<String, DynamicLinkedInstance>> {
     let mut mapping = Vec::new();
 
     let wasm_rpc_deps = app_ctx
@@ -1158,42 +1281,39 @@ fn app_component_dynamic_linking(
         mapping.push(app_ctx.component_stub_interfaces(&wasm_rpc_dep.name)?);
     }
 
-    if mapping.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(HashMap::from_iter(mapping.into_iter().map(
-            |stub_interfaces| {
-                (
-                    stub_interfaces.stub_interface_name,
-                    DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
-                        targets: HashMap::from_iter(
-                            stub_interfaces
-                                .exported_interfaces_per_stub_resource
-                                .into_iter()
-                                .map(|(resource_name, interface_name)| {
-                                    (
-                                        resource_name,
-                                        WasmRpcTarget {
-                                            interface_name,
-                                            component_name: stub_interfaces
-                                                .component_name
-                                                .as_str()
-                                                .to_string(),
-                                        },
-                                    )
-                                }),
-                        ),
-                    }),
-                )
-            },
-        ))))
-    }
+    Ok(mapping
+        .into_iter()
+        .map(|stub_interfaces| {
+            (
+                stub_interfaces.stub_interface_name,
+                DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
+                    targets: HashMap::from_iter(
+                        stub_interfaces
+                            .exported_interfaces_per_stub_resource
+                            .into_iter()
+                            .map(|(resource_name, interface_name)| {
+                                (
+                                    resource_name,
+                                    WasmRpcTarget {
+                                        interface_name,
+                                        component_name: stub_interfaces
+                                            .component_name
+                                            .as_str()
+                                            .to_string(),
+                                    },
+                                )
+                            }),
+                    ),
+                }),
+            )
+        })
+        .collect())
 }
 
 fn resolve_env_vars(
     component_name: &ComponentName,
     env: &BTreeMap<String, String>,
-) -> anyhow::Result<HashMap<String, String>> {
+) -> anyhow::Result<BTreeMap<String, String>> {
     let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
 
     let minijinja_env = {
@@ -1202,7 +1322,7 @@ fn resolve_env_vars(
         env
     };
 
-    let mut resolved_env = HashMap::with_capacity(env.len());
+    let mut resolved_env = BTreeMap::new();
     let mut validation = ValidationBuilder::new();
     validation.with_context(
         vec![("component", component_name.to_string())],

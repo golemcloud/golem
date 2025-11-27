@@ -18,6 +18,7 @@ use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
     AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
+use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
@@ -30,8 +31,7 @@ use crate::log::{
     Output,
 };
 use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
-use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::component::is_sensitive_env_var_name;
+use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
@@ -40,7 +40,7 @@ use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
-use golem_client::model::ApplicationCreation;
+use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -55,6 +55,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
+use tracing::debug;
+
+mod deploy_diff;
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -418,6 +421,7 @@ impl AppCommandHandler {
         let result = clients
             .agent_types
             .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
+            .todo: map svc err
             .await?;
 
         self.ctx.log_handler().log_view(&result);
@@ -479,181 +483,34 @@ impl AppCommandHandler {
             // TODO: atomic: delete env
         }
 
-        let components = self
-            .ctx
-            .component_handler()
-            .all_deployable_manifest_components()
-            .await?;
+        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
 
-        let remote_deployment_hash = environment
-            .remote_environment
-            .current_deployment
-            .as_ref()
-            .map(|d| d.hash);
-
-        let diffable_local_deployment = {
-            let diffable_components = {
-                let mut diffable_components =
-                    BTreeMap::<String, diff::HashOf<diff::Component>>::new();
-                for (component_name, component_deploy_properties) in &components {
-                    let diffable_component = self
-                        .ctx
-                        .component_handler()
-                        .diffable_local_component(component_name, component_deploy_properties)
-                        .await?;
-                    diffable_components.insert(component_name.0.clone(), diffable_component.into());
-                }
-                diffable_components
-            };
-
-            diff::Deployment {
-                components: diffable_components,
-                http_api_definitions: Default::default(), // TODO: atomic,
-                http_api_deployments: Default::default(), // TODO: atomic
-            }
-        };
-        let safe_diffable_local_deployment = self.safe_diff_deployment(&diffable_local_deployment);
-
-        let local_deployment_hash = diffable_local_deployment.hash();
-
-        if Some(local_deployment_hash) == remote_deployment_hash {
+        if deploy_quick_diff.is_up_to_date() {
             log_skipping_up_to_date(format!(
                 "deployment, no changes detected, deployment hash: {}",
-                local_deployment_hash.to_string().log_color_highlight()
+                deploy_quick_diff
+                    .local_deployment_hash
+                    .to_string()
+                    .log_color_highlight()
             ));
             // TODO: atomic: if there is a deployment, show details (version, revision...)
             return Ok(());
         }
 
-        let clients = self.ctx.golem_clients().await?;
-
-        let server_deployment = match &environment.remote_environment.current_deployment {
-            Some(current_deployment) => Some(
-                clients
-                    .environment
-                    .get_environment_deployed_deployment_plan(
-                        &environment.environment_id.0,
-                        current_deployment.revision.0,
-                    )
-                    .await?,
-            ),
-            None => None,
-        };
-        let diffable_server_deployment = server_deployment
-            .as_ref()
-            .map(|d| d.to_diffable())
-            .unwrap_or_default();
-        let safe_diffable_server_deployment =
-            self.safe_diff_deployment(&diffable_server_deployment);
-
-        let server_staged_deployment = clients
-            .environment
-            .get_environment_deployment_plan(&environment.environment_id.0)
-            .await?;
-        let mut diffable_server_staged_deployment = server_staged_deployment.to_diffable();
-
-        let Some(diff) = diffable_server_deployment.diff_with_local(&diffable_local_deployment)
-        else {
-            bail!(anyhow!("No diff with current deployment! The environment was changed concurrently. Retry planning and deploying!"))
-        };
-
-        let mut diff_stage =
-            diffable_server_staged_deployment.diff_with_local(&diffable_local_deployment);
-
-        if let Some(diff) = &mut diff_stage {
-            for (component_name, component_diff) in &diff.components {
-                match component_diff {
-                    diff::BTreeMapDiffValue::Create => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Delete => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) => {
-                        let Some(component_identity) = server_staged_deployment
-                            .components
-                            .iter()
-                            .find(|component| &component.name.0 == component_name)
-                        else {
-                            log_error(format!(
-                                "Inconsistent staging diff metadata: component not found: {}",
-                                component_name
-                            ));
-                            bail!(NonSuccessfulExit)
-                        };
-
-                        let staged_component = clients
-                            .component
-                            .get_component_revision(
-                                &component_identity.id.0,
-                                component_identity.revision.0,
-                            )
-                            .await?;
-
-                        diffable_server_staged_deployment.components.insert(
-                            component_name.clone(),
-                            staged_component.to_diffable().into(),
-                        );
-                    }
-                }
-            }
-
-            // TODO: atomic
-            /*
-            for (_http_api_definition_name, http_api_definition_diff) in
-                &diff_stage.http_api_definitions
-            {
-                match http_api_definition_diff {
-                    diff::BTreeMapDiffValue::Add => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Delete => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) => {
-                        // TODO: atomic: get detailed meta
-                    }
-                }
-            }
-
-            for (_http_api_deployment_name, http_api_deployment_diff) in
-                &diff_stage.http_api_deployments
-            {
-                match http_api_deployment_diff {
-                    diff::BTreeMapDiffValue::Add => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Delete => {
-                        // NOP
-                    }
-                    diff::BTreeMapDiffValue::Update(_) => {
-                        // TODO: atomic: get detailed meta
-                    }
-                }
-            }
-            */
-
-            // Update diff with details
-            diff_stage =
-                diffable_server_staged_deployment.diff_with_local(&diffable_local_deployment);
-        }
-        let safe_diffable_server_staged_deployment =
-            self.safe_diff_deployment(&diffable_server_staged_deployment);
-
+        log_action("Diffing", "");
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
         {
-            log_action("Diffing", "");
             let _indent = LogIndent::new();
+            let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
 
-            match &diff_stage {
-                Some(_) => {
+            match &unified_diffs.diff_stage {
+                Some(diff) => {
                     log_action("Diffing", "with staging area");
                     let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    log_unified_diff(
-                        &safe_diffable_server_staged_deployment.unified_yaml_diff_with_local(
-                            &safe_diffable_local_deployment,
-                            diff::SerializeMode::ValueIfAvailable,
-                        ),
-                    );
+                    log_unified_diff(diff);
                 }
                 None => {
                     log_skipping_up_to_date("diffing with staging area");
@@ -663,12 +520,7 @@ impl AppCommandHandler {
             {
                 log_action("Diffing", "with current deployment");
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
-                log_unified_diff(
-                    &safe_diffable_server_deployment.unified_yaml_diff_with_local(
-                        &safe_diffable_local_deployment,
-                        diff::SerializeMode::ValueIfAvailable,
-                    ),
-                );
+                log_unified_diff(&unified_diffs.diff);
             }
         }
 
@@ -676,7 +528,7 @@ impl AppCommandHandler {
             log_action("Planning", "");
             let _indent = LogIndent::new();
 
-            match &diff_stage {
+            match &deploy_diff.diff_stage {
                 Some(diff_stage) => {
                     log_warn_action("Planned", "changes to be applied to the staging area:");
                     let _indent = self.ctx.log_handler().nested_text_view_indent();
@@ -688,7 +540,7 @@ impl AppCommandHandler {
             {
                 log_warn_action("Planned", "changes to be applied to the environment:");
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
-                self.ctx.log_handler().log_view(&diff)
+                self.ctx.log_handler().log_view(&deploy_diff.diff)
             }
         }
 
@@ -697,8 +549,8 @@ impl AppCommandHandler {
         }
 
         if !self.ctx.interactive_handler().confirm_deploy_by_plan(
-            &environment.application_name,
-            &environment.environment_name,
+            &deploy_diff.environment.application_name,
+            &deploy_diff.environment.environment_name,
             &self
                 .ctx
                 .manifest_environment()
@@ -708,8 +560,274 @@ impl AppCommandHandler {
             return Ok(());
         }
 
+        self.apply_changes_to_stage(&deploy_diff).await?;
+        self.apply_staged_changes_to_environment(&deploy_diff)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn deploy_quick_diff(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<DeployQuickDiff> {
+        let deployable_manifest_components = self
+            .ctx
+            .component_handler()
+            .all_deployable_manifest_components()
+            .await?;
+
+        let diffable_components = {
+            let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
+            for (component_name, component_deploy_properties) in &deployable_manifest_components {
+                let diffable_component = self
+                    .ctx
+                    .component_handler()
+                    .diffable_local_component(component_name, component_deploy_properties)
+                    .await?;
+                diffable_components.insert(component_name.0.clone(), diffable_component.into());
+            }
+            diffable_components
+        };
+
+        let diffable_local_deployment = diff::Deployment {
+            components: diffable_components,
+            http_api_definitions: Default::default(), // TODO: atomic,
+            http_api_deployments: Default::default(), // TODO: atomic
+        };
+
+        let local_deployment_hash = diffable_local_deployment.hash();
+
+        Ok(DeployQuickDiff {
+            environment,
+            deployable_manifest_components,
+            diffable_local_deployment,
+            local_deployment_hash,
+        })
+    }
+
+    async fn deploy_diff(&self, deploy_quick_diff: DeployQuickDiff) -> anyhow::Result<DeployDiff> {
+        let clients = self.ctx.golem_clients().await?;
+
+        let server_deployment = match &deploy_quick_diff
+            .environment
+            .remote_environment
+            .current_deployment
+        {
+            Some(current_deployment) => Some(
+                clients
+                    .environment
+                    .get_environment_deployed_deployment_plan(
+                        &deploy_quick_diff.environment.environment_id.0,
+                        current_deployment.revision.0,
+                    )
+                    .await
+                    .map_service_error()?,
+            ),
+            None => None,
+        };
+
+        let diffable_server_deployment = server_deployment
+            .as_ref()
+            .map(|d| d.to_diffable())
+            .unwrap_or_default();
+
+        let server_staged_deployment = clients
+            .environment
+            .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
+            .await
+            .map_service_error()?;
+
+        let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+
+        let Some(diff) = diffable_server_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment)
+        else {
+            bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
+        };
+
+        let diff_stage = diffable_server_staged_deployment
+            .diff_with_local(&deploy_quick_diff.diffable_local_deployment);
+
+        Ok(DeployDiff {
+            environment: deploy_quick_diff.environment,
+            deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
+            local_deployment_hash: deploy_quick_diff.local_deployment_hash,
+            server_deployment,
+            diffable_server_deployment,
+            server_staged_deployment,
+            diffable_server_staged_deployment,
+            diff,
+            diff_stage,
+        })
+    }
+
+    async fn detailed_deploy_diff(
+        &self,
+        mut deploy_diff: DeployDiff,
+    ) -> anyhow::Result<DeployDiff> {
+        let Some(diff_stage) = &deploy_diff.diff_stage else {
+            return Ok(deploy_diff);
+        };
+
+        let clients = self.ctx.golem_clients().await?;
+
+        for (component_name, component_diff) in &diff_stage.components {
+            let component_name = ComponentName(component_name.clone());
+
+            match component_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    let component_identity = deploy_diff.staged_component_identity(&component_name);
+
+                    let staged_component = clients
+                        .component
+                        .get_component_revision(
+                            &component_identity.id.0,
+                            component_identity.revision.0,
+                        )
+                        .await
+                        .map_service_error()?;
+
+                    deploy_diff
+                        .diffable_server_staged_deployment
+                        .components
+                        .insert(component_name.0, staged_component.to_diffable().into());
+                }
+            }
+        }
+
         // TODO: atomic
-        todo!()
+        /*
+        for (_http_api_definition_name, http_api_definition_diff) in
+            &diff_stage.http_api_definitions
+        {
+            match http_api_definition_diff {
+                diff::BTreeMapDiffValue::Add => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    // TODO: atomic: get detailed meta
+                }
+            }
+        }
+
+        for (_http_api_deployment_name, http_api_deployment_diff) in
+            &diff_stage.http_api_deployments
+        {
+            match http_api_deployment_diff {
+                diff::BTreeMapDiffValue::Add => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    // NOP
+                }
+                diff::BTreeMapDiffValue::Update(_) => {
+                    // TODO: atomic: get detailed meta
+                }
+            }
+        }
+        */
+
+        // Update diff with details
+        deploy_diff.diff_stage = deploy_diff
+            .diffable_server_staged_deployment
+            .diff_with_local(&deploy_diff.diffable_local_deployment);
+
+        Ok(deploy_diff)
+    }
+
+    async fn apply_changes_to_stage(&self, deploy_diff: &DeployDiff) -> anyhow::Result<()> {
+        let Some(diff_stage) = &deploy_diff.diff_stage else {
+            log_skipping_up_to_date("changing staging area");
+            return Ok(());
+        };
+
+        log_action("Applying", "changes to the staging area");
+        let _indent = LogIndent::new();
+
+        let component_handler = self.ctx.component_handler();
+
+        for (component_name, component_diff) in &diff_stage.components {
+            let component_name = ComponentName(component_name.to_string());
+
+            match component_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    component_handler
+                        .create_staged_component(
+                            &deploy_diff.environment,
+                            &component_name,
+                            deploy_diff.deployable_manifest_component(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    component_handler
+                        .delete_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(component_diff) => {
+                    log_action(
+                        "Updating",
+                        format!("component {}", component_name.0.log_color_highlight()),
+                    );
+
+                    component_handler
+                        .update_staged_component(
+                            deploy_diff.staged_component_identity(&component_name),
+                            deploy_diff.deployable_manifest_component(&component_name),
+                            component_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        // TODO: atomic: http api and deployments
+
+        Ok(())
+    }
+
+    async fn apply_staged_changes_to_environment(
+        &self,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
+        log_action("Deploying", "staged changes to the environment");
+
+        clients
+            .environment
+            .deploy_environment(
+                &deploy_diff.environment.environment_id.0,
+                &DeploymentCreation {
+                    current_deployment_revision: deploy_diff
+                        .environment
+                        .remote_environment
+                        .current_deployment
+                        .as_ref()
+                        .map(|deployment| deployment.revision),
+                    expected_deployment_hash: deploy_diff.local_deployment_hash,
+                    version: "TODO".to_string(), // TODO: atomic
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        // TODO: atomic log details (version, revision etc..)
+
+        Ok(())
     }
 
     pub async fn get_remote_application(
@@ -752,7 +870,8 @@ impl AppCommandHandler {
                             name: application_name.clone(),
                         },
                     )
-                    .await?,
+                    .await
+                    .map_service_error()?,
             )),
         }
     }
@@ -1138,60 +1257,5 @@ impl AppCommandHandler {
         }
 
         Ok(())
-    }
-
-    fn safe_diff_deployment(&self, deployment: &diff::Deployment) -> diff::Deployment {
-        let show_sensitive = self.ctx.show_sensitive();
-
-        if show_sensitive {
-            return deployment.clone();
-        }
-
-        let safe_env = |env: &BTreeMap<String, String>| -> BTreeMap<String, String> {
-            env.into_iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        if is_sensitive_env_var_name(show_sensitive, k) {
-                            format!("<hashed-secret:{}>", blake3::hash(v.as_bytes()).to_hex())
-                        } else {
-                            v.clone()
-                        },
-                    )
-                })
-                .collect()
-        };
-
-        diff::Deployment {
-            components: deployment
-                .components
-                .iter()
-                .map(|(component_name, component)| {
-                    (
-                        component_name.clone(),
-                        match component.as_value() {
-                            Some(component) => diff::Component {
-                                metadata: match component.metadata.as_value() {
-                                    Some(metadata) => diff::ComponentMetadata {
-                                        version: metadata.version.clone(),
-                                        env: safe_env(&metadata.env),
-                                        dynamic_linking_wasm_rpc: Default::default(),
-                                    }
-                                    .into(),
-                                    None => component.metadata.hash().into(),
-                                },
-                                wasm_hash: component.wasm_hash.clone(),
-                                files_by_path: component.files_by_path.clone(),
-                                plugins_by_priority: component.plugins_by_priority.clone(),
-                            }
-                            .into(),
-                            None => component.hash().into(),
-                        },
-                    )
-                })
-                .collect(),
-            http_api_definitions: deployment.http_api_definitions.clone(),
-            http_api_deployments: deployment.http_api_deployments.clone(),
-        }
     }
 }

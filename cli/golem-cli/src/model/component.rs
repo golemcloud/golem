@@ -242,8 +242,8 @@ impl ComponentView {
 pub struct ComponentDeployProperties {
     pub linked_wasm_path: PathBuf,
     pub files: Vec<crate::model::app::InitialComponentFile>,
-    pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-    pub env: HashMap<String, String>,
+    pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+    pub env: BTreeMap<String, String>,
 }
 
 impl TrimDateTime for ComponentView {

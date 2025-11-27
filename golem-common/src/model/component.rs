@@ -224,7 +224,7 @@ impl ComponentDto {
                 .iter()
                 .map(|file| {
                     (
-                        file.path.to_rel_string(),
+                        file.path.to_abs_string(),
                         diff::ComponentFile {
                             hash: diff::Hash::empty(), // TODO: atomic: this is missing from ICF, and the key is SHA, not blake
                             permissions: file.permissions,
@@ -342,6 +342,10 @@ impl ComponentFilePath {
 
     pub fn as_path(&self) -> &Utf8UnixPathBuf {
         &self.0
+    }
+
+    pub fn as_abs_str(&self) -> &str {
+        self.0.as_str()
     }
 
     pub fn to_abs_string(&self) -> String {

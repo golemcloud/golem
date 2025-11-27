@@ -38,14 +38,14 @@ impl TextView for DeploymentDiff {
                         ));
                     }
                     BTreeMapDiffValue::Update(diff) => match diff {
-                        Some(DiffForHashOf::HashDiff { .. }) | None => {
+                        DiffForHashOf::HashDiff { .. } => {
                             logln(format!(
                                 "  - {} component {}",
                                 "update".yellow(),
                                 component_name.log_color_highlight()
                             ));
                         }
-                        Some(DiffForHashOf::ValueDiff { diff }) => {
+                        DiffForHashOf::ValueDiff { diff } => {
                             logln(format!(
                                 "  - {} component {}, changes:",
                                 "update".yellow(),
@@ -54,7 +54,7 @@ impl TextView for DeploymentDiff {
                             if diff.metadata_changed {
                                 logln("    - metadata");
                             }
-                            if diff.binary_changed {
+                            if diff.wasm_changed {
                                 logln("    - binary");
                             }
                             if !diff.file_changes.is_empty() {
