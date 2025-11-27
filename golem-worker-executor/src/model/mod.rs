@@ -29,6 +29,7 @@ use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
+use std::future::{pending, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
@@ -144,6 +145,7 @@ pub enum ExecutionStatus {
     Running {
         agent_mode: AgentMode,
         timestamp: Timestamp,
+        interrupt_signal: Arc<tokio::sync::broadcast::Sender<()>>,
     },
     Suspended {
         agent_mode: AgentMode,
@@ -210,6 +212,22 @@ impl ExecutionStatus {
                 agent_mode: component_type,
                 ..
             } => *component_type = new_agent_mode,
+        }
+    }
+
+    pub fn create_await_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = ()> + Send>> {
+        match self {
+            ExecutionStatus::Loading { .. } => Box::pin(pending()),
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => {
+                let mut rx = interrupt_signal.subscribe();
+                Box::pin(async move {
+                    let _ = rx.recv().await;
+                })
+            }
+            ExecutionStatus::Suspended { .. } => Box::pin(pending()),
+            ExecutionStatus::Interrupting { .. } => Box::pin(pending()),
         }
     }
 }

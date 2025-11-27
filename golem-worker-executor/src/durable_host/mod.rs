@@ -1321,16 +1321,22 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
             ExecutionStatus::Suspended { agent_mode, .. } => {
+                let (tx, _) = tokio::sync::broadcast::channel(128);
+                let interrupt_signal = Arc::new(tx);
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
+                    interrupt_signal,
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
             ExecutionStatus::Loading { agent_mode, .. } => {
+                let (tx, _) = tokio::sync::broadcast::channel(128);
+                let interrupt_signal = Arc::new(tx);
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
+                    interrupt_signal,
                 };
             }
         }

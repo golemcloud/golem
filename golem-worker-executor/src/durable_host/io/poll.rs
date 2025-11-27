@@ -16,6 +16,8 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendF
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{Duration, Utc};
+use futures::future::Either;
+use futures::pin_mut;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
@@ -96,8 +98,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<IoPollPoll>::new(self, DurableFunctionType::ReadLocal).await?;
 
         let result: Result<HostResponsePollResult, Duration> = if durability.is_live() {
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
             let count = in_.len();
-            let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
+
+            let result = {
+                let view = &mut self.as_wasi_view().0;
+                let poll = Host::poll(view, in_);
+                pin_mut!(poll);
+
+                let either_result = futures::future::select(poll, interrupt_signal).await;
+                match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right(_) => {
+                        tracing::info!("Interrupted while waiting for poll result");
+                        return Err(InterruptKind::Interrupt.into());
+                    }
+                }
+            };
+
             match is_suspend_for_sleep(&result) {
                 Some(duration) => Err(duration),
                 None => Ok(durability
