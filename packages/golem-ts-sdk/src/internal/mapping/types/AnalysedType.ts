@@ -338,8 +338,12 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.left("Unsupported type `void` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "tuple":
-      const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
-      return Either.map(tupleElems, (items) => tuple(type.name, undefined, items));
+      if (type.elements.length === 0) {
+        return Either.left("Empty tuple types are not supported");
+      } else {
+        const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
+        return Either.map(tupleElems, (items) => tuple(type.name, undefined, items));
+      }
 
     case "union": {
       const hash = JSON.stringify(buildJSONFromType(type));

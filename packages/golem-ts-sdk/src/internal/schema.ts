@@ -39,7 +39,10 @@ import {
   tuple,
 } from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
-import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
+import {
+  convertAgentMethodNameToKebab,
+  convertVariantTypeNameToKebab,
+} from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
 import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
 
@@ -131,10 +134,13 @@ export function getAgentMethodSchema(
     methodMetadata.map((methodInfo) => {
       const methodName = methodInfo[0];
       const signature = methodInfo[1];
-
       const parameters: MethodParams = signature.methodParams;
-
       const returnType: Type.Type = signature.returnType;
+
+      const methodNameValidation = validateMethodName(methodName);
+      if (Either.isLeft(methodNameValidation)) {
+        return Either.left(methodNameValidation.val);
+      }
 
       const baseMeta =
         AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
@@ -1110,4 +1116,24 @@ function isNamedMultimodal(type: Type.Type): boolean {
     return MULTIMODAL_TYPE_NAMES.includes(type.name);
   }
   return false;
+}
+
+function validateMethodName(methodName: string): Either.Either<void, string> {
+  if (methodName.includes('$')) {
+    return Either.left(
+      `Invalid method name \`${methodName}\`: cannot contain '\$'`,
+    );
+  }
+
+  const kebabMethodName = convertAgentMethodNameToKebab(methodName);
+  if (
+    kebabMethodName === 'initialize' ||
+    kebabMethodName === 'get-definition'
+  ) {
+    return Either.left(
+      `Invalid method name \`${methodName}\`: reserved method name`,
+    );
+  }
+
+  return Either.right(undefined);
 }
