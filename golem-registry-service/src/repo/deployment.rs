@@ -900,28 +900,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             )
             .await?;
 
-        // TODO: atomic: is this intentionally removed?
-        // // NOTE: this is an N+1 problem / implementation, but we expect very low cardinality around
-        // //       these for now, and this way we avoid many other inconsistencies or DB specific ways
-        // //       and limitations to use "IN" properly
-        // for deployment in &mut deployments {
-        //     let definitions = tx
-        //         .fetch_all(
-        //             sqlx::query(indoc! { r#"
-        //                 SELECT http_definition_id
-        //                 FROM http_api_deployment_definitions
-        //                 WHERE http_api_deployment_id = $1 AND revision_id = $2
-        //             "#})
-        //             .bind(deployment.http_api_deployment_id)
-        //             .bind(deployment.revision_id),
-        //         )
-        //         .await?;
-        //     deployment.http_api_definitions = definitions
-        //         .iter()
-        //         .map(|row| row.try_get("http_definition_id"))
-        //         .collect::<Result<_, _>>()?;
-        // }
-
         Ok(deployments)
     }
 
@@ -1141,26 +1119,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     .bind(revision_id),
             )
             .await?;
-
-        // TODO: atomic: is this intentionally commented?
-        // for deployment in &mut deployments {
-        //     let definitions = self
-        //         .with_ro("get_deployed_http_api_deployments - definitions")
-        //         .fetch_all(
-        //             sqlx::query(indoc! { r#"
-        //                 SELECT http_definition_id
-        //                 FROM http_api_deployment_definitions
-        //                 WHERE http_api_deployment_id = $1 AND revision_id = $2
-        //             "#})
-        //             .bind(deployment.http_api_deployment_id)
-        //             .bind(deployment.revision_id),
-        //         )
-        //         .await?;
-        //     deployment.http_api_definitions = definitions
-        //         .iter()
-        //         .map(|row| row.try_get("http_definition_id"))
-        //         .collect::<Result<_, _>>()?;
-        // }
 
         Ok(deployments)
     }
