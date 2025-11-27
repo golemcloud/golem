@@ -179,7 +179,7 @@ impl poem_openapi::types::ParseFromJSON for ComponentFilePath {
 #[cfg(test)]
 mod tests {
     use crate::model::component::{
-        ComponentFilePath, InitialComponentFile, InitialComponentFileKey,
+        ComponentFileContentHash, ComponentFilePath, InitialComponentFile,
     };
     use crate::model::{ComponentFilePermissions, Empty, IdempotencyKey, WorkerStatus};
     use poem_openapi::types::ToJSON;
@@ -211,7 +211,13 @@ mod tests {
     #[test]
     fn initial_component_file_serde_equivalence() {
         let file = InitialComponentFile {
-            key: InitialComponentFileKey("key".to_string()),
+            content_hash: ComponentFileContentHash(
+                blake3::Hash::from_bytes([
+                    143, 27, 202, 64, 119, 5, 88, 233, 14, 191, 62, 209, 76, 8, 154, 240, 37, 121,
+                    196, 3, 255, 98, 41, 172, 67, 10, 184, 213, 52, 139, 201, 16,
+                ])
+                .into(),
+            ),
             path: ComponentFilePath::from_rel_str("hello").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
         };

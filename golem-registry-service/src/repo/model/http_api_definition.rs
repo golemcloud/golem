@@ -18,15 +18,18 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::api_definition::{
-    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision,
-    HttpApiDefinitionVersion, HttpApiRoute,
-};
+use golem_common::model::deployment::DeploymentPlanHttpApiDefintionEntry;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::{
+    GatewayBinding, GatewayBindingType, HttpApiDefinition, HttpApiDefinitionId,
+    HttpApiDefinitionName, HttpApiDefinitionRevision, HttpApiDefinitionVersion, HttpApiRoute,
+};
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -54,10 +57,10 @@ pub struct HttpApiDefinitionRecord {
 }
 
 // Definition field of the HttpApiDefinitionRevisionRecord record. Must be kept backwards compatible
-#[derive(Debug, Clone, BinaryCodec)]
+#[derive(Debug, Clone, BinaryCodec, PartialEq)]
 #[desert(evolution())]
 pub struct HttpApiDefinitionDefinitionBlob {
-    routes: Vec<HttpApiRoute>,
+    pub routes: Vec<HttpApiRoute>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -68,7 +71,7 @@ pub struct HttpApiDefinitionRevisionRecord {
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
-    pub definition: Vec<u8>, // TODO: model
+    pub definition: Blob<HttpApiDefinitionDefinitionBlob>,
 }
 
 impl HttpApiDefinitionRevisionRecord {
@@ -93,41 +96,32 @@ impl HttpApiDefinitionRevisionRecord {
         version: HttpApiDefinitionVersion,
         routes: Vec<HttpApiRoute>,
         actor: AccountId,
-    ) -> Result<Self, HttpApiDefinitionRepoError> {
-        let blob = HttpApiDefinitionDefinitionBlob { routes };
-        let serialized_blob = desert_rust::serialize_to_byte_vec(&blob).map_err(|e| {
-            anyhow::Error::from(e).context("serializing api definition blob failed")
-        })?;
-
-        Ok(Self {
+    ) -> Self {
+        let mut value = Self {
             http_api_definition_id: http_api_definition_id.0,
-            revision_id: HttpApiDefinitionRevision::INITIAL.0 as i64,
+            revision_id: HttpApiDefinitionRevision::INITIAL.into(),
             version: version.0,
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            definition: serialized_blob,
-        })
+            definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes }),
+        };
+        value.update_hash();
+        value
     }
 
-    pub fn from_model(
-        value: HttpApiDefinition,
-        audit: DeletableRevisionAuditFields,
-    ) -> Result<Self, HttpApiDefinitionRepoError> {
-        let blob = HttpApiDefinitionDefinitionBlob {
-            routes: value.routes,
-        };
-        let serialized_blob = desert_rust::serialize_to_byte_vec(&blob).map_err(|e| {
-            anyhow::Error::from(e).context("serializing api definition blob failed")
-        })?;
-
-        Ok(Self {
+    pub fn from_model(value: HttpApiDefinition, audit: DeletableRevisionAuditFields) -> Self {
+        let mut value = Self {
             http_api_definition_id: value.id.0,
             revision_id: value.revision.0 as i64,
             version: value.version.0,
             hash: SqlBlake3Hash::empty(),
             audit,
-            definition: serialized_blob,
-        })
+            definition: Blob::new(HttpApiDefinitionDefinitionBlob {
+                routes: value.routes,
+            }),
+        };
+        value.update_hash();
+        value
     }
 
     pub fn deletion(
@@ -135,26 +129,83 @@ impl HttpApiDefinitionRevisionRecord {
         http_api_definition_id: Uuid,
         current_revision_id: i64,
     ) -> Self {
-        Self {
+        let mut value = Self {
             http_api_definition_id,
             revision_id: current_revision_id + 1,
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
-            definition: vec![],
-        }
+            definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
+        };
+        value.update_hash();
+        value
     }
 
     pub fn to_diffable(&self) -> diff::HttpApiDefinition {
+        let mut converted_routes = BTreeMap::new();
+        for route in &self.definition.value.routes {
+            let http_api_method_and_path = diff::HttpApiMethodAndPath {
+                method: route.method.to_string(),
+                path: route.path.clone(),
+            };
+            let binding = match &route.binding {
+                GatewayBinding::Worker(inner) => diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::Worker,
+                    component_name: Some(inner.component_name.0.clone()),
+                    worker_name: None,
+                    idempotency_key: inner.idempotency_key.clone(),
+                    invocation_context: inner.invocation_context.clone(),
+                    response: Some(inner.response.clone()),
+                },
+                GatewayBinding::FileServer(inner) => diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::FileServer,
+                    component_name: Some(inner.component_name.0.clone()),
+                    worker_name: Some(inner.worker_name.clone()),
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: Some(inner.response.clone()),
+                },
+                GatewayBinding::HttpHandler(inner) => diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::HttpHandler,
+                    component_name: Some(inner.component_name.0.clone()),
+                    worker_name: Some(inner.worker_name.clone()),
+                    idempotency_key: inner.idempotency_key.clone(),
+                    invocation_context: inner.invocation_context.clone(),
+                    response: Some(inner.response.clone()),
+                },
+                GatewayBinding::CorsPreflight(inner) => diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::CorsPreflight,
+                    component_name: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: inner.response.clone(),
+                },
+                GatewayBinding::SwaggerUi(_) => diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::SwaggerUi,
+                    component_name: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: None,
+                },
+            };
+            let http_api_route = diff::HttpApiRoute {
+                binding,
+                security: route.security.as_ref().map(|s| s.0.clone()),
+            };
+
+            converted_routes.insert(http_api_method_and_path, http_api_route);
+        }
+
         diff::HttpApiDefinition {
-            // TODO: add proper model
-            routes: Default::default(),
+            routes: converted_routes,
             version: self.version.clone(),
         }
     }
 
     pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
+        self.hash = self.to_diffable().hash().into();
     }
 
     pub fn with_updated_hash(mut self) -> Self {
@@ -186,24 +237,19 @@ impl HttpApiDefinitionExtRevisionRecord {
     }
 }
 
-impl TryFrom<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
-    type Error = HttpApiDefinitionRepoError;
-    fn try_from(value: HttpApiDefinitionExtRevisionRecord) -> Result<Self, Self::Error> {
-        let deserialzed_blob: HttpApiDefinitionDefinitionBlob =
-            desert_rust::deserialize(&value.revision.definition).map_err(|e| {
-                anyhow::Error::from(e).context("deserializing api definition blob failed")
-            })?;
-
-        Ok(Self {
+impl From<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
+    fn from(value: HttpApiDefinitionExtRevisionRecord) -> Self {
+        Self {
             id: HttpApiDefinitionId(value.revision.http_api_definition_id),
             revision: HttpApiDefinitionRevision(value.revision.revision_id as u64),
             environment_id: EnvironmentId(value.environment_id),
             name: HttpApiDefinitionName(value.name),
+            hash: value.revision.hash.into(),
             version: HttpApiDefinitionVersion(value.revision.version),
-            routes: deserialzed_blob.routes,
+            routes: value.revision.definition.value.routes,
             created_at: value.entity_created_at.into(),
             updated_at: value.revision.audit.created_at.into(),
-        })
+        }
     }
 }
 
@@ -216,15 +262,87 @@ pub struct HttpApiDefinitionRevisionIdentityRecord {
     pub hash: SqlBlake3Hash,
 }
 
-impl HttpApiDefinitionRevisionIdentityRecord {
-    // NOTE: on deployment inserts we only expect names to be provided
-    pub fn for_deployment_insert(name: String) -> Self {
+impl From<HttpApiDefinitionRevisionIdentityRecord> for DeploymentPlanHttpApiDefintionEntry {
+    fn from(value: HttpApiDefinitionRevisionIdentityRecord) -> Self {
         Self {
-            http_api_definition_id: Uuid::nil(),
-            name,
-            revision_id: 0,
-            version: "".to_string(),
-            hash: SqlBlake3Hash::empty(),
+            id: HttpApiDefinitionId(value.http_api_definition_id),
+            revision: value.revision_id.into(),
+            name: HttpApiDefinitionName(value.name),
+            hash: value.hash.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HttpApiDefinitionDefinitionBlob;
+    use desert_rust::BinaryCodec;
+    use goldenfile::Mint;
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::http_api_definition::{
+        GatewayBinding, HttpApiRoute, RouteMethod, WorkerGatewayBinding,
+    };
+    use golem_service_base::repo::blob::Blob;
+    use std::fmt::Debug;
+    use std::io::Write;
+    use test_r::test;
+
+    #[allow(clippy::type_complexity)]
+    fn assert_old_decodes_as<T: BinaryCodec + PartialEq + Debug + 'static>(
+        expected: T,
+    ) -> Box<dyn Fn(&std::path::Path, &std::path::Path)> {
+        Box::new(move |old, _new| {
+            let old_bytes = std::fs::read(old).unwrap();
+
+            let old_decoded: T =
+                desert_rust::deserialize(&old_bytes).expect("Failed to decode old version");
+
+            assert_eq!(
+                old_decoded, expected,
+                "Decoded value from old file does not match expected"
+            );
+        })
+    }
+
+    #[test]
+    fn blob_version_1_serialization() -> anyhow::Result<()> {
+        let blob = Blob::new(HttpApiDefinitionDefinitionBlob {
+            routes: vec![HttpApiRoute {
+                method: RouteMethod::Post,
+                path: "/{user-id}/test-path-1".to_string(),
+                binding: GatewayBinding::Worker(WorkerGatewayBinding {
+                    component_name: ComponentName("test-component".to_string()),
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: r#"
+                                let user-id = request.path.user-id;
+                                let worker = "shopping-cart-${user-id}";
+                                let inst = instance(worker);
+                                let res = inst.cart(user-id);
+                                let contents = res.get-cart-contents();
+                                {
+                                    headers: {ContentType: "json", userid: "foo"},
+                                    body: contents,
+                                    status: 201
+                                }
+                            "#
+                    .to_string(),
+                }),
+                security: None,
+            }],
+        });
+
+        let serialized = blob.serialize()?.clone();
+
+        let mut mint = Mint::new("tests/goldenfiles");
+
+        let mut file = mint.new_goldenfile_with_differ(
+            "http_api_definition_repo_blob_v1.bin",
+            assert_old_decodes_as(blob.value),
+        )?;
+
+        file.write_all(&serialized)?;
+
+        Ok(())
     }
 }

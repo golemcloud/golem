@@ -287,12 +287,10 @@ CREATE TABLE original_component_files
     revision_id      BIGINT    NOT NULL,
     file_path        TEXT      NOT NULL,
 
-    hash             BYTEA     NOT NULL,
-
     created_at       TIMESTAMP NOT NULL,
     created_by       UUID      NOT NULL,
 
-    file_key         TEXT      NOT NULL,
+    file_content_hash BYTEA      NOT NULL,
     file_permissions TEXT      NOT NULL,
 
     CONSTRAINT original_component_files_pk
@@ -307,12 +305,10 @@ CREATE TABLE component_files
     revision_id      BIGINT    NOT NULL,
     file_path        TEXT      NOT NULL,
 
-    hash             BYTEA     NOT NULL,
-
     created_at       TIMESTAMP NOT NULL,
     created_by       UUID      NOT NULL,
 
-    file_key         TEXT      NOT NULL,
+    file_content_hash BYTEA      NOT NULL,
     file_permissions TEXT      NOT NULL,
 
     CONSTRAINT component_files_pk
@@ -440,9 +436,7 @@ CREATE TABLE http_api_deployments
 (
     http_api_deployment_id UUID      NOT NULL,
     environment_id         UUID      NOT NULL,
-
-    host                   TEXT      NOT NULL,
-    subdomain              TEXT,
+    domain              TEXT NOT NULL,
 
     created_at             TIMESTAMP NOT NULL,
     updated_at             TIMESTAMP NOT NULL,
@@ -457,8 +451,8 @@ CREATE TABLE http_api_deployments
         FOREIGN KEY (environment_id) REFERENCES environments
 );
 
-CREATE UNIQUE INDEX http_api_deployments_name_uk
-    ON components (environment_id, name);
+CREATE UNIQUE INDEX http_api_deployments_domain_uk
+    ON http_api_deployments (environment_id, domain);
 
 CREATE TABLE http_api_deployment_revisions
 (
@@ -471,6 +465,8 @@ CREATE TABLE http_api_deployment_revisions
     created_by             UUID      NOT NULL,
     deleted                BOOLEAN   NOT NULL,
 
+    http_api_definitions TEXT NOT NULL,
+
     CONSTRAINT http_api_deployment_revisions_pk
         PRIMARY KEY (http_api_deployment_id, revision_id),
     CONSTRAINT http_api_deployment_revisions_deployments_fk
@@ -479,18 +475,6 @@ CREATE TABLE http_api_deployment_revisions
 
 CREATE INDEX http_api_deployment_revisions_latest_revision_by_id_idx
     ON http_api_deployment_revisions (http_api_deployment_id, revision_id DESC);
-
-CREATE TABLE http_api_deployment_definitions
-(
-    http_api_deployment_id UUID   NOT NULL,
-    revision_id            BIGINT NOT NULL,
-    http_definition_id     UUID   NOT NULL,
-
-    CONSTRAINT http_api_deployment_definitions_pk
-        PRIMARY KEY (http_api_deployment_id, revision_id, http_definition_id),
-    CONSTRAINT http_api_deployment_definitions_http_api_deployments_fk
-        FOREIGN KEY (http_api_deployment_id, revision_id) REFERENCES http_api_deployment_revisions
-);
 
 CREATE TABLE deployment_http_api_definition_revisions
 (
@@ -552,7 +536,7 @@ CREATE TABLE plugins
     transform_url         TEXT,
     component_id          UUID,
     component_revision_id BIGINT,
-    blob_storage_key      TEXT,
+    wasm_content_hash      BYTEA,
 
     CONSTRAINT plugins_pk
         PRIMARY KEY (plugin_id),
@@ -730,7 +714,11 @@ CREATE UNIQUE INDEX domain_registrations_domain_uk
     ON domain_registrations (domain)
     WHERE deleted_at IS NULL;
 
-CREATE INDEX domain_registrations_environment_id_idx ON environments (environment_id);
+CREATE INDEX domain_registrations_environment_id_idx ON domain_registrations (environment_id);
+
+CREATE INDEX domain_registrations_env_domain_active_idx
+  ON domain_registrations (environment_id, domain)
+  WHERE deleted_at IS NULL;
 
 CREATE TABLE security_schemes
 (
@@ -779,3 +767,21 @@ CREATE TABLE security_scheme_revisions
     CONSTRAINT security_schemes_revisions_security_schemes_fk
         FOREIGN KEY (security_scheme_id) REFERENCES security_schemes
 );
+
+CREATE TABLE deployment_compiled_http_api_definition_routes (
+    environment_id UUID NOT NULL,
+    deployment_revision_id BIGINT NOT NULL,
+    id INTEGER NOT NULL,  -- enumerated per deployment
+
+    domain TEXT NOT NULL,
+
+    security_scheme TEXT,         -- nullable if no security
+
+    compiled_route BYTEA NOT NULL, -- full compiled route as blob
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, id)
+);
+
+CREATE INDEX deployment_compiled_http_api_definition_routes_env_domain_idx
+    ON deployment_compiled_http_api_definition_routes(environment_id, domain);

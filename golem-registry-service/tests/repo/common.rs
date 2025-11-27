@@ -37,13 +37,14 @@ use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_definition::{
-    HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
+    HttpApiDefinitionDefinitionBlob, HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_service_base::repo::blob::Blob;
 use std::collections::{BTreeMap, HashMap};
 use std::default::Default;
 use strum::IntoEnumIterator;
@@ -565,7 +566,7 @@ pub async fn test_component_stage(deps: &Deps) {
             transform_url: None,
             component_id: None,
             component_revision_id: None,
-            blob_storage_key: None,
+            wasm_content_hash: None,
         })
         .await
         .unwrap()
@@ -589,7 +590,7 @@ pub async fn test_component_stage(deps: &Deps) {
             transform_url: None,
             component_id: None,
             component_revision_id: None,
-            blob_storage_key: None,
+            wasm_content_hash: None,
         })
         .await
         .unwrap()
@@ -620,9 +621,8 @@ pub async fn test_component_stage(deps: &Deps) {
             component_id,
             revision_id: 0,
             file_path: "file1".to_string(),
-            hash: blake3::hash("test-2".as_bytes()).into(),
+            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
-            file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
         plugins: vec![
@@ -651,9 +651,8 @@ pub async fn test_component_stage(deps: &Deps) {
             component_id,
             revision_id: 0,
             file_path: "file".to_string(),
-            hash: blake3::hash("test-2".as_bytes()).into(),
+            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
-            file_key: "xdxd".to_string(),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
     }
@@ -859,7 +858,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        definition: "test-definition".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
     }
     .with_updated_hash();
 
@@ -921,7 +920,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
         revision_id: 1,
         version: "1.1".to_string(),
         hash: SqlBlake3Hash::empty(),
-        definition: "test-definition-updated".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
         ..revision_0.clone()
     }
     .with_updated_hash();
@@ -1019,19 +1018,11 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
     assert!(created_after_delete.revision == revision_after_delete);
 }
 
-pub async fn test_http_api_deployment_stage_no_sub(deps: &Deps) {
-    test_http_api_deployment_stage_with_subdomain(deps, None).await;
-}
-
-pub async fn test_http_api_deployment_stage_has_sub(deps: &Deps) {
-    test_http_api_deployment_stage_with_subdomain(deps, Some("api")).await;
-}
-
-async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: Option<&str>) {
+pub async fn test_http_api_deployment_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
     let env = deps.create_env(&app.revision.application_id).await;
-    let host = "test-host-1.com";
+    let domain = "test-host-1.com";
     let deployment_id = new_repo_uuid();
 
     let definition_id = new_repo_uuid();
@@ -1042,7 +1033,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         version: "1.0".to_string(),
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        definition: "test-definition".as_bytes().to_vec(),
+        definition: Blob::new(HttpApiDefinitionDefinitionBlob { routes: Vec::new() }),
     };
 
     let created_definition = deps
@@ -1060,36 +1051,27 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        http_api_definitions: vec![created_definition.to_identity()],
+        http_api_definitions: serde_json::to_string(&vec![created_definition.name]).unwrap(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_0 = deps
         .http_api_deployment_repo
-        .create(
-            &env.revision.environment_id,
-            host,
-            subdomain,
-            revision_0.clone(),
-        )
+        .create(&env.revision.environment_id, domain, revision_0.clone())
         .await
         .unwrap();
+
     assert!(revision_0 == created_revision_0.revision);
     assert!(created_revision_0.environment_id == env.revision.environment_id);
-    assert!(created_revision_0.host == host);
-    assert!(created_revision_0.subdomain.as_deref() == subdomain);
+    assert!(created_revision_0.domain == domain);
 
     let recreate = deps
         .http_api_deployment_repo
-        .create(
-            &env.revision.environment_id,
-            host,
-            subdomain,
-            revision_0.clone(),
-        )
+        .create(&env.revision.environment_id, domain, revision_0.clone())
         .await;
 
-    let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = recreate);
+    let_assert!(Err(HttpApiDeploymentRepoError::ApiDeploymentViolatesUniqueness) = recreate);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
@@ -1099,19 +1081,17 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     let_assert!(Some(get_revision_0) = get_revision_0);
     assert!(revision_0 == get_revision_0.revision);
     assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.host == host);
-    assert!(get_revision_0.subdomain.as_deref() == subdomain);
+    assert!(get_revision_0.domain == domain);
 
     let get_revision_0 = deps
         .http_api_deployment_repo
-        .get_staged_by_name(&env.revision.environment_id, host, subdomain)
+        .get_staged_by_domain(&env.revision.environment_id, domain)
         .await
         .unwrap();
     let_assert!(Some(get_revision_0) = get_revision_0);
     assert!(revision_0 == get_revision_0.revision);
     assert!(get_revision_0.environment_id == env.revision.environment_id);
-    assert!(get_revision_0.host == host);
-    assert!(get_revision_0.subdomain.as_deref() == subdomain);
+    assert!(get_revision_0.domain == domain);
 
     let deployments = deps
         .http_api_deployment_repo
@@ -1121,15 +1101,15 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     assert!(deployments.len() == 1);
     assert!(deployments[0].revision == revision_0);
     assert!(deployments[0].environment_id == env.revision.environment_id);
-    assert!(deployments[0].host == host);
-    assert!(deployments[0].subdomain.as_deref() == subdomain);
+    assert!(deployments[0].domain == domain);
 
     let revision_1 = HttpApiDeploymentRevisionRecord {
         revision_id: 1,
         hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_1 = deps
         .http_api_deployment_repo
@@ -1139,8 +1119,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
 
     assert!(revision_1 == created_revision_1.revision);
     assert!(created_revision_1.environment_id == env.revision.environment_id);
-    assert!(created_revision_1.host == host);
-    assert!(created_revision_1.subdomain.as_deref() == subdomain);
+    assert!(created_revision_1.domain == domain);
 
     let recreated_revision_1 = deps
         .http_api_deployment_repo
@@ -1158,19 +1137,19 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
     assert!(deployments[0].revision == revision_1);
 
     let other_deployment_id = new_repo_uuid();
-    let other_host = "test-host-2.com";
+    let other_domain = "test-host-2.com";
     let other_deployment_revision_0 = HttpApiDeploymentRevisionRecord {
         http_api_deployment_id: other_deployment_id,
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_other_deployment_0 = deps
         .http_api_deployment_repo
         .create(
             &env.revision.environment_id,
-            other_host,
-            subdomain,
+            other_domain,
             other_deployment_revision_0.clone(),
         )
         .await
@@ -1216,8 +1195,7 @@ async fn test_http_api_deployment_stage_with_subdomain(deps: &Deps, subdomain: O
         .http_api_deployment_repo
         .create(
             &env.revision.environment_id,
-            host,
-            subdomain,
+            domain,
             revision_after_delete.clone(),
         )
         .await

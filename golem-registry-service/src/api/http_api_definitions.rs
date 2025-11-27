@@ -15,14 +15,14 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::http_api_definition::HttpApiDefinitionService;
-use golem_common::api::Page;
-use golem_common::model::api_definition::HttpApiDefinitionRevision;
-use golem_common::model::api_definition::{
+use golem_common::model::Page;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::HttpApiDefinitionRevision;
+use golem_common::model::http_api_definition::{
     HttpApiDefinition, HttpApiDefinitionCreation, HttpApiDefinitionId, HttpApiDefinitionName,
     HttpApiDefinitionUpdate,
 };
-use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;

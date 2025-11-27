@@ -14,9 +14,10 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::deployment::DeploymentService;
+use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
-use golem_common::api::Page;
+use golem_common::model::Page;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentSummary,
 };
@@ -35,11 +36,12 @@ use tracing::Instrument;
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     deployment_service: Arc<DeploymentService>,
+    deployment_write_service: Arc<DeploymentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
 #[OpenApi(
-    prefix_path = "/v1/envs",
+    prefix_path = "/v1",
     tag = ApiTags::RegistryService,
     tag = ApiTags::Environment
 )]
@@ -47,18 +49,146 @@ impl EnvironmentsApi {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         deployment_service: Arc<DeploymentService>,
+        deployment_write_service: Arc<DeploymentWriteService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             deployment_service,
+            deployment_write_service,
             auth_service,
         }
     }
 
+    /// Create an application environment
+    #[oai(
+        path = "/apps/:application_id/envs",
+        method = "post",
+        operation_id = "create_environment",
+        tag = ApiTags::Application
+    )]
+    pub async fn create_environment(
+        &self,
+        application_id: Path<ApplicationId>,
+        data: Json<EnvironmentCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Environment>> {
+        let record = recorded_http_api_request!(
+            "create_environment",
+            application_id = application_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_environment_internal(application_id.0, data.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_environment_internal(
+        &self,
+        application_id: ApplicationId,
+        data: EnvironmentCreation,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Environment>> {
+        let result = self
+            .environment_service
+            .create(application_id, data, &auth)
+            .await?;
+
+        Ok(Json(result))
+    }
+
+    /// Get application environment by name
+    #[oai(
+        path = "/apps/:application_id/envs/:environment_name",
+        method = "get",
+        operation_id = "get_application_environment",
+        tag = ApiTags::Application
+    )]
+    pub async fn get_application_environment(
+        &self,
+        application_id: Path<ApplicationId>,
+        environment_name: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Environment>> {
+        let record = recorded_http_api_request!(
+            "get_application_environment",
+            application_id = application_id.0.to_string(),
+            environment_name = environment_name.0
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_application_environment_internal(application_id.0, environment_name.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_application_environment_internal(
+        &self,
+        application_id: ApplicationId,
+        environment_name: String,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Environment>> {
+        let environment = self
+            .environment_service
+            .get_in_application(&application_id, &EnvironmentName(environment_name), &auth)
+            .await?;
+        Ok(Json(environment))
+    }
+
+    /// List all application environments
+    #[oai(
+        path = "/apps/:application_id/envs",
+        method = "get",
+        operation_id = "list_application_environments",
+        tag = ApiTags::Application
+    )]
+    pub async fn list_application_environments(
+        &self,
+        application_id: Path<ApplicationId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<Environment>>> {
+        let record = recorded_http_api_request!(
+            "list_application_environments",
+            application_id = application_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_application_environments_internal(application_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_application_environments_internal(
+        &self,
+        application_id: ApplicationId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Environment>>> {
+        let environments = self
+            .environment_service
+            .list_in_application(&application_id, &auth)
+            .await?;
+
+        Ok(Json(Page {
+            values: environments,
+        }))
+    }
+
     /// Get environment by id.
     #[oai(
-        path = "/:environment_id",
+        path = "/envs/:environment_id",
         method = "get",
         operation_id = "get_environment"
     )]
@@ -96,7 +226,7 @@ impl EnvironmentsApi {
 
     /// Update environment by id.
     #[oai(
-        path = "/:environment_id",
+        path = "/envs/:environment_id",
         method = "patch",
         operation_id = "update_environment"
     )]
@@ -136,7 +266,7 @@ impl EnvironmentsApi {
 
     /// Delete environment by id.
     #[oai(
-        path = "/:environment_id",
+        path = "/envs/:environment_id",
         method = "delete",
         operation_id = "delete_environment"
     )]
@@ -175,7 +305,7 @@ impl EnvironmentsApi {
 
     /// Get the current deployment plan
     #[oai(
-        path = "/:environment_id/plan",
+        path = "/envs/:environment_id/plan",
         method = "get",
         operation_id = "get_environment_deployment_plan"
     )]
@@ -213,7 +343,7 @@ impl EnvironmentsApi {
 
     /// Get all deployments in this environment
     #[oai(
-        path = "/:environment_id/deployments",
+        path = "/envs/:environment_id/deployments",
         method = "get",
         operation_id = "get_deployments",
         tag = ApiTags::Deployment
@@ -254,7 +384,7 @@ impl EnvironmentsApi {
 
     /// Deploy the current staging area of this environment
     #[oai(
-        path = "/:environment_id/deployments",
+        path = "/envs/:environment_id/deployments",
         method = "post",
         operation_id = "deploy_environment",
         tag = ApiTags::Deployment
@@ -287,7 +417,7 @@ impl EnvironmentsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Deployment>> {
         let deployment = self
-            .deployment_service
+            .deployment_write_service
             .create_deployment(&environment_id, payload, &auth)
             .await?;
         Ok(Json(deployment))
@@ -295,7 +425,7 @@ impl EnvironmentsApi {
 
     /// Get the deployment plan of a deployed deployment
     #[oai(
-        path = "/:environment_id/deployments/:deployment_id/plan",
+        path = "/envs/:environment_id/deployments/:deployment_id/plan",
         method = "get",
         operation_id = "get_environment_deployed_deployment_plan"
     )]

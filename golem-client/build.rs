@@ -232,15 +232,28 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // Http api definition
             (
                 "HttpApiDefinitionCreation",
-                "golem_common::model::api_definition::HttpApiDefinitionCreation",
+                "golem_common::model::http_api_definition::HttpApiDefinitionCreation",
             ),
             (
                 "HttpApiDefinitionUpdate",
-                "golem_common::model::api_definition::HttpApiDefinitionUpdate",
+                "golem_common::model::http_api_definition::HttpApiDefinitionUpdate",
             ),
             (
                 "HttpApiDefinition",
-                "golem_common::model::api_definition::HttpApiDefinition",
+                "golem_common::model::http_api_definition::HttpApiDefinition",
+            ),
+            // Http api deployment
+            (
+                "HttpApiDeploymentCreation",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentCreation",
+            ),
+            (
+                "HttpApiDeploymentUpdate",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentUpdate",
+            ),
+            (
+                "HttpApiDeployment",
+                "golem_common::model::http_api_deployment::HttpApiDeployment",
             ),
             // TODO: Leftovers
             ("PluginScope", "golem_common::model::plugin::PluginScope"),

@@ -16,6 +16,7 @@ use super::account::AccountId;
 use super::base64::Base64;
 use super::component::ComponentRevision;
 use super::ComponentId;
+use crate::model::diff;
 use crate::model::Empty;
 use crate::{declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
 
@@ -25,7 +26,7 @@ newtype_uuid!(
 );
 
 declare_transparent_newtypes! {
-    pub struct PluginWasmFileKey(pub String);
+    pub struct WasmContentHash(pub diff::Hash);
 }
 
 declare_structs! {

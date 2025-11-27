@@ -322,7 +322,7 @@ pub fn format_ifs_entry(files: &[InitialComponentFile]) -> String {
                 "{} {} {}",
                 file.permissions.as_compact_str(),
                 file.path.as_path().as_str().log_color_highlight(),
-                file.key.0.as_str().black()
+                file.content_hash.0.to_string().black()
             )
         })
         .join("\n")

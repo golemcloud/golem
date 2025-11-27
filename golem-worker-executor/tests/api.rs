@@ -1460,7 +1460,7 @@ async fn get_worker_metadata(
     check!(metadata1.worker_id == worker_id);
     check!(metadata1.created_by == context.account_id);
 
-    check!(metadata2.component_size == 200742);
+    check!(metadata2.component_size == 200406);
     check!(metadata2.total_linear_memory_size == 1245184);
     Ok(())
 }

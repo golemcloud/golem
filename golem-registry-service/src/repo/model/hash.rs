@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::diff;
 use sqlx::Database;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -70,6 +71,18 @@ impl From<SqlBlake3Hash> for blake3::Hash {
 impl From<blake3::Hash> for SqlBlake3Hash {
     fn from(hash: blake3::Hash) -> Self {
         Self { hash }
+    }
+}
+
+impl From<SqlBlake3Hash> for diff::Hash {
+    fn from(hash: SqlBlake3Hash) -> Self {
+        blake3::Hash::from(hash).into()
+    }
+}
+
+impl From<diff::Hash> for SqlBlake3Hash {
+    fn from(hash: diff::Hash) -> Self {
+        hash.into_blake3().into()
     }
 }
 

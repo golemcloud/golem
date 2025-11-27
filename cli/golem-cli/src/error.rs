@@ -60,8 +60,8 @@ pub mod service {
 
     use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
-        AccountError, ApiCertificateError, ApiDeploymentError, ApiDomainError, ApiSecurityError,
-        ApplicationError, ComponentError, EnvironmentError, HttpApiDefinitionError,
+        AccountError, ApiDeploymentError, ApiDomainError, ApiSecurityError, ApplicationError,
+        ComponentError, EnvironmentError, HttpApiDefinitionError,
         LoginCompleteOauth2DeviceFlowError, LoginCurrentLoginTokenError, LoginLoginOauth2Error,
         LoginPollOauth2WebflowError, LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
         LoginSubmitOauth2WebflowCallbackError, PluginError, TokenError, WorkerError,
@@ -953,47 +953,6 @@ pub mod service {
                     message: error.error,
                 },
                 AccountError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for ApiCertificateError {
-        fn service_name() -> &'static str {
-            "API Certificate"
-        }
-    }
-
-    impl From<ApiCertificateError> for ServiceErrorResponse {
-        fn from(value: ApiCertificateError) -> Self {
-            match value {
-                ApiCertificateError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ApiCertificateError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ApiCertificateError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ApiCertificateError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiCertificateError::Error409(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiCertificateError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ApiCertificateError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },

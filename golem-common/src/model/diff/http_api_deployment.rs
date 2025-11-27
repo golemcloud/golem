@@ -15,52 +15,6 @@
 use crate::model::diff::{hash_from_serialized_value, BTreeSetDiff, Diffable, Hash, Hashable};
 use serde::Serialize;
 use std::collections::BTreeSet;
-use std::fmt::Display;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HttpApiDeploymentTarget {
-    host: String,
-    subdomain: Option<String>,
-}
-
-pub static NO_SUBDOMAIN: Option<&str> = None;
-
-impl<Subdomain: Into<String>, Host: Into<String>> From<(Option<Subdomain>, Host)>
-    for HttpApiDeploymentTarget
-{
-    fn from(value: (Option<Subdomain>, Host)) -> Self {
-        HttpApiDeploymentTarget {
-            host: value.1.into(),
-            subdomain: value.0.map(|v| v.into()),
-        }
-    }
-}
-
-impl Serialize for HttpApiDeploymentTarget {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl From<&HttpApiDeploymentTarget> for String {
-    fn from(value: &HttpApiDeploymentTarget) -> Self {
-        match &value.subdomain {
-            Some(subdomain) => {
-                format!("{}.{}", subdomain, value.host)
-            }
-            None => value.host.to_string(),
-        }
-    }
-}
-
-impl Display for HttpApiDeploymentTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", String::from(self))
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HttpApiDeployment {

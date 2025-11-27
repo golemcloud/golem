@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use desert_rust::BinaryCodec;
+
 pub mod compiled_gateway_binding;
 pub mod compiled_http_api_definition;
 pub mod http_middlewares;
 pub mod identity_provider_metadata;
 pub mod path_pattern;
 mod path_pattern_parser;
+// pub mod protobuf;
+pub mod rib_compiler;
 pub mod security_scheme;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct HttpCors {
     pub allow_origin: String,
     pub allow_methods: String,
@@ -28,4 +33,17 @@ pub struct HttpCors {
     pub expose_headers: Option<String>,
     pub allow_credentials: Option<bool>,
     pub max_age: Option<u64>,
+}
+
+impl Default for HttpCors {
+    fn default() -> HttpCors {
+        HttpCors {
+            allow_origin: "*".to_string(),
+            allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
+            allow_headers: "Content-Type, Authorization".to_string(),
+            expose_headers: None,
+            max_age: None,
+            allow_credentials: None,
+        }
+    }
 }

@@ -72,13 +72,16 @@ declare_enums! {
 mod protobuf {
     use super::{AccountRole, EnvironmentRole};
 
-    impl From<golem_api_grpc::proto::golem::auth::AccountRole> for AccountRole {
-        fn from(value: golem_api_grpc::proto::golem::auth::AccountRole) -> Self {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AccountRole> for AccountRole {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AccountRole,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::auth::AccountRole as GrpcAccountRole;
             match value {
-                golem_api_grpc::proto::golem::auth::AccountRole::Admin => Self::Admin,
-                golem_api_grpc::proto::golem::auth::AccountRole::MarketingAdmin => {
-                    Self::MarketingAdmin
-                }
+                GrpcAccountRole::Admin => Ok(Self::Admin),
+                GrpcAccountRole::MarketingAdmin => Ok(Self::MarketingAdmin),
+                GrpcAccountRole::Unspecified => Err("unknown account role".to_string()),
             }
         }
     }
@@ -92,12 +95,18 @@ mod protobuf {
         }
     }
 
-    impl From<golem_api_grpc::proto::golem::auth::EnvironmentRole> for EnvironmentRole {
-        fn from(value: golem_api_grpc::proto::golem::auth::EnvironmentRole) -> Self {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::EnvironmentRole> for EnvironmentRole {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::EnvironmentRole,
+        ) -> Result<Self, Self::Error> {
+            use golem_api_grpc::proto::golem::auth::EnvironmentRole as GrpcEnvironmentRole;
+
             match value {
-                golem_api_grpc::proto::golem::auth::EnvironmentRole::Admin => Self::Admin,
-                golem_api_grpc::proto::golem::auth::EnvironmentRole::Viewer => Self::Viewer,
-                golem_api_grpc::proto::golem::auth::EnvironmentRole::Deployer => Self::Deployer,
+                GrpcEnvironmentRole::Admin => Ok(Self::Admin),
+                GrpcEnvironmentRole::Viewer => Ok(Self::Viewer),
+                GrpcEnvironmentRole::Deployer => Ok(Self::Deployer),
+                GrpcEnvironmentRole::Unspecified => Err("unknown environment role".to_string()),
             }
         }
     }

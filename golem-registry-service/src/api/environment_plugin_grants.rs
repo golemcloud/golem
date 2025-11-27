@@ -15,7 +15,7 @@
 use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
-use golem_common::api::Page;
+use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
@@ -173,7 +173,7 @@ impl EnvironmentPluginGrantsApi {
         Ok(Json(grant))
     }
 
-    /// Get environment grant by id
+    /// Delete environment plugin grant
     #[oai(
         path = "/environment-plugins/:environment_plugin_grant_id",
         method = "delete",

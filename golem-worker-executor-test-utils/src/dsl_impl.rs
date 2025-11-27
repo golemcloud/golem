@@ -110,7 +110,7 @@ impl TestDsl for TestWorkerExecutor {
         for entry in files {
             let full_source_path = component_directy.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
-            let key = self
+            let content_hash = self
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
@@ -120,7 +120,7 @@ impl TestDsl for TestWorkerExecutor {
                 )
                 .await?;
             converted_files.push(InitialComponentFile {
-                key,
+                content_hash,
                 path: entry.target_path,
                 permissions: entry.permissions,
             });
@@ -208,7 +208,7 @@ impl TestDsl for TestWorkerExecutor {
         for entry in new_files {
             let full_source_path = component_directy.join(entry.source_path);
             let data = tokio::fs::read(full_source_path).await?;
-            let key = self
+            let content_hash = self
                 .deps
                 .initial_component_files_service
                 .put_if_not_exists(
@@ -218,7 +218,7 @@ impl TestDsl for TestWorkerExecutor {
                 )
                 .await?;
             converted_new_files.push(InitialComponentFile {
-                key,
+                content_hash,
                 path: entry.target_path,
                 permissions: entry.permissions,
             });

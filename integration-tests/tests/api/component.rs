@@ -44,7 +44,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[test]
 #[tracing::instrument]
 async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -73,7 +73,7 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 #[test]
 #[tracing::instrument]
 async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -117,7 +117,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
 async fn component_update_with_wrong_revision_is_rejected(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -149,7 +149,7 @@ async fn component_update_with_wrong_revision_is_rejected(
 #[test]
 #[tracing::instrument]
 async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -190,7 +190,7 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
 async fn create_component_with_plugins_and_update_installations(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
@@ -294,7 +294,7 @@ async fn create_component_with_plugins_and_update_installations(
 #[test]
 #[tracing::instrument]
 async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
@@ -412,7 +412,7 @@ async fn install_component_transformer_plugin(
     let port = listener.local_addr().unwrap().port();
     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
@@ -472,7 +472,7 @@ async fn install_component_transformer_plugin(
 #[test]
 #[tracing::instrument]
 async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -523,7 +523,7 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
 #[test]
 #[tracing::instrument]
 async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let user = deps.user().await?;
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 

@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use super::audit::ImmutableAuditFields;
+use super::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
-use golem_common::model::plugin_registration::PluginWasmFileKey;
+use golem_common::model::plugin_registration::WasmContentHash;
 use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationId,
 };
@@ -60,7 +61,7 @@ pub struct PluginRecord {
     pub component_revision_id: Option<i64>,
 
     // for Library and App plugin type
-    pub blob_storage_key: Option<String>,
+    pub wasm_content_hash: Option<SqlBlake3Hash>,
 }
 
 impl PluginRecord {
@@ -82,7 +83,7 @@ impl PluginRecord {
                 transform_url: None,
                 component_id: None,
                 component_revision_id: None,
-                blob_storage_key: Some(inner.blob_storage_key.0),
+                wasm_content_hash: Some(inner.wasm_content_hash.0.into()),
             },
             PluginSpec::Library(inner) => Self {
                 plugin_id: model.id.0,
@@ -100,7 +101,7 @@ impl PluginRecord {
                 transform_url: None,
                 component_id: None,
                 component_revision_id: None,
-                blob_storage_key: Some(inner.blob_storage_key.0),
+                wasm_content_hash: Some(inner.wasm_content_hash.0.into()),
             },
             PluginSpec::ComponentTransformer(inner) => Self {
                 plugin_id: model.id.0,
@@ -118,7 +119,7 @@ impl PluginRecord {
                 transform_url: Some(inner.transform_url),
                 component_id: None,
                 component_revision_id: None,
-                blob_storage_key: None,
+                wasm_content_hash: None,
             },
             PluginSpec::OplogProcessor(inner) => Self {
                 plugin_id: model.id.0,
@@ -136,7 +137,7 @@ impl PluginRecord {
                 transform_url: None,
                 component_id: Some(inner.component_id.0),
                 component_revision_id: Some(inner.component_revision.into()),
-                blob_storage_key: None,
+                wasm_content_hash: None,
             },
         }
     }
@@ -156,10 +157,11 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                 icon: value.icon,
                 homepage: value.homepage,
                 spec: PluginSpec::App(AppPluginSpec {
-                    blob_storage_key: PluginWasmFileKey(
+                    wasm_content_hash: WasmContentHash(
                         value
-                            .blob_storage_key
-                            .ok_or(anyhow!("no blob_storage_key field"))?,
+                            .wasm_content_hash
+                            .ok_or(anyhow!("no wasm_content_hash field"))?
+                            .into(),
                     ),
                 }),
                 deleted: value.audit.deleted_at.is_some(),
@@ -173,10 +175,11 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                 icon: value.icon,
                 homepage: value.homepage,
                 spec: PluginSpec::Library(LibraryPluginSpec {
-                    blob_storage_key: PluginWasmFileKey(
+                    wasm_content_hash: WasmContentHash(
                         value
-                            .blob_storage_key
-                            .ok_or(anyhow!("no blob_storage_key field"))?,
+                            .wasm_content_hash
+                            .ok_or(anyhow!("no wasm_content_hash field"))?
+                            .into(),
                     ),
                 }),
                 deleted: value.audit.deleted_at.is_some(),

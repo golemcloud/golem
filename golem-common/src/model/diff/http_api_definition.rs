@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::diff::{hash_from_serialized_value, BTreeMapDiff, Diffable, Hash, Hashable};
-use crate::model::GatewayBindingType;
+use crate::model::http_api_definition::GatewayBindingType;
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -75,10 +75,11 @@ impl Display for HttpApiMethodAndPath {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDefinitionBinding {
-    pub binding_type: Option<GatewayBindingType>,
+    pub binding_type: GatewayBindingType,
     pub component_name: Option<String>,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
+    pub invocation_context: Option<String>,
     pub response: Option<String>,
 }
 

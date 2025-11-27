@@ -25,6 +25,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata,
 };
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
@@ -421,11 +422,15 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
                 value.agent_types,
             ),
             created_at: Default::default(),
+            original_files: value.files.clone(),
             files: value.files,
             installed_plugins: vec![],
+            original_env: value.env.clone(),
             env: value.env,
             wasm_hash: value.wasm_hash,
             environment_roles_from_shares: value.environment_roles_from_shares,
+            // TODO: slimmer model for worker-executor
+            hash: Hash::empty(),
         }
     }
 }

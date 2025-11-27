@@ -1611,10 +1611,10 @@ mod app_builder {
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use colored::Colorize;
-    use golem_common::model::api_definition::RouteMethod;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::http_api_definition::RouteMethod;
     use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

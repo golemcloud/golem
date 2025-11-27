@@ -43,6 +43,12 @@ pub trait DomainRegistrationRepo: Send + Sync {
         domain_registration_id: &Uuid,
     ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
 
+    async fn get_in_environment(
+        &self,
+        environment_id: &Uuid,
+        domain: &str,
+    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError>;
+
     async fn list_by_environment(
         &self,
         environment_id: &Uuid,
@@ -98,6 +104,18 @@ impl<Repo: DomainRegistrationRepo> DomainRegistrationRepo for LoggedDomainRegist
         let span = Self::span_id(domain_registration_id);
         self.repo
             .get_by_id(domain_registration_id)
+            .instrument(span)
+            .await
+    }
+
+    async fn get_in_environment(
+        &self,
+        environment_id: &Uuid,
+        domain: &str,
+    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+        let span = Self::span_environment(environment_id);
+        self.repo
+            .get_in_environment(environment_id, domain)
             .instrument(span)
             .await
     }
@@ -216,6 +234,32 @@ impl DomainRegistrationRepo for DbDomainRegistrationRepo<PostgresPool> {
                         AND deleted_at IS NULL
                 "#})
                 .bind(domain_registration_id),
+            )
+            .await?;
+
+        Ok(result)
+    }
+
+    async fn get_in_environment(
+        &self,
+        environment_id: &Uuid,
+        domain: &str,
+    ) -> Result<Option<DomainRegistrationRecord>, DomainRegistrationRepoError> {
+        let result = self
+            .with_ro("get_in_environment")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! {r#"
+                    SELECT
+                        domain_registration_id, environment_id, domain,
+                        created_at, created_by, deleted_at, deleted_by
+                    FROM domain_registrations
+                    WHERE
+                        environment_id = $1
+                        AND domain = $2
+                        AND deleted_at IS NULL
+                "#})
+                .bind(environment_id)
+                .bind(domain),
             )
             .await?;
 

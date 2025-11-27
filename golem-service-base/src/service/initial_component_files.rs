@@ -17,7 +17,7 @@ use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::component::InitialComponentFileKey;
+use golem_common::model::component::ComponentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
 use std::{path::PathBuf, sync::Arc};
 use tracing::debug;
@@ -38,10 +38,8 @@ impl InitialComponentFilesService {
     pub async fn exists(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
     ) -> Result<bool, Error> {
-        let path = PathBuf::from(key.0.clone());
-
         let metadata = self
             .blob_storage
             .get_metadata(
@@ -50,7 +48,7 @@ impl InitialComponentFilesService {
                 BlobStorageNamespace::InitialComponentFiles {
                     environment_id: environment_id.clone(),
                 },
-                &path,
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
             .context("Failed getting metadata")?;
@@ -61,7 +59,7 @@ impl InitialComponentFilesService {
     pub async fn get(
         &self,
         environment_id: &EnvironmentId,
-        key: &InitialComponentFileKey,
+        key: &ComponentFileContentHash,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
             .get_stream(
@@ -70,7 +68,7 @@ impl InitialComponentFilesService {
                 BlobStorageNamespace::InitialComponentFiles {
                     environment_id: environment_id.clone(),
                 },
-                &PathBuf::from(key.0.clone()),
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
             .context("Failed getting data stream")
@@ -80,10 +78,9 @@ impl InitialComponentFilesService {
         &self,
         environment_id: &EnvironmentId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<InitialComponentFileKey, Error> {
+    ) -> Result<ComponentFileContentHash, Error> {
         let hash = data.content_hash().await?;
-
-        let key = PathBuf::from(hash.clone());
+        let key = PathBuf::from(hash.into_blake3().to_hex().to_string());
 
         let metadata = self
             .blob_storage
@@ -114,6 +111,6 @@ impl InitialComponentFilesService {
                 .await
                 .context("Failed storing blob storage data")?;
         };
-        Ok(InitialComponentFileKey(hash))
+        Ok(ComponentFileContentHash(hash))
     }
 }

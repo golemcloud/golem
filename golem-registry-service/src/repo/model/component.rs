@@ -23,12 +23,12 @@ use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
-    InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
+    ComponentFileContentHash, ComponentFilePath, ComponentFilePermissions, ComponentName,
+    ComponentRevision, InitialComponentFile, InstalledPlugin,
 };
 use golem_common::model::component_metadata::{ComponentMetadata, dynamic_linking_to_diffable};
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff::{self, Hash, Hashable};
+use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
@@ -356,7 +356,7 @@ impl ComponentRevisionRecord {
                 ),
             }
             .into(),
-            wasm_hash: self.binary_hash.into_blake3_hash().into(),
+            wasm_hash: self.binary_hash.into(),
             files_by_path: self
                 .original_files
                 .iter()
@@ -364,7 +364,7 @@ impl ComponentRevisionRecord {
                     (
                         file.file_path.clone(),
                         diff::ComponentFile {
-                            hash: file.hash.into_blake3_hash().into(),
+                            hash: file.file_content_hash.into(),
                             permissions: file.file_permissions.into(),
                         }
                         .into(),
@@ -388,7 +388,7 @@ impl ComponentRevisionRecord {
     }
 
     pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
+        self.hash = self.to_diffable().hash().into()
     }
 
     pub fn with_updated_hash(mut self) -> Self {
@@ -398,25 +398,33 @@ impl ComponentRevisionRecord {
 
     pub fn from_model(value: FinalizedComponentRevision, actor: &AccountId) -> Self {
         let component_id = value.component_id.0;
+        let revision_id: i64 = value.component_revision.into();
 
         Self {
             files: value
                 .files
                 .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
+                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
                 .collect(),
             plugins: value
                 .installed_plugins
                 .into_iter()
-                .map(|p| ComponentPluginInstallationRecord::from_model(p, component_id, actor))
+                .map(|p| {
+                    ComponentPluginInstallationRecord::from_model(
+                        p,
+                        component_id,
+                        revision_id,
+                        actor,
+                    )
+                })
                 .collect(),
             original_files: value
                 .original_files
                 .into_iter()
-                .map(|f| ComponentFileRecord::from_model(f, component_id, actor))
+                .map(|f| ComponentFileRecord::from_model(f, component_id, revision_id, actor))
                 .collect(),
             component_id,
-            revision_id: 0,
+            revision_id,
             version: value
                 .metadata
                 .root_package_version()
@@ -430,7 +438,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             transformed_object_store_key: value.transformed_object_store_key,
-            binary_hash: value.wasm_hash.into_blake3().into(),
+            binary_hash: value.wasm_hash.into(),
         }
     }
 }
@@ -474,7 +482,7 @@ impl ComponentExtRevisionRecord {
                 .collect(),
             env: self.revision.env.0,
             object_store_key: self.revision.object_store_key,
-            wasm_hash: blake3::Hash::from(self.revision.binary_hash).into(),
+            wasm_hash: self.revision.binary_hash.into(),
             original_files: self
                 .revision
                 .original_files
@@ -484,6 +492,7 @@ impl ComponentExtRevisionRecord {
             original_env: self.revision.original_env.0,
             transformed_object_store_key: self.revision.transformed_object_store_key,
             environment_roles_from_shares,
+            hash: self.revision.hash.into(),
         })
     }
 }
@@ -494,10 +503,9 @@ pub struct ComponentFileRecord {
     // Note: Set by repo during insert
     pub revision_id: i64,
     pub file_path: String,
-    pub hash: SqlBlake3Hash, // NOTE: expected to be set by service-layer
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
-    pub file_key: String,
+    pub file_content_hash: SqlBlake3Hash,
     pub file_permissions: SqlComponentFilePermissions,
 }
 
@@ -514,16 +522,19 @@ impl ComponentFileRecord {
         }
     }
 
-    fn from_model(file: InitialComponentFile, component_id: Uuid, actor: &AccountId) -> Self {
+    fn from_model(
+        file: InitialComponentFile,
+        component_id: Uuid,
+        revision_id: i64,
+        actor: &AccountId,
+    ) -> Self {
         Self {
             component_id,
-            revision_id: 0,
+            revision_id,
             file_path: file.path.to_abs_string(),
-            file_key: file.key.0.clone(),
+            file_content_hash: file.content_hash.0.into(),
             file_permissions: file.permissions.into(),
             audit: RevisionAuditFields::new(actor.0),
-            // TODO: The key is the content hash currently, reuse it here
-            hash: SqlBlake3Hash::empty(),
         }
     }
 }
@@ -532,7 +543,7 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
     type Error = RepoError;
     fn try_from(value: ComponentFileRecord) -> Result<Self, Self::Error> {
         Ok(Self {
-            key: InitialComponentFileKey(value.file_key),
+            content_hash: ComponentFileContentHash(value.file_content_hash.into()),
             path: ComponentFilePath::from_abs_str(&value.file_path)
                 .map_err(|e| anyhow!("Failed converting component file record to model: {e}"))?,
             permissions: value.file_permissions.into(),
@@ -569,11 +580,12 @@ impl ComponentPluginInstallationRecord {
     fn from_model(
         plugin_installation: InstalledPlugin,
         component_id: Uuid,
+        revision_id: i64,
         actor: &AccountId,
     ) -> Self {
         Self {
             component_id,
-            revision_id: 0,
+            revision_id,
             plugin_id: plugin_installation.plugin_registration_id.0,
             plugin_name: "".to_string(),
             plugin_version: "".to_string(),
@@ -614,7 +626,7 @@ impl From<ComponentRevisionIdentityRecord> for DeploymentPlanComponentEntry {
             id: ComponentId(value.component_id),
             revision: value.revision_id.into(),
             name: ComponentName(value.name),
-            hash: Hash::new(value.hash.into_blake3_hash()),
+            hash: value.hash.into(),
         }
     }
 }

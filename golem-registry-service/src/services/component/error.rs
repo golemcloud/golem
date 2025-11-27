@@ -21,7 +21,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::model::component::PluginPriority;
-use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
+use golem_common::model::component::{ComponentFileContentHash, ComponentFilePath};
 use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::deployment::DeploymentRevision;
@@ -44,7 +44,7 @@ pub enum ComponentError {
     #[error("Provided component file not found: {path} (key: {key})")]
     InitialComponentFileNotFound {
         path: ComponentFilePath,
-        key: InitialComponentFileKey,
+        key: ComponentFileContentHash,
     },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),

@@ -40,7 +40,9 @@ pub enum DomainRegistrationError {
     #[error("Domain {0} cannot be provisioned")]
     DomainCannotBeProvisioned(Domain),
     #[error("Registration for id {0} not found")]
-    DomainRegistrationByIdNotFound(DomainRegistrationId),
+    DomainRegistrationNotFound(DomainRegistrationId),
+    #[error("Registration for domain {0} not found in the environment")]
+    DomainRegistrationByDomainNotFound(Domain),
     #[error("Parent environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Domain is already registered: {0}")]
@@ -55,7 +57,8 @@ impl SafeDisplay for DomainRegistrationError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::DomainCannotBeProvisioned(_) => self.to_string(),
-            Self::DomainRegistrationByIdNotFound(_) => self.to_string(),
+            Self::DomainRegistrationNotFound(_) => self.to_string(),
+            Self::DomainRegistrationByDomainNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DomainAlreadyExists(_) => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
@@ -171,7 +174,7 @@ impl DomainRegistrationService {
             .domain_registration_repo
             .delete(&domain_registration_id.0, &auth.account_id().0)
             .await?
-            .ok_or(DomainRegistrationError::DomainRegistrationByIdNotFound(
+            .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id.clone(),
             ))?
             .into();
@@ -193,6 +196,31 @@ impl DomainRegistrationService {
             .get_by_id_with_environment(domain_registration_id, auth)
             .await?
             .0)
+    }
+
+    pub async fn get_in_environment(
+        &self,
+        environment: &Environment,
+        domain: &Domain,
+        auth: &AuthCtx,
+    ) -> Result<DomainRegistration, DomainRegistrationError> {
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewDomainRegistration,
+        )
+        .map_err(|_| DomainRegistrationError::DomainRegistrationByDomainNotFound(domain.clone()))?;
+
+        let domain_registration: DomainRegistration = self
+            .domain_registration_repo
+            .get_in_environment(&environment.id.0, &domain.0)
+            .await?
+            .ok_or(DomainRegistrationError::DomainRegistrationByDomainNotFound(
+                domain.clone(),
+            ))?
+            .into();
+
+        Ok(domain_registration)
     }
 
     pub async fn list_in_environment(
@@ -239,7 +267,7 @@ impl DomainRegistrationService {
             .domain_registration_repo
             .get_by_id(&domain_registration_id.0)
             .await?
-            .ok_or(DomainRegistrationError::DomainRegistrationByIdNotFound(
+            .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
                 domain_registration_id.clone(),
             ))?
             .into();
@@ -250,7 +278,7 @@ impl DomainRegistrationService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    DomainRegistrationError::DomainRegistrationByIdNotFound(
+                    DomainRegistrationError::DomainRegistrationNotFound(
                         domain_registration_id.clone(),
                     )
                 }
@@ -261,7 +289,10 @@ impl DomainRegistrationService {
             &environment.owner_account_id,
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewDomainRegistration,
-        )?;
+        )
+        .map_err(|_| {
+            DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id.clone())
+        })?;
 
         Ok((domain_registration, environment))
     }

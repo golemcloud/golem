@@ -12,18 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod rib;
+mod write;
+
+pub use self::write::DeploymentWriteService;
+
+use super::component::ComponentError;
+use super::http_api_definition::HttpApiDefinitionError;
+use super::http_api_deployment::HttpApiDeploymentError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
-use crate::repo::model::hash::SqlBlake3Hash;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
+use golem_common::model::diff;
 use golem_common::model::environment::Environment;
 use golem_common::{
     SafeDisplay, error_forwarding,
-    model::{
-        deployment::{Deployment, DeploymentCreation},
-        environment::EnvironmentId,
-    },
+    model::{deployment::Deployment, environment::EnvironmentId},
 };
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -38,6 +43,8 @@ pub enum DeploymentError {
     DeploymentNotFound(DeploymentRevision),
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
+    #[error("Requested deployment would not have any changes compared to current deployment")]
+    NoopDeployment,
     #[error("Provided deployment version {version} already exists in this environment")]
     VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
@@ -46,8 +53,8 @@ pub enum DeploymentError {
         "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
     )]
     DeploymentHashMismatch {
-        requested_hash: SqlBlake3Hash,
-        actual_hash: SqlBlake3Hash,
+        requested_hash: diff::Hash,
+        actual_hash: diff::Hash,
     },
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
@@ -64,6 +71,7 @@ impl SafeDisplay for DeploymentError {
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
+            Self::NoopDeployment => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -74,7 +82,10 @@ error_forwarding!(
     DeploymentError,
     RepoError,
     EnvironmentError,
-    DeployRepoError
+    DeployRepoError,
+    ComponentError,
+    HttpApiDefinitionError,
+    HttpApiDeploymentError,
 );
 
 fn format_validation_errors(errors: &[DeployValidationError]) -> String {
@@ -101,64 +112,22 @@ impl DeploymentService {
         }
     }
 
-    pub async fn create_deployment(
+    pub async fn get_latest_deployment_for_environment(
         &self,
-        environment_id: &EnvironmentId,
-        new_deployment: DeploymentCreation,
+        environment: &Environment,
         auth: &AuthCtx,
-    ) -> Result<Deployment, DeploymentError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
+    ) -> Result<Option<Deployment>, DeploymentError> {
         auth.authorize_environment_action(
             &environment.owner_account_id,
             &environment.roles_from_active_shares,
-            EnvironmentAction::DeployEnvironment,
+            EnvironmentAction::ViewDeployment,
         )?;
 
-        tracing::info!("Creating deployment for environment: {environment_id}");
-
-        // Validation of the deployment is done as part of the repo.
-        let deployment: Deployment = self
+        let deployment: Option<Deployment> = self
             .deployment_repo
-            .deploy(
-                &auth.account_id().0,
-                &environment_id.0,
-                new_deployment
-                    .current_deployment_revision
-                    .map(|cdr| cdr.into()),
-                new_deployment.version,
-                new_deployment.expected_deployment_hash.into_blake3().into(),
-            )
-            .await
-            .map_err(|err| match err {
-                DeployRepoError::ConcurrentModification => DeploymentError::ConcurrentDeployment,
-                DeployRepoError::VersionAlreadyExists { version } => {
-                    DeploymentError::VersionAlreadyExists { version }
-                }
-                DeployRepoError::ValidationErrors(validation_errors) => {
-                    DeploymentError::DeploymentValidationFailed(validation_errors)
-                }
-                DeployRepoError::DeploymentHashMismatch {
-                    requested_hash,
-                    actual_hash,
-                } => DeploymentError::DeploymentHashMismatch {
-                    requested_hash,
-                    actual_hash,
-                },
-                other => other.into(),
-            })?
-            .into();
-
-        tracing::debug!("New deployment for environment {environment_id}: {deployment:?}");
+            .get_latest_revision(&environment.id.0)
+            .await?
+            .map(|r| r.into());
 
         Ok(deployment)
     }

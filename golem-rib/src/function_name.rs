@@ -137,7 +137,8 @@ impl ParsedFunctionSite {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub enum DynamicParsedFunctionReference {
     Function { function: String },
     RawResourceConstructor { resource: String },
@@ -269,7 +270,8 @@ impl ParsedFunctionReference {
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
 // `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd, BinaryCodec)]
+#[desert(evolution())]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: DynamicParsedFunctionReference,

@@ -14,8 +14,6 @@
 
 pub mod account;
 pub mod agent;
-pub mod api_definition;
-pub mod api_deployment;
 pub mod api_domain;
 pub mod application;
 pub mod auth;
@@ -32,6 +30,8 @@ pub mod environment_plugin_grant;
 pub mod environment_share;
 pub mod error;
 pub mod exports;
+pub mod http_api_definition;
+pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod login;
 pub mod lucene;
@@ -75,6 +75,13 @@ use std::str::FromStr;
 use std::time::Duration;
 use url::Url;
 use uuid::{uuid, Uuid};
+
+#[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
+pub struct Page<
+    T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,
+> {
+    pub values: Vec<T>,
+}
 
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
@@ -1646,34 +1653,6 @@ impl Display for WorkerEvent {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct Empty {}
-
-// Custom Deserialize is replaced with Simple Deserialize
-#[derive(
-    Debug, Clone, PartialEq, Serialize, BinaryCodec, Default, Deserialize, poem_openapi::Enum,
-)]
-#[desert(evolution())]
-#[serde(rename_all = "kebab-case")]
-#[oai(rename_all = "kebab-case")]
-pub enum GatewayBindingType {
-    #[default]
-    Default,
-    FileServer,
-    HttpHandler,
-    CorsPreflight,
-    SwaggerUi,
-}
-
-impl TryFrom<String> for GatewayBindingType {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "default" => Ok(GatewayBindingType::Default),
-            "file-server" => Ok(GatewayBindingType::FileServer),
-            _ => Err(format!("Invalid WorkerBindingType: {value}")),
-        }
-    }
-}
 
 impl From<WorkerId> for golem_wasm::AgentId {
     fn from(worker_id: WorkerId) -> Self {
