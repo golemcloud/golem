@@ -388,7 +388,7 @@ impl AuthCtx {
     ) -> Result<(), AuthorizationError> {
         // Environment owners and system users are allowed to do everything with their environments
         if self.account_id() == account_owning_enviroment || self.is_system() {
-            return Ok(())
+            return Ok(());
         }
 
         let is_allowed = match action {
