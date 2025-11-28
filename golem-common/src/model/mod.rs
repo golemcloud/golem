@@ -54,7 +54,7 @@ use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::SafeDisplay;
+use crate::{declare_structs, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -227,6 +227,12 @@ impl FromValue for Timestamp {
                 "Expected a record with two fields for Timestamp, got {other:?}"
             )),
         }
+    }
+}
+
+declare_structs! {
+    pub struct VersionInfo {
+        pub version: String,
     }
 }
 

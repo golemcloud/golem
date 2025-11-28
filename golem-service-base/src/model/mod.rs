@@ -62,6 +62,9 @@ pub struct InvokeParameters {
     pub params: Vec<OptionallyValueAndTypeJson>,
 }
 
+// TODO: move these reponse types to common and configure the client generator to use them.
+// TODO: replace empty responses with NoContentResponse
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct DeleteWorkerResponse {}
 

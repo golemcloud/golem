@@ -56,7 +56,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HealthcheckResponse'
+                $ref: '#/components/schemas/Empty'
       operationId: healthcheck
   /version:
     get:
@@ -4975,7 +4975,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/OAuth2DeviceFlowStartRequest'
+              $ref: '#/components/schemas/OAuth2DeviceflowStart'
         required: true
       responses:
         '200':
@@ -7517,9 +7517,6 @@ components:
             - Worker
             example: Worker
       - $ref: '#/components/schemas/WorkerGatewayBinding'
-    HealthcheckResponse:
-      type: object
-      title: HealthcheckResponse
     HttpApiDefinition:
       type: object
       title: HttpApiDefinition
@@ -7780,14 +7777,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NamedElementSchema'
-    OAuth2DeviceFlowStartRequest:
-      type: object
-      title: OAuth2DeviceFlowStartRequest
-      required:
-      - provider
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
     OAuth2DeviceflowData:
       type: object
       title: OAuth2DeviceflowData
@@ -7806,6 +7795,14 @@ components:
           format: date-time
         encodedSession:
           type: string
+    OAuth2DeviceflowStart:
+      type: object
+      title: OAuth2DeviceflowStart
+      required:
+      - provider
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
     OAuth2Provider:
       type: string
       enum:

@@ -56,7 +56,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HealthcheckResponse'
+                $ref: '#/components/schemas/Empty'
       operationId: healthcheck
   /version:
     get:
@@ -2319,9 +2319,6 @@ components:
         lastIndex:
           type: integer
           format: uint64
-    HealthcheckResponse:
-      type: object
-      title: HealthcheckResponse
     InterruptResponse:
       type: object
       title: InterruptResponse

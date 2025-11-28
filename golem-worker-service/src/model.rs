@@ -24,8 +24,8 @@ use golem_service_base::custom_api::compiled_gateway_binding::{
     HttpHandlerBindingCompiled, WorkerBindingCompiled,
 };
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
-use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
 use golem_service_base::custom_api::HttpCors;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use poem_openapi::Object;
 use std::fmt::Debug;
 use std::sync::Arc;

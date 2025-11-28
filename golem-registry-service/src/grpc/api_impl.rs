@@ -32,9 +32,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
     GetAllAgentTypesSuccessResponse, GetAllComponentVersionsRequest,
     GetAllComponentVersionsResponse, GetAllComponentVersionsSuccessResponse,
-    GetAuthCtxForAccountIdRequest, GetAuthCtxForAccountIdResponse,
-    GetAuthCtxForAccountIdSuccessResponse, GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetLatestComponentMetadataRequest, GetLatestComponentMetadataResponse,
     GetLatestComponentMetadataSuccessResponse, GetPluginRegistrationByIdRequest,
     GetPluginRegistrationByIdResponse, GetPluginRegistrationByIdSuccessResponse,
@@ -44,11 +42,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response, get_auth_ctx_for_account_id_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response, registry_service_error,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_all_component_versions_response, get_component_metadata_response,
+    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, registry_service_error, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -108,30 +105,6 @@ impl RegistryServiceGrpcApi {
             .await?;
         Ok(AuthenticateTokenSuccessResponse {
             auth_ctx: Some(auth_ctx.into()),
-        })
-    }
-
-    async fn get_auth_ctx_for_account_id_internal(
-        &self,
-        request: GetAuthCtxForAccountIdRequest,
-    ) -> Result<GetAuthCtxForAccountIdSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
-        let account_id: AccountId = request
-            .account_id
-            .ok_or("missing account_id field")?
-            .try_into()?;
-
-        let user_auth_ctx = self
-            .auth_service
-            .auth_ctx_for_account_id(&account_id, &auth_ctx)
-            .await?;
-
-        Ok(GetAuthCtxForAccountIdSuccessResponse {
-            auth_ctx: Some(user_auth_ctx.into()),
         })
     }
 
@@ -484,31 +457,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(AuthenticateTokenResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_auth_ctx_for_account_id(
-        &self,
-        request: Request<GetAuthCtxForAccountIdRequest>,
-    ) -> Result<Response<GetAuthCtxForAccountIdResponse>, tonic::Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_auth_ctx_for_account_id",
-            account_id = proto_account_id_string(&request.account_id)
-        );
-
-        let response = match self
-            .get_auth_ctx_for_account_id_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => get_auth_ctx_for_account_id_response::Result::Success(result),
-            Err(error) => get_auth_ctx_for_account_id_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(GetAuthCtxForAccountIdResponse {
             result: Some(response),
         }))
     }

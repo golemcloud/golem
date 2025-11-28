@@ -23,16 +23,15 @@ use golem_api_grpc::proto::golem::registry::v1::registry_service_client::Registr
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllComponentVersionsRequest, GetAuthCtxForAccountIdRequest, GetComponentMetadataRequest,
-    GetLatestComponentMetadataRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
+    GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response, get_auth_ctx_for_account_id_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_all_component_versions_response, get_component_metadata_response,
+    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;
@@ -57,12 +56,6 @@ pub trait RegistryService: Send + Sync {
     // auth api
     async fn authenticate_token(&self, token: TokenSecret)
     -> Result<AuthCtx, RegistryServiceError>;
-
-    async fn auth_ctx_for_account_id(
-        &self,
-        account_id: &AccountId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthCtx, RegistryServiceError>;
 
     // limits api
     async fn get_resource_limits(
@@ -218,37 +211,6 @@ impl RegistryService for GrpcRegistryService {
                 Ok(AuthCtx::User(user_auth_ctx))
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
-        }
-    }
-
-    async fn auth_ctx_for_account_id(
-        &self,
-        account_id: &AccountId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<AuthCtx, RegistryServiceError> {
-        let response = self
-            .client
-            .call("auth-ctx-for-account-id", move |client| {
-                let request = GetAuthCtxForAccountIdRequest {
-                    account_id: Some((*account_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                };
-
-                Box::pin(client.get_auth_ctx_for_account_id(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(get_auth_ctx_for_account_id_response::Result::Success(payload)) => {
-                let user_auth_ctx: UserAuthCtx = payload
-                    .auth_ctx
-                    .ok_or("missing authctx field")?
-                    .try_into()?;
-                Ok(AuthCtx::User(user_auth_ctx))
-            }
-            Some(get_auth_ctx_for_account_id_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

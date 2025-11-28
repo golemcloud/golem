@@ -64,12 +64,14 @@ impl DeployedRoutesService {
 
         let mut account_id = None;
         let mut environment_id = None;
+        let mut deployment_revision = None;
         let mut security_schemes = HashMap::new();
         let mut converted_routes = Vec::with_capacity(routes.len());
 
         for route in routes {
             let _ = account_id.insert(route.account_id);
             let _ = environment_id.insert(route.environment_id);
+            let _ = deployment_revision.insert(route.deployment_revision);
 
             let mut security_scheme_id = None;
             if let Some(security_scheme) = route.security_scheme {
@@ -87,12 +89,17 @@ impl DeployedRoutesService {
 
         let account_id =
             account_id.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
+
         let environment_id =
             environment_id.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
+
+        let deployment_revision = deployment_revision
+            .ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
 
         Ok(CompiledRoutes {
             account_id,
             environment_id,
+            deployment_revision,
             routes: converted_routes,
             security_schemes,
         })

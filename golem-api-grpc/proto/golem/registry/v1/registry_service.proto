@@ -16,8 +16,6 @@ import "golem/component/component_id.proto";
 import "golem/component/dynamic_linked_instance.proto";
 import "golem/component/plugin_installation.proto";
 import "golem/component/plugin_registration.proto";
-import "golem/component/v1/component_error.proto";
-import "golem/limit/v1/batch_update_resource_limits.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
@@ -27,7 +25,6 @@ import "golem/apidefinition/api_definition.proto";
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
-  rpc GetAuthCtxForAccountId (GetAuthCtxForAccountIdRequest) returns (GetAuthCtxForAccountIdResponse);
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
@@ -65,22 +62,6 @@ message AuthenticateTokenResponse {
 }
 
 message AuthenticateTokenSuccessResponse {
-    golem.auth.UserAuthCtx auth_ctx = 1;
-}
-
-message GetAuthCtxForAccountIdRequest {
-  golem.common.AccountId account_id = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
-}
-
-message GetAuthCtxForAccountIdResponse {
-  oneof result {
-      GetAuthCtxForAccountIdSuccessResponse success = 1;
-      RegistryServiceError error = 2;
-  }
-}
-
-message GetAuthCtxForAccountIdSuccessResponse {
     golem.auth.UserAuthCtx auth_ctx = 1;
 }
 

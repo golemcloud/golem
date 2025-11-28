@@ -14,7 +14,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HealthcheckResponse'
+                $ref: '#/components/schemas/Empty'
   /version:
     get:
       tags:
@@ -6672,7 +6672,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/OAuth2DeviceFlowStartRequest'
+              $ref: '#/components/schemas/OAuth2DeviceflowStart'
         required: true
       responses:
         '200':
@@ -8312,9 +8312,6 @@ components:
       - entries
       - firstIndexInChunk
       - lastIndex
-    HealthcheckResponse:
-      title: HealthcheckResponse
-      type: object
     InterruptResponse:
       title: InterruptResponse
       type: object
@@ -11960,14 +11957,6 @@ components:
             $ref: '#/components/schemas/NamedElementSchema'
       required:
       - elements
-    OAuth2DeviceFlowStartRequest:
-      title: OAuth2DeviceFlowStartRequest
-      type: object
-      properties:
-        provider:
-          $ref: '#/components/schemas/OAuth2Provider'
-      required:
-      - provider
     OAuth2DeviceflowData:
       title: OAuth2DeviceflowData
       type: object
@@ -11986,6 +11975,14 @@ components:
       - userCode
       - expires
       - encodedSession
+    OAuth2DeviceflowStart:
+      title: OAuth2DeviceflowStart
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/OAuth2Provider'
+      required:
+      - provider
     OAuth2Provider:
       type: string
       enum:
