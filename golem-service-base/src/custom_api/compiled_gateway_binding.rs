@@ -3,11 +3,11 @@ use super::rib_compiler::{ComponentDependencyWithAgentInfo, compile_rib};
 use desert_rust::BinaryCodec;
 use golem_common::model::Empty;
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use rib::{
     Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
     WorkerFunctionsInRib,
 };
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]

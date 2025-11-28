@@ -42,7 +42,7 @@ use golem_service_base::custom_api::compiled_gateway_binding::{
     FileServerBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled,
     InvocationContextCompiled, ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
-use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm::analysis::analysed_type::record;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};

@@ -13,12 +13,9 @@
 // limitations under the License.
 
 use crate::repo::account::AccountRepo;
-use crate::repo::model::account::{
-    AccountBySecretRecord, AccountExtRevisionRecord, AccountRepoError,
-};
-use anyhow::anyhow;
+use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
-use golem_common::model::account::{Account, AccountId};
+use golem_common::model::account::Account;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};

@@ -33,7 +33,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::HttpApiDefinition;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
-use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;

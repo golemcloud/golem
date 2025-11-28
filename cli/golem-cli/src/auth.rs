@@ -26,11 +26,11 @@ use golem_client::model::{OAuth2Provider, OAuth2WebflowData, Token, TokenWithSec
 use golem_client::Security;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::login::OAuth2WebflowStateId;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
 use uuid::Uuid;
-use golem_common::model::login::OAuth2WebflowStateId;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Authentication(pub TokenWithSecret);
@@ -175,7 +175,10 @@ impl Auth {
             .map_service_error()
     }
 
-    async fn complete_oauth2(&self, state: OAuth2WebflowStateId) -> anyhow::Result<TokenWithSecret> {
+    async fn complete_oauth2(
+        &self,
+        state: OAuth2WebflowStateId,
+    ) -> anyhow::Result<TokenWithSecret> {
         use tokio::time::{sleep, Duration};
 
         info!("Complete OAuth2 workflow");

@@ -32,8 +32,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
     GetAllAgentTypesSuccessResponse, GetAllComponentVersionsRequest,
     GetAllComponentVersionsResponse, GetAllComponentVersionsSuccessResponse,
-    GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetLatestComponentMetadataRequest, GetLatestComponentMetadataResponse,
     GetLatestComponentMetadataSuccessResponse, GetPluginRegistrationByIdRequest,
     GetPluginRegistrationByIdResponse, GetPluginRegistrationByIdSuccessResponse,
@@ -43,11 +42,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response, registry_service_error,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_all_component_versions_response, get_component_metadata_response,
+    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, registry_service_error, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;

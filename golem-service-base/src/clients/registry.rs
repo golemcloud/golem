@@ -23,16 +23,15 @@ use golem_api_grpc::proto::golem::registry::v1::registry_service_client::Registr
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllComponentVersionsRequest, GetComponentMetadataRequest,
-    GetLatestComponentMetadataRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest,
-    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
-    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
+    GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
+    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
+    batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response,
-    get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_all_component_versions_response, get_component_metadata_response,
+    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
+    get_resource_limits_response, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;

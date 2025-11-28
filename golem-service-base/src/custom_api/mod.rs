@@ -18,19 +18,18 @@ pub mod path_pattern;
 mod path_pattern_parser;
 mod protobuf;
 pub mod rib_compiler;
-pub mod security_scheme;
 
 use self::compiled_gateway_binding::GatewayBindingCompiled;
 use self::path_pattern::AllPathPatterns;
-use self::security_scheme::SecuritySchemeDetails;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::RouteMethod;
-use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde::Serialize;
 use std::collections::HashMap;
-use golem_common::model::deployment::DeploymentRevision;
 
 #[derive(Debug, Clone)]
 pub struct CompiledRoutes {
@@ -47,6 +46,16 @@ pub struct CompiledRoute {
     pub path: AllPathPatterns,
     pub binding: GatewayBindingCompiled,
     pub security_scheme: Option<SecuritySchemeId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecuritySchemeDetails {
+    pub id: SecuritySchemeId,
+    pub provider_type: Provider,
+    pub client_id: ClientId,
+    pub client_secret: ClientSecret,
+    pub redirect_url: RedirectUrl,
+    pub scopes: Vec<Scope>,
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, Serialize)]

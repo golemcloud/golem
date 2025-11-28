@@ -93,8 +93,8 @@ impl DeployedRoutesService {
         let environment_id =
             environment_id.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
 
-        let deployment_revision =
-            deployment_revision.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
+        let deployment_revision = deployment_revision
+            .ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
 
         Ok(CompiledRoutes {
             account_id,

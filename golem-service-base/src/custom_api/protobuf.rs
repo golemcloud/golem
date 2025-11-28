@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::SecuritySchemeDetails;
 use super::compiled_gateway_binding::{
     FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
     HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
     ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
 use super::path_pattern::AllPathPatterns;
-use super::security_scheme::SecuritySchemeDetails;
 use super::{CompiledRoute, CompiledRoutes, HttpCors};
 use golem_common::model::Empty;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::security_scheme::Provider;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
 use std::ops::Deref;
-use golem_common::model::deployment::DeploymentRevision;
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpCors> for HttpCors {
     type Error = String;

@@ -1,8 +1,8 @@
 use crate::api_tags::ApiTags;
 use golem_common::golem_version;
+use golem_common::model::{Empty, VersionInfo};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use golem_common::model::{Empty, VersionInfo};
 
 pub struct HealthcheckApi;
 

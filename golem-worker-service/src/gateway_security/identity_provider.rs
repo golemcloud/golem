@@ -17,7 +17,7 @@ use crate::gateway_security::open_id_client::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::security_scheme::Provider;
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,

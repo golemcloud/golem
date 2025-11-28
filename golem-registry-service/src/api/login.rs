@@ -20,7 +20,8 @@ use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::login::{
-    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowStart, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStateId
+    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2DeviceflowStart, OAuth2Provider,
+    OAuth2WebflowData, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
