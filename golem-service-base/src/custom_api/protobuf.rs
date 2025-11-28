@@ -26,6 +26,7 @@ use golem_common::model::security_scheme::Provider;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
 use std::ops::Deref;
+use golem_common::model::deployment::DeploymentRevision;
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpCors> for HttpCors {
     type Error = String;
@@ -653,6 +654,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for Co
             .ok_or_else(|| "environment_id field missing".to_string())?
             .try_into()?;
 
+        let deployment_revision = DeploymentRevision(value.deployment_revision);
+
         let security_schemes = value
             .security_schemes
             .into_iter()
@@ -671,6 +674,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for Co
         Ok(Self {
             account_id,
             environment_id,
+            deployment_revision,
             security_schemes,
             routes,
         })
@@ -684,6 +688,7 @@ impl TryFrom<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::Co
         Ok(Self {
             account_id: Some(value.account_id.into()),
             environment_id: Some(value.environment_id.into()),
+            deployment_revision: value.deployment_revision.0,
             security_schemes: value
                 .security_schemes
                 .into_values()

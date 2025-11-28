@@ -30,11 +30,13 @@ use golem_common::model::http_api_definition::RouteMethod;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use serde::Serialize;
 use std::collections::HashMap;
+use golem_common::model::deployment::DeploymentRevision;
 
 #[derive(Debug, Clone)]
 pub struct CompiledRoutes {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
     pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
     pub routes: Vec<CompiledRoute>,
 }

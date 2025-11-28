@@ -87,6 +87,7 @@ impl DeployedRoutesService {
 
         let account_id =
             account_id.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
+
         let environment_id =
             environment_id.ok_or(DeployedRoutesError::NoActiveRoutesForDomain(domain.clone()))?;
 

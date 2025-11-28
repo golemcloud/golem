@@ -30,6 +30,7 @@ use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
 use uuid::Uuid;
+use golem_common::model::login::OAuth2WebflowStateId;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Authentication(pub TokenWithSecret);
@@ -174,7 +175,7 @@ impl Auth {
             .map_service_error()
     }
 
-    async fn complete_oauth2(&self, state: Uuid) -> anyhow::Result<TokenWithSecret> {
+    async fn complete_oauth2(&self, state: OAuth2WebflowStateId) -> anyhow::Result<TokenWithSecret> {
         use tokio::time::{sleep, Duration};
 
         info!("Complete OAuth2 workflow");
@@ -183,7 +184,7 @@ impl Auth {
         let delay = Duration::from_secs(1);
 
         loop {
-            let status = self.login_client.poll_oauth_2_webflow(&state).await;
+            let status = self.login_client.poll_oauth_2_webflow(&state.0).await;
             match status {
                 Ok(token) => return Ok(token),
                 Err(err) => match err {

@@ -106,7 +106,9 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // worker
             ("FlatComponentFileSystemNode", "golem_common::model::worker::FlatComponentFileSystemNode"),
             ("RevertWorkerTarget", "golem_common::model::worker::RevertWorkerTarget"),
+            ("WasiConfigVars", "golem_common::model::worker::WasiConfigVars"),
             ("WasiConfigVarsEntry", "golem_common::model::worker::WasiConfigVarsEntry"),
+            ("WorkerCreationRequest", "golem_common::model::worker::WorkerCreationRequest"),
             ("WorkerMetadataDto", "golem_common::model::worker::WorkerMetadataDto"),
             ("WorkerUpdateMode", "golem_common::model::worker::WorkerUpdateMode"),
 

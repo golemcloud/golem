@@ -7,6 +7,7 @@ use rib::{
     Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
     WorkerFunctionsInRib,
 };
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
@@ -57,6 +58,12 @@ pub struct HttpHandlerBindingCompiled {
 #[desert(evolution())]
 pub struct HttpCorsBindingCompiled {
     pub http_cors: HttpCors,
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SwaggerUiBindingCompiled {
+    pub http_api_definition_name: HttpApiDefinitionName,
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]

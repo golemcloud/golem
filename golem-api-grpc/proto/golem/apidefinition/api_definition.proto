@@ -17,8 +17,9 @@ import "google/protobuf/timestamp.proto";
 message CompiledRoutes {
   golem.common.AccountId account_id = 1;
   golem.common.EnvironmentId environment_id = 2;
-  repeated SecuritySchemeDetails security_schemes = 3;
-  repeated CompiledHttpRoute compiled_routes = 4;
+  uint64 deployment_revision = 3;
+  repeated SecuritySchemeDetails security_schemes = 4;
+  repeated CompiledHttpRoute compiled_routes = 5;
 }
 
 message CompiledHttpRoute {
@@ -106,29 +107,6 @@ message CompiledFileServerBinding {
 message CompiledHttpCorsBinding {
   HttpCors http_cors = 1;
 }
-
-// message CompiledGatewayBinding {
-//     optional golem.component.ComponentId component_id = 1;
-//     optional uint64 component_revision = 2;
-//     optional golem.rib.Expr worker_name = 3;
-//     optional golem.rib.RibByteCode compiled_worker_name_expr = 4;
-//     optional golem.rib.RibInputType worker_name_rib_input = 5;
-//     optional golem.rib.Expr response = 6;
-//     optional golem.rib.RibByteCode compiled_response_expr = 7;
-//     optional golem.rib.RibInputType response_rib_input = 8;
-//     optional golem.rib.Expr idempotency_key = 9;
-//     optional golem.rib.RibByteCode compiled_idempotency_key_expr = 10;
-//     optional golem.rib.RibInputType idempotency_key_rib_input = 11;
-//     optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 12;
-//     // type discriminator to keep backward compatibility
-//     optional GatewayBindingType binding_type = 13;
-//     optional StaticBinding static_binding = 14;
-//     optional golem.rib.RibOutputType response_rib_output = 15;
-//     optional golem.rib.Expr invocation_context = 16;
-//     optional golem.rib.RibByteCode compiled_invocation_context_expr = 17;
-//     optional golem.rib.RibInputType invocation_context_rib_input = 18;
-//     optional string openapi_spec_json = 19;
-// }
 
 message HttpCors {
   optional string allow_origin = 1;

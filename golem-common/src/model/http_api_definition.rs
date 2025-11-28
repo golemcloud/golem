@@ -31,7 +31,8 @@ newtype_uuid!(HttpApiDefinitionId);
 declare_revision!(HttpApiDefinitionRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display, PartialOrd, Eq, Ord)]
+    #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct HttpApiDefinitionName(pub String);
 
     // User provided version. See HttpApiDefinitionRevision for the "proper" golem version.
