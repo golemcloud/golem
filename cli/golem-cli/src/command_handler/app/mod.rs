@@ -541,7 +541,7 @@ impl AppCommandHandler {
             let _indent = LogIndent::new();
 
             log_action(
-                "Diffing",
+                "Comparing",
                 format!(
                     "staging area with current deployment: {}",
                     if stage_is_same_as_server {
@@ -705,7 +705,7 @@ impl AppCommandHandler {
             server_deployment_hash,
             server_staged_deployment,
             server_staged_deployment_hash,
-            diffable_server_staged_deployment,
+            diffable_staged_deployment: diffable_server_staged_deployment,
             diff,
             diff_stage,
         })
@@ -715,9 +715,17 @@ impl AppCommandHandler {
         &self,
         mut deploy_diff: DeployDiff,
     ) -> anyhow::Result<DeployDiff> {
+        enum DiffKind {
+            Server,
+            Stage,
+        }
+
         let component_handler = self.ctx.component_handler();
 
-        for diff in [deploy_diff.diff_stage.as_ref(), Some(&deploy_diff.diff)] {
+        for (kind, diff) in [
+            (DiffKind::Stage, deploy_diff.diff_stage.as_ref()),
+            (DiffKind::Server, Some(&deploy_diff.diff)),
+        ] {
             let Some(diff) = diff else {
                 continue;
             };
@@ -740,10 +748,20 @@ impl AppCommandHandler {
                             )
                             .await?;
 
-                        deploy_diff
-                            .diffable_server_staged_deployment
-                            .components
-                            .insert(component_name.0, staged_component.to_diffable().into());
+                        match kind {
+                            DiffKind::Server => {
+                                deploy_diff.diffable_server_deployment.components.insert(
+                                    component_name.0,
+                                    staged_component.to_diffable().into(),
+                                );
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff.diffable_staged_deployment.components.insert(
+                                    component_name.0,
+                                    staged_component.to_diffable().into(),
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -786,12 +804,12 @@ impl AppCommandHandler {
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
-            deploy_diff.diffable_server_staged_deployment.hash()
+            deploy_diff.diffable_staged_deployment.hash()
         );
 
         // Update diff with details
         deploy_diff.diff_stage = deploy_diff
-            .diffable_server_staged_deployment
+            .diffable_staged_deployment
             .diff_with_local(&deploy_diff.diffable_local_deployment);
 
         Ok(deploy_diff)

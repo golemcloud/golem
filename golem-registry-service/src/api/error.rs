@@ -438,13 +438,10 @@ impl From<DeploymentError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            DeploymentError::VersionAlreadyExists { .. }
-            | DeploymentError::DeploymentHashMismatch { .. } => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                    cause: None,
-                }))
-            }
+            DeploymentError::VersionAlreadyExists { .. } => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                cause: None,
+            })),
             DeploymentError::DeploymentValidationFailed(failed_validations) => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: failed_validations
@@ -455,7 +452,9 @@ impl From<DeploymentError> for ApiError {
                 }))
             }
 
-            DeploymentError::ConcurrentDeployment | DeploymentError::NoopDeployment => {
+            DeploymentError::ConcurrentDeployment
+            | DeploymentError::NoopDeployment
+            | DeploymentError::DeploymentHashMismatch { .. } => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 

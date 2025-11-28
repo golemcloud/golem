@@ -1042,7 +1042,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 INSERT INTO current_deployments (environment_id, current_revision_id)
                 VALUES ($1, $2)
-                ON CONFLICT (environment_id, current_revision_id)
+                ON CONFLICT (environment_id)
                 DO UPDATE SET current_revision_id = excluded.current_revision_id
             "#})
             .bind(environment_id)

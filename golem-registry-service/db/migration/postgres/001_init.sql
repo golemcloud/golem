@@ -1,16 +1,16 @@
 CREATE TABLE plans
 (
-    plan_id UUID NOT NULL,
-    name    TEXT NOT NULL,
+    plan_id                              UUID   NOT NULL,
+    name                                 TEXT   NOT NULL,
 
-    max_memory_per_worker BIGINT NOT NULL,
-    total_app_count BIGINT NOT NULL,
-    total_env_count BIGINT NOT NULL,
-    total_component_count BIGINT NOT NULL,
-    total_worker_count BIGINT NOT NULL,
-    total_worker_connection_count BIGINT NOT NULL,
-    total_component_storage_bytes BIGINT NOT NULL,
-    monthly_gas_limit BIGINT NOT NULL,
+    max_memory_per_worker                BIGINT NOT NULL,
+    total_app_count                      BIGINT NOT NULL,
+    total_env_count                      BIGINT NOT NULL,
+    total_component_count                BIGINT NOT NULL,
+    total_worker_count                   BIGINT NOT NULL,
+    total_worker_connection_count        BIGINT NOT NULL,
+    total_component_storage_bytes        BIGINT NOT NULL,
+    monthly_gas_limit                    BIGINT NOT NULL,
     monthly_component_upload_limit_bytes BIGINT NOT NULL,
 
     CONSTRAINT plans_pk
@@ -26,8 +26,7 @@ CREATE TABLE usage_types
 );
 
 INSERT INTO usage_types (usage_type, name)
-VALUES
-       (0, 'TOTAL_WORKER_COUNT'),
+VALUES (0, 'TOTAL_WORKER_COUNT'),
        (1, 'TOTAL_WORKER_CONNECTION_COUNT'),
        (2, 'MONTHLY_GAS_LIMIT'),
        (3, 'MONTHLY_COMPONENT_UPLOAD_LIMIT_BYTES');
@@ -283,15 +282,15 @@ CREATE INDEX component_revisions_latest_revision_by_id_idx
 
 CREATE TABLE original_component_files
 (
-    component_id     UUID      NOT NULL,
-    revision_id      BIGINT    NOT NULL,
-    file_path        TEXT      NOT NULL,
+    component_id      UUID      NOT NULL,
+    revision_id       BIGINT    NOT NULL,
+    file_path         TEXT      NOT NULL,
 
-    created_at       TIMESTAMP NOT NULL,
-    created_by       UUID      NOT NULL,
+    created_at        TIMESTAMP NOT NULL,
+    created_by        UUID      NOT NULL,
 
-    file_content_hash BYTEA      NOT NULL,
-    file_permissions TEXT      NOT NULL,
+    file_content_hash BYTEA     NOT NULL,
+    file_permissions  TEXT      NOT NULL,
 
     CONSTRAINT original_component_files_pk
         PRIMARY KEY (component_id, revision_id, file_path),
@@ -301,15 +300,15 @@ CREATE TABLE original_component_files
 
 CREATE TABLE component_files
 (
-    component_id     UUID      NOT NULL,
-    revision_id      BIGINT    NOT NULL,
-    file_path        TEXT      NOT NULL,
+    component_id      UUID      NOT NULL,
+    revision_id       BIGINT    NOT NULL,
+    file_path         TEXT      NOT NULL,
 
-    created_at       TIMESTAMP NOT NULL,
-    created_by       UUID      NOT NULL,
+    created_at        TIMESTAMP NOT NULL,
+    created_by        UUID      NOT NULL,
 
-    file_content_hash BYTEA      NOT NULL,
-    file_permissions TEXT      NOT NULL,
+    file_content_hash BYTEA     NOT NULL,
+    file_permissions  TEXT      NOT NULL,
 
     CONSTRAINT component_files_pk
         PRIMARY KEY (component_id, revision_id, file_path),
@@ -363,10 +362,12 @@ CREATE TABLE current_deployments
     environment_id      UUID   NOT NULL,
     current_revision_id BIGINT NOT NULL,
     CONSTRAINT current_deployments_pk
-        PRIMARY KEY (environment_id, current_revision_id),
+        PRIMARY KEY (environment_id),
     CONSTRAINT current_deployments_deployments_revisions_fk
         FOREIGN KEY (environment_id, current_revision_id) REFERENCES current_deployment_revisions (environment_id, revision_id)
 );
+
+CREATE INDEX current_deployments_revision_idx ON current_deployments (environment_id, current_revision_id);
 
 CREATE TABLE deployment_component_revisions
 (
@@ -436,7 +437,7 @@ CREATE TABLE http_api_deployments
 (
     http_api_deployment_id UUID      NOT NULL,
     environment_id         UUID      NOT NULL,
-    domain              TEXT NOT NULL,
+    domain                 TEXT      NOT NULL,
 
     created_at             TIMESTAMP NOT NULL,
     updated_at             TIMESTAMP NOT NULL,
@@ -465,7 +466,7 @@ CREATE TABLE http_api_deployment_revisions
     created_by             UUID      NOT NULL,
     deleted                BOOLEAN   NOT NULL,
 
-    http_api_definitions TEXT NOT NULL,
+    http_api_definitions   TEXT      NOT NULL,
 
     CONSTRAINT http_api_deployment_revisions_pk
         PRIMARY KEY (http_api_deployment_id, revision_id),
@@ -536,7 +537,7 @@ CREATE TABLE plugins
     transform_url         TEXT,
     component_id          UUID,
     component_revision_id BIGINT,
-    wasm_content_hash      BYTEA,
+    wasm_content_hash     BYTEA,
 
     CONSTRAINT plugins_pk
         PRIMARY KEY (plugin_id),
@@ -695,14 +696,14 @@ CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grant
 
 CREATE TABLE domain_registrations
 (
-    domain_registration_id   UUID      NOT NULL,
-    environment_id              UUID      NOT NULL,
-    domain                   TEXT      NOT NULL,
+    domain_registration_id UUID      NOT NULL,
+    environment_id         UUID      NOT NULL,
+    domain                 TEXT      NOT NULL,
 
-    created_at                  TIMESTAMP NOT NULL,
-    created_by                  UUID      NOT NULL,
-    deleted_at                  TIMESTAMP,
-    deleted_by                  UUID,
+    created_at             TIMESTAMP NOT NULL,
+    created_by             UUID      NOT NULL,
+    deleted_at             TIMESTAMP,
+    deleted_by             UUID,
 
     CONSTRAINT domain_registrations_pk
         PRIMARY KEY (domain_registration_id),
@@ -717,21 +718,21 @@ CREATE UNIQUE INDEX domain_registrations_domain_uk
 CREATE INDEX domain_registrations_environment_id_idx ON domain_registrations (environment_id);
 
 CREATE INDEX domain_registrations_env_domain_active_idx
-  ON domain_registrations (environment_id, domain)
-  WHERE deleted_at IS NULL;
+    ON domain_registrations (environment_id, domain)
+    WHERE deleted_at IS NULL;
 
 CREATE TABLE security_schemes
 (
-    security_scheme_id UUID      NOT NULL,
-    environment_id       UUID      NOT NULL,
-    name   TEXT      NOT NULL,
+    security_scheme_id  UUID      NOT NULL,
+    environment_id      UUID      NOT NULL,
+    name                TEXT      NOT NULL,
 
-    created_at           TIMESTAMP NOT NULL,
-    updated_at           TIMESTAMP NOT NULL,
-    deleted_at           TIMESTAMP,
-    modified_by          UUID      NOT NULL,
+    created_at          TIMESTAMP NOT NULL,
+    updated_at          TIMESTAMP NOT NULL,
+    deleted_at          TIMESTAMP,
+    modified_by         UUID      NOT NULL,
 
-    current_revision_id  BIGINT    NOT NULL,
+    current_revision_id BIGINT    NOT NULL,
 
     CONSTRAINT security_schemes_pk
         PRIMARY KEY (security_scheme_id),
@@ -748,19 +749,19 @@ CREATE INDEX security_schemes_environment_idx
 
 CREATE TABLE security_scheme_revisions
 (
-    security_scheme_id UUID NOT NULL,
-    revision_id BIGINT NOT NULL,
+    security_scheme_id UUID      NOT NULL,
+    revision_id        BIGINT    NOT NULL,
 
-    provider_type TEXT NOT NULL,
-    client_id TEXT NOT NULL,
-    client_secret TEXT NOT NULL,
-    redirect_url TEXT NOT NULL,
+    provider_type      TEXT      NOT NULL,
+    client_id          TEXT      NOT NULL,
+    client_secret      TEXT      NOT NULL,
+    redirect_url       TEXT      NOT NULL,
     -- string containing a json array
-    scopes TEXT NOT NULL,
+    scopes             TEXT      NOT NULL,
 
-    created_at           TIMESTAMP NOT NULL,
-    created_by           UUID      NOT NULL,
-    deleted              BOOLEAN   NOT NULL,
+    created_at         TIMESTAMP NOT NULL,
+    created_by         UUID      NOT NULL,
+    deleted            BOOLEAN   NOT NULL,
 
     CONSTRAINT security_scheme_revisions_pk
         PRIMARY KEY (security_scheme_id, revision_id),
@@ -768,20 +769,21 @@ CREATE TABLE security_scheme_revisions
         FOREIGN KEY (security_scheme_id) REFERENCES security_schemes
 );
 
-CREATE TABLE deployment_compiled_http_api_definition_routes (
-    environment_id UUID NOT NULL,
-    deployment_revision_id BIGINT NOT NULL,
-    id INTEGER NOT NULL,  -- enumerated per deployment
+CREATE TABLE deployment_compiled_http_api_definition_routes
+(
+    environment_id         UUID    NOT NULL,
+    deployment_revision_id BIGINT  NOT NULL,
+    id                     INTEGER NOT NULL, -- enumerated per deployment
 
-    domain TEXT NOT NULL,
+    domain                 TEXT    NOT NULL,
 
-    security_scheme TEXT,         -- nullable if no security
+    security_scheme        TEXT,             -- nullable if no security
 
-    compiled_route BYTEA NOT NULL, -- full compiled route as blob
+    compiled_route         BYTEA   NOT NULL, -- full compiled route as blob
 
     CONSTRAINT deployment_compiled_http_api_definition_routes_pk
         PRIMARY KEY (environment_id, deployment_revision_id, id)
 );
 
 CREATE INDEX deployment_compiled_http_api_definition_routes_env_domain_idx
-    ON deployment_compiled_http_api_definition_routes(environment_id, domain);
+    ON deployment_compiled_http_api_definition_routes (environment_id, domain);

@@ -56,7 +56,7 @@ pub struct DeployDiff {
     pub server_deployment_hash: diff::Hash,
     pub server_staged_deployment: DeploymentPlan,
     pub server_staged_deployment_hash: diff::Hash,
-    pub diffable_server_staged_deployment: diff::Deployment,
+    pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
 }
@@ -72,7 +72,7 @@ impl DeployDiff {
         let safe_diffable_server_deployment =
             Self::safe_diff_deployment(show_sensitive, &self.diffable_server_deployment);
         let safe_diffable_server_staged_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_server_staged_deployment);
+            Self::safe_diff_deployment(show_sensitive, &self.diffable_staged_deployment);
 
         UnifiedYamlDeployDiff {
             diff_stage: self.diff_stage.is_some().then(|| {
