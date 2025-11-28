@@ -864,14 +864,20 @@ pub mod app {
         },
         /// Deploy application
         Deploy {
-            /// Only plan deployment, but apply no changes to the environment
-            #[arg(long, conflicts_with_all = ["version", "revision"])]
+            /// Only plan deployment, but apply no changes to the staging area or the environment
+            #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
             plan: bool,
+            /// Only plan and stage changes, but do not apply them to the environment; used for testing
+            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+            stage: bool,
+            /// Ask for approval for every staging step; used for testing
+            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+            approve_staging_steps: bool,
             /// Revert to the specified version
-            #[arg(long, conflicts_with_all = ["force_build", "revision"])]
+            #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
             version: Option<String>,
             /// Revert to the specified revision
-            #[arg(long, conflicts_with_all = ["force_build", "version"])]
+            #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
             revision: Option<u64>,
             #[command(flatten)]
             force_build: ForceBuildArg,

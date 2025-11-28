@@ -79,13 +79,23 @@ impl AppCommandHandler {
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
                 plan,
+                stage,
+                approve_staging_steps,
                 version,
                 revision,
                 force_build,
                 deploy_args,
             } => {
-                self.cmd_deploy(plan, version, revision, force_build, deploy_args)
-                    .await
+                self.cmd_deploy(
+                    plan,
+                    stage,
+                    approve_staging_steps,
+                    version,
+                    revision,
+                    force_build,
+                    deploy_args,
+                )
+                .await
             }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateAgents {
@@ -308,6 +318,8 @@ impl AppCommandHandler {
     async fn cmd_deploy(
         &self,
         plan: bool,
+        stage: bool,
+        approve_staging_steps: bool,
         version: Option<String>,
         revision: Option<u64>,
         force_build: ForceBuildArg,
@@ -318,7 +330,8 @@ impl AppCommandHandler {
         } else if let Some(revision) = revision {
             self.deploy_by_revision(revision, deploy_args).await
         } else {
-            self.deploy(plan, force_build, deploy_args).await
+            self.deploy(plan, stage, approve_staging_steps, force_build, deploy_args)
+                .await
         }
     }
 
@@ -459,6 +472,8 @@ impl AppCommandHandler {
     pub async fn deploy(
         &self,
         plan: bool,
+        stage: bool,
+        approve_staging_steps: bool,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
@@ -504,7 +519,12 @@ impl AppCommandHandler {
             return Ok(());
         }
 
-        self.apply_changes_to_stage(&deploy_diff).await?;
+        self.apply_changes_to_stage(approve_staging_steps, &deploy_diff)
+            .await?;
+        if stage {
+            return Ok(());
+        }
+
         self.apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
@@ -815,7 +835,11 @@ impl AppCommandHandler {
         Ok(deploy_diff)
     }
 
-    async fn apply_changes_to_stage(&self, deploy_diff: &DeployDiff) -> anyhow::Result<()> {
+    async fn apply_changes_to_stage(
+        &self,
+        approve_staging_steps: bool,
+        deploy_diff: &DeployDiff,
+    ) -> anyhow::Result<()> {
         let Some(diff_stage) = &deploy_diff.diff_stage else {
             log_skipping_up_to_date("changing staging area");
             return Ok(());
@@ -825,8 +849,20 @@ impl AppCommandHandler {
         let _indent = LogIndent::new();
 
         let component_handler = self.ctx.component_handler();
+        let interactive_handler = self.ctx.interactive_handler();
+
+        let approve = || {
+            if approve_staging_steps {
+                if !interactive_handler.confirm_staging_next_step()? {
+                    bail!("Aborted staging");
+                }
+            }
+            Ok(())
+        };
 
         for (component_name, component_diff) in &diff_stage.components {
+            approve()?;
+
             let component_name = ComponentName(component_name.to_string());
 
             match component_diff {

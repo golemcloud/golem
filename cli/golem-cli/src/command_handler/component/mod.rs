@@ -948,6 +948,8 @@ impl ComponentCommandHandler {
                         .app_handler()
                         .deploy(
                             false,
+                            false,
+                            false,
                             ForceBuildArg { force_build: false },
                             deploy_args.cloned().unwrap_or_else(DeployArgs::none),
                         )
