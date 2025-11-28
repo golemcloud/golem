@@ -15,7 +15,7 @@
 test_r::enable!();
 
 #[cfg(test)]
-#[cfg(feature = "export_golem_agentic")]
+#[cfg(all(feature = "export_golem_agentic"))]
 mod tests {
     use golem_rust::agentic::{
         Multimodal, MultimodalAdvanced, MultimodalCustom, UnstructuredBinary, UnstructuredText,
