@@ -78,35 +78,6 @@ impl AuthService {
         })
     }
 
-    pub async fn auth_ctx_for_account_id(
-        &self,
-        account_id: &AccountId,
-        auth: &AuthCtx,
-    ) -> Result<UserAuthCtx, AuthError> {
-        // special action only available for system tasks that need to impersonate a user
-        if !auth.is_system() {
-            return Err(AuthError::InternalError(anyhow!(
-                "Attempted impersonating user as non-system user"
-            )));
-        };
-
-        let record: AccountExtRevisionRecord = self
-            .account_repo
-            .get_by_id(&account_id.0)
-            .await?
-            .ok_or(AuthError::CouldNotAuthenticate)?;
-
-        let account: Account = record.try_into()?;
-
-        let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
-
-        Ok(UserAuthCtx {
-            account_id: account.id,
-            account_roles,
-            account_plan_id: account.plan_id,
-        })
-    }
-
     pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
         let user = self.authenticate_user(token).await?;
         Ok(AuthCtx::User(user))

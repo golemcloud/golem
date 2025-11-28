@@ -27,7 +27,6 @@ import "golem/apidefinition/api_definition.proto";
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
-  rpc GetAuthCtxForAccountId (GetAuthCtxForAccountIdRequest) returns (GetAuthCtxForAccountIdResponse);
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
@@ -65,22 +64,6 @@ message AuthenticateTokenResponse {
 }
 
 message AuthenticateTokenSuccessResponse {
-    golem.auth.UserAuthCtx auth_ctx = 1;
-}
-
-message GetAuthCtxForAccountIdRequest {
-  golem.common.AccountId account_id = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
-}
-
-message GetAuthCtxForAccountIdResponse {
-  oneof result {
-      GetAuthCtxForAccountIdSuccessResponse success = 1;
-      RegistryServiceError error = 2;
-  }
-}
-
-message GetAuthCtxForAccountIdSuccessResponse {
     golem.auth.UserAuthCtx auth_ctx = 1;
 }
 
