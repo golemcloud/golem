@@ -768,20 +768,57 @@ CREATE TABLE security_scheme_revisions
         FOREIGN KEY (security_scheme_id) REFERENCES security_schemes
 );
 
-CREATE TABLE deployment_compiled_http_api_definition_routes (
-    environment_id UUID NOT NULL,
-    deployment_revision_id BIGINT NOT NULL,
-    id INTEGER NOT NULL,  -- enumerated per deployment
+CREATE TABLE deployment_domain_http_api_definitions (
+    environment_id         UUID    NOT NULL,
+    deployment_revision_id BIGINT  NOT NULL,
+    domain                 TEXT    NOT NULL,
+    http_api_definition_id UUID    NOT NULL,
 
-    domain TEXT NOT NULL,
+    CONSTRAINT deployment_domain_http_api_definitions_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, domain, http_api_definition_id),
 
-    security_scheme TEXT,         -- nullable if no security
+    CONSTRAINT deployment_domain_http_api_definitions_environments_fk
+        FOREIGN KEY (environment_id)
+        REFERENCES environments(environment_id),
 
-    compiled_route BYTEA NOT NULL, -- full compiled route as blob
+    CONSTRAINT deployment_domain_http_api_definitions_http_api_definitions_fk
+        FOREIGN KEY (http_api_definition_id)
+        REFERENCES http_api_definitions(http_api_definition_id),
 
-    CONSTRAINT deployment_compiled_http_api_definition_routes_pk
-        PRIMARY KEY (environment_id, deployment_revision_id, id)
+    CONSTRAINT deployment_domain_http_api_definitions_deployment_revisions_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+        REFERENCES deployment_revisions(environment_id, revision_id)
 );
 
-CREATE INDEX deployment_compiled_http_api_definition_routes_env_domain_idx
-    ON deployment_compiled_http_api_definition_routes(environment_id, domain);
+CREATE INDEX deployment_domain_http_api_definitions_domain_idx
+    ON deployment_domain_http_api_definitions(domain)
+    INCLUDE (environment_id, deployment_revision_id, http_api_definition_id);
+
+CREATE TABLE deployment_compiled_http_api_definition_routes (
+    environment_id         UUID    NOT NULL,
+    deployment_revision_id BIGINT  NOT NULL,
+    http_api_definition_id UUID    NOT NULL,
+    id                     INTEGER NOT NULL,      -- enumerated per definition
+
+    security_scheme        TEXT,                   -- nullable if no security
+    compiled_route         BYTEA   NOT NULL,       -- full compiled route as blob
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, http_api_definition_id, id),
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_environments_fk
+        FOREIGN KEY (environment_id)
+        REFERENCES environments(environment_id),
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_http_api_definitions_fk
+        FOREIGN KEY (http_api_definition_id)
+        REFERENCES http_api_definitions(http_api_definition_id),
+
+    CONSTRAINT deployment_compiled_http_api_definition_routes_deployment_revisions_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+        REFERENCES deployment_revisions(environment_id, revision_id)
+);
+
+CREATE INDEX deployment_compiled_http_api_definition_routes_routes_def_idx
+    ON deployment_compiled_http_api_definition_routes(environment_id, deployment_revision_id, http_api_definition_id)
+    INCLUDE (compiled_route, security_scheme);

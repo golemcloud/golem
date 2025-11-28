@@ -17,7 +17,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::RouteMethod;
+use golem_common::model::http_api_definition::{HttpApiDefinitionId, RouteMethod};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
@@ -33,7 +33,7 @@ pub struct CompiledRouteWithoutSecurity {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRouteWithContext {
-    pub domain: Domain,
+    pub http_api_definition_id: HttpApiDefinitionId,
     pub security_scheme: Option<SecuritySchemeName>,
     pub route: CompiledRouteWithoutSecurity,
 }
