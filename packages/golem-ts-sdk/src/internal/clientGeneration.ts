@@ -468,45 +468,18 @@ function convertToValue(
       const values: Value.Value[] = [];
 
       if (Array.isArray(arg)) {
-        // Pre-compute type matchers to avoid redundant type checking per element
-        const typeMatchers = types.map((paramDetail) => {
-          const type = paramDetail.type;
-          switch (type.tag) {
-            case 'analysed':
-              return (elem: any) => matchesType(elem, type.val);
-
-            case 'unstructured-binary':
-              return (elem: any) => {
-                const isObjectBinary =
-                  typeof elem === 'object' && elem !== null;
-                const keysBinary = Object.keys(elem);
-                return (
-                  isObjectBinary &&
-                  keysBinary.includes('tag') &&
-                  (elem['tag'] === 'url' || elem['tag'] === 'inline')
-                );
-              };
-
-            case 'unstructured-text':
-              return (elem: any) => {
-                const isObject = typeof elem === 'object' && elem !== null;
-                const keys = Object.keys(elem);
-                return (
-                  isObject &&
-                  keys.includes('tag') &&
-                  (elem['tag'] === 'url' || elem['tag'] === 'inline')
-                );
-              };
-
-            case 'multimodal':
-              throw new Error(`Nested multimodal types are not supported`);
-          }
-        });
-
         for (const elem of arg) {
-          const index = typeMatchers.findIndex((matcher) => matcher(elem));
+          const index = types.findIndex(
+            (paramDetail) => elem.tag === paramDetail.name,
+          );
 
-          const result = convertToValue(arg[index], types[index].type);
+          if (index === -1) {
+            return Either.left(
+              `Failed to serialize multimodal element: value is not matching any of the multimodal types`,
+            );
+          }
+
+          const result = convertToValue(arg[index].val, types[index].type);
 
           if (Either.isLeft(result)) {
             return Either.left(
