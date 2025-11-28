@@ -15,22 +15,20 @@
 pub mod api_definition_lookup;
 pub mod auth_call_back_binding_handler;
 pub mod file_server_binding_handler;
-pub mod gateway_binding_resolver;
 pub mod gateway_http_input_executor;
-pub mod gateway_session;
+pub mod gateway_session_store;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
 pub mod http_handler_binding_handler;
 pub mod request;
-pub mod router;
-pub mod swagger_binding_handler;
+pub mod route_resolver;
 pub mod to_response;
 pub mod to_response_failure;
 pub use gateway_worker_request_executor::*;
 
-use golem_common::model::auth::Namespace;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{ComponentId, ComponentVersion, IdempotencyKey};
+use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::ValueAndType;
@@ -42,19 +40,18 @@ use std::fmt::Display;
 #[derive(PartialEq, Debug, Clone)]
 pub struct GatewayResolvedWorkerRequest {
     pub component_id: ComponentId,
-    pub component_version: ComponentVersion,
+    pub component_revision: ComponentRevision,
     pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<ValueAndType>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub invocation_context: InvocationContextStack,
-    pub namespace: Namespace,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerDetails {
     pub component_id: ComponentId,
-    pub component_version: ComponentVersion,
+    pub component_revision: ComponentRevision,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub invocation_context: InvocationContextStack,

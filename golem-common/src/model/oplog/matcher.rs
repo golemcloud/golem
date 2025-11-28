@@ -185,7 +185,7 @@ impl PublicOplogEntry {
                                     .unwrap_or(false)
                         }
                         PublicWorkerInvocation::ManualUpdate(params) => Self::string_match(
-                            &params.target_version.to_string(),
+                            &params.target_revision.to_string(),
                             &[],
                             query_path,
                             query,
@@ -197,7 +197,7 @@ impl PublicOplogEntry {
                     || Self::string_match("pending-update", &[], query_path, query)
                     || Self::string_match("update", &[], query_path, query)
                     || Self::string_match(
-                        &params.target_version.to_string(),
+                        &params.target_revision.to_string(),
                         &[],
                         query_path,
                         query,
@@ -208,7 +208,7 @@ impl PublicOplogEntry {
                     || Self::string_match("successful-update", &[], query_path, query)
                     || Self::string_match("update", &[], query_path, query)
                     || Self::string_match(
-                        &params.target_version.to_string(),
+                        &params.target_revision.to_string(),
                         &[],
                         query_path,
                         query,
@@ -219,7 +219,7 @@ impl PublicOplogEntry {
                     || Self::string_match("failed-update", &[], query_path, query)
                     || Self::string_match("update", &[], query_path, query)
                     || Self::string_match(
-                        &params.target_version.to_string(),
+                        &params.target_revision.to_string(),
                         &[],
                         query_path,
                         query,

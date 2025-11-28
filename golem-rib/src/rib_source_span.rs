@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use desert_rust::BinaryCodec;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, BinaryCodec)]
+#[desert(evolution())]
 pub struct SourceSpan {
     start: SourcePosition,
     end: SourcePosition,
@@ -98,7 +100,8 @@ impl Display for SourceSpan {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, BinaryCodec)]
+#[desert(evolution())]
 pub struct SourcePosition {
     pub line: i32,
     pub column: i32,

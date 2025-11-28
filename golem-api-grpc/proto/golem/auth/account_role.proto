@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.auth;
+
+enum AccountRole {
+  ACCOUNT_ROLE_UNSPECIFIED = 0;
+  ACCOUNT_ROLE_ADMIN = 1;
+  ACCOUNT_ROLE_MARKETING_ADMIN = 2;
+}

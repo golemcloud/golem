@@ -15,9 +15,10 @@
 use crate::fs::{read_to_string, write_str};
 use crate::log::{log_warn_action, LogColorize};
 use crate::model::app::{
-    AppComponentName, Application, BinaryComponentSource, DependencyType, HttpApiDefinitionName,
+    Application, BinaryComponentSource, DependencyType, HttpApiDefinitionName,
 };
 use anyhow::{anyhow, Context};
+use golem_common::model::component::ComponentName;
 use nondestructive::yaml::{Document, Id, MappingMut, Separator, SequenceMut, Value, ValueMut};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ impl<'a> AppYamlEditor<'a> {
     /// Returns true if the dependency was inserted and false on update
     pub fn insert_or_update_dependency(
         &mut self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         target_component_source: &BinaryComponentSource,
         dependency_type: DependencyType,
     ) -> anyhow::Result<bool> {
@@ -247,9 +248,10 @@ impl<'a> AppYamlEditor<'a> {
         Ok(self.documents.get_mut(path).unwrap())
     }
 
-    fn document_path_for_component(&self, component_name: &AppComponentName) -> PathBuf {
+    fn document_path_for_component(&self, component_name: &ComponentName) -> PathBuf {
         self.application
-            .component_source(component_name)
+            .component(component_name)
+            .source()
             .to_path_buf()
     }
 
@@ -263,7 +265,7 @@ impl<'a> AppYamlEditor<'a> {
 
     fn existing_document_path_for_dependency(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         target_component_source: &BinaryComponentSource,
     ) -> Option<PathBuf> {
         match target_component_source {
@@ -277,7 +279,7 @@ impl<'a> AppYamlEditor<'a> {
 
     fn target_document_path_for_dependency(
         &self,
-        component_name: &AppComponentName,
+        component_name: &ComponentName,
         target_component_source: &BinaryComponentSource,
     ) -> PathBuf {
         match self.existing_document_path_for_dependency(component_name, target_component_source) {

@@ -3,8 +3,8 @@
 Release:
 
 ```shell
-golem-cli app -b release build
-golem-cli app -b release copy
+golem-cli app --preset release build
+golem-cli app --preset release copy
 ```
 
 Debug:

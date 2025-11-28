@@ -15,7 +15,8 @@
 use crate::app::build::command::execute_build_command;
 use crate::app::context::ApplicationContext;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
-use crate::model::app::{AppComponentName, DependencyType};
+use crate::model::app::DependencyType;
+use golem_common::model::component::ComponentName;
 use std::collections::BTreeSet;
 
 pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
@@ -24,11 +25,13 @@ pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
 
     let components_to_build = components_to_build(ctx);
     for component_name in components_to_build {
-        let component_properties = ctx
+        let build_commands = ctx
             .application
-            .component_properties(&component_name, ctx.build_profile());
+            .component(&component_name)
+            .build_commands()
+            .clone();
 
-        if component_properties.build.is_empty() {
+        if build_commands.is_empty() {
             log_warn_action(
                 "Skipping",
                 format!(
@@ -45,7 +48,7 @@ pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
         );
         let _indent = LogIndent::new();
 
-        for build_step in component_properties.build.clone() {
+        for build_step in build_commands {
             execute_build_command(ctx, &component_name, &build_step).await?;
         }
     }
@@ -53,7 +56,7 @@ pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn components_to_build(ctx: &ApplicationContext) -> BTreeSet<AppComponentName> {
+fn components_to_build(ctx: &ApplicationContext) -> BTreeSet<ComponentName> {
     let mut components_to_build = BTreeSet::new();
     let mut remaining: Vec<_> = ctx.selected_component_names().iter().cloned().collect();
 

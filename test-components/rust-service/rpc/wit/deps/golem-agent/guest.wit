@@ -1,0 +1,28 @@
+package golem:agent;
+
+interface guest {
+  use common.{agent-error, agent-type, data-value};
+
+  /// Initializes the agent of a given type with the given constructor parameters.
+  /// If called a second time, it fails.
+  initialize: func(agent-type: string, input: data-value) -> result<_, agent-error>;
+
+  /// Invokes an agent. If create was not called before, it fails
+  invoke: func(method-name: string, input: data-value) -> result<data-value, agent-error>;
+
+  /// Gets the agent type. If create was not called before, it fails
+  get-definition: func() -> agent-type;
+
+  /// Gets the agent types defined by this component
+  discover-agent-types: func() -> result<list<agent-type>, agent-error>;
+}
+
+world agent-guest {
+  import golem:api/host@1.3.0;
+  import golem:rpc/types@0.2.2;
+  export guest;
+}
+
+world agent-host {
+  export host;
+}

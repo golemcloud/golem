@@ -14,9 +14,7 @@
 
 use super::{GatewayWorkerRequestExecutor, WorkerRequestExecutorError};
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, WorkerDetails};
-use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::auth::Namespace;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
 use golem_wasm::ValueAndType;
@@ -26,58 +24,30 @@ use http_body_util::BodyExt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[async_trait]
-pub trait HttpHandlerBindingHandler: Send + Sync {
-    async fn handle_http_handler_binding(
-        &self,
-        namespace: &Namespace,
-        worker_detail: &WorkerDetails,
-        incoming_http_request: IncomingHttpRequest,
-    ) -> HttpHandlerBindingResult;
+pub struct HttpHandlerBindingHandler {
+    worker_request_executor: Arc<GatewayWorkerRequestExecutor>,
 }
 
-pub type HttpHandlerBindingResult = Result<HttpHandlerBindingSuccess, HttpHandlerBindingError>;
-
-pub struct HttpHandlerBindingSuccess {
-    pub response: poem::Response,
-}
-
-#[derive(Debug)]
-pub enum HttpHandlerBindingError {
-    InternalError(String),
-    WorkerRequestExecutorError(WorkerRequestExecutorError),
-}
-
-pub struct DefaultHttpHandlerBindingHandler {
-    worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor>,
-}
-
-impl DefaultHttpHandlerBindingHandler {
-    pub fn new(worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor>) -> Self {
+impl HttpHandlerBindingHandler {
+    pub fn new(worker_request_executor: Arc<GatewayWorkerRequestExecutor>) -> Self {
         Self {
             worker_request_executor,
         }
     }
-}
 
-#[async_trait]
-impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
-    async fn handle_http_handler_binding(
+    pub async fn handle_http_handler_binding(
         &self,
-        namespace: &Namespace,
         worker_detail: &WorkerDetails,
         incoming_http_request: IncomingHttpRequest,
     ) -> HttpHandlerBindingResult {
-        let component_id = worker_detail.component_id.clone();
-
         let type_annotated_param = ValueAndType::new(
             incoming_http_request.to_value(),
             IncomingHttpRequest::analysed_type(),
         );
 
         let resolved_request = GatewayResolvedWorkerRequest {
-            component_id,
-            component_version: worker_detail.component_version,
+            component_id: worker_detail.component_id,
+            component_revision: worker_detail.component_revision,
             worker_name: worker_detail
                 .worker_name
                 .as_ref()
@@ -89,7 +59,6 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
             function_params: vec![type_annotated_param],
             idempotency_key: worker_detail.idempotency_key.clone(),
             invocation_context: worker_detail.invocation_context.clone(),
-            namespace: namespace.clone(),
         };
 
         let response = self.worker_request_executor.execute(resolved_request).await;
@@ -106,8 +75,8 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
         let poem_response = {
             use golem_common::virtual_exports::http_incoming_handler as hic;
 
-            let parsed_response = hic::HttpResponse::from_function_output(response.result)
-                .map_err(|e| {
+            let parsed_response =
+                hic::HttpResponse::from_function_output(response).map_err(|e| {
                     HttpHandlerBindingError::InternalError(format!("Failed parsing response: {e}"))
                 })?;
 
@@ -171,4 +140,16 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
             response: poem_response,
         })
     }
+}
+
+pub type HttpHandlerBindingResult = Result<HttpHandlerBindingSuccess, HttpHandlerBindingError>;
+
+pub struct HttpHandlerBindingSuccess {
+    pub response: poem::Response,
+}
+
+#[derive(Debug)]
+pub enum HttpHandlerBindingError {
+    InternalError(String),
+    WorkerRequestExecutorError(WorkerRequestExecutorError),
 }

@@ -16,16 +16,17 @@ use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{CachableComponent, ComponentRevision};
+use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
-};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -46,8 +47,7 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
-use golem_worker_executor::services::plugins::Plugins;
-use golem_worker_executor::services::projects::ProjectService;
+use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
@@ -139,10 +139,10 @@ impl ExternalOperations<Self> for DebugContext {
 
     async fn record_last_known_limits<This: HasAll<Self> + Send + Sync>(
         this: &This,
-        project_id: &ProjectId,
+        account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::record_last_known_limits(this, project_id, last_known_limits)
+        DurableWorkerCtx::<Self>::record_last_known_limits(this, account_id, last_known_limits)
             .await
     }
 
@@ -249,7 +249,7 @@ impl UpdateManagement for DebugContext {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
@@ -259,9 +259,9 @@ impl UpdateManagement for DebugContext {
 
     async fn on_worker_update_succeeded(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(target_version, new_component_size, new_active_plugins)
@@ -446,7 +446,7 @@ impl DynamicLinking<Self> for DebugContext {
         engine: &Engine,
         linker: &mut Linker<Self>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &CachableComponent,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -541,10 +541,9 @@ impl WorkerCtx for DebugContext {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -572,7 +571,6 @@ impl WorkerCtx for DebugContext {
             file_loader,
             plugins,
             worker_fork,
-            project_service,
             agent_types_service,
             shard_service,
             pending_update,
@@ -619,7 +617,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component {
+    fn component_metadata(&self) -> &CachableComponent {
         self.durable_ctx.component_metadata()
     }
 

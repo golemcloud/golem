@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::wait_for_startup;
 use crate::components::redis::Redis;
-use crate::components::shard_manager::{wait_for_startup, ShardManager};
+use crate::components::shard_manager::ShardManager;
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -40,33 +41,6 @@ pub struct SpawnedShardManager {
 
 impl SpawnedShardManager {
     pub async fn new(
-        executable: &Path,
-        working_directory: &Path,
-        number_of_shards_override: Option<usize>,
-        http_port: u16,
-        grpc_port: u16,
-        redis: Arc<dyn Redis + Send + Sync + 'static>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        otlp: bool,
-    ) -> Self {
-        Self::new_base(
-            executable,
-            working_directory,
-            number_of_shards_override,
-            http_port,
-            grpc_port,
-            redis,
-            verbosity,
-            out_level,
-            err_level,
-            otlp,
-        )
-        .await
-    }
-
-    pub async fn new_base(
         executable: &Path,
         working_directory: &Path,
         number_of_shards_override: Option<usize>,
@@ -168,15 +142,11 @@ impl SpawnedShardManager {
 
 #[async_trait]
 impl ShardManager for SpawnedShardManager {
-    fn private_host(&self) -> String {
+    fn grpc_host(&self) -> String {
         "localhost".to_string()
     }
 
-    fn private_http_port(&self) -> u16 {
-        self.http_port
-    }
-
-    fn private_grpc_port(&self) -> u16 {
+    fn grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

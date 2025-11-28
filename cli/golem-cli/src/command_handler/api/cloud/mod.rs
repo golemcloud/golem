@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod certificate;
-pub mod domain;
+// TODO: atomic, pub mod certificate;
+// TODO: atomic, pub mod domain;
 
 use crate::command::api::cloud::ApiCloudSubcommand;
-use crate::command_handler::Handlers;
 use crate::context::Context;
 use std::sync::Arc;
 
 pub struct ApiCloudCommandHandler {
+    // TODO: atomic
+    #[allow(unused)]
     ctx: Arc<Context>,
 }
 
@@ -31,17 +32,25 @@ impl ApiCloudCommandHandler {
 
     pub async fn handle_command(&self, command: ApiCloudSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiCloudSubcommand::Domain { subcommand } => {
+            ApiCloudSubcommand::Domain { subcommand: _ } => {
+                // TODO: atomic
+                /*
                 self.ctx
                     .api_cloud_domain_handler()
                     .handle_command(subcommand)
                     .await
+                 */
+                todo!()
             }
-            ApiCloudSubcommand::Certificate { subcommand } => {
+            ApiCloudSubcommand::Certificate { subcommand: _ } => {
+                // TODO: atomic
+                /*
                 self.ctx
                     .api_cloud_certificate_handler()
                     .handle_command(subcommand)
                     .await
+                 */
+                todo!()
             }
         }
     }

@@ -13,13 +13,15 @@
 // limitations under the License.
 
 use crate::{InferredExpr, RibCompilationError};
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[desert(evolution())]
 pub struct RibOutputTypeInfo {
     pub analysed_type: AnalysedType,
 }

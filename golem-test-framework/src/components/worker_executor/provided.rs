@@ -12,53 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::worker_executor::{new_client_lazy, WorkerExecutor};
+use crate::components::worker_executor::WorkerExecutor;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use tonic::transport::Channel;
 use tracing::info;
 
 pub struct ProvidedWorkerExecutor {
     host: String,
-    http_port: u16,
     grpc_port: u16,
-    client: Option<WorkerExecutorClient<Channel>>,
 }
 
 impl ProvidedWorkerExecutor {
-    pub fn new(host: String, http_port: u16, grpc_port: u16, shared_client: bool) -> Self {
-        info!("Using already running golem-worker-executor on {host}, http port: {http_port}, grpc port: {grpc_port}");
+    pub fn new(host: String, grpc_port: u16) -> Self {
+        info!("Using already running golem-worker-executor on {host}, grpc port: {grpc_port}");
         Self {
             host: host.clone(),
-            http_port,
             grpc_port,
-            client: if shared_client {
-                Some(new_client_lazy(&host, grpc_port).expect("Failed to create client"))
-            } else {
-                None
-            },
         }
     }
 }
 
 #[async_trait]
 impl WorkerExecutor for ProvidedWorkerExecutor {
-    async fn client(&self) -> crate::Result<WorkerExecutorClient<Channel>> {
-        match &self.client {
-            Some(client) => Ok(client.clone()),
-            None => new_client_lazy(&self.host, self.grpc_port),
-        }
-    }
-
-    fn private_host(&self) -> String {
+    fn grpc_host(&self) -> String {
         self.host.clone()
     }
-
-    fn private_http_port(&self) -> u16 {
-        self.http_port
-    }
-
-    fn private_grpc_port(&self) -> u16 {
+    fn grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

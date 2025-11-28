@@ -21,7 +21,7 @@ mod shard_management;
 pub mod shard_manager_config;
 mod worker_executor;
 
-use crate::error::ShardManagerTraceErrorKind;
+use self::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use crate::persistence::RoutingTableFileSystemPersistence;
 use crate::shard_manager_config::{HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};
@@ -203,7 +203,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 let error: golem::shardmanager::v1::ShardManagerError = error.into();
                 record.fail(
                     golem::shardmanager::v1::register_response::Result::Failure(error.clone()),
-                    &ShardManagerTraceErrorKind(&error),
+                    &mut ShardManagerTraceErrorKind(&error),
                 )
             }
         };

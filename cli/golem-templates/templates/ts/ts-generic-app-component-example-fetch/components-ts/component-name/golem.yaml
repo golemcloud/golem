@@ -2,4 +2,4 @@
 
 components:
   componentname:
-    template: ts
+    templates: ts

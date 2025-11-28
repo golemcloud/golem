@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package golem.common;
+
+ message Hash {
+   repeated uint32 hash_bytes = 14;
+ }

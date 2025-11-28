@@ -5,7 +5,7 @@
 
 components:
   golem:ictest:
-    template: rust
+    templates: rust
 
 dependencies:
   golem:ictest:

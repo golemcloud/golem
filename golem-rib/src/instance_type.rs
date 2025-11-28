@@ -24,6 +24,7 @@ use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, FullyQualifiedResourceConstructor,
     FunctionDictionary, FunctionType, InferredType, ResourceMethodDictionary,
 };
+use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
@@ -37,7 +38,8 @@ use std::ops::Deref;
 //
 // Please look at `InstanceCreationType`
 // for a tangible view on the fact that an instance can be either worker or a resource.
-#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Hash, Clone, Eq, PartialEq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum InstanceType {
     // Holds functions across every package and interface in every component
     Global {

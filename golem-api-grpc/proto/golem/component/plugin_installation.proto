@@ -2,12 +2,15 @@ syntax = "proto3";
 
 package golem.component;
 
-import "golem/common/plugin_installation_id.proto";
-import "golem/component/plugin_definition.proto";
+import "golem/common/uuid.proto";
+import "golem/component/plugin_registration.proto";
+
+message EnvironmentPluginGrantId {
+  golem.common.UUID value = 1;
+}
 
 message PluginInstallation {
-  golem.common.PluginInstallationId id = 1;
-  golem.component.PluginId plugin_id = 2;
-  int32 priority = 3;
-  map<string, string> parameters = 4;
+  PluginRegistrationId plugin_registration_id = 1;
+  int32 priority = 2;
+  map<string, string> parameters = 3;
 }

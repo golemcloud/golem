@@ -6,56 +6,19 @@ port = 9005
 worker_grpc_port = 9007
 workspace = "release"
 
-[api_definition]
-component_by_id_cache_size = 1024
-component_by_name_cache_size = 1024
-
 [blob_storage]
 type = "LocalFileSystem"
 
 [blob_storage.config]
 root = "../data/blob_storage"
 
-[cloud_service]
-access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-host = "localhost"
-port = 8080
-
-[cloud_service.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[component_service]
-access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-cache_capacity = 1000
-host = "localhost"
-port = 9090
-
-[component_service.connect_timeout]
-nanos = 0
-secs = 10
-
-[component_service.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
-
 [db]
 type = "Sqlite"
 
 [db.config]
 database = "../data/golem_worker.sqlite"
+foreign_keys = false
 max_connections = 10
-
-[domain_records]
-domain_allow_list = []
-register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-subdomain_black_list = ["api-gateway", "release", "grafana"]
 
 [gateway_session_storage]
 type = "Redis"
@@ -74,6 +37,24 @@ max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[registry_service]
+connect_timeout = "10s"
+host = "localhost"
+max_message_size = 52428800
+port = 8080
+
+[registry_service.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[route_resolver]
+router_cache_eviction_period = "1m"
+router_cache_max_capacity = 1024
+router_cache_ttl = "10m"
 
 [routing_table]
 connect_timeout = "10s"
@@ -152,44 +133,11 @@ multiplier = 10.0
 # worker_grpc_port = 9007
 # workspace = "release"
 # 
-# [api_definition]
-# component_by_id_cache_size = 1024
-# component_by_name_cache_size = 1024
-# 
 # [blob_storage]
 # type = "LocalFileSystem"
 # 
 # [blob_storage.config]
 # root = "../data/blob_storage"
-# 
-# [cloud_service]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-# host = "localhost"
-# port = 8080
-# 
-# [cloud_service.retries]
-# max_attempts = 5
-# max_delay = "2s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 2.0
-# 
-# [component_service]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-# cache_capacity = 1000
-# host = "localhost"
-# port = 9090
-# 
-# [component_service.connect_timeout]
-# nanos = 0
-# secs = 10
-# 
-# [component_service.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [db]
 # type = "Postgres"
@@ -201,11 +149,6 @@ multiplier = 10.0
 # password = "postgres"
 # port = 5432
 # username = "postgres"
-# 
-# [domain_records]
-# domain_allow_list = []
-# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-# subdomain_black_list = ["api-gateway", "release", "grafana"]
 # 
 # [gateway_session_storage]
 # type = "Redis"
@@ -224,6 +167,24 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [registry_service]
+# connect_timeout = "10s"
+# host = "localhost"
+# max_message_size = 52428800
+# port = 8080
+# 
+# [registry_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [route_resolver]
+# router_cache_eviction_period = "1m"
+# router_cache_max_capacity = 1024
+# router_cache_ttl = "10m"
 # 
 # [routing_table]
 # connect_timeout = "10s"
@@ -301,10 +262,6 @@ multiplier = 10.0
 # worker_grpc_port = 9007
 # workspace = "release"
 # 
-# [api_definition]
-# component_by_id_cache_size = 1024
-# component_by_name_cache_size = 1024
-# 
 # [blob_storage]
 # type = "S3"
 # 
@@ -327,35 +284,6 @@ multiplier = 10.0
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
-# [cloud_service]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-# host = "localhost"
-# port = 8080
-# 
-# [cloud_service.retries]
-# max_attempts = 5
-# max_delay = "2s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 2.0
-# 
-# [component_service]
-# access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
-# cache_capacity = 1000
-# host = "localhost"
-# port = 9090
-# 
-# [component_service.connect_timeout]
-# nanos = 0
-# secs = 10
-# 
-# [component_service.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
 # [db]
 # type = "Postgres"
 # 
@@ -366,11 +294,6 @@ multiplier = 10.0
 # password = "postgres"
 # port = 5432
 # username = "postgres"
-# 
-# [domain_records]
-# domain_allow_list = []
-# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-# subdomain_black_list = ["api-gateway", "release", "grafana"]
 # 
 # [gateway_session_storage]
 # type = "Redis"
@@ -389,6 +312,24 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [registry_service]
+# connect_timeout = "10s"
+# host = "localhost"
+# max_message_size = 52428800
+# port = 8080
+# 
+# [registry_service.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [route_resolver]
+# router_cache_eviction_period = "1m"
+# router_cache_max_capacity = 1024
+# router_cache_ttl = "10m"
 # 
 # [routing_table]
 # connect_timeout = "10s"

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::context::check_http_response_success;
+use crate::http::check_http_response_success;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::app::InitialComponentFile;
+use crate::model::app::{ComponentFilePathWithPermissions, InitialComponentFile};
 use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList};
+use golem_common::model::component::{ComponentFileOptions, ComponentFilePath};
 use itertools::Itertools;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs::File;
@@ -29,6 +29,8 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
 use url::Url;
 
+// TODO: atomic
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
@@ -37,15 +39,27 @@ struct LoadedFile {
 
 #[derive(Debug, Clone)]
 pub struct HashedFile {
-    pub hash_hex: String,
+    pub hash: blake3::Hash,
     pub target: ComponentFilePathWithPermissions,
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
-    pub properties: ComponentFilePathWithPermissionsList,
+    pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
+}
+
+impl ComponentFilesArchive {
+    pub async fn open_archive(&self) -> anyhow::Result<File> {
+        File::open(&self.archive_path).await.with_context(|| {
+            anyhow!(
+                "Failed to open IFS archive: {}",
+                self.archive_path.display()
+            )
+        })
+    }
 }
 
 pub struct IfsFileManager {
@@ -57,6 +71,8 @@ impl IfsFileManager {
         Self { client }
     }
 
+    // TODO: atomic
+    #[allow(unused)]
     pub async fn build_files_archive(
         &self,
         component_files: &[InitialComponentFile],
@@ -74,14 +90,13 @@ impl IfsFileManager {
             .prefix("golem-cli-zip")
             .tempdir()
             .with_context(|| "Error creating temporary dir for IFS archive")?;
-        let zip_file_path = temp_dir.path().join("data.zip");
-        let zip_file = File::create(&zip_file_path)
+        let archive_path = temp_dir.path().join("data.zip");
+        let zip_file = File::create(&archive_path)
             .await
             .with_context(|| "Error creating zip file for IFS archive")?;
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
-        let mut successfully_added: Vec<ComponentFilePathWithPermissions> =
-            Vec::with_capacity(component_files.len());
+        let mut file_options = BTreeMap::<ComponentFilePath, ComponentFileOptions>::new();
 
         for component_file in component_files {
             for LoadedFile { content, target } in self
@@ -108,25 +123,26 @@ impl IfsFileManager {
                         anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
                     })?;
 
-                successfully_added.push(target);
+                file_options.insert(
+                    target.path,
+                    ComponentFileOptions {
+                        permissions: target.permissions,
+                    },
+                );
             }
         }
 
         zip_writer.close().await.with_context(|| {
             anyhow!(
                 "Error closing zip file for IFS archive {}",
-                zip_file_path.display()
+                archive_path.display()
             )
         })?;
 
-        let properties = ComponentFilePathWithPermissionsList {
-            values: successfully_added,
-        };
-
         Ok(ComponentFilesArchive {
             _temp_dir: temp_dir,
-            archive_path: zip_file_path,
-            properties,
+            archive_path,
+            file_options,
         })
     }
 
@@ -243,6 +259,8 @@ impl IfsFileManager {
     }
 }
 
+// TODO: atomic
+#[allow(unused)]
 #[async_trait]
 trait FileProcessor<R> {
     async fn process_local_file(
@@ -258,6 +276,8 @@ trait FileProcessor<R> {
     ) -> anyhow::Result<R>;
 }
 
+// TODO: atomic
+#[allow(unused)]
 struct FileLoader {
     client: reqwest::Client,
 }
@@ -318,6 +338,8 @@ impl FileProcessor<LoadedFile> for FileLoader {
     }
 }
 
+// TODO: atomic
+#[allow(unused)]
 struct FileHasher {
     client: reqwest::Client,
 }
@@ -346,7 +368,7 @@ impl FileProcessor<HashedFile> for FileHasher {
             .with_context(|| anyhow!("Failed to hash local IFS file: {}", path.display()))?;
 
         Ok(HashedFile {
-            hash_hex: hasher.finalize().to_hex().to_string(),
+            hash: hasher.finalize(),
             target: target.clone(),
         })
     }
@@ -381,7 +403,7 @@ impl FileProcessor<HashedFile> for FileHasher {
         }
 
         Ok(HashedFile {
-            hash_hex: hasher.finalize().to_hex().to_string(),
+            hash: hasher.finalize(),
             target: target.clone(),
         })
     }

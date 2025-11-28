@@ -6,8 +6,18 @@
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 
+app: agent-counters
+
 includes:
 - common-*/golem.yaml
 - components-*/*/golem.yaml
 witDeps:
-- golem-temp/wit/deps
+- .wit/wit/deps
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

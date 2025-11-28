@@ -5,4 +5,4 @@
 
 components:
   child-component:
-    template: rust
+    templates: rust

@@ -12,19 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::bail;
 use chrono::{DateTime, Utc};
-use golem_client::model::{ApiDefinitionInfo, ApiSite, MethodPattern, Provider};
+use golem_common::model::http_api_definition::HttpApiDefinition;
+use golem_common::model::security_scheme::Provider;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Copy)]
-pub enum HttpApiDeployMode {
-    All,
-    Matching,
-}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum IdentityProviderType {
@@ -124,6 +118,7 @@ impl From<String> for ApiDefinitionId {
     }
 }
 
+// TODO: atomic: both revision and version should be allowed
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ApiDefinitionVersion(pub String);
 
@@ -148,16 +143,19 @@ impl From<String> for ApiDefinitionVersion {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiDeployment {
     #[serde(rename = "apiDefinitions")]
-    pub api_definitions: Vec<ApiDefinitionInfo>,
+    pub api_definitions: Vec<HttpApiDefinition>,
     #[serde(rename = "projectId")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub project_id: Option<Uuid>,
-    pub site: ApiSite,
+    // TODO: atomic: pub site: ApiSite,
+    pub site: String,
     #[serde(rename = "createdAt")]
     pub created_at: Option<DateTime<Utc>>,
 }
 
+// TODO: atomic
+/*
 impl From<golem_client::model::ApiDeployment> for ApiDeployment {
     fn from(value: golem_client::model::ApiDeployment) -> Self {
         ApiDeployment {
@@ -168,6 +166,7 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
         }
     }
 }
+*/
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiSecurityScheme {
@@ -182,6 +181,8 @@ pub struct ApiSecurityScheme {
     pub scopes: Vec<String>,
 }
 
+// TODO: atomic
+/*
 impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
     fn from(value: golem_client::model::SecuritySchemeData) -> Self {
         ApiSecurityScheme {
@@ -193,18 +194,4 @@ impl From<golem_client::model::SecuritySchemeData> for ApiSecurityScheme {
         }
     }
 }
-
-pub fn to_method_pattern(method: &str) -> anyhow::Result<MethodPattern> {
-    Ok(match method.to_lowercase().as_str() {
-        "get" => MethodPattern::Get,
-        "connect" => MethodPattern::Connect,
-        "post" => MethodPattern::Post,
-        "delete" => MethodPattern::Delete,
-        "put" => MethodPattern::Put,
-        "patch" => MethodPattern::Patch,
-        "options" => MethodPattern::Options,
-        "trace" => MethodPattern::Trace,
-        "head" => MethodPattern::Head,
-        _ => bail!("Invalid method: {}", method),
-    })
-}
+*/

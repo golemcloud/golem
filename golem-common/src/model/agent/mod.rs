@@ -38,8 +38,8 @@ pub mod bindings {
 
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
+use crate::model::component::ComponentId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;

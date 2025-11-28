@@ -1,38 +1,35 @@
 use crate::model::app_raw;
+use indexmap::IndexMap;
 use minijinja::{Environment, Error};
 use serde::Serialize;
 use std::collections::HashMap;
 
-pub trait Template<C: Serialize> {
-    type Rendered;
+pub trait Template<C>
+where
+    C: Serialize,
+    Self: Sized,
+{
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error>;
 
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error>;
+    fn render_or_clone(&self, env: &Environment, ctx: Option<&C>) -> Result<Self, Error>
+    where
+        Self: Clone,
+    {
+        match ctx {
+            Some(ctx) => self.render(env, ctx),
+            None => Ok(self.clone()),
+        }
+    }
 }
 
 impl<C: Serialize> Template<C> for String {
-    type Rendered = String;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         env.render_str(self, ctx)
     }
 }
 
 impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
-    type Rendered = Option<T::Rendered>;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         match self {
             Some(template) => Ok(Some(template.render(env, ctx)?)),
             None => Ok(None),
@@ -41,26 +38,24 @@ impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
 }
 
 impl<C: Serialize, T: Template<C>> Template<C> for Vec<T> {
-    type Rendered = Vec<T::Rendered>;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         self.iter().map(|elem| elem.render(env, ctx)).collect()
     }
 }
 
 impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
-    type Rendered = HashMap<String, T::Rendered>;
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        let mut rendered = HashMap::<String, T>::with_capacity(self.len());
+        for (key, template) in self {
+            rendered.insert(key.clone(), template.render(env, ctx)?);
+        }
+        Ok(rendered)
+    }
+}
 
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
-        let mut rendered = HashMap::<String, T::Rendered>::with_capacity(self.len());
+impl<C: Serialize, T: Template<C>> Template<C> for IndexMap<String, T> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        let mut rendered = IndexMap::<String, T>::with_capacity(self.len());
         for (key, template) in self {
             rendered.insert(key.clone(), template.render(env, ctx)?);
         }
@@ -69,9 +64,7 @@ impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
 }
 
 impl<C: Serialize> Template<C> for app_raw::BuildCommand {
-    type Rendered = app_raw::BuildCommand;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         match self {
             app_raw::BuildCommand::External(external) => {
                 Ok(app_raw::BuildCommand::External(external.render(env, ctx)?))
@@ -98,13 +91,7 @@ impl<C: Serialize> Template<C> for app_raw::BuildCommand {
 }
 
 impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
-    type Rendered = app_raw::ExternalCommand;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ExternalCommand {
             command: self.command.render(env, ctx)?,
             dir: self.dir.render(env, ctx)?,
@@ -117,9 +104,7 @@ impl<C: Serialize> Template<C> for app_raw::ExternalCommand {
 }
 
 impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
-    type Rendered = app_raw::GenerateQuickJSCrate;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::GenerateQuickJSCrate {
             generate_quickjs_crate: self.generate_quickjs_crate.render(env, ctx)?,
             wit: self.wit.render(env, ctx)?,
@@ -138,9 +123,7 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSCrate {
 }
 
 impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
-    type Rendered = app_raw::GenerateQuickJSDTS;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::GenerateQuickJSDTS {
             generate_quickjs_dts: self.generate_quickjs_dts.render(env, ctx)?,
             wit: self.wit.render(env, ctx)?,
@@ -150,9 +133,7 @@ impl<C: Serialize> Template<C> for app_raw::GenerateQuickJSDTS {
 }
 
 impl<C: Serialize> Template<C> for app_raw::GenerateAgentWrapper {
-    type Rendered = app_raw::GenerateAgentWrapper;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::GenerateAgentWrapper {
             generate_agent_wrapper: self.generate_agent_wrapper.render(env, ctx)?,
             based_on_compiled_wasm: self.based_on_compiled_wasm.render(env, ctx)?,
@@ -161,9 +142,7 @@ impl<C: Serialize> Template<C> for app_raw::GenerateAgentWrapper {
 }
 
 impl<C: Serialize> Template<C> for app_raw::ComposeAgentWrapper {
-    type Rendered = app_raw::ComposeAgentWrapper;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::ComposeAgentWrapper {
             compose_agent_wrapper: self.compose_agent_wrapper.render(env, ctx)?,
             with_agent: self.with_agent.render(env, ctx)?,
@@ -173,9 +152,7 @@ impl<C: Serialize> Template<C> for app_raw::ComposeAgentWrapper {
 }
 
 impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
-    type Rendered = app_raw::InjectToPrebuiltQuickJs;
-
-    fn render(&self, env: &Environment, ctx: &C) -> Result<Self::Rendered, Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::InjectToPrebuiltQuickJs {
             inject_to_prebuilt_quickjs: self.inject_to_prebuilt_quickjs.render(env, ctx)?,
             module: self.module.render(env, ctx)?,
@@ -186,14 +163,8 @@ impl<C: Serialize> Template<C> for app_raw::InjectToPrebuiltQuickJs {
 }
 
 impl<C: Serialize> Template<C> for serde_json::Value {
-    type Rendered = serde_json::Value;
-
     #[allow(clippy::only_used_in_recursion)]
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(match self {
             value @ serde_json::Value::Null => value.clone(),
             value @ serde_json::Value::Bool(_) => value.clone(),
@@ -219,41 +190,11 @@ impl<C: Serialize> Template<C> for serde_json::Value {
 }
 
 impl<C: Serialize> Template<C> for serde_json::Map<String, serde_json::Value> {
-    type Rendered = serde_json::Map<String, serde_json::Value>;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         let mut rendered = serde_json::Map::<String, serde_json::Value>::with_capacity(self.len());
         for (key, template) in self {
             rendered.insert(key.clone(), template.render(env, ctx)?);
         }
         Ok(rendered)
-    }
-}
-
-impl<C: Serialize> Template<C> for app_raw::ComponentProperties {
-    type Rendered = app_raw::ComponentProperties;
-
-    fn render(
-        &self,
-        env: &minijinja::Environment,
-        ctx: &C,
-    ) -> Result<Self::Rendered, minijinja::Error> {
-        Ok(app_raw::ComponentProperties {
-            source_wit: self.source_wit.render(env, ctx)?,
-            generated_wit: self.generated_wit.render(env, ctx)?,
-            component_wasm: self.component_wasm.render(env, ctx)?,
-            linked_wasm: self.linked_wasm.render(env, ctx)?,
-            build: self.build.render(env, ctx)?,
-            custom_commands: self.custom_commands.render(env, ctx)?,
-            clean: self.clean.render(env, ctx)?,
-            component_type: self.component_type,
-            files: self.files.clone(),
-            plugins: self.plugins.clone(),
-            env: self.env.render(env, ctx)?,
-        })
     }
 }

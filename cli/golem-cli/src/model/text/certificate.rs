@@ -12,12 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::text::fmt::*;
-use cli_table::Table;
-use golem_client::model::Certificate;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
+// TODO: atomic
+/*
 fn certificate_fields(certificate: &Certificate) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
@@ -74,3 +70,4 @@ impl TextView for CertificateListView {
         log_table::<_, CertificateTableView>(&self.0);
     }
 }
+*/

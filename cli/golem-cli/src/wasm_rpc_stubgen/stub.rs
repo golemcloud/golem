@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::app::AppComponentName;
 use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::rust::BindingMapping;
 use crate::wasm_rpc_stubgen::wit_encode::EncodedWitDir;
 use crate::wasm_rpc_stubgen::wit_generate::extract_exports_as_wit_dep;
 use crate::wasm_rpc_stubgen::wit_resolve::{PackageSource, ResolvedWitDir};
 use anyhow::{anyhow, Context};
+use golem_common::model::component::ComponentName;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use proc_macro2::Span;
@@ -39,7 +39,7 @@ pub struct StubConfig {
     pub golem_rust_override: RustDependencyOverride,
     pub extract_source_exports_package: bool,
     pub seal_cargo_workspace: bool,
-    pub component_name: AppComponentName,
+    pub component_name: ComponentName,
 }
 
 #[derive(Debug, Clone, Default)]

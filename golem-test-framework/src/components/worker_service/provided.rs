@@ -12,15 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{new_worker_grpc_client, WorkerServiceGrpcClient};
-use crate::components::component_service::ComponentService;
 use crate::components::new_reqwest_client;
 use crate::components::worker_service::WorkerService;
-use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
-use std::sync::Arc;
 use tokio::sync::OnceCell;
-use tonic::transport::Channel;
 use tracing::info;
 
 pub struct ProvidedWorkerService {
@@ -28,10 +23,7 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
-    client_protocol: GolemClientProtocol,
-    component_service: Arc<dyn ComponentService>,
     base_http_client: OnceCell<reqwest::Client>,
-    worker_grpc_client: OnceCell<WorkerServiceGrpcClient<Channel>>,
 }
 
 impl ProvidedWorkerService {
@@ -40,31 +32,39 @@ impl ProvidedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
-        client_protocol: GolemClientProtocol,
-        component_service: Arc<dyn ComponentService>,
     ) -> Self {
-        info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
+        info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}, custom request port: {custom_request_port}");
         Self {
             host: host.clone(),
             http_port,
             grpc_port,
             custom_request_port,
-            client_protocol,
-            component_service,
             base_http_client: OnceCell::new(),
-            worker_grpc_client: OnceCell::new(),
         }
     }
 }
 
 #[async_trait]
 impl WorkerService for ProvidedWorkerService {
-    fn component_service(&self) -> &Arc<dyn ComponentService> {
-        &self.component_service
+    fn http_host(&self) -> String {
+        self.host.clone()
+    }
+    fn http_port(&self) -> u16 {
+        self.http_port
     }
 
-    fn client_protocol(&self) -> GolemClientProtocol {
-        self.client_protocol
+    fn grpc_host(&self) -> String {
+        self.host.clone()
+    }
+    fn gprc_port(&self) -> u16 {
+        self.grpc_port
+    }
+
+    fn custom_request_host(&self) -> String {
+        self.host.clone()
+    }
+    fn custom_request_port(&self) -> u16 {
+        self.custom_request_port
     }
 
     async fn base_http_client(&self) -> reqwest::Client {
@@ -72,31 +72,6 @@ impl WorkerService for ProvidedWorkerService {
             .get_or_init(async || new_reqwest_client())
             .await
             .clone()
-    }
-
-    async fn worker_grpc_client(&self) -> WorkerServiceGrpcClient<Channel> {
-        self.worker_grpc_client
-            .get_or_init(async || {
-                new_worker_grpc_client(&self.public_host(), self.public_grpc_port()).await
-            })
-            .await
-            .clone()
-    }
-
-    fn private_host(&self) -> String {
-        self.host.clone()
-    }
-
-    fn private_http_port(&self) -> u16 {
-        self.http_port
-    }
-
-    fn private_grpc_port(&self) -> u16 {
-        self.grpc_port
-    }
-
-    fn private_custom_request_port(&self) -> u16 {
-        self.custom_request_port
     }
 
     async fn kill(&self) {}
