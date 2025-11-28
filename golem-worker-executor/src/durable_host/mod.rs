@@ -1279,7 +1279,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         let execution_status = self.execution_status.read().unwrap();
         match &*execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind.clone()),
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(*interrupt_kind),
             _ => None,
         }
     }
@@ -1321,16 +1321,22 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
             ExecutionStatus::Suspended { agent_mode, .. } => {
+                let (tx, _) = tokio::sync::broadcast::channel(128);
+                let interrupt_signal = Arc::new(tx);
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
+                    interrupt_signal,
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
             ExecutionStatus::Loading { agent_mode, .. } => {
+                let (tx, _) = tokio::sync::broadcast::channel(128);
+                let interrupt_signal = Arc::new(tx);
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
+                    interrupt_signal,
                 };
             }
         }
@@ -2513,13 +2519,28 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
             Some((
                 _,
                 OplogEntry::Log {
-                    level: LogLevel::Stderr,
+                    level,
                     message,
+                    context,
                     ..
                 },
-            )) => {
+            )) if level == &LogLevel::Warn
+                || level == &LogLevel::Error
+                || level == &LogLevel::Critical
+                || level == &LogLevel::Stderr =>
+            {
                 if collected_count < max_count {
-                    current_stderr_entries_batch.push(message.clone());
+                    if level == &LogLevel::Stderr {
+                        current_stderr_entries_batch.push(message.clone());
+                    } else {
+                        let line = format!(
+                            "[{}] [{}] {}\n",
+                            format!("{level:?}").to_uppercase(),
+                            context,
+                            message
+                        );
+                        current_stderr_entries_batch.push(line);
+                    }
                     collected_count += 1;
                 }
             }

@@ -40,6 +40,11 @@ class TestAgent extends BaseAgent {
             child
         }
     }
+
+    async longRpcCall(durationInMillis: number): Promise<void> {
+      const childAgent = ChildAgent.get(1000);
+      await childAgent.longRpcCall(durationInMillis);
+    }
 }
 
 @agent()
@@ -59,6 +64,12 @@ class ChildAgent extends BaseAgent {
 
     envVars(): EnvVar[] {
         return Object.entries(process.env).map(([key, value]) => ({key, value: value ?? ''}));
+    }
+
+    async longRpcCall(durationInMillis: number): Promise<void> {
+      console.log(`Starting sleeping ${durationInMillis}ms`);
+      await sleep(durationInMillis);
+      console.log(`Finished sleeping ${durationInMillis}ms`);
     }
 }
 

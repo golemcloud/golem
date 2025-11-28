@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: blacksmith-16vcpu-windows-2025
     env:
-      CARGO_BUILD_JOBS: 5
+      CARGO_BUILD_JOBS: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5

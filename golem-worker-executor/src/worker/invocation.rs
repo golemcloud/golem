@@ -699,7 +699,7 @@ impl InvokeResult {
                 retry_from: *retry_from,
             }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
-                Some(TrapType::Interrupt(interrupt_kind.clone()))
+                Some(TrapType::Interrupt(*interrupt_kind))
             }
             InvokeResult::Exited { .. } => Some(TrapType::Exit),
             _ => None,
