@@ -29,7 +29,7 @@ pub mod diagnose;
 pub mod error;
 pub mod fs;
 pub mod fuzzy;
-pub mod http;
+pub mod client;
 pub mod log;
 pub mod model;
 pub mod validation;

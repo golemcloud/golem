@@ -98,6 +98,10 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_staging_next_step(&self) -> anyhow::Result<bool> {
+        self.confirm(true, "Continue with the next staging step?", None)
+    }
+
     pub fn confirm_auto_deploy_component(
         &self,
         component_name: &ComponentName,
