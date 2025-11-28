@@ -2519,13 +2519,28 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
             Some((
                 _,
                 OplogEntry::Log {
-                    level: LogLevel::Stderr,
+                    level,
                     message,
+                    context,
                     ..
                 },
-            )) => {
+            )) if level == &LogLevel::Warn
+                || level == &LogLevel::Error
+                || level == &LogLevel::Critical
+                || level == &LogLevel::Stderr =>
+            {
                 if collected_count < max_count {
-                    current_stderr_entries_batch.push(message.clone());
+                    if level == &LogLevel::Stderr {
+                        current_stderr_entries_batch.push(message.clone());
+                    } else {
+                        let line = format!(
+                            "[{}] [{}] {}\n",
+                            format!("{level:?}").to_uppercase(),
+                            context,
+                            message
+                        );
+                        current_stderr_entries_batch.push(line);
+                    }
                     collected_count += 1;
                 }
             }
