@@ -29,6 +29,7 @@ use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
+use std::future::{pending, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
@@ -144,6 +145,7 @@ pub enum ExecutionStatus {
     Running {
         agent_mode: AgentMode,
         timestamp: Timestamp,
+        interrupt_signal: Arc<tokio::sync::broadcast::Sender<InterruptKind>>,
     },
     Suspended {
         agent_mode: AgentMode,
@@ -212,6 +214,22 @@ impl ExecutionStatus {
             } => *component_type = new_agent_mode,
         }
     }
+
+    pub fn create_await_interrupt_signal(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+        match self {
+            ExecutionStatus::Loading { .. } => Box::pin(pending()),
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => {
+                let mut rx = interrupt_signal.subscribe();
+                Box::pin(async move { rx.recv().await.unwrap_or(InterruptKind::Interrupt) })
+            }
+            ExecutionStatus::Suspended { .. } => Box::pin(pending()),
+            ExecutionStatus::Interrupting { .. } => Box::pin(pending()),
+        }
+    }
 }
 
 /// Describes the various reasons a worker can run into a trap
@@ -231,7 +249,7 @@ pub enum TrapType {
 impl TrapType {
     pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => TrapType::Interrupt(kind.clone()),
+            Some(kind) => TrapType::Interrupt(*kind),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {

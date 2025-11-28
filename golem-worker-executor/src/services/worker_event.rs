@@ -163,7 +163,7 @@ impl WorkerEventService for WorkerEventServiceDefault {
                     || level == &LogLevel::Critical =>
                 {
                     let line = format!(
-                        "[{}] [{}] {}",
+                        "[{}] [{}] {}\n",
                         (*level).to_string().to_uppercase(),
                         context,
                         message

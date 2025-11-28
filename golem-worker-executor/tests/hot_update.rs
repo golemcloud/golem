@@ -53,7 +53,7 @@ impl F1Control {
     }
 
     pub fn resume(self) {
-        self.resume.send(()).unwrap();
+        let _ = self.resume.send(());
         debug!("F1 control resumed from blocking point");
     }
 }
