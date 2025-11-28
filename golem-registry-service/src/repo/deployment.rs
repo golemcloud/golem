@@ -536,8 +536,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        ac.account_id, e.environment_id, r.domain,
-                        s.security_scheme_id,
+                        ac.account_id, e.environment_id, r.deployment_revision_id,
+                        r.domain, s.security_scheme_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,

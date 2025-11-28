@@ -386,6 +386,7 @@ impl DeploymentRevisionCreationRecord {
 pub struct DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord {
     pub account_id: Uuid,
     pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
 
     pub domain: String,
 
@@ -450,6 +451,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
         Ok(Self {
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),
+            deployment_revision: value.deployment_revision_id.into(),
             domain: Domain(value.domain),
             security_scheme,
             route: value.compiled_route.value,

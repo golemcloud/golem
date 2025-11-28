@@ -21,6 +21,7 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
+use golem_common::model::deployment::DeploymentRevision;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
@@ -41,6 +42,7 @@ pub struct CompiledRouteWithContext {
 pub struct CompiledRouteWithSecuritySchemeDetails {
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
     pub security_scheme: Option<SecuritySchemeDetails>,
     pub route: CompiledRouteWithoutSecurity,
