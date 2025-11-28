@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::http::check_http_response_success;
+use crate::client::check_http_response_success;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::app::{ComponentFilePathWithPermissions, InitialComponentFile};
 use anyhow::{anyhow, bail, Context};

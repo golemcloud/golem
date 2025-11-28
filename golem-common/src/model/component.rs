@@ -211,7 +211,7 @@ impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: None, // TODO: atomic
+                version: Some("TODO".to_string()), // TODO: atomic
                 env: self
                     .env
                     .iter()

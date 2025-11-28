@@ -50,16 +50,22 @@ pub struct DeployDiff {
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
-    #[allow(unused)] // For debug logs
+    #[allow(unused)] // NOTE: for debug logs
     pub server_deployment: Option<DeploymentSummary>,
     pub diffable_server_deployment: diff::Deployment,
+    pub server_deployment_hash: diff::Hash,
     pub server_staged_deployment: DeploymentPlan,
+    pub server_staged_deployment_hash: diff::Hash,
     pub diffable_server_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
 }
 
 impl DeployDiff {
+    pub fn is_stage_same_as_server(&self) -> bool {
+        self.server_staged_deployment_hash == self.server_deployment_hash
+    }
+
     pub fn unified_yaml_diffs(&self, show_sensitive: bool) -> UnifiedYamlDeployDiff {
         let safe_diffable_local_deployment =
             Self::safe_diff_deployment(show_sensitive, &self.diffable_local_deployment);

@@ -27,8 +27,7 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent, LogOutput,
-    Output,
+    log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
@@ -39,7 +38,7 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
+use golem_client::api::{ApplicationClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
@@ -484,71 +483,10 @@ impl AppCommandHandler {
             todo!()
         }
 
-        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
-
-        if deploy_quick_diff.is_up_to_date() {
-            log_skipping_up_to_date(format!(
-                "deployment, no changes detected, deployment hash: {}",
-                deploy_quick_diff
-                    .local_deployment_hash
-                    .to_string()
-                    .log_color_highlight()
-            ));
-            // TODO: atomic: if there is a deployment, show details (version, revision...)
+        let Some(deploy_diff) = self.prepare_deployment(environment).await? else {
+            log_skipping_up_to_date("deployment, no changes detected");
             return Ok(());
-        }
-
-        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
-
-        log_action("Diffing", "");
-
-        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
-        debug!("deploy_diff: {:#?}", deploy_diff);
-
-        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
-        debug!("detailed deploy_diff: {:#?}", deploy_diff);
-
-        {
-            let _indent = LogIndent::new();
-            let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
-
-            match &unified_diffs.diff_stage {
-                Some(diff) => {
-                    log_action("Diffing", "with staging area");
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    log_unified_diff(diff);
-                }
-                None => {
-                    log_skipping_up_to_date("diffing with staging area");
-                }
-            }
-
-            {
-                log_action("Diffing", "with current deployment");
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
-                log_unified_diff(&unified_diffs.diff);
-            }
-        }
-
-        {
-            log_action("Planning", "");
-            let _indent = LogIndent::new();
-
-            match &deploy_diff.diff_stage {
-                Some(diff_stage) => {
-                    log_warn_action("Planned", "changes to be applied to the staging area:");
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    self.ctx.log_handler().log_view(diff_stage)
-                }
-                None => log_skipping_up_to_date("planning changes for staging area"),
-            }
-
-            {
-                log_warn_action("Planned", "changes to be applied to the environment:");
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
-                self.ctx.log_handler().log_view(&deploy_diff.diff)
-            }
-        }
+        };
 
         if plan {
             return Ok(());
@@ -571,6 +509,104 @@ impl AppCommandHandler {
             .await?;
 
         Ok(())
+    }
+
+    async fn prepare_deployment(
+        &self,
+        environment: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<Option<DeployDiff>> {
+        log_action("Preparing", "deployment");
+        let _indent = LogIndent::new();
+
+        let deploy_quick_diff = self.deploy_quick_diff(environment).await?;
+
+        if deploy_quick_diff.is_up_to_date() {
+            return Ok(None);
+        }
+
+        debug!("deploy_quick_diff: {:#?}", deploy_quick_diff);
+
+        log_action("Diffing", "");
+
+        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+        debug!("deploy_diff: {:#?}", deploy_diff);
+
+        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+
+        let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
+        let stage_is_same_as_server = deploy_diff.is_stage_same_as_server();
+
+        {
+            let _indent = LogIndent::new();
+
+            log_action(
+                "Diffing",
+                format!(
+                    "staging area with current deployment: {}",
+                    if stage_is_same_as_server {
+                        "SAME".green()
+                    } else {
+                        "DIFFERENT".yellow()
+                    }
+                ),
+            );
+
+            if !stage_is_same_as_server {
+                match &unified_diffs.diff_stage {
+                    Some(diff) => {
+                        log_action("Diffing", "with staging area");
+                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        log_unified_diff(diff);
+                    }
+                    None => {
+                        log_skipping_up_to_date("diffing with staging area");
+                    }
+                }
+            }
+
+            {
+                if stage_is_same_as_server {
+                    log_action("Diffing", "with staging area and current deployment");
+                } else {
+                    log_action("Diffing", "with current deployment");
+                }
+
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                log_unified_diff(&unified_diffs.diff);
+            }
+        }
+
+        {
+            log_action("Planning", "");
+            let _indent = LogIndent::new();
+
+            if !stage_is_same_as_server {
+                match &deploy_diff.diff_stage {
+                    Some(diff_stage) => {
+                        log_action("Planned", "changes to be applied to the staging area:");
+                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        self.ctx.log_handler().log_view(diff_stage)
+                    }
+                    None => log_skipping_up_to_date("planning changes for staging area"),
+                }
+            }
+
+            {
+                if stage_is_same_as_server {
+                    log_action(
+                        "Planned",
+                        "changes to be applied to the staging area and to the environment:",
+                    );
+                } else {
+                    log_action("Planned", "changes to be applied to the environment:");
+                }
+                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                self.ctx.log_handler().log_view(&deploy_diff.diff)
+            }
+        }
+
+        Ok(Some(deploy_diff))
     }
 
     async fn deploy_quick_diff(
@@ -638,6 +674,8 @@ impl AppCommandHandler {
             .map(|d| d.to_diffable())
             .unwrap_or_default();
 
+        let server_deployment_hash = diffable_server_deployment.hash();
+
         let server_staged_deployment = clients
             .environment
             .get_environment_deployment_plan(&deploy_quick_diff.environment.environment_id.0)
@@ -645,6 +683,8 @@ impl AppCommandHandler {
             .map_service_error()?;
 
         let diffable_server_staged_deployment = server_staged_deployment.to_diffable();
+
+        let server_staged_deployment_hash = diffable_server_staged_deployment.hash();
 
         let Some(diff) = diffable_server_deployment
             .diff_with_local(&deploy_quick_diff.diffable_local_deployment)
@@ -662,7 +702,9 @@ impl AppCommandHandler {
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             server_deployment,
             diffable_server_deployment,
+            server_deployment_hash,
             server_staged_deployment,
+            server_staged_deployment_hash,
             diffable_server_staged_deployment,
             diff,
             diff_stage,
@@ -673,38 +715,36 @@ impl AppCommandHandler {
         &self,
         mut deploy_diff: DeployDiff,
     ) -> anyhow::Result<DeployDiff> {
-        let Some(diff_stage) = &deploy_diff.diff_stage else {
-            return Ok(deploy_diff);
-        };
+        let component_handler = self.ctx.component_handler();
 
-        let clients = self.ctx.golem_clients().await?;
+        for diff in [deploy_diff.diff_stage.as_ref(), Some(&deploy_diff.diff)] {
+            let Some(diff) = diff else {
+                continue;
+            };
 
-        for (component_name, component_diff) in &diff_stage.components {
-            let component_name = ComponentName(component_name.clone());
+            for (component_name, component_diff) in &diff.components {
+                let component_name = ComponentName(component_name.clone());
 
-            match component_diff {
-                diff::BTreeMapDiffValue::Create => {
-                    // NOP
-                }
-                diff::BTreeMapDiffValue::Delete => {
-                    // NOP
-                }
-                diff::BTreeMapDiffValue::Update(_) => {
-                    let component_identity = deploy_diff.staged_component_identity(&component_name);
+                match component_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let component_identity =
+                            deploy_diff.staged_component_identity(&component_name);
 
-                    let staged_component = clients
-                        .component
-                        .get_component_revision(
-                            &component_identity.id.0,
-                            component_identity.revision.0,
-                        )
-                        .await
-                        .map_service_error()?;
+                        let staged_component = component_handler
+                            .get_component_revision_by_id(
+                                &component_identity.id,
+                                component_identity.revision,
+                            )
+                            .await?;
 
-                    deploy_diff
-                        .diffable_server_staged_deployment
-                        .components
-                        .insert(component_name.0, staged_component.to_diffable().into());
+                        deploy_diff
+                            .diffable_server_staged_deployment
+                            .components
+                            .insert(component_name.0, staged_component.to_diffable().into());
+                    }
                 }
             }
         }
@@ -743,6 +783,11 @@ impl AppCommandHandler {
             }
         }
         */
+
+        debug!(
+            "diffable_server_staged_deployment hash: {:#?}",
+            deploy_diff.diffable_server_staged_deployment.hash()
+        );
 
         // Update diff with details
         deploy_diff.diff_stage = deploy_diff
@@ -813,7 +858,7 @@ impl AppCommandHandler {
 
         log_action("Deploying", "staged changes to the environment");
 
-        clients
+        let result = clients
             .environment
             .deploy_environment(
                 &deploy_diff.environment.environment_id.0,
@@ -826,7 +871,10 @@ impl AppCommandHandler {
             .await
             .map_service_error()?;
 
-        // TODO: atomic log details (version, revision etc..)
+        log_action("Deployed", "all changes");
+
+        // TODO: atomic: proper view
+        self.ctx.log_handler().log_serializable(&result);
 
         Ok(())
     }

@@ -40,8 +40,11 @@ use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
+use golem_common::cache::SimpleCache;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentName, ComponentUpdate};
+use golem_common::model::component::{
+    ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+};
 use golem_common::model::component_metadata::{
     dynamic_linking_to_diffable, DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -1091,7 +1094,7 @@ impl ComponentCommandHandler {
             log_action(
                 "Calculating hash",
                 format!(
-                    "for local component {}",
+                    "for component {} binary",
                     component_name.as_str().log_color_highlight()
                 ),
             );
@@ -1099,7 +1102,7 @@ impl ComponentCommandHandler {
             let mut component_hasher = blake3::Hasher::new();
             component_hasher
                 .update_reader(&file)
-                .context("Failed to hash component")?;
+                .context("Failed to hash component binary")?;
             component_hasher.finalize()
         };
 
@@ -1124,7 +1127,7 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             metadata: diff::ComponentMetadata {
-                version: None, // TODO: atomic
+                version: Some("TODO".to_string()), // TODO: atomic
                 env: properties
                     .env
                     .iter()
@@ -1260,6 +1263,30 @@ impl ComponentCommandHandler {
             .map_service_error()?;
 
         Ok(())
+    }
+
+    pub async fn get_component_revision_by_id(
+        &self,
+        component_id: &ComponentId,
+        revision: ComponentRevision,
+    ) -> anyhow::Result<ComponentDto> {
+        self.ctx
+            .caches()
+            .component_revision
+            .get_or_insert_simple(&(component_id.clone(), revision), {
+                let ctx = self.ctx.clone();
+                async move || {
+                    ctx.golem_clients()
+                        .await?
+                        .component
+                        .get_component_revision(&component_id.0, revision.0)
+                        .await
+                        .map_service_error()
+                        .map_err(Arc::new)
+                }
+            })
+            .await
+            .map_err(|err| anyhow!(err))
     }
 }
 
