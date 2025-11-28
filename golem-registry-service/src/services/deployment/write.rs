@@ -31,7 +31,7 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_definition::{
     CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
-    HttpApiDefinitionName, HttpHandlerBinding, WorkerGatewayBinding,
+    HttpApiDefinitionId, HttpApiDefinitionName, HttpHandlerBinding, WorkerGatewayBinding,
 };
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::{
@@ -49,7 +49,7 @@ use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentIn
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use rib::ComponentDependencyKey;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 macro_rules! ok_or_continue {
@@ -166,15 +166,19 @@ impl DeploymentWriteService {
 
         deployment_context.validate_http_api_deployments()?;
 
-        let (compiled_http_api_routes, deployment_context) = {
+        let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
             let deployment_context = Arc::new(deployment_context);
             let deployment_context_clone = deployment_context.clone();
-            let result =
+            let (domain_http_api_definitions, compiled_http_api_routes) =
                 run_cpu_bound_work(move || deployment_context_clone.compiled_http_api_routes())
                     .await?;
             let deployment_context = Arc::try_unwrap(deployment_context)
                 .expect("should only have one reference to deployment context");
-            (result, deployment_context)
+            (
+                domain_http_api_definitions,
+                compiled_http_api_routes,
+                deployment_context,
+            )
         };
 
         let record = DeploymentRevisionCreationRecord::from_model(
@@ -191,6 +195,7 @@ impl DeploymentWriteService {
                 .http_api_deployments
                 .into_values()
                 .collect(),
+            domain_http_api_definitions,
             compiled_http_api_routes,
         );
 
@@ -284,7 +289,17 @@ impl DeploymentContext {
         Ok(())
     }
 
-    fn compiled_http_api_routes(&self) -> Result<Vec<CompiledRouteWithContext>, DeploymentError> {
+    #[allow(clippy::type_complexity)]
+    fn compiled_http_api_routes(
+        &self,
+    ) -> Result<
+        (
+            HashSet<(Domain, HttpApiDefinitionId)>,
+            Vec<CompiledRouteWithContext>,
+        ),
+        DeploymentError,
+    > {
+        let mut domain_http_api_definitions = HashSet::new();
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
 
@@ -300,6 +315,10 @@ impl DeploymentContext {
                     errors
                 );
 
+                if !definition.routes.is_empty() {
+                    domain_http_api_definitions.insert((deployment.domain.clone(), definition.id));
+                };
+
                 for route in &definition.routes {
                     let path_pattern = ok_or_continue!(
                         AllPathPatterns::parse(&route.path).map_err(|_| {
@@ -314,7 +333,7 @@ impl DeploymentContext {
                         ok_or_continue!(self.compile_gateway_binding(&route.binding), errors);
 
                     let compiled_route = CompiledRouteWithContext {
-                        domain: deployment.domain.clone(),
+                        http_api_definition_id: definition.id,
                         security_scheme: route.security.clone(),
                         route: CompiledRouteWithoutSecurity {
                             method: route.method,
@@ -332,7 +351,7 @@ impl DeploymentContext {
             return Err(DeploymentError::DeploymentValidationFailed(errors));
         };
 
-        Ok(compiled_routes)
+        Ok((domain_http_api_definitions, compiled_routes))
     }
 
     fn compile_gateway_binding(

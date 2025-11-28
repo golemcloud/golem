@@ -30,13 +30,14 @@ use golem_common::model::deployment::{
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::HttpApiDefinition;
+use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionId};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
 use sqlx::FromRow;
+use std::collections::HashSet;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -278,18 +279,41 @@ impl DeploymentIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
-pub struct DeploymentCompiledHttpApiRouteRecord {
+pub struct DeploymentDomainHttpApiDefinitionRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
-    pub id: i32,
-
     pub domain: String,
+    pub http_api_definition_id: Uuid,
+}
+
+impl DeploymentDomainHttpApiDefinitionRecord {
+    pub fn new(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        domain: Domain,
+        http_api_definition_id: HttpApiDefinitionId,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            domain: domain.0,
+            http_api_definition_id: http_api_definition_id.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentCompiledHttpApiDefinitionRouteRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub http_api_definition_id: Uuid,
+    pub id: i32,
 
     pub security_scheme: Option<String>,
     pub compiled_route: Blob<CompiledRouteWithoutSecurity>,
 }
 
-impl DeploymentCompiledHttpApiRouteRecord {
+impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     pub fn from_model(
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -299,8 +323,8 @@ impl DeploymentCompiledHttpApiRouteRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
+            http_api_definition_id: compiled_route.http_api_definition_id.0,
             id,
-            domain: compiled_route.domain.0,
             security_scheme: compiled_route.security_scheme.map(|scn| scn.0),
             compiled_route: Blob::new(compiled_route.route),
         }
@@ -317,7 +341,8 @@ pub struct DeploymentRevisionCreationRecord {
     pub components: Vec<DeploymentComponentRevisionRecord>,
     pub http_api_definitions: Vec<DeploymentHttpApiDefinitionRevisionRecord>,
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
-    pub compiled_http_api_routes: Vec<DeploymentCompiledHttpApiRouteRecord>,
+    pub domain_http_api_definitions: Vec<DeploymentDomainHttpApiDefinitionRecord>,
+    pub compiled_http_api_definition_routes: Vec<DeploymentCompiledHttpApiDefinitionRouteRecord>,
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -329,6 +354,7 @@ impl DeploymentRevisionCreationRecord {
         components: Vec<Component>,
         http_api_definitions: Vec<HttpApiDefinition>,
         http_api_deployments: Vec<HttpApiDeployment>,
+        domain_definitions: HashSet<(Domain, HttpApiDefinitionId)>,
         compiled_routes: Vec<CompiledRouteWithContext>,
     ) -> Self {
         Self {
@@ -366,11 +392,22 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-            compiled_http_api_routes: compiled_routes
+            domain_http_api_definitions: domain_definitions
+                .into_iter()
+                .map(|(domain, http_api_definition_id)| {
+                    DeploymentDomainHttpApiDefinitionRecord::new(
+                        environment_id,
+                        deployment_revision,
+                        domain,
+                        http_api_definition_id,
+                    )
+                })
+                .collect(),
+            compiled_http_api_definition_routes: compiled_routes
                 .into_iter()
                 .enumerate()
                 .map(|(i, r)| {
-                    DeploymentCompiledHttpApiRouteRecord::from_model(
+                    DeploymentCompiledHttpApiDefinitionRouteRecord::from_model(
                         environment_id,
                         deployment_revision,
                         i32::try_from(i).expect("too many routes for i32"),
