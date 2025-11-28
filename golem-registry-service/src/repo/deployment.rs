@@ -499,7 +499,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 }
 
                 for compiled_route in &deployment_creation.compiled_http_api_definition_routes {
-                    Self::create_deployment_compiled_http_api_definition_route(tx, compiled_route).await?
+                    Self::create_deployment_compiled_http_api_definition_route(tx, compiled_route)
+                        .await?
                 }
 
                 let revision = Self::set_current_deployment(
@@ -540,7 +541,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.compiled_route
                     FROM deployment_domain_http_api_definitions d
 
-                    -- join compiled routes for this domain's definitions
                     JOIN deployment_compiled_http_api_definition_routes r
                       ON r.environment_id = d.environment_id
                      AND r.deployment_revision_id = d.deployment_revision_id
