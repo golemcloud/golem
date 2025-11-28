@@ -82,7 +82,7 @@ pub trait TestDsl {
         environment_id: &EnvironmentId,
         name: &str,
     ) -> StoreComponentBuilder<'_, Self> {
-        StoreComponentBuilder::new(self, environment_id.clone(), name.to_string())
+        StoreComponentBuilder::new(self, *environment_id, name.to_string())
     }
 
     async fn store_component_with(
@@ -501,6 +501,7 @@ pub trait TestDsl {
 // TestDsl for multi service tests and benchmarks
 pub trait TestDslExtended: TestDsl {
     fn account_id(&self) -> &AccountId;
+    fn custom_request_port(&self) -> u16;
 
     async fn registry_service_client(&self) -> RegistryServiceClientLive;
 
@@ -588,7 +589,7 @@ pub trait TestDslExtended: TestDsl {
             .create_environment_share(
                 &environment_id.0,
                 &EnvironmentShareCreation {
-                    grantee_account_id: grantee_account_id.clone(),
+                    grantee_account_id: *grantee_account_id,
                     roles: roles.to_vec(),
                 },
             )
@@ -771,7 +772,7 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         parameters: BTreeMap<String, String>,
     ) -> Self {
         self.plugins.push(PluginInstallation {
-            environment_plugin_grant_id: environment_plugin_id.clone(),
+            environment_plugin_grant_id: *environment_plugin_id,
             priority: PluginPriority(priority),
             parameters,
         });

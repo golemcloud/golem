@@ -147,8 +147,8 @@ impl WorkerProxy for TestWorkerProxy {
         assert!(*caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
-            account_id: self.test_ctx.account_id.clone(),
-            account_plan_id: self.test_ctx.account_plan_id.clone(),
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
         });
 
@@ -158,7 +158,7 @@ impl WorkerProxy for TestWorkerProxy {
                 .clone()
                 .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
                     worker_id: Some(worker_id.clone().into()),
-                    environment_id: Some(component.environment_id.clone().into()),
+                    environment_id: Some(component.environment_id.into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 })
@@ -201,8 +201,8 @@ impl WorkerProxy for TestWorkerProxy {
         assert!(*caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
-            account_id: self.test_ctx.account_id.clone(),
-            account_plan_id: self.test_ctx.account_plan_id.clone(),
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
         });
 
@@ -210,7 +210,7 @@ impl WorkerProxy for TestWorkerProxy {
             .client
             .clone()
             .fork_worker(ForkWorkerRequest {
-                component_owner_account_id: Some(component.account_id.clone().into()),
+                component_owner_account_id: Some(component.account_id.into()),
                 environment_id: Some(component.environment_id.into()),
                 source_worker_id: Some(source_worker_id.clone().into()),
                 target_worker_id: Some(target_worker_id.clone().into()),
@@ -247,8 +247,8 @@ impl WorkerProxy for TestWorkerProxy {
         assert!(*caller_account_id == self.test_ctx.account_id);
 
         let auth_ctx = AuthCtx::User(UserAuthCtx {
-            account_id: self.test_ctx.account_id.clone(),
-            account_plan_id: self.test_ctx.account_plan_id.clone(),
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
         });
 

@@ -86,7 +86,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
             .get::<GetAgentsEntry>(&self_)
             .map(|e| {
                 (
-                    e.component_id.clone(),
+                    e.component_id,
                     e.filter.clone(),
                     e.count,
                     e.precise,
@@ -722,9 +722,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.environment_id.clone(),
-                    self.state.component_metadata.application_id.clone(),
-                    self.state.component_metadata.account_id.clone(),
+                    self.state.component_metadata.environment_id,
+                    self.state.component_metadata.application_id,
+                    self.state.component_metadata.account_id,
                 )
                 .await
                 .map_err(|err| err.to_string());
@@ -1147,9 +1147,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .component_service
             .resolve_component(
                 component_slug.clone(),
-                self.state.component_metadata.environment_id.clone(),
-                self.state.component_metadata.application_id.clone(),
-                self.state.component_metadata.account_id.clone(),
+                self.state.component_metadata.environment_id,
+                self.state.component_metadata.application_id,
+                self.state.component_metadata.account_id,
             )
             .await?;
 

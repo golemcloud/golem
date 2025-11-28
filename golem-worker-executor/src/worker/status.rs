@@ -1249,7 +1249,7 @@ mod test {
                         vec![],
                         vec![],
                         owned_worker_id.environment_id(),
-                        account_id.clone(),
+                        account_id,
                         None,
                         100,
                         200,

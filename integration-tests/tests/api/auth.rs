@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCurrentLoginTokenError, RegistryServiceGetAccountError,
@@ -20,7 +19,6 @@ use golem_client::api::{
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -45,7 +43,10 @@ async fn deleting_account_revokes_tokens(deps: &EnvBasedTestDependencies) -> any
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
-    client.delete_account(&user.account_id.0).await?;
+    let account = client.get_account(&user.account_id.0).await?;
+    client
+        .delete_account(&account.id.0, account.revision.0)
+        .await?;
 
     {
         let result = client.current_login_token().await;

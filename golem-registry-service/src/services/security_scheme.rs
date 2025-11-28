@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::security_scheme::{SecuritySchemeRepoError, SecuritySchemeRevisionRecord};
 use crate::repo::security_scheme::SecuritySchemeRepo;
@@ -22,7 +23,6 @@ use golem_common::model::security_scheme::{
     SecuritySchemeUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
-use golem_service_base::custom_api::security_scheme::SecurityScheme;
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
@@ -99,7 +99,7 @@ impl SecuritySchemeService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id.clone())
+                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
@@ -123,7 +123,7 @@ impl SecuritySchemeService {
             data.client_secret,
             &redirect_url,
             &scopes,
-            auth.account_id().clone(),
+            *auth.account_id(),
         );
 
         let result = self
@@ -183,10 +183,10 @@ impl SecuritySchemeService {
 
         let result = self
             .security_scheme_repo
-            .update(
-                update.current_revision.into(),
-                SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
-            )
+            .update(SecuritySchemeRevisionRecord::from_model(
+                security_scheme,
+                audit,
+            ))
             .await;
 
         match result {
@@ -223,10 +223,10 @@ impl SecuritySchemeService {
 
         let result = self
             .security_scheme_repo
-            .delete(
-                current_revision.into(),
-                SecuritySchemeRevisionRecord::from_model(security_scheme, audit),
-            )
+            .delete(SecuritySchemeRevisionRecord::from_model(
+                security_scheme,
+                audit,
+            ))
             .await;
 
         match result {
@@ -258,7 +258,7 @@ impl SecuritySchemeService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id.clone())
+                    SecuritySchemeError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
@@ -314,7 +314,7 @@ impl SecuritySchemeService {
             .get_by_id(&security_scheme_id.0)
             .await?
             .ok_or(SecuritySchemeError::SecuritySchemeNotFound(
-                security_scheme_id.clone(),
+                *security_scheme_id,
             ))?
             .try_into()?;
 
@@ -324,7 +324,7 @@ impl SecuritySchemeService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id.clone())
+                    SecuritySchemeError::SecuritySchemeNotFound(*security_scheme_id)
                 }
                 other => other.into(),
             })?;
@@ -334,7 +334,7 @@ impl SecuritySchemeService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewSecurityScheme,
         )
-        .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(security_scheme_id.clone()))?;
+        .map_err(|_| SecuritySchemeError::SecuritySchemeNotFound(*security_scheme_id))?;
 
         Ok((security_scheme, environment))
     }

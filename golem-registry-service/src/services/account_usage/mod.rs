@@ -195,7 +195,7 @@ impl AccountUsageService {
 
         match usage {
             Some(usage) => Ok(usage),
-            None => Err(AccountUsageError::AccountNotfound(account_id.clone())),
+            None => Err(AccountUsageError::AccountNotfound(*account_id)),
         }
     }
 

@@ -139,7 +139,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .delete_account(&account.id.0)
+            .delete_account(&account.id.0, account.revision.0)
             .await
             .map_service_error()?;
 
@@ -159,7 +159,7 @@ impl CloudAccountCommandHandler {
     }
 
     pub async fn account_id_or_err(&self) -> anyhow::Result<AccountId> {
-        Ok(self.ctx.golem_clients().await?.account_id().clone())
+        Ok(*self.ctx.golem_clients().await?.account_id())
     }
 
     pub async fn select_account_id_or_err(

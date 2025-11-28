@@ -13,15 +13,11 @@
 // limitations under the License.
 
 use super::rib::CorsPreflightExpr;
-use super::{DeploymentError, DeploymentService};
-use crate::model::api_definition::{
-    CompiledRoute, CompiledRouteWithContext, GatewayBindingCompiled,
-};
+use super::{DeployValidationError, DeploymentError, DeploymentService};
+use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithoutSecurity};
 use crate::model::component::Component;
 use crate::repo::deployment::DeploymentRepo;
-use crate::repo::model::deployment::{
-    DeployRepoError, DeployValidationError, DeploymentRevisionCreationRecord,
-};
+use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::component::ComponentService;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::http_api_definition::HttpApiDefinitionService;
@@ -44,8 +40,9 @@ use golem_common::model::{
 };
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::compiled_gateway_binding::{
-    FileServerBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled,
-    InvocationContextCompiled, ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
+    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
+    ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentInfo;
@@ -199,7 +196,7 @@ impl DeploymentWriteService {
 
         let deployment: Deployment = self
             .deployment_repo
-            .deploy(&auth.account_id().0, record)
+            .deploy(&auth.account_id().0, record, environment.version_check)
             .await
             .map_err(|err| match err {
                 DeployRepoError::ConcurrentModification => DeploymentError::ConcurrentDeployment,
@@ -319,7 +316,7 @@ impl DeploymentContext {
                     let compiled_route = CompiledRouteWithContext {
                         domain: deployment.domain.clone(),
                         security_scheme: route.security.clone(),
-                        route: CompiledRoute {
+                        route: CompiledRouteWithoutSecurity {
                             method: route.method,
                             path: path_pattern,
                             binding,
@@ -404,7 +401,8 @@ impl DeploymentContext {
         };
 
         let binding = WorkerBindingCompiled {
-            component_id: component.id.clone(),
+            component_id: component.id,
+            component_name: component.component_name.clone(),
             component_revision: component.revision,
             idempotency_key_compiled,
             invocation_context_compiled,
@@ -450,7 +448,8 @@ impl DeploymentContext {
         };
 
         let binding = FileServerBindingCompiled {
-            component_id: component.id.clone(),
+            component_id: component.id,
+            component_name: component.component_name.clone(),
             component_revision: component.revision,
             worker_name_compiled,
             response_compiled,
@@ -508,7 +507,8 @@ impl DeploymentContext {
         };
 
         let binding = HttpHandlerBindingCompiled {
-            component_id: component.id.clone(),
+            component_id: component.id,
+            component_name: component.component_name.clone(),
             component_revision: component.revision,
             worker_name_compiled,
             idempotency_key_compiled,
@@ -526,14 +526,16 @@ impl DeploymentContext {
             Some(expr) => {
                 let expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
                 let cors_preflight_expr = CorsPreflightExpr(expr);
-                let cors = cors_preflight_expr
+                let http_cors = cors_preflight_expr
                     .into_http_cors()
                     .map_err(DeployValidationError::InvalidHttpCorsBindingExpr)?;
-                Ok(GatewayBindingCompiled::HttpCorsPreflight(cors))
+                let binding = HttpCorsBindingCompiled { http_cors };
+                Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
             }
             None => {
-                let cors = HttpCors::default();
-                Ok(GatewayBindingCompiled::HttpCorsPreflight(cors))
+                let http_cors = HttpCors::default();
+                let binding = HttpCorsBindingCompiled { http_cors };
+                Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(binding)))
             }
         }
     }

@@ -705,7 +705,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
                 &source_worker_id.worker_name,
                 &golem_client::model::ForkWorkerRequest {
                     target_worker_id: WorkerId {
-                        component_id: source_worker_id.component_id.clone(),
+                        component_id: source_worker_id.component_id,
                         worker_name: target_worker_name.to_string(),
                     },
                     oplog_index_cutoff: oplog_index.as_u64(),
@@ -721,6 +721,10 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
 impl<Deps: TestDependencies> TestDslExtended for TestDependenciesTestDsl<Deps> {
     fn account_id(&self) -> &AccountId {
         &self.account_id
+    }
+
+    fn custom_request_port(&self) -> u16 {
+        self.deps.worker_service().custom_request_port()
     }
 
     async fn registry_service_client(&self) -> RegistryServiceClientLive {

@@ -14,13 +14,13 @@
 
 use super::model::BindFields;
 use super::model::deployment::{
-    CurrentDeploymentExtRevisionRecord, DeploymentRevisionCreationRecord,
+    CurrentDeploymentExtRevisionRecord, DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord,
+    DeploymentRevisionCreationRecord,
 };
 use super::model::deployment::{
     DeploymentCompiledHttpApiRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentHttpApiDefinitionRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
 };
-use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoDefault};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -86,21 +86,13 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         user_account_id: &Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
 
-    async fn deploy_by_revision_id(
+    async fn list_active_compiled_http_api_routes(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
-
-    async fn deploy_by_version(
-        &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        version: &str,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -129,33 +121,18 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
         )
     }
 
-    fn span_user_env_revision(
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> Span {
-        info_span!(
-            SPAN_NAME,
-            user_account_id = %user_account_id,
-            environment_id = %environment_id,
-            revision_id
-        )
-    }
-
-    fn span_user_env_version(user_account_id: &Uuid, environment_id: &Uuid, version: &str) -> Span {
-        info_span!(
-            SPAN_NAME,
-            user_account_id = %user_account_id,
-            environment_id = %environment_id,
-            version
-        )
-    }
-
     fn span_user_and_env(user_account_id: &Uuid, environment_id: &Uuid) -> Span {
         info_span!(
             SPAN_NAME,
             user_account_id = %user_account_id,
             environment_id = %environment_id,
+        )
+    }
+
+    fn span_domain(domain: &str) -> Span {
+        info_span!(
+            SPAN_NAME,
+            domain = %domain,
         )
     }
 }
@@ -245,60 +222,35 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         user_account_id: &Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
         let span = Self::span_user_and_env(user_account_id, &deployment_creation.environment_id);
         self.repo
-            .deploy(user_account_id, deployment_creation)
+            .deploy(user_account_id, deployment_creation, version_check)
             .instrument(span)
             .await
     }
 
-    async fn deploy_by_revision_id(
+    async fn list_active_compiled_http_api_routes(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
         self.repo
-            .deploy_by_revision_id(user_account_id, environment_id, revision_id)
-            .instrument(Self::span_user_env_revision(
-                user_account_id,
-                environment_id,
-                revision_id,
-            ))
-            .await
-    }
-
-    async fn deploy_by_version(
-        &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        version: &str,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        self.repo
-            .deploy_by_version(user_account_id, environment_id, version)
-            .instrument(Self::span_user_env_version(
-                user_account_id,
-                environment_id,
-                version,
-            ))
+            .list_active_compiled_http_api_routes(domain)
+            .instrument(Self::span_domain(domain))
             .await
     }
 }
 
 pub struct DbDeploymentRepo<DBP: Pool> {
     db_pool: DBP,
-    environment: EnvironmentSharedRepoDefault<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "deployment";
 
 impl<DBP: Pool> DbDeploymentRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self {
-            db_pool: db_pool.clone(),
-            environment: EnvironmentSharedRepoDefault::new(db_pool),
-        }
+        Self { db_pool }
     }
 
     pub fn logged(db_pool: DBP) -> LoggedDeploymentRepo<Self>
@@ -487,13 +439,9 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         user_account_id: &Uuid,
         deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let environment = self
-            .environment
-            .must_get_by_id(&deployment_creation.environment_id)
-            .await?;
-
-        if environment.revision.version_check
+        if version_check
             && self
                 .version_exists(
                     &deployment_creation.environment_id,
@@ -580,79 +528,62 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         .await
     }
 
-    async fn deploy_by_revision_id(
+    async fn list_active_compiled_http_api_routes(
         &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let Some(deployment_revision) = self
-            .get_deployment_revision(environment_id, revision_id)
-            .await?
-        else {
-            return Err(DeployRepoError::DeploymentNotFoundByRevision { revision_id });
-        };
+        domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+        self.with_ro("list_active_compiled_http_api_routes")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        ac.account_id, e.environment_id, r.domain,
+                        s.security_scheme_id,
+                        sr.provider_type AS security_scheme_provider_type,
+                        sr.client_id AS security_scheme_client_id,
+                        sr.client_secret AS security_scheme_client_secret,
+                        sr.redirect_url AS security_scheme_redirect_url,
+                        sr.scopes AS security_scheme_scopes,
+                        r.compiled_route
+                    FROM deployment_compiled_http_api_definition_routes r
 
-        let user_account_id = *user_account_id;
-        let environment_id = *environment_id;
+                    -- active deployment
+                    JOIN current_deployment_revisions cdr
+                      ON r.environment_id = cdr.environment_id
+                     AND r.deployment_revision_id = cdr.deployment_revision_id
 
-        self.with_tx_err("deploy_by_revision_id", |tx| {
-            async move {
-                Self::set_current_deployment(
-                    tx,
-                    &user_account_id,
-                    &environment_id,
-                    deployment_revision.revision_id,
-                    &deployment_revision.hash,
-                    &deployment_revision.version,
-                )
-                .await
-                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
-            }
-            .boxed()
-        })
-        .await
-    }
+                    -- parents not deleted
+                    JOIN environments e
+                      ON r.environment_id = e.environment_id
+                     AND e.deleted_at IS NULL
+                    JOIN applications a
+                      ON e.application_id = a.application_id
+                     AND a.deleted_at IS NULL
+                    JOIN accounts ac
+                      ON a.account_id = ac.account_id
+                     AND ac.deleted_at IS NULL
 
-    async fn deploy_by_version(
-        &self,
-        user_account_id: &Uuid,
-        environment_id: &Uuid,
-        version: &str,
-    ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError> {
-        let mut deployment_revisions = self
-            .get_deployment_revisions_by_version(environment_id, version)
-            .await?;
-        if deployment_revisions.len() > 1 {
-            return Err(DeployRepoError::DeploymentIsNotUniqueByVersion {
-                version: version.to_string(),
-            });
-        }
-        let Some(deployment_revision) = deployment_revisions.pop() else {
-            return Err(DeployRepoError::DeploymentNotfoundByVersion {
-                version: version.to_string(),
-            });
-        };
+                    -- registered domains
+                    JOIN domain_registrations d
+                      ON r.environment_id = d.environment_id
+                     AND r.domain = d.domain
+                     AND d.deleted_at IS NULL
 
-        let user_account_id = *user_account_id;
-        let environment_id = *environment_id;
+                    -- optional security scheme
+                    LEFT JOIN security_schemes s
+                      ON r.environment_id = s.environment_id
+                     AND r.security_scheme = s.name
+                     AND s.deleted_at IS NULL
 
-        self.with_tx_err("deploy_by_version", |tx| {
-            async move {
-                Self::set_current_deployment(
-                    tx,
-                    &user_account_id,
-                    &environment_id,
-                    deployment_revision.revision_id,
-                    &deployment_revision.hash,
-                    &deployment_revision.version,
-                )
-                .await
-                .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)
-            }
-            .boxed()
-        })
-        .await
+                     LEFT JOIN security_scheme_revisions sr
+                       ON sr.security_scheme_id = s.security_scheme_id
+                      AND sr.revision_id = s.current_revision_id
+
+                    WHERE r.domain = $1
+                      AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL);
+                "#})
+                .bind(domain),
+            )
+            .await
     }
 }
 
@@ -666,12 +597,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>>;
-
-    async fn get_deployment_revisions_by_version(
-        &self,
-        environment_id: &Uuid,
-        version: &str,
-    ) -> RepoResult<Vec<DeploymentRevisionRecord>>;
 
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
@@ -784,24 +709,6 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
-    async fn get_deployment_revisions_by_version(
-        &self,
-        environment_id: &Uuid,
-        version: &str,
-    ) -> RepoResult<Vec<DeploymentRevisionRecord>> {
-        self.with_ro("get_deployment_revisions_by_version")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT environment_id, revision_id, version, hash, created_at, created_by
-                    FROM deployment_revisions
-                    WHERE environment_id = $1 AND version = $2
-                "#})
-                .bind(environment_id)
-                .bind(version),
-            )
-            .await
-    }
-
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
         user_account_id: Uuid,
@@ -886,9 +793,8 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         environment_id: &Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
-        let deployments: Vec<HttpApiDeploymentRevisionIdentityRecord> = tx
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
+        tx.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
                     SELECT d.http_api_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM http_api_deployments d
                     JOIN http_api_deployment_revisions dr
@@ -896,11 +802,9 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                         AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                 "#})
-                .bind(environment_id),
-            )
-            .await?;
-
-        Ok(deployments)
+            .bind(environment_id),
+        )
+        .await
     }
 
     async fn create_deployment_component_revision(

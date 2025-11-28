@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::environment::{
-    EnvironmentRepoError, MinimalEnvironmentExtRevisionRecord, OptionalEnvironmentExtRevisionRecord,
-};
+use super::model::environment::{EnvironmentRepoError, OptionalEnvironmentExtRevisionRecord};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentPluginInstallationRecord,
@@ -67,13 +65,11 @@ pub trait EnvironmentRepo: Send + Sync {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
 
@@ -178,26 +174,18 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_env(&revision.environment_id);
-        self.repo
-            .update(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_env(&revision.environment_id);
-        self.repo
-            .delete(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.delete(revision).instrument(span).await
     }
 
     async fn get_current_plugin_installations(
@@ -515,8 +503,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         let application_id = *application_id;
-        let revision = revision.ensure_first();
-
         // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
         self.with_tx_err("create", |tx| async move {
             let environment_record: EnvironmentExtRecord = tx.fetch_one_as(
@@ -571,15 +557,11 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let revision = revision.ensure_new(current_revision_id);
-
         self.with_tx_err("update", |tx| {
             async move {
-                let revision: EnvironmentRevisionRecord =
-                    Self::insert_revision(tx, revision).await?;
+                let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
 
                 // Note no {access,deletion}-based filtering is done here. That needs to be handled in higher layer before ever calling this function
                 let environment_record: EnvironmentExtRecord = tx.fetch_optional_as(
@@ -590,7 +572,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             modified_by = $3,
                             current_revision_id = $4
                         WHERE environment_id = $5
-                          AND current_revision_id = $6
                         RETURNING
                             environment_id,
                             name,
@@ -646,7 +627,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
                     .bind(revision.environment_id)
-                    .bind(current_revision_id)
                 )
                 .await
                 .to_error_on_unique_violation(EnvironmentRepoError::EnvironmentViolatesUniqueness)?
@@ -670,11 +650,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
-        let revision = revision.ensure_deletion(current_revision_id);
-
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
@@ -688,7 +665,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             modified_by = $3,
                             current_revision_id = $4
                         WHERE environment_id = $5
-                          AND current_revision_id = $6
                         RETURNING
                             environment_id,
                             name,
@@ -745,7 +721,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
                     .bind(revision.environment_id)
-                    .bind(current_revision_id)
                 )
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
@@ -1037,68 +1012,5 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .await?;
 
         Ok(())
-    }
-}
-
-#[async_trait]
-pub(super) trait EnvironmentSharedRepo<DBP: Pool>: Send + Sync {
-    type Db: Database;
-    type Tx: LabelledPoolTransaction;
-
-    async fn must_get_by_id(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<MinimalEnvironmentExtRevisionRecord>;
-}
-
-pub(super) struct EnvironmentSharedRepoDefault<DBP: Pool> {
-    db_pool: DBP,
-}
-
-impl<DBP: Pool> EnvironmentSharedRepoDefault<DBP> {
-    pub fn new(db_pool: DBP) -> Self {
-        Self { db_pool }
-    }
-
-    fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
-        self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
-    }
-}
-
-#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-#[async_trait]
-impl EnvironmentSharedRepo<PostgresPool> for EnvironmentSharedRepoDefault<PostgresPool> {
-    type Db = <PostgresPool as Pool>::Db;
-    type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
-
-    async fn must_get_by_id(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<MinimalEnvironmentExtRevisionRecord> {
-        self.with_ro("must_get_by_id")
-            .fetch_one_as(
-                sqlx::query_as(indoc! { r"
-                    SELECT
-                        e.name,e.application_id,
-                        r.environment_id, r.revision_id, r.hash,
-                        r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides
-                    FROM accounts a
-                    JOIN applications ap
-                        ON ap.account_id = a.account_id
-                    JOIN environments e
-                        ON e.application_id = ap.application_id
-                    JOIN environment_revisions r
-                        ON r.environment_id = e.environment_id
-                        AND r.revision_id = e.current_revision_id
-                    WHERE
-                        e.environment_id = $1
-                        AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
-                        AND e.deleted_at IS NULL
-                 "})
-                .bind(environment_id),
-            )
-            .await
     }
 }

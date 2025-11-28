@@ -560,11 +560,11 @@ mod tests {
         let uuid = Uuid::new_v4();
         let c1: ComponentId = ComponentId(uuid);
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -613,8 +613,8 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
-                    environment_id: environment_id.clone(),
+                    account_id,
+                    environment_id,
                     promise_id: p1.clone(),
                 },
             )
@@ -623,9 +623,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -633,9 +633,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -655,9 +655,9 @@ mod tests {
                     vec![(
                         3540000.0,
                         serialized_bytes(&ScheduledAction::CompletePromise {
-                            account_id: account_id.clone(),
+                            account_id,
                             promise_id: p2,
-                            environment_id: environment_id.clone()
+                            environment_id
                         })
                     )]
                 ),
@@ -667,17 +667,17 @@ mod tests {
                         (
                             300000.0,
                             serialized_bytes(&ScheduledAction::CompletePromise {
-                                account_id: account_id.clone(),
+                                account_id,
                                 promise_id: p1,
-                                environment_id: environment_id.clone()
+                                environment_id
                             })
                         ),
                         (
                             301000.0,
                             serialized_bytes(&ScheduledAction::CompletePromise {
-                                account_id: account_id.clone(),
+                                account_id,
                                 promise_id: p3,
-                                environment_id: environment_id.clone()
+                                environment_id
                             })
                         )
                     ]
@@ -690,11 +690,11 @@ mod tests {
     pub async fn cancel_removes_entry() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -744,9 +744,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p1.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -754,9 +754,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -764,9 +764,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -791,9 +791,9 @@ mod tests {
                     vec![(
                         300000.0,
                         serialized_bytes(&ScheduledAction::CompletePromise {
-                            account_id: account_id.clone(),
+                            account_id,
                             promise_id: p1,
-                            environment_id: environment_id.clone()
+                            environment_id
                         })
                     )]
                 )
@@ -805,11 +805,11 @@ mod tests {
     pub async fn process_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -858,9 +858,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p1.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -868,9 +868,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -878,9 +878,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -904,9 +904,9 @@ mod tests {
                 vec![(
                     3540000.0,
                     serialized_bytes(&ScheduledAction::CompletePromise {
-                        account_id: account_id.clone(),
+                        account_id,
                         promise_id: p2.clone(),
-                        environment_id: environment_id.clone()
+                        environment_id
                     })
                 )]
             )])
@@ -923,11 +923,11 @@ mod tests {
     pub async fn process_past_and_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -976,9 +976,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p1.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -986,9 +986,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -996,9 +996,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1034,11 +1034,11 @@ mod tests {
     pub async fn process_past_and_current_hours_past_schedules_2() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -1091,9 +1091,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p1.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1101,9 +1101,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1111,9 +1111,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:11:01Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1121,9 +1121,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p4.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1160,11 +1160,11 @@ mod tests {
     pub async fn process_past_and_current_hours_past_schedules_3() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst1".to_string(),
         };
         let i2: WorkerId = WorkerId {
-            component_id: c1.clone(),
+            component_id: c1,
             worker_name: "inst2".to_string(),
         };
 
@@ -1213,9 +1213,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p1.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1223,9 +1223,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:59:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p2.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;
@@ -1233,9 +1233,9 @@ mod tests {
             .schedule(
                 DateTime::from_str("2023-07-17T09:47:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
-                    account_id: account_id.clone(),
+                    account_id,
                     promise_id: p3.clone(),
-                    environment_id: environment_id.clone(),
+                    environment_id,
                 },
             )
             .await;

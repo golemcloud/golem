@@ -128,13 +128,13 @@ impl RegistryService for SpawnedRegistryService {
     }
 
     fn admin_account_id(&self) -> AccountId {
-        self.admin_account_id.clone()
+        self.admin_account_id
     }
     fn admin_account_email(&self) -> String {
         self.admin_account_email.clone()
     }
     fn admin_account_token(&self) -> TokenSecret {
-        self.admin_account_token.clone()
+        self.admin_account_token
     }
 
     async fn base_http_client(&self) -> reqwest::Client {

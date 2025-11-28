@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateApplicationError,
@@ -25,7 +24,6 @@ use golem_test_framework::dsl::TestDslExtended;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -53,7 +51,7 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
 
         let app_ids = apps.into_iter().map(|a| a.id).collect::<HashSet<_>>();
 
-        assert!(app_ids == HashSet::from_iter([app_1.id.clone(), app_2.id.clone()]));
+        assert!(app_ids == HashSet::from_iter([app_1.id, app_2.id]));
     }
 
     client
@@ -81,7 +79,7 @@ async fn can_get_and_list_applications(deps: &EnvBasedTestDependencies) -> anyho
 
         let app_ids = apps.into_iter().map(|a| a.id).collect::<Vec<_>>();
 
-        assert!(app_ids == vec![app_1.id.clone()]);
+        assert!(app_ids == vec![app_1.id]);
     }
 
     Ok(())
@@ -125,7 +123,10 @@ async fn deleting_account_hides_applications(
 
     let app = user.app().await?;
 
-    user_client.delete_account(&user.account_id.0).await?;
+    let account = user_client.get_account(&user.account_id.0).await?;
+    user_client
+        .delete_account(&account.id.0, account.revision.0)
+        .await?;
 
     {
         let result = admin_client

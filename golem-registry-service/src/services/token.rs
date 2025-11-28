@@ -79,11 +79,11 @@ impl TokenService {
             .token_repo
             .get_by_id(&token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .ok_or(TokenError::TokenNotFound(*token_id))?
             .into();
 
         auth.authorize_account_action(&token.account_id, AccountAction::ViewToken)
-            .map_err(|_| TokenError::TokenNotFound(token_id.clone()))?;
+            .map_err(|_| TokenError::TokenNotFound(*token_id))?;
 
         Ok(token)
     }
@@ -130,7 +130,7 @@ impl TokenService {
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id.clone())
+                    TokenError::ParentAccountNotFound(*account_id)
                 }
                 other => other.into(),
             })?;
@@ -159,7 +159,7 @@ impl TokenService {
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id.clone())
+                    TokenError::ParentAccountNotFound(account_id)
                 }
                 other => other.into(),
             })?;
@@ -183,7 +183,7 @@ impl TokenService {
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id.clone())
+                    TokenError::ParentAccountNotFound(account_id)
                 }
                 other => other.into(),
             })?;
@@ -226,7 +226,7 @@ impl TokenService {
             .token_repo
             .get_by_id(&token_id.0)
             .await?
-            .ok_or(TokenError::TokenNotFound(token_id.clone()))?
+            .ok_or(TokenError::TokenNotFound(*token_id))?
             .into();
 
         auth.authorize_account_action(&token.account_id, AccountAction::DeleteToken)?;

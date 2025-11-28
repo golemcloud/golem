@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::RegistryServiceConfig;
+use crate::custom_api::CompiledRoutes;
 use crate::model::ResourceLimits;
 use crate::model::auth::{AuthCtx, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
@@ -21,16 +22,17 @@ use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllComponentVersionsRequest,
-    GetAuthCtxForAccountIdRequest, GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
-    GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response, get_agent_type_response,
-    get_all_agent_types_response, get_all_component_versions_response,
-    get_auth_ctx_for_account_id_response, get_component_metadata_response,
-    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllComponentVersionsRequest, GetAuthCtxForAccountIdRequest, GetComponentMetadataRequest,
+    GetLatestComponentMetadataRequest, GetPluginRegistrationByIdRequest, GetResourceLimitsRequest,
+    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
+    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_component_versions_response, get_auth_ctx_for_account_id_response,
+    get_component_metadata_response, get_latest_component_metadata_response,
+    get_plugin_registration_by_id_response, get_resource_limits_response,
+    resolve_component_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;
@@ -40,6 +42,7 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay};
@@ -155,6 +158,11 @@ pub trait RegistryService: Send + Sync {
         name: &str,
         auth_ctx: &AuthCtx,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
+
+    async fn get_active_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError>;
 }
 
 #[derive(Clone)]
@@ -222,7 +230,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("auth-ctx-for-account-id", move |client| {
                 let request = GetAuthCtxForAccountIdRequest {
-                    account_id: Some(account_id.clone().into()),
+                    account_id: Some((*account_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -253,7 +261,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-resource-limits", move |client| {
                 let request = GetResourceLimitsRequest {
-                    account_id: Some(account_id.clone().into()),
+                    account_id: Some((*account_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
                 Box::pin(client.get_resource_limits(request))
@@ -281,7 +289,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("update-worker-limit", move |client| {
                 let request = UpdateWorkerLimitRequest {
-                    account_id: Some(account_id.clone().into()),
+                    account_id: Some((*account_id).into()),
                     worker_id: Some(worker_id.clone().into()),
                     added,
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -310,7 +318,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("update-worker-connection-limit", move |client| {
                 let request = UpdateWorkerConnectionLimitRequest {
-                    account_id: Some(account_id.clone().into()),
+                    account_id: Some((*account_id).into()),
                     worker_id: Some(worker_id.clone().into()),
                     added,
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -372,7 +380,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-plugin-registration-by-id", move |client| {
                 let request = GetPluginRegistrationByIdRequest {
-                    id: Some(plugin_id.clone().into()),
+                    id: Some((*plugin_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -400,7 +408,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("download-component", move |client| {
                 let request = DownloadComponentRequest {
-                    component_id: Some(component_id.clone().into()),
+                    component_id: Some((*component_id).into()),
                     version: component_revision.0,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
@@ -435,7 +443,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-component-metadata", move |client| {
                 let request = GetComponentMetadataRequest {
-                    component_id: Some(component_id.clone().into()),
+                    component_id: Some((*component_id).into()),
                     version: component_revision.0,
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
@@ -467,7 +475,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-latest-component-metadata", move |client| {
                 let request = GetLatestComponentMetadataRequest {
-                    component_id: Some(component_id.clone().into()),
+                    component_id: Some((*component_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -498,7 +506,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("resolve-component-by-name", move |client| {
                 let request = GetAllComponentVersionsRequest {
-                    component_id: Some(component_id.clone().into()),
+                    component_id: Some((*component_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -533,9 +541,9 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("resolve-component", move |client| {
                 let request = ResolveComponentRequest {
-                    resolving_account_id: Some(resolving_account_id.clone().into()),
-                    resolving_application_id: Some(resolving_application_id.clone().into()),
-                    resolving_environment_id: Some(resolving_environment_id.clone().into()),
+                    resolving_account_id: Some((*resolving_account_id).into()),
+                    resolving_application_id: Some((*resolving_application_id).into()),
+                    resolving_environment_id: Some((*resolving_environment_id).into()),
                     component_slug: component_slug.to_string(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
@@ -567,7 +575,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-all-agent-types", move |client| {
                 let request = GetAllAgentTypesRequest {
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some((*environment_id).into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -600,7 +608,7 @@ impl RegistryService for GrpcRegistryService {
             .client
             .call("get-all-agent-types", move |client| {
                 let request = GetAgentTypeRequest {
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some((*environment_id).into()),
                     agent_type: name.to_string(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
@@ -619,6 +627,34 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(get_agent_type_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_active_routes_for_domain(
+        &self,
+        domain: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get-active-routes-for-domain", move |client| {
+                let request = GetActiveRoutesForDomainRequest {
+                    domain: domain.0.clone(),
+                };
+                Box::pin(client.get_active_routes_for_domain(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_active_routes_for_domain_response::Result::Success(payload)) => {
+                let converted = payload
+                    .compiled_routes
+                    .ok_or("missing compiled_routes field")?
+                    .try_into()?;
+                Ok(converted)
+            }
+            Some(get_active_routes_for_domain_response::Result::Error(error)) => Err(error.into()),
         }
     }
 }

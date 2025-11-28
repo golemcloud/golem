@@ -925,9 +925,9 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.to_string(),
-            store.data().component_metadata().environment_id.clone(),
-            store.data().component_metadata().application_id.clone(),
-            store.data().component_metadata().account_id.clone(),
+            store.data().component_metadata().environment_id,
+            store.data().component_metadata().application_id,
+            store.data().component_metadata().account_id,
         )
         .await?;
 
@@ -999,7 +999,7 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
     remote_worker_id: &OwnedWorkerId,
     span_id: &SpanId,
 ) -> anyhow::Result<Box<dyn RpcDemand>> {
-    let self_created_by = store.data().created_by().clone();
+    let self_created_by = *store.data().created_by();
     let self_worker_id = store.data().owned_worker_id().worker_id();
 
     let args = store.data_mut().get_arguments().await?;

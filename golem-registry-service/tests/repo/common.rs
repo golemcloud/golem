@@ -18,6 +18,7 @@ use chrono::Utc;
 use futures::future::join_all;
 use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_registry_service::repo::environment::EnvironmentRevisionRecord;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
@@ -40,7 +41,7 @@ use golem_registry_service::repo::model::http_api_definition::{
     HttpApiDefinitionDefinitionBlob, HttpApiDefinitionRepoError, HttpApiDefinitionRevisionRecord,
 };
 use golem_registry_service::repo::model::http_api_deployment::{
-    HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
+    HttpApiDefinitionNameList, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plugin::PluginRecord;
@@ -117,7 +118,7 @@ pub async fn test_update(deps: &Deps) {
 
     let created_updated_account = deps
         .account_repo
-        .update(account.revision_id, updated_account.clone())
+        .update(updated_account.clone())
         .await
         .unwrap();
 
@@ -212,8 +213,13 @@ pub async fn test_application_delete(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(&user.revision.account_id).await;
 
+    let deleted_app = ApplicationRevisionRecord {
+        revision_id: app.revision.revision_id + 1,
+        ..app.revision.clone()
+    };
+
     deps.application_repo
-        .delete(user.revision.revision_id, app.revision.clone())
+        .delete(deleted_app.clone())
         .await
         .unwrap();
 
@@ -232,10 +238,7 @@ pub async fn test_application_delete(deps: &Deps) {
 
     // Delete app again, should fail
     {
-        let result = deps
-            .application_repo
-            .delete(user.revision.revision_id, app.revision.clone())
-            .await;
+        let result = deps.application_repo.delete(deleted_app).await;
         assert!(let Err(ApplicationRepoError::ConcurrentModification) = result);
     }
 
@@ -386,7 +389,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let revision_1_created = deps
         .environment_repo
-        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
+        .update(env_rev_1.clone())
         .await
         .unwrap();
 
@@ -394,10 +397,7 @@ pub async fn test_environment_update(deps: &Deps) {
     assert!(env_rev_0.revision.name == revision_1_created.revision.name);
     assert!(env_rev_0.application_id == revision_1_created.application_id);
 
-    let revision_1_retry = deps
-        .environment_repo
-        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
-        .await;
+    let revision_1_retry = deps.environment_repo.update(env_rev_1.clone()).await;
 
     assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_1_retry);
 
@@ -445,7 +445,7 @@ pub async fn test_environment_update(deps: &Deps) {
 
     let revision_2_created = deps
         .environment_repo
-        .update(revision_1_created.revision.revision_id, env_rev_2.clone())
+        .update(env_rev_2.clone())
         .await
         .unwrap();
 
@@ -453,16 +453,10 @@ pub async fn test_environment_update(deps: &Deps) {
     assert!(env_rev_0.revision.name == revision_2_created.revision.name);
     assert!(env_rev_0.application_id == revision_2_created.application_id);
 
-    let revision_1_retry = deps
-        .environment_repo
-        .update(env_rev_0.revision.revision_id, env_rev_1.clone())
-        .await;
+    let revision_1_retry = deps.environment_repo.update(env_rev_1.clone()).await;
     assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_1_retry);
 
-    let revision_2_retry = deps
-        .environment_repo
-        .update(env_rev_0.revision.revision_id, env_rev_2.clone())
-        .await;
+    let revision_2_retry = deps.environment_repo.update(env_rev_2.clone()).await;
     assert!(let Err(EnvironmentRepoError::ConcurrentModification) = revision_2_retry);
 
     let rev_2_by_name = deps
@@ -506,19 +500,16 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
         (0..concurrency)
             .map(|_| async {
                 deps.environment_repo
-                    .update(
-                        env_rev_0.revision.revision_id,
-                        EnvironmentRevisionRecord {
-                            environment_id: env_rev_0.revision.environment_id,
-                            revision_id: 0,
-                            name: env_rev_0.revision.name.clone(),
-                            audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-                            compatibility_check: false,
-                            version_check: false,
-                            security_overrides: false,
-                            hash: SqlBlake3Hash::empty(),
-                        },
-                    )
+                    .update(EnvironmentRevisionRecord {
+                        environment_id: env_rev_0.revision.environment_id,
+                        revision_id: 1,
+                        name: env_rev_0.revision.name.clone(),
+                        audit: DeletableRevisionAuditFields::new(user.revision.account_id),
+                        compatibility_check: false,
+                        version_check: false,
+                        security_overrides: false,
+                        hash: SqlBlake3Hash::empty(),
+                    })
                     .await
             })
             .collect::<Vec<_>>(),
@@ -603,15 +594,14 @@ pub async fn test_component_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         size: 10,
-        metadata: ComponentMetadata::from_parts(
+        metadata: Blob::new(ComponentMetadata::from_parts(
             vec![],
             vec![],
             HashMap::new(),
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
-        )
-        .into(),
+        )),
         original_env: BTreeMap::from([("X1".to_string(), "value1".to_string())]).into(),
         env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
         object_store_key: "xys".to_string(),
@@ -664,6 +654,7 @@ pub async fn test_component_stage(deps: &Deps) {
             &env.revision.environment_id,
             component_name,
             revision_0.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -678,6 +669,7 @@ pub async fn test_component_stage(deps: &Deps) {
             &env.revision.environment_id,
             component_name,
             revision_0.clone(),
+            true,
         )
         .await;
     let_assert!(Err(ComponentRepoError::ComponentViolatesUniqueness) = recreate);
@@ -748,7 +740,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let created_revision_1 = deps
         .component_repo
-        .update(0, revision_1.clone())
+        .update(revision_1.clone(), true)
         .await
         .unwrap();
     let_assert!(created_revision_1 = created_revision_1);
@@ -756,7 +748,7 @@ pub async fn test_component_stage(deps: &Deps) {
     assert!(created_revision_1.environment_id == env.revision.environment_id);
     assert!(created_revision_1.name == component_name);
 
-    let recreated_revision_1 = deps.component_repo.update(0, revision_1.clone()).await;
+    let recreated_revision_1 = deps.component_repo.update(revision_1.clone(), true).await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = recreated_revision_1);
 
     let components = deps
@@ -784,6 +776,7 @@ pub async fn test_component_stage(deps: &Deps) {
             &env.revision.environment_id,
             other_component_name,
             other_component_revision_0.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -801,12 +794,12 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .component_repo
-        .delete(&user.revision.account_id, &component_id, 0)
+        .delete(&user.revision.account_id, &component_id, 1)
         .await;
     let_assert!(Err(ComponentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.component_repo
-        .delete(&user.revision.account_id, &component_id, 1)
+        .delete(&user.revision.account_id, &component_id, 2)
         .await
         .unwrap();
 
@@ -832,6 +825,7 @@ pub async fn test_component_stage(deps: &Deps) {
             &env.revision.environment_id,
             component_name,
             revision_after_delete.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -868,6 +862,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             &env.revision.environment_id,
             definition_name,
             revision_0.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -882,6 +877,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             &env.revision.environment_id,
             definition_name,
             revision_0.clone(),
+            true,
         )
         .await;
     let_assert!(Err(HttpApiDefinitionRepoError::ApiDefinitionViolatesUniqueness) = recreate);
@@ -927,7 +923,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let created_revision_1 = deps
         .http_api_definition_repo
-        .update(0, revision_1.clone())
+        .update(revision_1.clone(), true)
         .await
         .unwrap();
     let_assert!(created_revision_1 = created_revision_1);
@@ -937,7 +933,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let recreated_revision_1 = deps
         .http_api_definition_repo
-        .update(0, revision_1.clone())
+        .update(revision_1.clone(), true)
         .await;
     let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = recreated_revision_1);
 
@@ -962,6 +958,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             &env.revision.environment_id,
             other_definition_name,
             other_definition_revision_0.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -979,12 +976,12 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .http_api_definition_repo
-        .delete(&user.revision.account_id, &definition_id, 0)
+        .delete(&user.revision.account_id, &definition_id, 1)
         .await;
     let_assert!(Err(HttpApiDefinitionRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.http_api_definition_repo
-        .delete(&user.revision.account_id, &definition_id, 1)
+        .delete(&user.revision.account_id, &definition_id, 2)
         .await
         .unwrap();
 
@@ -1007,6 +1004,7 @@ pub async fn test_http_api_definition_stage(deps: &Deps) {
             &env.revision.environment_id,
             definition_name,
             revision_after_delete.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1042,6 +1040,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
             &env.revision.environment_id,
             definition_name,
             definition_revision.clone(),
+            true,
         )
         .await
         .unwrap();
@@ -1051,10 +1050,11 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         revision_id: 0,
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
-        http_api_definitions: serde_json::to_string(&vec![created_definition.name]).unwrap(),
+        http_api_definitions: HttpApiDefinitionNameList(vec![HttpApiDefinitionName(
+            created_definition.name,
+        )]),
     }
-    .with_updated_hash()
-    .unwrap();
+    .with_updated_hash();
 
     let created_revision_0 = deps
         .http_api_deployment_repo
@@ -1108,12 +1108,11 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash()
-    .unwrap();
+    .with_updated_hash();
 
     let created_revision_1 = deps
         .http_api_deployment_repo
-        .update(0, revision_1.clone())
+        .update(revision_1.clone())
         .await
         .unwrap();
 
@@ -1123,7 +1122,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let recreated_revision_1 = deps
         .http_api_deployment_repo
-        .update(0, revision_1.clone())
+        .update(revision_1.clone())
         .await;
 
     let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = recreated_revision_1);
@@ -1133,6 +1132,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         .list_staged(&env.revision.environment_id)
         .await
         .unwrap();
+
     assert!(deployments.len() == 1);
     assert!(deployments[0].revision == revision_1);
 
@@ -1142,8 +1142,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         http_api_deployment_id: other_deployment_id,
         ..revision_0.clone()
     }
-    .with_updated_hash()
-    .unwrap();
+    .with_updated_hash();
 
     let created_other_deployment_0 = deps
         .http_api_deployment_repo
@@ -1168,13 +1167,13 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
 
     let delete_with_old_revision = deps
         .http_api_deployment_repo
-        .delete(&user.revision.account_id, &deployment_id, 0)
+        .delete(&user.revision.account_id, &deployment_id, 1)
         .await;
 
     let_assert!(Err(HttpApiDeploymentRepoError::ConcurrentModification) = delete_with_old_revision);
 
     deps.http_api_deployment_repo
-        .delete(&user.revision.account_id, &deployment_id, 1)
+        .delete(&user.revision.account_id, &deployment_id, 2)
         .await
         .unwrap();
 
@@ -1335,15 +1334,14 @@ pub async fn test_account_usage(deps: &Deps) {
                     hash: SqlBlake3Hash::empty(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     size: 0,
-                    metadata: ComponentMetadata::from_parts(
+                    metadata: Blob::new(ComponentMetadata::from_parts(
                         vec![],
                         vec![],
                         HashMap::new(),
                         None,
                         None,
                         vec![],
-                    )
-                    .into(),
+                    )),
                     env: Default::default(),
                     original_env: Default::default(),
                     object_store_key: "".to_string(),
@@ -1353,6 +1351,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     plugins: vec![],
                     files: vec![],
                 },
+                true,
             )
             .await
             .unwrap();

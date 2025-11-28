@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{RegistryServiceClient, RegistryServiceGetEnvironmentShareError};
 use golem_common::model::auth::EnvironmentRole;
@@ -21,7 +20,6 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -37,7 +35,7 @@ async fn share_environment_with_other_user(deps: &EnvBasedTestDependencies) -> a
         .create_environment_share(
             &env.id.0,
             &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id.clone(),
+                grantee_account_id: user_2.account_id,
                 roles: vec![EnvironmentRole::Admin],
             },
         )
@@ -74,7 +72,7 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
         .create_environment_share(
             &env.id.0,
             &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id.clone(),
+                grantee_account_id: user_2.account_id,
                 roles: vec![EnvironmentRole::Admin],
             },
         )
@@ -116,7 +114,7 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
         .create_environment_share(
             &env.id.0,
             &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id.clone(),
+                grantee_account_id: user_2.account_id,
                 roles: vec![EnvironmentRole::Admin],
             },
         )

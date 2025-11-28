@@ -45,7 +45,9 @@ use crate::services::component_compilation::ComponentCompilationService;
 use crate::services::component_object_store::ComponentObjectStore;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
-use crate::services::deployment::{DeploymentService, DeploymentWriteService};
+use crate::services::deployment::{
+    DeployedRoutesService, DeploymentService, DeploymentWriteService,
+};
 use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
@@ -85,6 +87,7 @@ pub struct Services {
     pub component_resolver_service: Arc<ComponentResolverService>,
     pub component_service: Arc<ComponentService>,
     pub component_write_service: Arc<ComponentWriteService>,
+    pub deployed_routes_service: Arc<DeployedRoutesService>,
     pub deployment_service: Arc<DeploymentService>,
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
@@ -282,6 +285,9 @@ impl Services {
             http_api_deployment_service.clone(),
         ));
 
+        let deployed_routes_service =
+            Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
+
         Ok(Self {
             account_service,
             account_usage_service,
@@ -291,6 +297,7 @@ impl Services {
             component_resolver_service,
             component_service,
             component_write_service,
+            deployed_routes_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,

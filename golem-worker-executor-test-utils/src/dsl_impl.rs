@@ -138,8 +138,8 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.context.application_id.clone(),
-                        self.context.account_id.clone(),
+                        self.context.application_id,
+                        self.context.account_id,
                         HashSet::new(),
                     )
                     .await
@@ -155,8 +155,8 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.context.application_id.clone(),
-                        self.context.account_id.clone(),
+                        self.context.application_id,
+                        self.context.account_id,
                         HashSet::new(),
                     )
                     .await
@@ -251,7 +251,7 @@ impl TestDsl for TestWorkerExecutor {
         let latest_version = self.get_latest_component_version(component_id).await?;
 
         let worker_id = WorkerId {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             worker_name: name.to_string(),
         };
 
@@ -556,7 +556,7 @@ impl TestDsl for TestWorkerExecutor {
                 .clone()
                 .get_oplog(workerexecutor::v1::GetOplogRequest {
                     worker_id: Some(worker_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.into()),
                     from_oplog_index: from.into(),
                     cursor,
                     count: 100,
@@ -624,7 +624,7 @@ impl TestDsl for TestWorkerExecutor {
                 .clone()
                 .search_oplog(SearchOplogRequest {
                     worker_id: Some(worker_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.into()),
                     cursor,
                     count: 100,
                     query: query.to_string(),
@@ -902,7 +902,7 @@ impl TestDsl for TestWorkerExecutor {
             .client
             .clone()
             .get_workers_metadata(GetWorkersMetadataRequest {
-                component_id: Some(component_id.clone().into()),
+                component_id: Some((*component_id).into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 filter: filter.map(|f| f.into()),
                 cursor: Some(cursor.into()),
@@ -1076,7 +1076,7 @@ impl TestDsl for TestWorkerExecutor {
             .await?;
 
         let target_worker_id = WorkerId {
-            component_id: source_worker_id.component_id.clone(),
+            component_id: source_worker_id.component_id,
             worker_name: target_worker_name.to_string(),
         };
 

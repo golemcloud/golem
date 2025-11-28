@@ -175,7 +175,7 @@ impl DomainRegistrationService {
             .delete(&domain_registration_id.0, &auth.account_id().0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
-                domain_registration_id.clone(),
+                *domain_registration_id,
             ))?
             .into();
 
@@ -268,7 +268,7 @@ impl DomainRegistrationService {
             .get_by_id(&domain_registration_id.0)
             .await?
             .ok_or(DomainRegistrationError::DomainRegistrationNotFound(
-                domain_registration_id.clone(),
+                *domain_registration_id,
             ))?
             .into();
 
@@ -278,9 +278,7 @@ impl DomainRegistrationService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    DomainRegistrationError::DomainRegistrationNotFound(
-                        domain_registration_id.clone(),
-                    )
+                    DomainRegistrationError::DomainRegistrationNotFound(*domain_registration_id)
                 }
                 other => other.into(),
             })?;
@@ -291,7 +289,7 @@ impl DomainRegistrationService {
             EnvironmentAction::ViewDomainRegistration,
         )
         .map_err(|_| {
-            DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id.clone())
+            DomainRegistrationError::DomainRegistrationNotFound(*domain_registration_id)
         })?;
 
         Ok((domain_registration, environment))

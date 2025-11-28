@@ -102,7 +102,7 @@ impl FileServerBindingHandler {
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
 
             let worker_id = WorkerId::from_component_metadata_and_worker_id(
-                component_id.clone(),
+                *component_id,
                 &component_metadata.metadata,
                 worker_name,
             )
@@ -115,8 +115,8 @@ impl FileServerBindingHandler {
                 .get_file_contents(
                     &worker_id,
                     binding_details.file_path.clone(),
-                    environment_id.clone(),
-                    account_id.clone(),
+                    *environment_id,
+                    *account_id,
                     AuthCtx::system(),
                 ) // TODO: gateway execution specific auth ctx
                 .await?;
@@ -145,10 +145,10 @@ impl FileServerBindingHandler {
                 .worker_service
                 .get_metadata(
                     &WorkerId {
-                        component_id: component_id.clone(),
+                        component_id: *component_id,
                         worker_name: worker_name.to_string(),
                     },
-                    environment_id.clone(),
+                    *environment_id,
                     AuthCtx::system(), // TODO: custom request specific auth ctx
                 )
                 .await;

@@ -142,12 +142,17 @@ impl HttpApiDefinitionService {
             id,
             data.version,
             data.routes,
-            auth.account_id().clone(),
+            *auth.account_id(),
         );
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .create(&environment_id.0, &data.name.0, record)
+            .create(
+                &environment_id.0,
+                &data.name.0,
+                record,
+                environment.version_check,
+            )
             .await
             .map_err(|err| match err {
                 HttpApiDefinitionRepoError::ConcurrentModification
@@ -175,7 +180,7 @@ impl HttpApiDefinitionService {
             .get_staged_by_id(&http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                http_api_definition_id.clone(),
+                *http_api_definition_id,
             ))?
             .into();
 
@@ -185,9 +190,7 @@ impl HttpApiDefinitionService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                        http_api_definition_id.clone(),
-                    )
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
                 }
                 other => other.into(),
             })?;
@@ -197,9 +200,7 @@ impl HttpApiDefinitionService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| {
-            HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id.clone())
-        })?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -231,7 +232,7 @@ impl HttpApiDefinitionService {
 
         let stored_http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
-            .update(update.current_revision.into(), record)
+            .update(record, environment.version_check)
             .await
             .map_err(|err| match err {
                 HttpApiDefinitionRepoError::ConcurrentModification => {
@@ -260,7 +261,7 @@ impl HttpApiDefinitionService {
             .get_staged_by_id(&http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                http_api_definition_id.clone(),
+                *http_api_definition_id,
             ))?
             .into();
 
@@ -270,9 +271,7 @@ impl HttpApiDefinitionService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                        http_api_definition_id.clone(),
-                    )
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
                 }
                 other => other.into(),
             })?;
@@ -282,9 +281,7 @@ impl HttpApiDefinitionService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| {
-            HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id.clone())
-        })?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -300,7 +297,7 @@ impl HttpApiDefinitionService {
             .delete(
                 &auth.account_id().0,
                 &http_api_definition_id.0,
-                current_revision.into(),
+                current_revision.next()?.into(),
             )
             .await
             .map_err(|err| match err {
@@ -434,7 +431,7 @@ impl HttpApiDefinitionService {
             .get_staged_by_id(&http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                http_api_definition_id.clone(),
+                *http_api_definition_id,
             ))?
             .into();
 
@@ -444,9 +441,7 @@ impl HttpApiDefinitionService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                        http_api_definition_id.clone(),
-                    )
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
                 }
                 other => other.into(),
             })?;
@@ -456,9 +451,7 @@ impl HttpApiDefinitionService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| {
-            HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id.clone())
-        })?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
 
         Ok(http_api_definition)
     }
@@ -473,7 +466,7 @@ impl HttpApiDefinitionService {
             .get_deployed_by_id(&http_api_definition_id.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                http_api_definition_id.clone(),
+                *http_api_definition_id,
             ))?
             .into();
 
@@ -483,9 +476,7 @@ impl HttpApiDefinitionService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                        http_api_definition_id.clone(),
-                    )
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
                 }
                 other => other.into(),
             })?;
@@ -495,9 +486,7 @@ impl HttpApiDefinitionService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDefinition,
         )
-        .map_err(|_| {
-            HttpApiDefinitionError::HttpApiDefinitionNotFound(http_api_definition_id.clone())
-        })?;
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
 
         Ok(http_api_definition)
     }

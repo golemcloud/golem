@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::environment::{EnvironmentSharedRepo, EnvironmentSharedRepoDefault};
 use crate::repo::model::BindFields;
 use crate::repo::model::http_api_definition::{
     HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRecord, HttpApiDefinitionRepoError,
@@ -39,19 +38,20 @@ pub trait HttpApiDefinitionRepo: Send + Sync {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn delete(
         &self,
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
-        current_revision_id: i64,
+        revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError>;
 
     async fn get_staged_by_id(
@@ -156,21 +156,22 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         self.repo
-            .create(environment_id, name, revision)
+            .create(environment_id, name, revision, version_check)
             .instrument(Self::span_name(environment_id, name))
             .await
     }
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         let span = Self::span_id(&revision.http_api_definition_id);
         self.repo
-            .update(current_revision_id, revision)
+            .update(revision, version_check)
             .instrument(span)
             .await
     }
@@ -179,10 +180,10 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
         &self,
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
-        current_revision_id: i64,
+        revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError> {
         self.repo
-            .delete(user_account_id, http_api_definition_id, current_revision_id)
+            .delete(user_account_id, http_api_definition_id, revision_id)
             .instrument(Self::span_id(http_api_definition_id))
             .await
     }
@@ -310,17 +311,13 @@ impl<Repo: HttpApiDefinitionRepo> HttpApiDefinitionRepo for LoggedHttpApiDefinit
 
 pub struct DbHttpApiDefinitionRepo<DBP: Pool> {
     db_pool: DBP,
-    environment: EnvironmentSharedRepoDefault<DBP>,
 }
 
 static METRICS_SVC_NAME: &str = "http_api_definition";
 
 impl<DBP: Pool> DbHttpApiDefinitionRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self {
-            db_pool: db_pool.clone(),
-            environment: EnvironmentSharedRepoDefault::new(db_pool.clone()),
-        }
+        Self { db_pool }
     }
 
     pub fn logged(db_pool: DBP) -> LoggedHttpApiDefinitionRepo<Self>
@@ -357,6 +354,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         environment_id: &Uuid,
         name: &str,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
         let opt_deleted_revision: Option<HttpApiDefinitionRevisionIdentityRecord> =
             self.with_ro("create - get opt deleted").fetch_optional_as(
@@ -372,18 +370,15 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
             ).await?;
 
         if let Some(deleted_revision) = opt_deleted_revision {
-            let revision = HttpApiDefinitionRevisionRecord {
-                http_api_definition_id: deleted_revision.http_api_definition_id,
-                ..revision
-            };
-            return self.update(deleted_revision.revision_id, revision).await;
+            let recreated_revision = revision.for_recreation(
+                deleted_revision.http_api_definition_id,
+                deleted_revision.revision_id,
+            )?;
+            return self.update(recreated_revision, version_check).await;
         }
-
-        let environment = self.environment.must_get_by_id(environment_id).await?;
 
         let environment_id = *environment_id;
         let name = name.to_owned();
-        let revision = revision.ensure_first();
 
         self.with_tx_err("create", |tx| {
             async move {
@@ -408,8 +403,7 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
                 let revision = Self::insert_revision(
                     tx,
-                    &environment.revision.environment_id,
-                    environment.revision.version_check,
+                    version_check,
                     revision,
                 )
                 .await?;
@@ -428,28 +422,15 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDefinitionRevisionRecord,
+        version_check: bool,
     ) -> Result<HttpApiDefinitionExtRevisionRecord, HttpApiDefinitionRepoError> {
-        let Some(checked_current) = self
-            .check_current_revision(&revision.http_api_definition_id, current_revision_id)
-            .await?
-        else {
-            return Err(HttpApiDefinitionRepoError::ConcurrentModification);
-        };
-
-        let environment = self
-            .environment
-            .must_get_by_id(&checked_current.environment_id)
-            .await?;
-
         self.with_tx_err("update", |tx| {
             async move {
                 let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
                     tx,
-                    &environment.revision.environment_id,
-                    environment.revision.version_check,
-                    revision.ensure_new(current_revision_id),
+                    version_check,
+                    revision,
                 )
                 .await?;
 
@@ -484,28 +465,20 @@ impl HttpApiDefinitionRepo for DbHttpApiDefinitionRepo<PostgresPool> {
         &self,
         user_account_id: &Uuid,
         http_api_definition_id: &Uuid,
-        current_revision_id: i64,
+        revision_id: i64,
     ) -> Result<(), HttpApiDefinitionRepoError> {
         let user_account_id = *user_account_id;
         let http_api_definition_id = *http_api_definition_id;
-
-        let Some(checked_current) = self
-            .check_current_revision(&http_api_definition_id, current_revision_id)
-            .await?
-        else {
-            return Err(HttpApiDefinitionRepoError::ConcurrentModification);
-        };
 
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: HttpApiDefinitionRevisionRecord = Self::insert_revision(
                     tx,
-                    &checked_current.environment_id,
                     false,
                     HttpApiDefinitionRevisionRecord::deletion(
                         user_account_id,
                         http_api_definition_id,
-                        current_revision_id,
+                        revision_id,
                     ),
                 )
                 .await?;
@@ -799,22 +772,14 @@ trait HttpApiDefinitionRepoInternal: HttpApiDefinitionRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn check_current_revision(
-        &self,
-        http_api_definition_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDefinitionRecord>>;
-
     async fn insert_revision(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
         version_check: bool,
         revision: HttpApiDefinitionRevisionRecord,
     ) -> Result<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRepoError>;
 
     async fn version_exists(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
         http_api_definition_id: &Uuid,
         version: &str,
     ) -> RepoResult<bool>;
@@ -826,40 +791,13 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn check_current_revision(
-        &self,
-        http_api_definition_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDefinitionRecord>> {
-        self.with_ro("check_current_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT http_api_definition_id, name, environment_id,
-                           created_at, updated_at, deleted_at, modified_by,
-                           current_revision_id
-                    FROM http_api_definitions
-                    WHERE http_api_definition_id = $1 AND current_revision_id = $2
-                "#})
-                .bind(http_api_definition_id)
-                .bind(current_revision_id),
-            )
-            .await
-    }
-
     async fn insert_revision(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
         version_check: bool,
         revision: HttpApiDefinitionRevisionRecord,
     ) -> Result<HttpApiDefinitionRevisionRecord, HttpApiDefinitionRepoError> {
         if version_check
-            && Self::version_exists(
-                tx,
-                environment_id,
-                &revision.http_api_definition_id,
-                &revision.version,
-            )
-            .await?
+            && Self::version_exists(tx, &revision.http_api_definition_id, &revision.version).await?
         {
             return Err(HttpApiDefinitionRepoError::VersionAlreadyExists {
                 version: revision.version,
@@ -893,7 +831,6 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
 
     async fn version_exists(
         tx: &mut Self::Tx,
-        environment_id: &Uuid,
         http_api_definition_id: &Uuid,
         version: &str,
     ) -> RepoResult<bool> {
@@ -903,13 +840,11 @@ impl HttpApiDefinitionRepoInternal for DbHttpApiDefinitionRepo<PostgresPool> {
                     SELECT 1
                     FROM http_api_definition_revisions r
                     JOIN deployment_http_api_definition_revisions dr
-                        ON dr.http_api_definition_id = r.http_api_definition_id
-                               AND dr.http_api_definition_revision_id = r.revision_id
-                    WHERE dr.environment_id = $1 AND dr.http_api_definition_id = $2 AND version = $3
+                        ON dr.http_api_definition_id = r.http_api_definition_id AND dr.http_api_definition_revision_id = r.revision_id
+                    WHERE dr.http_api_definition_id = $1 AND version = $2
                     GROUP BY dr.http_api_definition_id
                     LIMIT 1
                 "#})
-                .bind(environment_id)
                 .bind(http_api_definition_id)
                 .bind(version),
             )

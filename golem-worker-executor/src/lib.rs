@@ -491,10 +491,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         golem_config.public_worker_api.uri(),
         golem_config.public_worker_api.retries.clone(),
         golem_config.public_worker_api.connect_timeout,
-        golem_config.public_worker_api.auth_cache_size,
-        golem_config.public_worker_api.auth_cache_ttl,
-        golem_config.public_worker_api.auth_cache_eviction_period,
-        registry_service.clone(),
     ));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService> =

@@ -12,19 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use desert_rust::BinaryCodec;
-
 pub mod compiled_gateway_binding;
-pub mod compiled_http_api_definition;
-pub mod http_middlewares;
-pub mod identity_provider_metadata;
+pub mod openapi;
 pub mod path_pattern;
 mod path_pattern_parser;
-// pub mod protobuf;
+mod protobuf;
 pub mod rib_compiler;
 pub mod security_scheme;
 
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+use self::compiled_gateway_binding::GatewayBindingCompiled;
+use self::path_pattern::AllPathPatterns;
+use self::security_scheme::SecuritySchemeDetails;
+use desert_rust::BinaryCodec;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::RouteMethod;
+use golem_common::model::security_scheme::SecuritySchemeId;
+use serde::Serialize;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct CompiledRoutes {
+    pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
+    pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
+    pub routes: Vec<CompiledRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledRoute {
+    pub method: RouteMethod,
+    pub path: AllPathPatterns,
+    pub binding: GatewayBindingCompiled,
+    pub security_scheme: Option<SecuritySchemeId>,
+}
+
+#[derive(Debug, Clone, PartialEq, BinaryCodec, Serialize)]
 #[desert(evolution())]
 pub struct HttpCors {
     pub allow_origin: String,

@@ -83,7 +83,14 @@ impl SpawnedWorkerService {
         let logger =
             ChildProcessLogger::log_child_process("[workersvc]", out_level, err_level, &mut child);
 
-        wait_for_startup("localhost", grpc_port, http_port, Duration::from_secs(90)).await;
+        wait_for_startup(
+            "localhost",
+            grpc_port,
+            http_port,
+            custom_request_port,
+            Duration::from_secs(90),
+        )
+        .await;
 
         Self {
             http_port,

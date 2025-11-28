@@ -17,6 +17,7 @@ use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
+use crate::services::deployment::DeployedRoutesService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use applying::Apply;
 use async_trait::async_trait;
@@ -26,7 +27,8 @@ use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchUpdateFuelUsageRequest, BatchUpdateFuelUsageResponse, DownloadComponentRequest,
-    DownloadComponentResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    DownloadComponentResponse, GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
+    GetActiveRoutesForDomainSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
     GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
     GetAllAgentTypesSuccessResponse, GetAllComponentVersionsRequest,
     GetAllComponentVersionsResponse, GetAllComponentVersionsSuccessResponse,
@@ -41,16 +43,18 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveComponentSuccessResponse, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
-    get_agent_type_response, get_all_agent_types_response, get_all_component_versions_response,
-    get_auth_ctx_for_account_id_response, get_component_metadata_response,
-    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, registry_service_error, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    get_all_component_versions_response, get_auth_ctx_for_account_id_response,
+    get_component_metadata_response, get_latest_component_metadata_response,
+    get_plugin_registration_by_id_response, get_resource_limits_response, registry_service_error,
+    resolve_component_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::recorded_grpc_api_request;
@@ -70,22 +74,25 @@ pub struct RegistryServiceGrpcApi {
     plugin_registration_service: Arc<PluginRegistrationService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
+    deployed_routes_service: Arc<DeployedRoutesService>,
 }
 
 impl RegistryServiceGrpcApi {
     pub fn new(
-        auth: Arc<AuthService>,
-        account_usage: Arc<AccountUsageService>,
-        plugin_registration: Arc<PluginRegistrationService>,
-        component: Arc<ComponentService>,
-        component_resolver: Arc<ComponentResolverService>,
+        auth_service: Arc<AuthService>,
+        account_usage_service: Arc<AccountUsageService>,
+        plugin_registration_service: Arc<PluginRegistrationService>,
+        component_service: Arc<ComponentService>,
+        component_resolver_service: Arc<ComponentResolverService>,
+        deployed_routes_service: Arc<DeployedRoutesService>,
     ) -> Self {
         Self {
-            auth_service: auth,
-            account_usage_service: account_usage,
-            plugin_registration_service: plugin_registration,
-            component_service: component,
-            component_resolver_service: component_resolver,
+            auth_service,
+            account_usage_service,
+            plugin_registration_service,
+            component_service,
+            component_resolver_service,
+            deployed_routes_service,
         }
     }
 
@@ -343,6 +350,48 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn resolve_component_internal(
+        &self,
+        request: ResolveComponentRequest,
+    ) -> Result<ResolveComponentSuccessResponse, GrpcApiError> {
+        let component_reference = request.component_slug;
+
+        let resolving_account_id: AccountId = request
+            .resolving_account_id
+            .ok_or("missing resolving_account_id field")?
+            .try_into()?;
+
+        let resolving_application_id: ApplicationId = request
+            .resolving_application_id
+            .ok_or("missing resolving_application_id field")?
+            .try_into()?;
+
+        let resolving_environment_id: EnvironmentId = request
+            .resolving_environment_id
+            .ok_or("missing resolving_environment_id field")?
+            .try_into()?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+
+        let component = self
+            .component_resolver_service
+            .resolve_deployed_component(
+                component_reference,
+                &resolving_environment_id,
+                &resolving_application_id,
+                &resolving_account_id,
+                &auth_ctx,
+            )
+            .await?;
+
+        Ok(ResolveComponentSuccessResponse {
+            component: Some(ComponentDto::from(component).into()),
+        })
+    }
+
     async fn get_all_agent_types_internal(
         &self,
         request: GetAllAgentTypesRequest,
@@ -394,45 +443,19 @@ impl RegistryServiceGrpcApi {
         })
     }
 
-    async fn resolve_component_internal(
+    async fn get_active_routes_for_domain_internal(
         &self,
-        request: ResolveComponentRequest,
-    ) -> Result<ResolveComponentSuccessResponse, GrpcApiError> {
-        let component_reference = request.component_slug;
+        request: GetActiveRoutesForDomainRequest,
+    ) -> Result<GetActiveRoutesForDomainSuccessResponse, GrpcApiError> {
+        let domain: Domain = Domain(request.domain);
 
-        let resolving_account_id: AccountId = request
-            .resolving_account_id
-            .ok_or("missing resolving_account_id field")?
-            .try_into()?;
-
-        let resolving_application_id: ApplicationId = request
-            .resolving_application_id
-            .ok_or("missing resolving_application_id field")?
-            .try_into()?;
-
-        let resolving_environment_id: EnvironmentId = request
-            .resolving_environment_id
-            .ok_or("missing resolving_environment_id field")?
-            .try_into()?;
-
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
-        let component = self
-            .component_resolver_service
-            .resolve_deployed_component(
-                component_reference,
-                &resolving_environment_id,
-                &resolving_application_id,
-                &resolving_account_id,
-                &auth_ctx,
-            )
+        let compiled_routes = self
+            .deployed_routes_service
+            .get_currently_deployed_compiled_http_api_routes(&domain)
             .await?;
 
-        Ok(ResolveComponentSuccessResponse {
-            component: Some(ComponentDto::from(component).into()),
+        Ok(GetActiveRoutesForDomainSuccessResponse {
+            compiled_routes: Some(compiled_routes.try_into()?),
         })
     }
 }
@@ -807,6 +830,31 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetAgentTypeResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_active_routes_for_domain(
+        &self,
+        request: Request<GetActiveRoutesForDomainRequest>,
+    ) -> Result<Response<GetActiveRoutesForDomainResponse>, tonic::Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_agent_type",
+            get_active_routes_for_domain = request.domain,
+        );
+
+        let response = match self
+            .get_active_routes_for_domain_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => get_active_routes_for_domain_response::Result::Success(result),
+            Err(error) => get_active_routes_for_domain_response::Result::Error(error.into()),
+        };
+
+        Ok(Response::new(GetActiveRoutesForDomainResponse {
             result: Some(response),
         }))
     }

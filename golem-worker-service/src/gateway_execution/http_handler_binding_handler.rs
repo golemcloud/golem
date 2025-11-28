@@ -46,7 +46,7 @@ impl HttpHandlerBindingHandler {
         );
 
         let resolved_request = GatewayResolvedWorkerRequest {
-            component_id: worker_detail.component_id.clone(),
+            component_id: worker_detail.component_id,
             component_revision: worker_detail.component_revision,
             worker_name: worker_detail
                 .worker_name

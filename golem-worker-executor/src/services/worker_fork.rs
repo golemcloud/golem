@@ -431,7 +431,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?;
 
         let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let environment_id = owned_target_worker_id.environment_id.clone();
+        let environment_id = owned_target_worker_id.environment_id;
 
         let source_worker_instance = Worker::get_or_create_suspended(
             self,
@@ -450,7 +450,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
-            created_by: fork_account_id.clone(),
+            created_by: *fork_account_id,
             environment_id,
             env: initial_source_worker_metadata.env.clone(),
             args: initial_source_worker_metadata.args.clone(),

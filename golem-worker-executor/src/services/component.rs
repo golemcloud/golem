@@ -132,16 +132,16 @@ impl ComponentService for ComponentServiceDefault {
         component_version: ComponentRevision,
     ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
         let key = ComponentKey {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             component_version,
         };
-        let component_id_clone = component_id.clone();
+        let component_id_clone = *component_id;
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_version))
             .await?;
-        let environment_id_clone = metadata.environment_id.clone();
+        let environment_id_clone = metadata.environment_id;
 
         let component = self
             .component_cache
@@ -176,13 +176,13 @@ impl ComponentService for ComponentServiceDefault {
                                 )
                                 .await
                                 .map_err(|e| WorkerExecutorError::ComponentDownloadFailed {
-                                    component_id: component_id_clone.clone(),
+                                    component_id: component_id_clone,
                                     component_version,
                                     reason: e.to_safe_string(),
                                 })?;
 
                             let start = Instant::now();
-                            let component_id_clone2 = component_id_clone.clone();
+                            let component_id_clone2 = component_id_clone;
                             let span = info_span!("Loading WASM component");
                             let component = spawn_blocking(move || {
                                 let _enter = span.enter();
@@ -241,11 +241,11 @@ impl ComponentService for ComponentServiceDefault {
         match forced_version {
             Some(version) => {
                 let client = self.registry_client.clone();
-                let component_id = component_id.clone();
+                let component_id = *component_id;
                 self.component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
-                            component_id: component_id.clone(),
+                            component_id,
                             component_version: version,
                         },
                         || {
@@ -285,7 +285,7 @@ impl ComponentService for ComponentServiceDefault {
                     .component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
-                            component_id: component_id.clone(),
+                            component_id: *component_id,
                             component_version: metadata.revision,
                         },
                         || Box::pin(async move { Ok(metadata.into()) }),
@@ -318,7 +318,7 @@ impl ComponentService for ComponentServiceDefault {
         self.component_metadata_cache
             .get_or_insert_simple(
                 &ComponentKey {
-                    component_id: component_id.clone(),
+                    component_id: *component_id,
                     component_version: metadata.revision,
                 },
                 || Box::pin(async move { Ok(metadata_clone.into()) }),

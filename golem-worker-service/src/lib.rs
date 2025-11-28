@@ -13,8 +13,6 @@
 // limitations under the License.
 
 pub mod api;
-// pub mod aws_config;
-// pub mod aws_load_balancer;
 pub mod config;
 pub mod gateway_execution;
 pub mod gateway_middleware;
@@ -27,8 +25,8 @@ pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
-// pub mod repo;
 pub mod service;
+pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;

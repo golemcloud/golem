@@ -122,7 +122,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 })
                 .collect(),
         ))

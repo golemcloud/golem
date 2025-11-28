@@ -40,13 +40,11 @@ pub trait SecuritySchemeRepo: Send + Sync {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError>;
 
@@ -104,26 +102,18 @@ impl<Repo: SecuritySchemeRepo> SecuritySchemeRepo for LoggedSecuritySchemeRepo<R
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(&revision.security_scheme_id);
-        self.repo
-            .update(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
         let span = Self::span_security_scheme_id(&revision.security_scheme_id);
-        self.repo
-            .delete(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.delete(revision).instrument(span).await
     }
 
     async fn get_by_id(
@@ -253,7 +243,6 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
@@ -265,14 +254,13 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
                         sqlx::query_as(indoc! {r#"
                             UPDATE security_schemes
                             SET updated_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE security_scheme_id = $4 AND current_revision_id = $5
+                            WHERE security_scheme_id = $4
                             RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
                             .bind(revision.security_scheme_id)
-                            .bind(current_revision_id)
                     ).await?
                     .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
 
@@ -288,7 +276,6 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: SecuritySchemeRevisionRecord,
     ) -> Result<SecuritySchemeExtRevisionRecord, SecuritySchemeRepoError> {
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
@@ -300,14 +287,13 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
                         sqlx::query_as(indoc! {r#"
                             UPDATE security_schemes
                             SET updated_at = $1, deleted_at = $1, modified_by = $2, current_revision_id = $3
-                            WHERE security_scheme_id = $4 AND current_revision_id = $5
+                            WHERE security_scheme_id = $4
                             RETURNING security_scheme_id, environment_id, name, created_at, updated_at, deleted_at, modified_by, current_revision_id
                         "#})
                             .bind(&revision.audit.created_at)
                             .bind(revision.audit.created_by)
                             .bind(revision.revision_id)
                             .bind(revision.security_scheme_id)
-                            .bind(current_revision_id)
                     ).await?
                     .ok_or(SecuritySchemeRepoError::ConcurrentModification)?;
 

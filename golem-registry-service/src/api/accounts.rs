@@ -20,7 +20,7 @@ use crate::services::plugin_registration::PluginRegistrationService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountSetRoles, AccountUpdate, Plan,
+    Account, AccountCreation, AccountId, AccountRevision, AccountSetRoles, AccountUpdate, Plan,
 };
 use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
@@ -28,7 +28,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::poem::TempFileUpload;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::types::multipart::JsonField;
 use poem_openapi::*;
@@ -246,6 +246,7 @@ impl AccountsApi {
     async fn delete_account(
         &self,
         account_id: Path<AccountId>,
+        current_revision: Query<AccountRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Empty>> {
         let record =
@@ -254,7 +255,7 @@ impl AccountsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .delete_account_internal(account_id.0, auth)
+            .delete_account_internal(account_id.0, current_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -264,9 +265,12 @@ impl AccountsApi {
     async fn delete_account_internal(
         &self,
         account_id: AccountId,
+        current_revision: AccountRevision,
         auth: AuthCtx,
     ) -> ApiResult<Json<Empty>> {
-        self.account_service.delete(&account_id, &auth).await?;
+        self.account_service
+            .delete(&account_id, current_revision, &auth)
+            .await?;
         Ok(Json(Empty {}))
     }
 

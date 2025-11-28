@@ -15,7 +15,7 @@
 #[macro_export]
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
-        #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
+        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq, desert_rust::BinaryCodec)]
         #[derive(serde::Serialize, serde::Deserialize)]
         #[serde(transparent)]
         #[desert(transparent)]

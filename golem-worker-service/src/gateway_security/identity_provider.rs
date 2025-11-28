@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::identity_provider_metadata::GolemIdentityProviderMetadata;
 use crate::gateway_security::open_id_client::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::security_scheme::Provider;
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::identity_provider_metadata::GolemIdentityProviderMetadata;
-use golem_service_base::custom_api::security_scheme::SecurityScheme;
+use golem_service_base::custom_api::security_scheme::SecuritySchemeDetails;
 use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,
@@ -53,7 +53,7 @@ pub trait IdentityProvider: Send + Sync {
     // Or It can be created before exchange of token during the execution of static binding backing auth_call_back endpoint.
     async fn get_client(
         &self,
-        security_scheme: &SecurityScheme,
+        security_scheme: &SecuritySchemeDetails,
     ) -> Result<OpenIdClient, IdentityProviderError>;
 
     // Get IDToken verifier
@@ -165,11 +165,11 @@ impl IdentityProvider for DefaultIdentityProvider {
 
     async fn get_client(
         &self,
-        security_scheme: &SecurityScheme,
+        security_scheme: &SecuritySchemeDetails,
     ) -> Result<OpenIdClient, IdentityProviderError> {
         debug!(
             "Creating identity provider client for {}",
-            security_scheme.name
+            security_scheme.id
         );
 
         let provider_metadata = self

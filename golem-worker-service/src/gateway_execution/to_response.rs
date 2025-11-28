@@ -15,13 +15,13 @@
 use super::auth_call_back_binding_handler::{AuthenticationSuccess, AuthorisationError};
 use super::file_server_binding_handler::FileServerBindingSuccess;
 use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingSuccess};
-use super::swagger_binding_handler::{SwaggerBindingError, SwaggerHtml};
 use super::{RibInputTypeMismatch, WorkerRequestExecutorError};
 use crate::api::common::ApiEndpointError;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingError;
 use crate::gateway_execution::gateway_session_store::GatewaySessionStore;
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_execution::to_response_failure::ToHttpResponseFromSafeDisplay;
+use crate::model::SwaggerHtml;
 use async_trait::async_trait;
 use golem_service_base::custom_api::HttpCors;
 use http::header::*;
@@ -295,17 +295,6 @@ impl ToHttpResponse for SwaggerHtml {
         poem::Response::builder()
             .content_type("text/html")
             .body(Body::from_string(self.0))
-    }
-}
-
-#[async_trait]
-impl ToHttpResponse for SwaggerBindingError {
-    async fn to_response(
-        self,
-        _request_details: &RichRequest,
-        _session_store: &Arc<dyn GatewaySessionStore>,
-    ) -> poem::Response {
-        self.into()
     }
 }
 

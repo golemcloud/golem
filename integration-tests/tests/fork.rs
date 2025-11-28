@@ -66,7 +66,7 @@ async fn fork_interrupted_worker(
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: target_worker_name.clone(),
     };
 
@@ -128,7 +128,7 @@ async fn fork_running_worker_1(
     let source_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name,
     };
 
@@ -155,7 +155,7 @@ async fn fork_running_worker_1(
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: target_worker_name.clone(),
     };
 
@@ -231,7 +231,7 @@ async fn fork_running_worker_2(
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: target_worker_name.clone(),
     };
 
@@ -308,7 +308,7 @@ async fn fork_idle_worker(
     let source_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name,
     };
 
@@ -348,7 +348,7 @@ async fn fork_idle_worker(
     let target_worker_name = Uuid::new_v4().to_string();
 
     let target_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: target_worker_name.clone(),
     };
 
@@ -488,7 +488,7 @@ async fn fork_worker_when_target_already_exists(
     let source_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name,
     };
 
@@ -533,7 +533,7 @@ async fn fork_worker_with_invalid_oplog_index_cut_off(
     let source_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name,
     };
 
@@ -572,7 +572,7 @@ async fn fork_invalid_worker(
     let target_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name,
     };
 
@@ -610,7 +610,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     let source_worker_name = Uuid::new_v4().to_string();
 
     let source_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: source_worker_name.clone(),
     };
 
@@ -767,7 +767,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     let forked_phantom_id = fork_phantom_id_rx.await.unwrap();
 
     let target_worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: format!("source-worker-{forked_phantom_id}"),
     };
     let target_result = user

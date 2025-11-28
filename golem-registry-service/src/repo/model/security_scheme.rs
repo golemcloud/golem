@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::datetime::SqlDateTime;
+use crate::model::security_scheme::SecurityScheme;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use anyhow::anyhow;
 use golem_common::error_forwarding;
@@ -21,7 +22,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
 };
-use golem_service_base::custom_api::security_scheme::SecurityScheme;
 use golem_service_base::repo::RepoError;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sqlx::FromRow;
@@ -123,20 +123,12 @@ pub struct SecuritySchemeExtRevisionRecord {
 impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
     type Error = SecuritySchemeRepoError;
     fn try_from(value: SecuritySchemeExtRevisionRecord) -> Result<Self, Self::Error> {
-        let scopes: Vec<Scope> = serde_json::from_str(&value.revision.scopes).map_err(|e| {
-            SecuritySchemeRepoError::InternalError(
-                anyhow::Error::from(e).context("Failed parsing scopes"),
-            )
-        })?;
+        let scopes: Vec<Scope> = serde_json::from_str(&value.revision.scopes)
+            .map_err(|e| anyhow::Error::from(e).context("Failed parsing scopes"))?;
         let redirect_url: RedirectUrl = serde_json::from_str(&value.revision.redirect_url)
-            .map_err(|e| {
-                SecuritySchemeRepoError::InternalError(
-                    anyhow::Error::from(e).context("Failed parsing redirect_url"),
-                )
-            })?;
-        let provider_type = Provider::from_str(&value.revision.provider_type).map_err(|e| {
-            SecuritySchemeRepoError::InternalError(anyhow!("Failed parsing provider type: {e}"))
-        })?;
+            .map_err(|e| anyhow::Error::from(e).context("Failed parsing redirect_url"))?;
+        let provider_type = Provider::from_str(&value.revision.provider_type)
+            .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?;
         let client_id = ClientId::new(value.revision.client_id);
         let client_secret = ClientSecret::new(value.revision.client_secret);
 

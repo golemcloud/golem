@@ -165,7 +165,7 @@ impl EnvironmentPluginGrantService {
             .delete(&environment_plugin_grant_id.0, &auth.account_id().0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                environment_plugin_grant_id.clone(),
+                *environment_plugin_grant_id,
             ))?
             .into();
 
@@ -228,7 +228,7 @@ impl EnvironmentPluginGrantService {
             .get_by_id(&environment_plugin_grant_id.0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                environment_plugin_grant_id.clone(),
+                *environment_plugin_grant_id,
             ))?
             .into();
 
@@ -239,7 +239,7 @@ impl EnvironmentPluginGrantService {
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
                     EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
-                        environment_plugin_grant_id.clone(),
+                        *environment_plugin_grant_id,
                     )
                 }
                 other => other.into(),

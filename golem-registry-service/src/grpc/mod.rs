@@ -58,6 +58,7 @@ pub async fn start_grpc_server(
                     services.plugin_registration_service.clone(),
                     services.component_service.clone(),
                     services.component_resolver_service.clone(),
+                    services.deployed_routes_service.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),

@@ -447,6 +447,14 @@ paths:
         required: true
         deprecated: false
         explode: true
+      - name: current_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: true
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''

@@ -13,19 +13,25 @@
 // limitations under the License.
 
 mod rib;
+mod routes;
 mod write;
 
+pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
 pub use self::write::DeploymentWriteService;
 
 use super::component::ComponentError;
 use super::http_api_definition::HttpApiDefinitionError;
 use super::http_api_deployment::HttpApiDeploymentError;
 use crate::repo::deployment::DeploymentRepo;
-use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
+use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use ::rib::RibCompilationError;
+use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
 use golem_common::model::diff;
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -88,6 +94,33 @@ error_forwarding!(
     HttpApiDeploymentError,
 );
 
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum DeployValidationError {
+    #[error(
+        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
+    )]
+    HttpApiDeploymentMissingHttpApiDefinition {
+        http_api_deployment_domain: Domain,
+        missing_http_api_definition: HttpApiDefinitionName,
+    },
+    #[error("Invalid path pattern: {0}")]
+    HttpApiDefinitionInvalidPathPattern(String),
+    #[error("Invalid rib expression: {0}")]
+    InvalidRibExpr(String),
+    #[error("Failed rib compilation: {0}")]
+    RibCompilationFailed(RibCompilationError),
+    #[error("Invalid http cors binding expression: {0}")]
+    InvalidHttpCorsBindingExpr(String),
+    #[error("Component {0} not found in deployment")]
+    ComponentNotFound(ComponentName),
+}
+
+impl SafeDisplay for DeployValidationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 fn format_validation_errors(errors: &[DeployValidationError]) -> String {
     errors
         .iter()
@@ -105,7 +138,7 @@ impl DeploymentService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
-    ) -> DeploymentService {
+    ) -> Self {
         Self {
             environment_service,
             deployment_repo,

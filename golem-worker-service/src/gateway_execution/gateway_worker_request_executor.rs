@@ -69,7 +69,6 @@ impl GatewayWorkerRequestExecutor {
         &self,
         resolved_worker_request: GatewayResolvedWorkerRequest,
     ) -> Result<Option<ValueAndType>, WorkerRequestExecutorError> {
-        // TODO: Not dependent on caller, so could be cached
         let component = self
             .component_service
             .get_revision(
@@ -81,7 +80,7 @@ impl GatewayWorkerRequestExecutor {
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
 
         let worker_id = WorkerId::from_component_metadata_and_worker_id(
-            component.id.clone(),
+            component.id,
             &component.metadata,
             resolved_worker_request.worker_name,
         )?;
@@ -109,7 +108,7 @@ impl GatewayWorkerRequestExecutor {
                 }),
                 component.environment_id,
                 component.account_id,
-                AuthCtx::System, // TODO: specific auth ctx for gateway invocations
+                AuthCtx::impersonated_user(component.account_id),
             )
             .await
             .map_err(|e| format!("Error when executing resolved worker request. Error: {e}"))?;

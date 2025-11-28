@@ -120,9 +120,9 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
         component_version: ComponentRevision,
         plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
-        let key = (component_id.clone(), component_version, plugin_priority);
+        let key = (*component_id, component_version, plugin_priority);
         let inner = self.inner.clone();
-        let component_id = component_id.clone();
+        let component_id = *component_id;
         self.cached_plugin_installations
             .get_or_insert_simple(&key, || {
                 Box::pin(async move {

@@ -46,7 +46,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = if durability.is_live() {
             let svc = self.state.blob_store_service.clone();
             let result = svc
-                .create_container(environment_id.clone(), name.clone())
+                .create_container(environment_id, name.clone())
                 .and_then(|_| svc.get_container(environment_id, name.clone()))
                 .await
                 .map(|r| r.unwrap())

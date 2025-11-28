@@ -124,7 +124,7 @@ impl OAuth2Service {
             .transpose()?;
 
         let account_id = match &existing_data {
-            Some(token) => token.account_id.clone(),
+            Some(token) => token.account_id,
             None => self.make_account(&external_login).await?,
         };
 
@@ -180,7 +180,7 @@ impl OAuth2Service {
             .oauth2_web_flow_state_repo
             .get_by_id(&state_id.0)
             .await?
-            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(state_id.clone()))?
+            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(*state_id))?
             .into();
 
         let access_token = self
@@ -210,7 +210,7 @@ impl OAuth2Service {
             .oauth2_web_flow_state_repo
             .get_by_id(&state_id.0)
             .await?
-            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(state_id.clone()))?
+            .ok_or(OAuth2Error::OAuth2WebflowStateNotFound(*state_id))?
             .into();
 
         // State is only allowed to be exchanged once for access tokens.
@@ -368,15 +368,15 @@ impl OAuth2Service {
 
         let token_with_secret = self
             .token_service
-            .create(account_id.clone(), expiration, &AuthCtx::system())
+            .create(account_id, expiration, &AuthCtx::system())
             .await?;
 
         {
             let oauth2_token = OAuth2Token {
                 provider,
                 external_id: external_login.external_id,
-                account_id: account_id.clone(),
-                token_id: Some(token_with_secret.id.clone()),
+                account_id,
+                token_id: Some(token_with_secret.id),
             };
 
             let record: OAuth2TokenRecord = oauth2_token.into();

@@ -169,6 +169,39 @@ pub async fn wait_for_startup_http(host: &str, http_port: u16, name: &str, timeo
     }
 }
 
+pub async fn wait_for_startup_http_any_response(
+    host: &str,
+    http_port: u16,
+    name: &str,
+    timeout: Duration,
+) {
+    info!(
+        "Waiting for {name} (HTTP) start on host {host}:{http_port}, timeout: {}s",
+        timeout.as_secs()
+    );
+    let start = Instant::now();
+    let client = reqwest::Client::new();
+    let url = reqwest::Url::parse(&format!("http://{host}:{http_port}")).unwrap();
+    loop {
+        let success = match client.get(url.clone()).send().await {
+            Ok(_) => true,
+            Err(err) => {
+                debug!("request for {name} resulted in an error: {err:?}");
+                false
+            }
+        };
+
+        if success {
+            break;
+        } else {
+            if start.elapsed() > timeout {
+                panic!("Failed to verify that {name} is running");
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+}
+
 struct EnvVarBuilder {
     env_vars: HashMap<String, String>,
 }

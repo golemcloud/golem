@@ -391,13 +391,13 @@ impl WorkerServiceDefault {
         filter: Option<WorkerFilter>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadataDto>> {
-        let component_id = component_id.clone();
+        let component_id = *component_id;
         let result = self.call_worker_executor(
             AllExecutors,
             "get_running_workers_metadata",
             move |worker_executor_client| {
                 let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-                    component_id.clone().into();
+                    component_id.into();
 
                 Box::pin(
                     worker_executor_client.get_running_workers_metadata(
@@ -447,7 +447,7 @@ impl WorkerServiceDefault {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
-        let component_id = component_id.clone();
+        let component_id = *component_id;
         let result = self
             .call_worker_executor(
                 RandomExecutor,
@@ -455,12 +455,12 @@ impl WorkerServiceDefault {
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.get_workers_metadata(
                         workerexecutor::v1::GetWorkersMetadataRequest {
-                            component_id: Some(component_id.clone().into()),
+                            component_id: Some(component_id.into()),
                             filter: filter.clone().map(|f| f.into()),
                             cursor: Some(cursor.clone().into()),
                             count,
                             precise,
-                            environment_id: Some(environment_id.clone().into()),
+                            environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                         },
                     ))
@@ -539,7 +539,7 @@ impl WorkerService for WorkerServiceDefault {
         let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id_clone = worker_id.clone();
-        let account_id_clone = account_id.clone();
+        let account_id_clone = account_id;
         self.call_worker_executor(
             worker_id.clone(),
             "create_worker",
@@ -550,8 +550,8 @@ impl WorkerService for WorkerServiceDefault {
                     component_version: component_version.0,
                     args: arguments.clone(),
                     env: environment_variables.clone(),
-                    component_owner_account_id: Some(account_id_clone.clone().into()),
-                    environment_id: Some(environment_id.clone().into()),
+                    component_owner_account_id: Some(account_id_clone.into()),
+                    environment_id: Some(environment_id.into()),
                     account_limits: Some(resource_limits.clone().into()),
                     wasi_config_vars: Some(wasi_config_vars.clone().into()),
                     ignore_already_existing,
@@ -587,7 +587,7 @@ impl WorkerService for WorkerServiceDefault {
     ) -> WorkerResult<ConnectWorkerStream> {
         let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
         let worker_id_clone = worker_id.clone();
-        let account_id_clone = account_id.clone();
+        let account_id_clone = account_id;
         let worker_id_err = worker_id.clone();
         let stream = self
             .call_worker_executor(
@@ -596,9 +596,9 @@ impl WorkerService for WorkerServiceDefault {
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
-                        component_owner_account_id: Some(account_id_clone.clone().into()),
+                        component_owner_account_id: Some(account_id_clone.into()),
                         account_limits: Some(resource_limits.clone().into()),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     }))
                 },
@@ -643,7 +643,7 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
                             worker_id_clone.clone(),
                         )),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -703,10 +703,10 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
@@ -770,10 +770,10 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
@@ -834,10 +834,10 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
@@ -902,10 +902,10 @@ impl WorkerService for WorkerServiceDefault {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -950,10 +950,10 @@ impl WorkerService for WorkerServiceDefault {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
@@ -998,7 +998,7 @@ impl WorkerService for WorkerServiceDefault {
                             .complete_promise(CompletePromiseRequest {
                                 promise_id: Some(promise_id.into()),
                                 data,
-                                environment_id: Some(environment_id.clone().into()),
+                                environment_id: Some(environment_id.into()),
                                 auth_ctx: Some(auth_ctx.clone().into())
                             })
                     )
@@ -1045,7 +1045,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.interrupt_worker(InterruptWorkerRequest {
                         worker_id: Some(worker_id.into()),
                         recover_immediately,
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     }),
                 )
@@ -1082,7 +1082,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id.clone())),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }
                 ))
@@ -1158,7 +1158,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     force: Some(force),
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
@@ -1196,7 +1196,7 @@ impl WorkerService for WorkerServiceDefault {
                     mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode)
                         as i32,
                     target_version: target_version.0,
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
@@ -1236,7 +1236,7 @@ impl WorkerService for WorkerServiceDefault {
                         from_oplog_index: from_oplog_index.into(),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                     }),
                 )
@@ -1310,7 +1310,7 @@ impl WorkerService for WorkerServiceDefault {
                         query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }),
                 )
@@ -1369,10 +1369,10 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(
                     worker_executor_client.get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
                         worker_id: Some(worker_id.into()),
-                        component_owner_account_id: Some(account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.into()),
                         account_limits: Some(resource_limits.clone().into()),
                         path: path_clone.to_string(),
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }),
                 )
@@ -1434,10 +1434,10 @@ impl WorkerService for WorkerServiceDefault {
                     Box::pin(worker_executor_client.get_file_contents(
                         workerexecutor::v1::GetFileContentsRequest {
                             worker_id: Some(worker_id.clone().into()),
-                            component_owner_account_id: Some(account_id.clone().into()),
+                            component_owner_account_id: Some(account_id.into()),
                             account_limits: Some(resource_limits.clone().into()),
                             file_path: path_clone.to_string(),
-                            environment_id: Some(environment_id.clone().into()),
+                            environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                         },
                     ))
@@ -1528,7 +1528,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.activate_plugin(ActivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         plugin_priority: plugin_priority.0,
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }),
                 )
@@ -1567,7 +1567,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         plugin_priority: plugin_priority.0,
-                        environment_id: Some(environment_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into())
                     }),
                 )
@@ -1609,9 +1609,9 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.fork_worker(ForkWorkerRequest {
                     source_worker_id: Some(source_worker_id.into()),
                     target_worker_id: Some(target_worker_id.into()),
-                    component_owner_account_id: Some(account_id.clone().into()),
+                    component_owner_account_id: Some(account_id.into()),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
@@ -1647,7 +1647,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.revert_worker(RevertWorkerRequest {
                     worker_id: Some(worker_id.into()),
                     target: Some(target.into()),
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
@@ -1684,7 +1684,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.cancel_invocation(CancelInvocationRequest {
                     worker_id: Some(worker_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
-                    environment_id: Some(environment_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
