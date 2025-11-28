@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod identity_provider;
+mod identity_provider_metadata;
 mod open_id_client;
 
 pub use identity_provider::*;

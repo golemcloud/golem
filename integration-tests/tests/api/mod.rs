@@ -26,10 +26,7 @@ mod http_api_deployment;
 mod plugin_registration;
 mod reports;
 mod security_schemes;
-
-use super::Tracing;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);

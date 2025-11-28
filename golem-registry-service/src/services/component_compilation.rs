@@ -99,8 +99,8 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         component_id: &ComponentId,
         component_version: ComponentRevision,
     ) {
-        let component_id_clone = component_id.clone();
-        let environment_id_clone = environment_id.clone();
+        let component_id_clone = *component_id;
+        let environment_id_clone = *environment_id;
         let component_service_port = match self.own_grpc_port.load(Ordering::Acquire) {
             0 => None,
             port => Some(port as u32),
@@ -109,8 +109,8 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
         let result = self
             .client
             .call("enqueue-compilation", move |client| {
-                let component_id_clone = component_id_clone.clone();
-                let environment_id_clone = environment_id_clone.clone();
+                let component_id_clone = component_id_clone;
+                let environment_id_clone = environment_id_clone;
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),

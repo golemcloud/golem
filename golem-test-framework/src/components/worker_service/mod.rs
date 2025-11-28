@@ -18,7 +18,9 @@ pub mod spawned;
 use super::rdb::Rdb;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
-use super::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
+use super::{
+    wait_for_startup_grpc, wait_for_startup_http, wait_for_startup_http_any_response, EnvVarBuilder,
+};
 use async_trait::async_trait;
 use golem_client::api::WorkerClientLive;
 use golem_client::{Context, Security};
@@ -56,9 +58,17 @@ pub trait WorkerService: Send + Sync {
     }
 }
 
-async fn wait_for_startup(host: &str, grpc_port: u16, http_port: u16, timeout: Duration) {
+async fn wait_for_startup(
+    host: &str,
+    grpc_port: u16,
+    http_port: u16,
+    custom_request_port: u16,
+    timeout: Duration,
+) {
     wait_for_startup_grpc(host, grpc_port, "golem-worker-service", timeout).await;
     wait_for_startup_http(host, http_port, "golem-worker-service", timeout).await;
+    wait_for_startup_http_any_response(host, custom_request_port, "golem-worker-service", timeout)
+        .await;
 }
 
 async fn env_vars(

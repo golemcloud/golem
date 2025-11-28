@@ -298,11 +298,6 @@ pub struct WorkerServiceGrpcConfig {
     pub retries: RetryConfig,
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
-    pub auth_cache_size: usize,
-    #[serde(with = "humantime_serde")]
-    pub auth_cache_ttl: Duration,
-    #[serde(with = "humantime_serde")]
-    pub auth_cache_eviction_period: Duration,
 }
 
 impl SafeDisplay for WorkerServiceGrpcConfig {
@@ -314,13 +309,6 @@ impl SafeDisplay for WorkerServiceGrpcConfig {
         let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-        let _ = writeln!(&mut result, "auth cache size: {}", self.auth_cache_size);
-        let _ = writeln!(&mut result, "auth cache ttl: {:?}", self.auth_cache_ttl);
-        let _ = writeln!(
-            &mut result,
-            "auth cache eviction period: {:?}",
-            self.auth_cache_eviction_period
-        );
         result
     }
 }
@@ -968,9 +956,6 @@ impl Default for WorkerServiceGrpcConfig {
             port: 9007,
             retries: RetryConfig::max_attempts_5(),
             connect_timeout: Duration::from_secs(10),
-            auth_cache_size: 1024,
-            auth_cache_ttl: Duration::from_mins(10),
-            auth_cache_eviction_period: Duration::from_mins(1),
         }
     }
 }

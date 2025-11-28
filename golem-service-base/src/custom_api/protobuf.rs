@@ -12,96 +12,517 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::http_api_definition::RouteMethod;
-use super::compiled_http_api_definition::CompiledRoute;
+use super::compiled_gateway_binding::{
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
+    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
+    ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+};
 use super::path_pattern::AllPathPatterns;
-use applying::Apply;
-use super::compiled_gateway_binding::{FileServerBindingCompiled, GatewayBindingCompiled, HttpHandlerBindingCompiled, WorkerBindingCompiled};
-use golem_common::model::GatewayBindingType;
+use super::security_scheme::SecuritySchemeDetails;
+use super::{CompiledRoute, CompiledRoutes, HttpCors};
+use golem_common::model::Empty;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::security_scheme::Provider;
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+use std::collections::HashMap;
+use std::ops::Deref;
 
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpCors> for HttpCors {
+    type Error = String;
 
-impl TryFrom<GatewayBindingCompiled> for golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::HttpCors,
+    ) -> Result<Self, Self::Error> {
+        let allow_origin = value
+            .allow_origin
+            .ok_or_else(|| "allow_origin field missing".to_string())?;
+
+        let allow_methods = value
+            .allow_methods
+            .ok_or_else(|| "allow_methods field missing".to_string())?;
+
+        let allow_headers = value
+            .allow_headers
+            .ok_or_else(|| "allow_headers field missing".to_string())?;
+
+        Ok(Self {
+            allow_origin,
+            allow_methods,
+            allow_headers,
+            expose_headers: value.expose_headers,
+            allow_credentials: value.allow_credentials,
+            max_age: value.max_age,
+        })
+    }
+}
+
+impl From<HttpCors> for golem_api_grpc::proto::golem::apidefinition::HttpCors {
+    fn from(value: HttpCors) -> Self {
+        Self {
+            allow_origin: Some(value.allow_origin),
+            allow_methods: Some(value.allow_methods),
+            allow_headers: Some(value.allow_headers),
+            expose_headers: value.expose_headers,
+            max_age: value.max_age,
+            allow_credentials: value.allow_credentials,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails>
+    for SecuritySchemeDetails
 {
     type Error = String;
-    fn try_from(value: GatewayBindingCompiled) -> Result<Self, String> {
-        match value {
-            GatewayBindingCompiled::Worker(worker_binding_compiled) => {
-                Ok(worker_binding_to_gateway_binding_compiled_proto(
-                    *worker_binding_compiled,
-                    GatewayBindingType::Default,
-                )?)
-            }
 
-            GatewayBindingCompiled::FileServer(file_server_binding_compiled) => Ok(
-                file_server_binding_to_gateway_binding_compiled_proto(
-                    *file_server_binding_compiled,
-                    GatewayBindingType::FileServer,
-                )?,
-            ),
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails,
+    ) -> Result<Self, Self::Error> {
+        let provider_type =
+            Provider::try_from(value.provider()).map_err(|e| format!("invalid provider: {}", e))?;
 
-            GatewayBindingCompiled::HttpHandler(http_handler_binding) => {
-                Ok(http_handler_to_gateway_binding_compiled_proto(
-                    *http_handler_binding,
-                    GatewayBindingType::HttpHandler,
-                )?)
-            }
+        let id = value
+            .id
+            .ok_or_else(|| "scheme_identifier field missing".to_string())?
+            .try_into()?;
 
-            GatewayBindingCompiled::Static(static_binding) => {
-                let binding_type = match static_binding {
-                    StaticBinding::HttpCorsPreflight(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight,
-                    StaticBinding::HttpAuthCallBack(_) => golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack,
-                };
+        let client_id = ClientId::new(value.client_id);
 
-                Ok(
-                    golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                        component: None,
-                        worker_name: None,
-                        compiled_worker_name_expr: None,
-                        worker_name_rib_input: None,
-                        idempotency_key: None,
-                        compiled_idempotency_key_expr: None,
-                        idempotency_key_rib_input: None,
-                        response: None,
-                        compiled_response_expr: None,
-                        response_rib_input: None,
-                        worker_functions_in_response: None,
-                        binding_type: Some(binding_type as i32),
-                        static_binding: Some(
-                            golem_api_grpc::proto::golem::apidefinition::StaticBinding::try_from(
-                                static_binding,
-                            )?,
-                        ),
-                        response_rib_output: None,
-                        invocation_context: None,
-                        compiled_invocation_context_expr: None,
-                        invocation_context_rib_input: None,
-                        openapi_spec_json: None,
-                    },
-                )
-            }
+        let client_secret = ClientSecret::new(value.client_secret);
 
-            GatewayBindingCompiled::SwaggerUi(swagger_binding) => Ok(
-                golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                    component: None,
-                    worker_name: None,
-                    compiled_worker_name_expr: None,
-                    worker_name_rib_input: None,
-                    idempotency_key: None,
-                    compiled_idempotency_key_expr: None,
-                    idempotency_key_rib_input: None,
-                    response: None,
-                    compiled_response_expr: None,
-                    response_rib_input: None,
-                    worker_functions_in_response: None,
-                    binding_type: Some(ProtoGatewayBindingType::SwaggerUi.into()),
-                    static_binding: None,
-                    response_rib_output: None,
-                    invocation_context: None,
-                    compiled_invocation_context_expr: None,
-                    invocation_context_rib_input: None,
-                    openapi_spec_json: swagger_binding.openapi_spec_json.clone(),
-                },
-            ),
+        let redirect_url = RedirectUrl::new(value.redirect_url)
+            .map_err(|e| format!("Failed parsing redirect url: {e}"))?;
+
+        let scopes = value.scopes.into_iter().map(Scope::new).collect::<Vec<_>>();
+
+        Ok(Self {
+            id,
+            provider_type,
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        })
+    }
+}
+
+impl From<SecuritySchemeDetails>
+    for golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails
+{
+    fn from(value: SecuritySchemeDetails) -> Self {
+        Self {
+            id: Some(value.id.into()),
+            provider: golem_api_grpc::proto::golem::apidefinition::Provider::from(
+                value.provider_type,
+            )
+            .into(),
+            client_id: value.client_id.deref().clone(),
+            client_secret: value.client_secret.secret().clone(),
+            redirect_url: value.redirect_url.deref().clone(),
+            scopes: value.scopes.iter().map(|s| s.deref().clone()).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled>
+    for WorkerNameCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled,
+    ) -> Result<Self, Self::Error> {
+        let worker_name = value
+            .expr
+            .ok_or_else(|| "expr field missing".to_string())?
+            .try_into()?;
+
+        let compiled_worker_name = value
+            .compiled_expr
+            .ok_or_else(|| "compiled_expr field missing".to_string())?
+            .try_into()?;
+
+        let rib_input = value
+            .rib_input
+            .ok_or_else(|| "rib_input field missing".to_string())?
+            .try_into()?;
+
+        Ok(Self {
+            worker_name,
+            compiled_worker_name,
+            rib_input,
+        })
+    }
+}
+
+impl TryFrom<WorkerNameCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled
+{
+    type Error = String;
+    fn try_from(value: WorkerNameCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            expr: Some(value.worker_name.into()),
+            compiled_expr: Some(value.compiled_worker_name.try_into()?),
+            rib_input: Some(value.rib_input.into()),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled>
+    for IdempotencyKeyCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled,
+    ) -> Result<Self, Self::Error> {
+        let idempotency_key = value
+            .expr
+            .ok_or_else(|| "expr field missing".to_string())?
+            .try_into()?;
+
+        let compiled_idempotency_key = value
+            .compiled_expr
+            .ok_or_else(|| "compiled_expr field missing".to_string())?
+            .try_into()?;
+
+        let rib_input = value
+            .rib_input
+            .ok_or_else(|| "rib_input field missing".to_string())?
+            .try_into()?;
+
+        Ok(Self {
+            idempotency_key,
+            compiled_idempotency_key,
+            rib_input,
+        })
+    }
+}
+
+impl TryFrom<IdempotencyKeyCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled
+{
+    type Error = String;
+    fn try_from(value: IdempotencyKeyCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            expr: Some(value.idempotency_key.into()),
+            compiled_expr: Some(value.compiled_idempotency_key.try_into()?),
+            rib_input: Some(value.rib_input.into()),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::InvocationContextCompiled>
+    for InvocationContextCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::InvocationContextCompiled,
+    ) -> Result<Self, Self::Error> {
+        let invocation_context = value
+            .expr
+            .ok_or_else(|| "expr field missing".to_string())?
+            .try_into()?;
+
+        let compiled_invocation_context = value
+            .compiled_expr
+            .ok_or_else(|| "compiled_expr field missing".to_string())?
+            .try_into()?;
+
+        let rib_input = value
+            .rib_input
+            .ok_or_else(|| "rib_input field missing".to_string())?
+            .try_into()?;
+
+        Ok(Self {
+            invocation_context,
+            compiled_invocation_context,
+            rib_input,
+        })
+    }
+}
+
+impl TryFrom<InvocationContextCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::InvocationContextCompiled
+{
+    type Error = String;
+
+    fn try_from(value: InvocationContextCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            expr: Some(value.invocation_context.into()),
+            compiled_expr: Some(value.compiled_invocation_context.try_into()?),
+            rib_input: Some(value.rib_input.into()),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompiled>
+    for ResponseMappingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompiled,
+    ) -> Result<Self, Self::Error> {
+        let response_mapping_expr = value
+            .expr
+            .ok_or_else(|| "expr field missing".to_string())?
+            .try_into()?;
+
+        let response_mapping_compiled = value
+            .compiled_expr
+            .ok_or_else(|| "compiled_expr field missing".to_string())?
+            .try_into()?;
+
+        let rib_input = value
+            .rib_input
+            .ok_or_else(|| "rib_input field missing".to_string())?
+            .try_into()?;
+
+        let worker_calls = match value.worker_functions {
+            Some(w) => Some(w.try_into()?),
+            None => None,
+        };
+
+        let rib_output = match value.rib_output {
+            Some(o) => Some(o.try_into()?),
+            None => None,
+        };
+
+        Ok(Self {
+            response_mapping_expr,
+            response_mapping_compiled,
+            rib_input,
+            worker_calls,
+            rib_output,
+        })
+    }
+}
+
+impl TryFrom<ResponseMappingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompiled
+{
+    type Error = String;
+
+    fn try_from(value: ResponseMappingCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            expr: Some(value.response_mapping_expr.into()),
+            compiled_expr: Some(value.response_mapping_compiled.try_into()?),
+            rib_input: Some(value.rib_input.into()),
+            worker_functions: value.worker_calls.map(|wc| wc.into()),
+            rib_output: value.rib_output.map(|ro| ro.into()),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
+    for WorkerBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding,
+    ) -> Result<Self, Self::Error> {
+        let component_id = value
+            .component_id
+            .ok_or_else(|| "component_id field missing".to_string())?
+            .try_into()?;
+
+        let component_revision = ComponentRevision(value.component_revision);
+
+        let component_name = ComponentName(value.component_name);
+
+        let idempotency_key_compiled = match value.idempotency_key {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        let invocation_context_compiled = match value.invocation_context {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        let response_compiled = value
+            .response_mapping
+            .ok_or_else(|| "response_mapping field missing".to_string())?
+            .try_into()?;
+
+        Ok(Self {
+            component_id,
+            component_name,
+            component_revision,
+            idempotency_key_compiled,
+            invocation_context_compiled,
+            response_compiled,
+        })
+    }
+}
+
+impl TryFrom<WorkerBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding
+{
+    type Error = String;
+
+    fn try_from(value: WorkerBindingCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: Some(value.component_id.into()),
+            component_revision: value.component_revision.0,
+            component_name: value.component_name.0,
+            idempotency_key: value
+                .idempotency_key_compiled
+                .map(|v| v.try_into())
+                .transpose()?,
+            invocation_context: value
+                .invocation_context_compiled
+                .map(|v| v.try_into())
+                .transpose()?,
+            response_mapping: Some(value.response_compiled.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpHandlerBinding>
+    for HttpHandlerBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpHandlerBinding,
+    ) -> Result<Self, Self::Error> {
+        let component_id = value
+            .component_id
+            .ok_or_else(|| "component_id field missing".to_string())?
+            .try_into()?;
+
+        let component_revision = ComponentRevision(value.component_revision);
+
+        let component_name = ComponentName(value.component_name);
+
+        let worker_name_compiled = value
+            .worker_name_compiled
+            .ok_or_else(|| "worker_name_compiled field missing".to_string())?
+            .try_into()?;
+
+        let idempotency_key_compiled = match value.idempotency_key_compiled {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        let invocation_context_compiled = match value.invocation_context_compiled {
+            Some(v) => Some(v.try_into()?),
+            None => None,
+        };
+
+        Ok(Self {
+            component_id,
+            component_name,
+            component_revision,
+            worker_name_compiled,
+            idempotency_key_compiled,
+            invocation_context_compiled,
+        })
+    }
+}
+
+impl TryFrom<HttpHandlerBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledHttpHandlerBinding
+{
+    type Error = String;
+
+    fn try_from(value: HttpHandlerBindingCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: Some(value.component_id.into()),
+            component_revision: value.component_revision.0,
+            component_name: value.component_name.0,
+            worker_name_compiled: Some(value.worker_name_compiled.try_into()?),
+            idempotency_key_compiled: value
+                .idempotency_key_compiled
+                .map(|v| v.try_into())
+                .transpose()?,
+            invocation_context_compiled: value
+                .invocation_context_compiled
+                .map(|v| v.try_into())
+                .transpose()?,
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledFileServerBinding>
+    for FileServerBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledFileServerBinding,
+    ) -> Result<Self, Self::Error> {
+        let component_id = value
+            .component_id
+            .ok_or_else(|| "component_id field missing".to_string())?
+            .try_into()?;
+
+        let component_revision = ComponentRevision(value.component_revision);
+
+        let component_name = ComponentName(value.component_name);
+
+        let worker_name_compiled = value
+            .worker_name_compiled
+            .ok_or_else(|| "worker_name_compiled field missing".to_string())?
+            .try_into()?;
+
+        let response_compiled = value
+            .response_compiled
+            .ok_or_else(|| "response_compiled field missing".to_string())?
+            .try_into()?;
+
+        Ok(Self {
+            component_id,
+            component_name,
+            component_revision,
+            worker_name_compiled,
+            response_compiled,
+        })
+    }
+}
+
+impl TryFrom<FileServerBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledFileServerBinding
+{
+    type Error = String;
+
+    fn try_from(value: FileServerBindingCompiled) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: Some(value.component_id.into()),
+            component_revision: value.component_revision.0,
+            component_name: value.component_name.0,
+            worker_name_compiled: Some(value.worker_name_compiled.try_into()?),
+            response_compiled: Some(value.response_compiled.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpCorsBinding>
+    for HttpCorsBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpCorsBinding,
+    ) -> Result<Self, Self::Error> {
+        let http_cors = value
+            .http_cors
+            .ok_or_else(|| "http_cors field missing".to_string())?
+            .try_into()?;
+
+        Ok(HttpCorsBindingCompiled { http_cors })
+    }
+}
+
+impl From<HttpCorsBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledHttpCorsBinding
+{
+    fn from(value: HttpCorsBindingCompiled) -> Self {
+        Self {
+            http_cors: Some(value.http_cors.into()),
         }
     }
 }
@@ -114,202 +535,59 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding,
     ) -> Result<Self, Self::Error> {
-        let binding_type = value
-            .binding_type
-            .unwrap_or(ProtoGatewayBindingType::Default.into());
-
-        let binding_type = ProtoGatewayBindingType::try_from(binding_type)
-            .map_err(|e| format!("Failed to convert binding type: {e}"))?;
-
-        match binding_type {
-            ProtoGatewayBindingType::FileServer | ProtoGatewayBindingType::Default => {
-                // Convert fields for the Worker variant
-                let component_id = value
-                    .component
-                    .ok_or("Missing component_id for Worker")?
-                    .try_into()?;
-
-                let worker_name_compiled = match (
-                    value.worker_name,
-                    value.compiled_worker_name_expr,
-                    value.worker_name_rib_input,
-                ) {
-                    (Some(worker_name), Some(compiled_worker_name), Some(rib_input_type_info)) => {
-                        Some(WorkerNameCompiled {
-                            worker_name: rib::Expr::try_from(worker_name)?,
-                            compiled_worker_name: rib::RibByteCode::try_from(compiled_worker_name)?,
-                            rib_input_type_info: rib::RibInputTypeInfo::try_from(
-                                rib_input_type_info,
-                            )?,
-                        })
-                    }
-                    _ => None,
-                };
-
-                let idempotency_key_compiled = match (
-                    value.idempotency_key,
-                    value.compiled_idempotency_key_expr,
-                    value.idempotency_key_rib_input,
-                ) {
-                    (Some(idempotency_key), Some(compiled_idempotency_key), Some(rib_input)) => {
-                        Some(IdempotencyKeyCompiled {
-                            idempotency_key: rib::Expr::try_from(idempotency_key)?,
-                            compiled_idempotency_key: rib::RibByteCode::try_from(
-                                compiled_idempotency_key,
-                            )?,
-                            rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
-                        })
-                    }
-                    _ => None,
-                };
-
-                let invocation_context_compiled = match (
-                    value.invocation_context,
-                    value.compiled_invocation_context_expr,
-                    value.invocation_context_rib_input,
-                ) {
-                    (
-                        Some(invocation_context),
-                        Some(compiled_invocation_context),
-                        Some(rib_input),
-                    ) => Some(InvocationContextCompiled {
-                        invocation_context: rib::Expr::try_from(invocation_context)?,
-                        compiled_invocation_context: rib::RibByteCode::try_from(
-                            compiled_invocation_context,
-                        )?,
-                        rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
-                    }),
-                    _ => None,
-                };
-
-                let response_compiled = ResponseMappingCompiled {
-                    response_mapping_expr: rib::Expr::try_from(
-                        value.response.ok_or("Missing response for Worker")?,
-                    )?,
-                    response_mapping_compiled: rib::RibByteCode::try_from(
-                        value
-                            .compiled_response_expr
-                            .ok_or("Missing compiled_response for Worker")?,
-                    )?,
-                    rib_input: rib::RibInputTypeInfo::try_from(
-                        value
-                            .response_rib_input
-                            .ok_or("Missing response_rib_input for Worker")?,
-                    )?,
-                    worker_calls: value
-                        .worker_functions_in_response
-                        .map(rib::WorkerFunctionsInRib::try_from)
-                        .transpose()?,
-                    rib_output: value
-                        .response_rib_output
-                        .map(RibOutputTypeInfo::try_from)
-                        .transpose()?,
-                };
-
-                let binding_type = value
-                    .binding_type
-                    .unwrap_or(ProtoGatewayBindingType::Default.into());
-
-                if binding_type == 0 {
-                    Ok(GatewayBindingCompiled::Worker(Box::new(
-                        WorkerBindingCompiled {
-                            component_id,
-                            idempotency_key_compiled,
-                            response_compiled,
-                            invocation_context_compiled,
-                        },
-                    )))
-                } else {
-                    Ok(GatewayBindingCompiled::FileServer(Box::new(
-                        FileServerBindingCompiled {
-                            component_id,
-                            worker_name_compiled,
-                            idempotency_key_compiled,
-                            response_compiled,
-                            invocation_context_compiled,
-                        },
-                    )))
-                }
+        match value.binding.ok_or_else(|| "binding field missing".to_string())? {
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::WorkerBinding(v) => {
+                Ok(GatewayBindingCompiled::Worker(Box::new(v.try_into()?)))
             }
-            ProtoGatewayBindingType::HttpHandler => {
-                // Convert fields for the Worker variant
-                let component_id = value
-                    .component
-                    .ok_or("Missing component_id for Worker")?
-                    .try_into()?;
-
-                let worker_name_compiled = match (
-                    value.worker_name,
-                    value.compiled_worker_name_expr,
-                    value.worker_name_rib_input,
-                ) {
-                    (Some(worker_name), Some(compiled_worker_name), Some(rib_input_type_info)) => {
-                        Some(WorkerNameCompiled {
-                            worker_name: rib::Expr::try_from(worker_name)?,
-                            compiled_worker_name: rib::RibByteCode::try_from(compiled_worker_name)?,
-                            rib_input_type_info: rib::RibInputTypeInfo::try_from(
-                                rib_input_type_info,
-                            )?,
-                        })
-                    }
-                    _ => None,
-                };
-
-                let idempotency_key_compiled = match (
-                    value.idempotency_key,
-                    value.compiled_idempotency_key_expr,
-                    value.idempotency_key_rib_input,
-                ) {
-                    (Some(idempotency_key), Some(compiled_idempotency_key), Some(rib_input)) => {
-                        Some(IdempotencyKeyCompiled {
-                            idempotency_key: rib::Expr::try_from(idempotency_key)?,
-                            compiled_idempotency_key: rib::RibByteCode::try_from(
-                                compiled_idempotency_key,
-                            )?,
-                            rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
-                        })
-                    }
-                    _ => None,
-                };
-
-                Ok(GatewayBindingCompiled::HttpHandler(Box::new(
-                    HttpHandlerBindingCompiled {
-                        component_id,
-                        worker_name_compiled,
-                        idempotency_key_compiled,
-                    },
-                )))
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::HttpHandlerBinding(v) => {
+                Ok(GatewayBindingCompiled::HttpHandler(Box::new(v.try_into()?)))
             }
-            ProtoGatewayBindingType::CorsPreflight | ProtoGatewayBindingType::AuthCallBack => {
-                let static_binding = value
-                    .static_binding
-                    .ok_or("Missing static_binding for Static")?;
-
-                Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::FileServerBinding(v) => {
+                Ok(GatewayBindingCompiled::FileServer(Box::new(v.try_into()?)))
             }
-            ProtoGatewayBindingType::SwaggerUi => {
-                Ok(GatewayBindingCompiled::SwaggerUi(SwaggerUiBinding {
-                    openapi_spec_json: value.openapi_spec_json,
-                }))
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::HttpCorsBinding(v) => {
+                Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(v.try_into()?)))
+            }
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(_) => {
+                Ok(GatewayBindingCompiled::SwaggerUi(Empty { }))
             }
         }
     }
 }
 
-impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute {
+impl TryFrom<GatewayBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
+{
     type Error = String;
 
-    fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
-        let method = value.method as i32;
-        let path = value.path.to_string();
-        let binding =
-            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::try_from(
-                value.binding,
-            )?;
+    fn try_from(value: GatewayBindingCompiled) -> Result<Self, Self::Error> {
+        let binding = match value {
+            GatewayBindingCompiled::Worker(b) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::WorkerBinding(
+                    (*b).try_into()?
+                )
+            }
+            GatewayBindingCompiled::HttpHandler(b) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::HttpHandlerBinding(
+                    (*b).try_into()?
+                )
+            }
+            GatewayBindingCompiled::FileServer(b) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::FileServerBinding(
+                    (*b).try_into()?
+                )
+            }
+            GatewayBindingCompiled::HttpCorsPreflight(b) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::HttpCorsBinding(
+                    (*b).into()
+                )
+            }
+            GatewayBindingCompiled::SwaggerUi(_) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(golem_api_grpc::proto::golem::common::Empty { })
+            }
+        };
 
         Ok(Self {
-            method,
-            path,
             binding: Some(binding),
         })
     }
@@ -321,242 +599,101 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute,
     ) -> Result<Self, Self::Error> {
-        let method = RouteMethod::try_from(value.method())?;
-        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = value.binding.ok_or("binding is missing")?.apply(GatewayBindingCompiled::try_from);
+        let method = value.method().try_into()?;
 
-        Ok(CompiledRoute {
+        let path =
+            AllPathPatterns::parse(&value.path).map_err(|e| format!("Failed parsing path: {e}"))?;
+
+        let binding = value
+            .binding
+            .ok_or_else(|| "binding field missing".to_string())?
+            .try_into()?;
+
+        let security_scheme = match value.security_scheme_id {
+            Some(id) => Some(id.try_into()?),
+            None => None,
+        };
+
+        Ok(Self {
             method,
             path,
             binding,
+            security_scheme,
         })
     }
 }
 
-fn file_server_binding_to_gateway_binding_compiled_proto(
-        file_server_binding: FileServerBindingCompiled,
-        binding_type: GatewayBindingType,
-    ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
-        let component = Some(file_server_binding.component_id.into());
-        let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
-            match file_server_binding.idempotency_key_compiled {
-                Some(x) => (
-                    Some(x.idempotency_key.into()),
-                    Some(x.compiled_idempotency_key.try_into()?),
-                    Some(x.rib_input.into()),
-                ),
-                None => (None, None, None),
-            };
+impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute {
+    type Error = String;
 
-        let worker_name = file_server_binding
-            .worker_name_compiled
-            .clone()
-            .map(|w| w.worker_name.into());
-        let compiled_worker_name_expr = file_server_binding
-            .worker_name_compiled
-            .clone()
-            .map(|w| w.compiled_worker_name.try_into())
-            .transpose()?;
-        let worker_name_rib_input = file_server_binding
-            .worker_name_compiled
-            .map(|w| w.rib_input_type_info.into());
-
-        let (invocation_context, compiled_invocation_context_expr, invocation_context_rib_input) =
-            match file_server_binding.invocation_context_compiled {
-                Some(x) => (
-                    Some(x.invocation_context.into()),
-                    Some(x.compiled_invocation_context.try_into()?),
-                    Some(x.rib_input.into()),
-                ),
-                None => (None, None, None),
-            };
-
-        let response = Some(
-            file_server_binding
-                .response_compiled
-                .response_mapping_expr
+    fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
+        Ok(Self {
+            method: golem_api_grpc::proto::golem::apidefinition::HttpMethod::from(value.method)
                 .into(),
-        );
-        let compiled_response_expr = Some(
-            file_server_binding
-                .response_compiled
-                .response_mapping_compiled
-                .try_into()?,
-        );
-        let response_rib_input = Some(file_server_binding.response_compiled.rib_input.into());
-        let response_rib_output = file_server_binding
-            .response_compiled
-            .rib_output
-            .map(rib::proto::golem::rib::RibOutputType::from);
-
-        let worker_functions_in_response = file_server_binding
-            .response_compiled
-            .worker_calls
-            .map(|x| x.into());
-
-        let binding_type = match binding_type {
-            GatewayBindingType::Default => 0,
-            GatewayBindingType::FileServer => 1,
-            GatewayBindingType::CorsPreflight => 2,
-            GatewayBindingType::HttpHandler => 4,
-            GatewayBindingType::SwaggerUi => 5,
-        };
-
-        Ok(
-            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                component_id: Some(worker_binding.component_id.into()),
-                component_revision: Some(worker_binding.component_revision.0),
-                worker_name,
-                compiled_worker_name_expr,
-                worker_name_rib_input,
-                idempotency_key,
-                compiled_idempotency_key_expr,
-                idempotency_key_rib_input,
-                response,
-                compiled_response_expr,
-                response_rib_input,
-                worker_functions_in_response,
-                binding_type: Some(binding_type),
-                static_binding: None,
-                response_rib_output,
-                invocation_context,
-                compiled_invocation_context_expr,
-                invocation_context_rib_input,
-                openapi_spec_json: None,
-            },
-        )
+            path: value.path.to_string(),
+            binding: Some(value.binding.try_into()?),
+            security_scheme_id: value.security_scheme.map(|id| id.into()),
+        })
     }
+}
 
-    fn worker_binding_to_gateway_binding_compiled_proto(
-        worker_binding: WorkerBindingCompiled,
-        binding_type: GatewayBindingType,
-    ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
-        let component = Some(worker_binding.component_id.into());
-        let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
-            match worker_binding.idempotency_key_compiled {
-                Some(x) => (
-                    Some(x.idempotency_key.into()),
-                    Some(x.compiled_idempotency_key.try_into()?),
-                    Some(x.rib_input.into()),
-                ),
-                None => (None, None, None),
-            };
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledRoutes> for CompiledRoutes {
+    type Error = String;
 
-        let (invocation_context, compiled_invocation_context_expr, invocation_context_rib_input) =
-            match worker_binding.invocation_context_compiled {
-                Some(x) => (
-                    Some(x.invocation_context.into()),
-                    Some(x.compiled_invocation_context.try_into()?),
-                    Some(x.rib_input.into()),
-                ),
-                None => (None, None, None),
-            };
-
-        let response = Some(
-            worker_binding
-                .response_compiled
-                .response_mapping_expr
-                .into(),
-        );
-        let compiled_response_expr = Some(
-            worker_binding
-                .response_compiled
-                .response_mapping_compiled
-                .try_into()?,
-        );
-        let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
-        let response_rib_output = worker_binding
-            .response_compiled
-            .rib_output
-            .map(rib::proto::golem::rib::RibOutputType::from);
-
-        let worker_functions_in_response = worker_binding
-            .response_compiled
-            .worker_calls
-            .map(|x| x.into());
-
-        let binding_type = match binding_type {
-            GatewayBindingType::Default => 0,
-            GatewayBindingType::FileServer => 1,
-            GatewayBindingType::CorsPreflight => 2,
-            GatewayBindingType::HttpHandler => 4,
-            GatewayBindingType::SwaggerUi => 5,
-        };
-
-        Ok(
-            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                component_id: Some(worker_binding.component_id.into()),
-                component_revision: Some(worker_binding.component_revision.0),
-                worker_name: None,
-                compiled_worker_name_expr: None,
-                worker_name_rib_input: None,
-                idempotency_key,
-                compiled_idempotency_key_expr,
-                idempotency_key_rib_input,
-                response,
-                compiled_response_expr,
-                response_rib_input,
-                worker_functions_in_response,
-                binding_type: Some(binding_type),
-                static_binding: None,
-                response_rib_output,
-                invocation_context,
-                compiled_invocation_context_expr,
-                invocation_context_rib_input,
-                openapi_spec_json: None,
-            },
-        )
-    }
-
-    fn http_handler_to_gateway_binding_compiled_proto(
-        http_handler_binding: HttpHandlerBindingCompiled,
-    ) -> Result<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding, String> {
-        let worker_name = http_handler_binding
-            .worker_name_compiled
-            .worker_name
-            .into();
-
-        let compiled_worker_name_expr = http_handler_binding
-            .worker_name_compiled
-            .compiled_worker_name
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledRoutes,
+    ) -> Result<Self, Self::Error> {
+        let account_id = value
+            .account_id
+            .ok_or_else(|| "account_id field missing".to_string())?
             .try_into()?;
 
-        let worker_name_rib_input = http_handler_binding
-            .worker_name_compiled
-            .rib_input_type_info
-            .into();
+        let environment_id = value
+            .environment_id
+            .ok_or_else(|| "environment_id field missing".to_string())?
+            .try_into()?;
 
-        let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
-            match http_handler_binding.idempotency_key_compiled {
-                Some(x) => (
-                    Some(x.idempotency_key.into()),
-                    Some(x.compiled_idempotency_key.try_into()?),
-                    Some(x.rib_input.into()),
-                ),
-                None => (None, None, None),
-            };
+        let security_schemes = value
+            .security_schemes
+            .into_iter()
+            .map(|s| {
+                let s_converted: SecuritySchemeDetails = s.try_into()?;
+                Ok((s_converted.id, s_converted))
+            })
+            .collect::<Result<HashMap<_, _>, String>>()?;
 
-        Ok(
-            golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                component_id: Some(http_handler_binding.component_id.into()),
-                component_revision: Some(http_handler_binding.component_revision.0),
-                worker_name: Some(worker_name),
-                compiled_worker_name_expr: Some(compiled_worker_name_expr),
-                worker_name_rib_input: Some(worker_name_rib_input),
-                idempotency_key,
-                compiled_idempotency_key_expr,
-                idempotency_key_rib_input,
-                response: None,
-                compiled_response_expr: None,
-                response_rib_input: None,
-                worker_functions_in_response: None,
-                binding_type: Some(GatewayBindingType::HttpHandler.into()),
-                static_binding: None,
-                response_rib_output: None,
-                invocation_context: None,
-                compiled_invocation_context_expr: None,
-                invocation_context_rib_input: None,
-                openapi_spec_json: None,
-            },
-        )
+        let routes = value
+            .compiled_routes
+            .into_iter()
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(Self {
+            account_id,
+            environment_id,
+            security_schemes,
+            routes,
+        })
     }
+}
+
+impl TryFrom<CompiledRoutes> for golem_api_grpc::proto::golem::apidefinition::CompiledRoutes {
+    type Error = String;
+
+    fn try_from(value: CompiledRoutes) -> Result<Self, Self::Error> {
+        Ok(Self {
+            account_id: Some(value.account_id.into()),
+            environment_id: Some(value.environment_id.into()),
+            security_schemes: value
+                .security_schemes
+                .into_values()
+                .map(|v| v.into())
+                .collect(),
+            compiled_routes: value
+                .routes
+                .into_iter()
+                .map(|r| r.try_into())
+                .collect::<Result<Vec<_>, String>>()?,
+        })
+    }
+}

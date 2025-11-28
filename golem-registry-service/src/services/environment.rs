@@ -125,7 +125,7 @@ impl EnvironmentService {
             .ensure_environment_within_limits(&application.account_id)
             .await?;
 
-        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id().clone());
+        let record = EnvironmentRevisionRecord::creation(data, *auth.account_id());
 
         let result = self
             .environment_repo
@@ -170,7 +170,7 @@ impl EnvironmentService {
 
         let result = self
             .environment_repo
-            .update(update.current_revision.into(), record)
+            .update(record)
             .await
             .map_err(|err| match err {
                 EnvironmentRepoError::ConcurrentModification => {
@@ -210,7 +210,7 @@ impl EnvironmentService {
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         self.environment_repo
-            .delete(current_revision.into(), record)
+            .delete(record)
             .await
             .map_err(|err| match err {
                 EnvironmentRepoError::ConcurrentModification => {
@@ -237,9 +237,7 @@ impl EnvironmentService {
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
-            .ok_or(EnvironmentError::EnvironmentNotFound(
-                environment_id.clone(),
-            ))?
+            .ok_or(EnvironmentError::EnvironmentNotFound(*environment_id))?
             .into();
 
         auth.authorize_environment_action(
@@ -247,7 +245,7 @@ impl EnvironmentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewEnvironment,
         )
-        .map_err(|_| EnvironmentError::EnvironmentNotFound(environment_id.clone()))?;
+        .map_err(|_| EnvironmentError::EnvironmentNotFound(*environment_id))?;
 
         Ok(environment)
     }
@@ -302,7 +300,7 @@ impl EnvironmentService {
 
             let environment: Option<Environment> = record.into_revision_record().map(|r| r.into());
 
-            application_owner_id.get_or_insert_with(|| owner_account_id.clone());
+            application_owner_id.get_or_insert(owner_account_id);
 
             if let Some(environment) = environment
                 && auth
@@ -333,9 +331,7 @@ impl EnvironmentService {
             }
             (None, _) => {
                 // parent application does not exist -> return notfound to prevent leakage
-                Err(EnvironmentError::ParentApplicationNotFound(
-                    application_id.clone(),
-                ))
+                Err(EnvironmentError::ParentApplicationNotFound(*application_id))
             }
         }
     }

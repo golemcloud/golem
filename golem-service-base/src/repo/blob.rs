@@ -68,6 +68,8 @@ impl<T: PartialEq> PartialEq for Blob<T> {
     }
 }
 
+impl<T: Eq> Eq for Blob<T> {}
+
 impl<T, DB: Database> sqlx::Type<DB> for Blob<T>
 where
     Vec<u8>: sqlx::Type<DB>,

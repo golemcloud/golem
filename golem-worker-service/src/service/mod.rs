@@ -16,13 +16,14 @@ pub mod auth;
 pub mod component;
 pub mod limit;
 pub mod worker;
+// pub mod user_auth_resolver;
 
 use self::auth::{AuthService, RemoteAuthService};
 use self::component::RemoteComponentService;
 use self::limit::{LimitService, RemoteLimitService};
 use crate::config::{GatewaySessionStorageConfig, WorkerServiceConfig};
 use crate::gateway_execution::api_definition_lookup::{
-    HttpApiDefinitionsLookup, StubHttpApiDefinitionsLookup,
+    HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::gateway_execution::auth_call_back_binding_handler::{
     AuthCallBackBindingHandler, DefaultAuthCallBackBindingHandler,
@@ -34,6 +35,7 @@ use crate::gateway_execution::gateway_session_store::{
     SqliteGatewaySessionExpiration,
 };
 use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
+use crate::gateway_execution::route_resolver::RouteResolver;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_security::DefaultIdentityProvider;
 use crate::service::component::ComponentService;
@@ -185,16 +187,22 @@ impl Services {
             HttpHandlerBindingHandler::new(gateway_worker_request_executor.clone()),
         );
 
-        let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> =
-            Arc::new(StubHttpApiDefinitionsLookup);
+        let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
+            RegistryServiceApiDefinitionsLookup::new(registry_service_client.clone()),
+        );
+
+        let route_resolver = Arc::new(RouteResolver::new(
+            &config.route_resolver,
+            api_definition_lookup_service.clone(),
+        ));
 
         let gateway_http_input_executor: Arc<GatewayHttpInputExecutor> =
             Arc::new(GatewayHttpInputExecutor::new(
+                route_resolver.clone(),
                 gateway_worker_request_executor.clone(),
                 file_server_binding_handler.clone(),
                 auth_call_back_binding_handler.clone(),
                 http_handler_binding_handler.clone(),
-                api_definition_lookup_service.clone(),
                 gateway_session_store.clone(),
                 identity_provider.clone(),
             ));

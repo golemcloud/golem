@@ -22,7 +22,10 @@ use openidconnect::IssuerUrl;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(SecuritySchemeId);
+newtype_uuid!(
+    SecuritySchemeId,
+    golem_api_grpc::proto::golem::common::SecuritySchemeId
+);
 
 declare_revision!(SecuritySchemeRevision);
 
@@ -118,34 +121,10 @@ mod protobuf {
     impl From<Provider> for golem_api_grpc::proto::golem::apidefinition::Provider {
         fn from(value: Provider) -> Self {
             match value {
-                Provider::Google => golem_api_grpc::proto::golem::apidefinition::Provider {
-                    provider: Some(
-                        golem_api_grpc::proto::golem::apidefinition::provider::Provider::Google(
-                            golem_api_grpc::proto::golem::apidefinition::Google {},
-                        ),
-                    ),
-                },
-                Provider::Facebook => golem_api_grpc::proto::golem::apidefinition::Provider {
-                    provider: Some(
-                        golem_api_grpc::proto::golem::apidefinition::provider::Provider::Facebook(
-                            golem_api_grpc::proto::golem::apidefinition::Facebook {},
-                        ),
-                    ),
-                },
-                Provider::Microsoft => golem_api_grpc::proto::golem::apidefinition::Provider {
-                    provider: Some(
-                        golem_api_grpc::proto::golem::apidefinition::provider::Provider::Microsoft(
-                            golem_api_grpc::proto::golem::apidefinition::Microsoft {},
-                        ),
-                    ),
-                },
-                Provider::Gitlab => golem_api_grpc::proto::golem::apidefinition::Provider {
-                    provider: Some(
-                        golem_api_grpc::proto::golem::apidefinition::provider::Provider::Gitlab(
-                            golem_api_grpc::proto::golem::apidefinition::Gitlab {},
-                        ),
-                    ),
-                },
+                Provider::Google => Self::Google,
+                Provider::Facebook => Self::Facebook,
+                Provider::Gitlab => Self::Gitlab,
+                Provider::Microsoft => Self::Microsoft,
             }
         }
     }
@@ -155,20 +134,13 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::apidefinition::Provider,
         ) -> Result<Self, String> {
-            let provider = value.provider.ok_or("Provider name missing".to_string())?;
-            match provider {
-                golem_api_grpc::proto::golem::apidefinition::provider::Provider::Google(_) => {
-                    Ok(Provider::Google)
-                }
-                golem_api_grpc::proto::golem::apidefinition::provider::Provider::Facebook(_) => {
-                    Ok(Provider::Facebook)
-                }
-                golem_api_grpc::proto::golem::apidefinition::provider::Provider::Microsoft(_) => {
-                    Ok(Provider::Microsoft)
-                }
-                golem_api_grpc::proto::golem::apidefinition::provider::Provider::Gitlab(_) => {
-                    Ok(Provider::Gitlab)
-                }
+            use golem_api_grpc::proto::golem::apidefinition::Provider as GrpcProvider;
+            match value {
+                GrpcProvider::Facebook => Ok(Self::Facebook),
+                GrpcProvider::Gitlab => Ok(Self::Gitlab),
+                GrpcProvider::Google => Ok(Self::Google),
+                GrpcProvider::Microsoft => Ok(Self::Microsoft),
+                GrpcProvider::Unspecified => Err("Unknown provider".to_string()),
             }
         }
     }

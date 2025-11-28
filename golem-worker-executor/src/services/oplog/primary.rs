@@ -92,7 +92,7 @@ impl PrimaryOplogService {
             let worker_name = &key[redis_prefix.len()..];
             WorkerId {
                 worker_name: worker_name.to_string(),
-                component_id: component_id.clone(),
+                component_id: *component_id,
             }
         } else {
             panic!("Failed to get worker id from indexed storage key: {key}")
@@ -331,7 +331,7 @@ impl OplogService for PrimaryOplogService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: Self::get_worker_id_from_key(&key, component_id),
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 })
                 .collect(),
         ))

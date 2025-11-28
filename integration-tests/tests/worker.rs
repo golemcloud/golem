@@ -64,7 +64,7 @@ async fn dynamic_worker_creation(
         .store()
         .await?;
     let worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: "dynamic-worker-creation-1".to_string(),
     };
 

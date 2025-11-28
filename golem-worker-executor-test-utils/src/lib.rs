@@ -209,8 +209,8 @@ pub struct TestWorkerExecutor {
 impl TestWorkerExecutor {
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
-            account_id: self.context.account_id.clone(),
-            account_plan_id: self.context.account_plan_id.clone(),
+            account_id: self.context.account_id,
+            account_plan_id: self.context.account_plan_id,
             account_roles: self.context.account_roles.clone(),
         })
     }
@@ -228,9 +228,9 @@ impl TestWorkerExecutor {
                 &source_path,
                 component_id,
                 name,
-                environment_id.clone(),
-                self.context.application_id.clone(),
-                self.context.account_id.clone(),
+                *environment_id,
+                self.context.application_id,
+                self.context.account_id,
                 HashSet::new(),
             )
             .await
@@ -245,7 +245,7 @@ impl TestWorkerExecutor {
             .client
             .clone()
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                component_id: Some(component_id.clone().into()),
+                component_id: Some((*component_id).into()),
                 filter: filter.map(|f| f.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
             })

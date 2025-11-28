@@ -42,7 +42,6 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError>;
 
@@ -50,7 +49,7 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         &self,
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
-        current_revision_id: i64,
+        revision_id: i64,
     ) -> Result<(), HttpApiDeploymentRepoError>;
 
     async fn get_staged_by_id(
@@ -164,14 +163,10 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
         let span = Self::span_id(&revision.http_api_deployment_id);
-        self.repo
-            .update(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
@@ -369,16 +364,15 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             ).await?;
 
         if let Some(deleted_revision) = opt_deleted_revision {
-            let revision = HttpApiDeploymentRevisionRecord {
-                http_api_deployment_id: deleted_revision.http_api_deployment_id,
-                ..revision
-            };
-            return self.update(deleted_revision.revision_id, revision).await;
+            let recreated_revision = revision.for_recreation(
+                deleted_revision.http_api_deployment_id,
+                deleted_revision.revision_id,
+            )?;
+            return self.update(recreated_revision).await;
         }
 
         let environment_id = *environment_id;
         let domain = domain.to_owned();
-        let revision = revision.ensure_first();
 
         self.with_tx_err("create", |tx| {
             async move {
@@ -417,21 +411,13 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentExtRevisionRecord, HttpApiDeploymentRepoError> {
-        let Some(_) = self
-            .check_current_revision(&revision.http_api_deployment_id, current_revision_id)
-            .await?
-        else {
-            return Err(HttpApiDeploymentRepoError::ConcurrentModification);
-        };
-
         self.with_tx_err("update", |tx| {
             async move {
                 let revision: HttpApiDeploymentRevisionRecord = Self::insert_revision(
                     tx,
-                    revision.ensure_new(current_revision_id),
+                    revision,
                 )
                 .await?;
 
@@ -466,17 +452,10 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
         &self,
         user_account_id: &Uuid,
         http_api_deployment_id: &Uuid,
-        current_revision_id: i64,
+        revision_id: i64,
     ) -> Result<(), HttpApiDeploymentRepoError> {
         let user_account_id = *user_account_id;
         let http_api_deployment_id = *http_api_deployment_id;
-
-        let Some(_) = self
-            .check_current_revision(&http_api_deployment_id, current_revision_id)
-            .await?
-        else {
-            return Err(HttpApiDeploymentRepoError::ConcurrentModification);
-        };
 
         self.with_tx_err("delete", |tx| {
             async move {
@@ -485,7 +464,7 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                     HttpApiDeploymentRevisionRecord::deletion(
                         user_account_id,
                         http_api_deployment_id,
-                        current_revision_id,
+                        revision_id,
                     ),
                 )
                 .await?;
@@ -771,12 +750,6 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn check_current_revision(
-        &self,
-        http_api_deployment_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentRecord>>;
-
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: HttpApiDeploymentRevisionRecord,
@@ -789,31 +762,10 @@ impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn check_current_revision(
-        &self,
-        http_api_deployment_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentRecord>> {
-        self.with_ro("check_current_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT http_api_deployment_id, environment_id, domain,
-                           created_at, updated_at, deleted_at, modified_by,
-                           current_revision_id
-                    FROM http_api_deployments
-                    WHERE http_api_deployment_id = $1 AND current_revision_id = $2
-                "#})
-                .bind(http_api_deployment_id)
-                .bind(current_revision_id),
-            )
-            .await
-    }
-
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: HttpApiDeploymentRevisionRecord,
     ) -> Result<HttpApiDeploymentRevisionRecord, HttpApiDeploymentRepoError> {
-        let revision = revision.with_updated_hash()?;
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                     INSERT INTO http_api_deployment_revisions

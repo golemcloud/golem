@@ -132,7 +132,7 @@ impl PlanService {
 
     pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {
         auth.authorize_plan_action(plan_id, PlanAction::ViewPlan)
-            .map_err(|_| PlanError::PlanNotFound(plan_id.clone()))?;
+            .map_err(|_| PlanError::PlanNotFound(*plan_id))?;
 
         debug!("Getting plan {}", plan_id);
 
@@ -140,7 +140,7 @@ impl PlanService {
             .plan_repo
             .get_by_id(&plan_id.0)
             .await?
-            .ok_or(PlanError::PlanNotFound(plan_id.clone()))?;
+            .ok_or(PlanError::PlanNotFound(*plan_id))?;
 
         Ok(result.try_into()?)
     }

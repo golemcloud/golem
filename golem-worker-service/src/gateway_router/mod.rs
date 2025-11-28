@@ -16,12 +16,10 @@ mod core;
 mod pattern;
 pub mod tree;
 
+use crate::model::{HttpMiddleware, RichCompiledRoute, RichGatewayBindingCompiled};
 pub use core::*;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
-use golem_service_base::custom_api::compiled_http_api_definition::CompiledRoute;
-use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
 use golem_service_base::custom_api::path_pattern::{PathPattern, QueryInfo, VarInfo};
 pub use pattern::*;
 
@@ -36,16 +34,16 @@ pub struct RouteEntry {
     // size is the index of all path patterns.
     pub path_params: Vec<PathParamExtractor>,
     pub query_params: Vec<QueryInfo>,
-    pub binding: GatewayBindingCompiled,
-    pub middlewares: Option<HttpMiddlewares>,
+    pub binding: RichGatewayBindingCompiled,
+    pub middlewares: Vec<HttpMiddleware>,
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,
 }
 
-pub fn build_router(routes: Vec<(AccountId, EnvironmentId, CompiledRoute)>) -> Router<RouteEntry> {
+pub fn build_router(routes: Vec<RichCompiledRoute>) -> Router<RouteEntry> {
     let mut router = Router::new();
 
-    for (account_id, environment_id, route) in routes {
+    for route in routes {
         let method = route.method.into();
         let path = route.path;
         let binding = route.binding;
@@ -72,8 +70,8 @@ pub fn build_router(routes: Vec<(AccountId, EnvironmentId, CompiledRoute)>) -> R
             query_params: path.query_params,
             binding,
             middlewares: route.middlewares,
-            account_id,
-            environment_id,
+            account_id: route.account_id,
+            environment_id: route.environment_id,
         };
 
         let path: Vec<RouterPattern> = path

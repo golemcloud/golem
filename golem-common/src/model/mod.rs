@@ -241,7 +241,7 @@ pub struct OwnedWorkerId {
 impl OwnedWorkerId {
     pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            environment_id: environment_id.clone(),
+            environment_id: *environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -251,11 +251,11 @@ impl OwnedWorkerId {
     }
 
     pub fn environment_id(&self) -> EnvironmentId {
-        self.environment_id.clone()
+        self.environment_id
     }
 
     pub fn component_id(&self) -> ComponentId {
-        self.worker_id.component_id.clone()
+        self.worker_id.component_id
     }
 
     pub fn worker_name(&self) -> String {

@@ -1582,11 +1582,7 @@ impl WorkerApi {
                 }))
             })?;
 
-        let id = validated_worker_id(
-            component_id.clone(),
-            &latest_component_version.metadata,
-            worker_id,
-        );
+        let id = validated_worker_id(component_id, &latest_component_version.metadata, worker_id);
 
         // We return:
         // - if we parsed successfully
@@ -1618,8 +1614,7 @@ impl WorkerApi {
             .iter()
             .take(all_component_versions.len() - 1)
         {
-            let id_with_version =
-                validated_worker_id(component_id.clone(), &component.metadata, worker_id);
+            let id_with_version = validated_worker_id(component_id, &component.metadata, worker_id);
             if id_with_version.is_ok() {
                 return id_with_version;
             }

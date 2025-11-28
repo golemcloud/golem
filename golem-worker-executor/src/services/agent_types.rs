@@ -96,7 +96,7 @@ impl AgentTypesService for CachedAgentTypes {
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
         // Getting a particular agent type is cached with a short TTL because
         // it is used in RPC to find the invocation target
-        let key = (owner_environment.clone(), name.to_string());
+        let key = (*owner_environment, name.to_string());
         let result = self
             .cached_registered_agent_types
             .get_or_insert_simple(&key, || {
@@ -213,7 +213,7 @@ mod local {
                         .iter()
                         .map(|agent_type| RegisteredAgentType {
                             agent_type: agent_type.clone(),
-                            implemented_by: component.id.clone(),
+                            implemented_by: component.id,
                         })
                         .collect::<Vec<_>>()
                 })

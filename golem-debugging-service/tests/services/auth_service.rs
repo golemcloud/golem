@@ -22,8 +22,8 @@ impl AuthService for TestAuthService {
             return Err(AuthServiceError::CouldNotAuthenticate);
         }
         Ok(AuthCtx::User(UserAuthCtx {
-            account_id: self.test_ctx.account_id.clone(),
-            account_plan_id: self.test_ctx.account_plan_id.clone(),
+            account_id: self.test_ctx.account_id,
+            account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
         }))
     }

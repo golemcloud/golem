@@ -80,7 +80,7 @@ async fn spawning_many_workers_that_sleep(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component.id.clone(), executor.clone()))
+        .map(|i| (i, component.id, executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
@@ -182,7 +182,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 
     let start = tokio::time::Instant::now();
     let input: Vec<(i32, _, _)> = (1..N)
-        .map(|i| (i, component.id.clone(), executor.clone()))
+        .map(|i| (i, component.id, executor.clone()))
         .collect();
     let fibers: Vec<_> = input
         .into_iter()
@@ -275,7 +275,7 @@ async fn initial_large_memory_allocation(
     const N: usize = 10;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component.id.clone();
+        let component_id_clone = component.id;
         handles.spawn(
             async move {
                 let worker = executor_clone
@@ -325,7 +325,7 @@ async fn dynamic_large_memory_allocation(
     const N: usize = 3;
     for i in 0..N {
         let executor_clone = executor.clone();
-        let component_id_clone = component.id.clone();
+        let component_id_clone = component.id;
         handles.spawn(
             async move {
                 let worker = executor_clone

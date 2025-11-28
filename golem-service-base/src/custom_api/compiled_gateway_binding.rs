@@ -1,27 +1,31 @@
 use super::HttpCors;
 use super::rib_compiler::{ComponentDependencyWithAgentInfo, compile_rib};
-use super::security_scheme::SecuritySchemeWithProviderMetadata;
 use desert_rust::BinaryCodec;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::Empty;
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use rib::{
     Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
     WorkerFunctionsInRib,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+// Compared to what the worker service is working with, this is missing auth callbacks and
+// the materialized swagger api spec. Reason is that these can only be built once the security scheme and active routes
+// are fully resolved at routing time.
 pub enum GatewayBindingCompiled {
-    HttpCorsPreflight(HttpCors),
-    HttpAuthCallBack(Box<SecuritySchemeWithProviderMetadata>),
+    HttpCorsPreflight(Box<HttpCorsBindingCompiled>),
     Worker(Box<WorkerBindingCompiled>),
     FileServer(Box<FileServerBindingCompiled>),
     HttpHandler(Box<HttpHandlerBindingCompiled>),
-    SwaggerUi(SwaggerUiBinding),
+    SwaggerUi(Empty),
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct WorkerBindingCompiled {
     pub component_id: ComponentId,
+    pub component_name: ComponentName,
     pub component_revision: ComponentRevision,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub invocation_context_compiled: Option<InvocationContextCompiled>,
@@ -32,6 +36,7 @@ pub struct WorkerBindingCompiled {
 #[desert(evolution())]
 pub struct FileServerBindingCompiled {
     pub component_id: ComponentId,
+    pub component_name: ComponentName,
     pub component_revision: ComponentRevision,
     pub worker_name_compiled: WorkerNameCompiled,
     pub response_compiled: ResponseMappingCompiled,
@@ -41,23 +46,17 @@ pub struct FileServerBindingCompiled {
 #[desert(evolution())]
 pub struct HttpHandlerBindingCompiled {
     pub component_id: ComponentId,
+    pub component_name: ComponentName,
     pub component_revision: ComponentRevision,
     pub worker_name_compiled: WorkerNameCompiled,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub invocation_context_compiled: Option<InvocationContextCompiled>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SwaggerUiBinding {
-    pub openapi_spec_json: Option<String>,
-}
-
-impl SwaggerUiBinding {
-    pub fn empty() -> Self {
-        Self {
-            openapi_spec_json: None,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct HttpCorsBindingCompiled {
+    pub http_cors: HttpCors,
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
@@ -67,7 +66,6 @@ pub struct ResponseMappingCompiled {
     pub response_mapping_compiled: RibByteCode,
     pub rib_input: RibInputTypeInfo,
     pub worker_calls: Option<WorkerFunctionsInRib>,
-    // Optional to keep backward compatibility
     pub rib_output: Option<RibOutputTypeInfo>,
 }
 
@@ -93,7 +91,7 @@ impl ResponseMappingCompiled {
 pub struct WorkerNameCompiled {
     pub worker_name: Expr,
     pub compiled_worker_name: RibByteCode,
-    pub rib_input_type_info: RibInputTypeInfo,
+    pub rib_input: RibInputTypeInfo,
 }
 
 impl WorkerNameCompiled {
@@ -103,7 +101,7 @@ impl WorkerNameCompiled {
         Ok(WorkerNameCompiled {
             worker_name: expr.clone(),
             compiled_worker_name: compiled_worker_name.byte_code,
-            rib_input_type_info: compiled_worker_name.rib_input_type_info,
+            rib_input: compiled_worker_name.rib_input_type_info,
         })
     }
 }

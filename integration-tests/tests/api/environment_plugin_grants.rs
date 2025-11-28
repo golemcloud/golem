@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentPluginGrantError,
@@ -29,7 +28,6 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -80,7 +78,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             .create_environment_plugin_grant(
                 &shared_env.id.0,
                 &EnvironmentPluginGrantCreation {
-                    plugin_registration_id: plugin.id.clone(),
+                    plugin_registration_id: plugin.id,
                 },
             )
             .await;
@@ -96,7 +94,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         .create_environment_plugin_grant(
             &shared_env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: plugin.id.clone(),
+                plugin_registration_id: plugin.id,
             },
         )
         .await?;
@@ -224,7 +222,7 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
             .create_environment_plugin_grant(
                 &unrelated_env.id.0,
                 &EnvironmentPluginGrantCreation {
-                    plugin_registration_id: plugin.id.clone(),
+                    plugin_registration_id: plugin.id,
                 },
             )
             .await;
@@ -275,7 +273,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: plugin_component.id.clone(),
+                    component_id: plugin_component.id,
                     component_revision: plugin_component.revision,
                 }),
             },
@@ -287,7 +285,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         .create_environment_plugin_grant(
             &shared_env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: plugin.id.clone(),
+                plugin_registration_id: plugin.id,
             },
         )
         .await?;

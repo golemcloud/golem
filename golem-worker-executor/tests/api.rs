@@ -292,7 +292,7 @@ async fn dynamic_worker_creation(
         .store()
         .await?;
     let worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: "dynamic-worker-creation-1".to_string(),
     };
 
@@ -372,7 +372,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
         .store()
         .await?;
     let worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: "ephemeral-counter(\"test\")".to_string(),
     };
 
@@ -846,7 +846,7 @@ async fn component_env_variables(
         .await?;
 
     let worker_id = WorkerId {
-        component_id: component.id.clone(),
+        component_id: component.id,
         worker_name: "component-env-variables-1".to_string(),
     };
 

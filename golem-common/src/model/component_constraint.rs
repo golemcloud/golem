@@ -41,7 +41,7 @@ impl ComponentConstraints {
         worker_functions_in_rib: WorkerFunctionsInRib,
     ) -> ComponentConstraints {
         ComponentConstraints {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             constraints: FunctionConstraints {
                 constraints: worker_functions_in_rib
                     .function_calls

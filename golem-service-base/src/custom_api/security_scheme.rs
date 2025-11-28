@@ -12,57 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::identity_provider_metadata::GolemIdentityProviderMetadata;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::security_scheme::{
-    Provider, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
-};
+use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SecuritySchemeWithProviderMetadata {
-    pub security_scheme: SecurityScheme,
-    pub provider_metadata: GolemIdentityProviderMetadata,
-}
-
 #[derive(Debug, Clone)]
-pub struct SecurityScheme {
+pub struct SecuritySchemeDetails {
     pub id: SecuritySchemeId,
-    pub revision: SecuritySchemeRevision,
-    pub name: SecuritySchemeName,
-    pub environment_id: EnvironmentId,
     pub provider_type: Provider,
     pub client_id: ClientId,
     pub client_secret: ClientSecret,
     pub redirect_url: RedirectUrl,
     pub scopes: Vec<Scope>,
-}
-
-impl PartialEq for SecurityScheme {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.revision == other.revision
-            && self.name == other.name
-            && self.environment_id == other.environment_id
-            && self.provider_type == other.provider_type
-            && self.client_id == other.client_id
-            && self.client_secret.secret() == other.client_secret.secret()
-            && self.redirect_url == other.redirect_url
-            && self.scopes == other.scopes
-    }
-}
-
-impl From<SecurityScheme> for SecuritySchemeDto {
-    fn from(value: SecurityScheme) -> Self {
-        Self {
-            id: value.id,
-            revision: value.revision,
-            name: value.name,
-            environment_id: value.environment_id,
-            provider_type: value.provider_type,
-            client_id: value.client_id.into(),
-            redirect_url: (*value.redirect_url).clone(),
-            scopes: value.scopes.into_iter().map(|s| (*s).clone()).collect(),
-        }
-    }
 }

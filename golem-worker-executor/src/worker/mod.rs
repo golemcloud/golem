@@ -1556,7 +1556,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     environment_id: owned_worker_id.environment_id(),
-                    created_by: account_id.clone(),
+                    created_by: *account_id,
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
@@ -1570,8 +1570,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.environment_id.clone(),
-                    initial_worker_metadata.created_by.clone(),
+                    initial_worker_metadata.environment_id,
+                    initial_worker_metadata.created_by,
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
                     initial_worker_metadata
@@ -1981,7 +1981,7 @@ impl RunningWorker {
             );
 
         let context = Ctx::create(
-            worker_metadata.created_by.clone(),
+            worker_metadata.created_by,
             OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.agent_id.clone(),
             parent.promise_service(),

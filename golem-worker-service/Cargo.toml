@@ -63,6 +63,7 @@ futures = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+humantime-serde.workspace = true
 hyper = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }

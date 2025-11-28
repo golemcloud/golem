@@ -2059,6 +2059,15 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: current_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
       responses:
         '200':
           description: ''

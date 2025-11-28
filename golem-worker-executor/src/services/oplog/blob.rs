@@ -127,8 +127,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
             let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
             let owned_worker_ids = if blob_storage.exists(
                 BlobStorageNamespace::CompressedOplog {
-                    environment_id: environment_id.clone(),
-                    component_id: component_id.clone(),
+                    environment_id: *environment_id,
+                    component_id: *component_id,
                     level: self.level,
                 },
                 Path::new(""),
@@ -139,8 +139,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 let paths = blob_storage
                     .list_dir(
                     BlobStorageNamespace::CompressedOplog {
-                    environment_id: environment_id.clone(),
-                    component_id: component_id.clone(),
+                    environment_id: *environment_id,
+                    component_id: *component_id,
                     level: self.level,
                 },
                 Path::new(""),
@@ -153,9 +153,9 @@ impl OplogArchiveService for BlobOplogArchiveService {
                     .map(|path| {
                         let worker_name = path.file_name().unwrap().to_str().unwrap();
                         OwnedWorkerId {
-                            environment_id: environment_id.clone(),
+                            environment_id: *environment_id,
                             worker_id: WorkerId {
-                                component_id: component_id.clone(),
+                                component_id: *component_id,
                                 worker_name: worker_name.to_string(),
                             },
                         }

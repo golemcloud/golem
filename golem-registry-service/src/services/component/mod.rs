@@ -70,7 +70,7 @@ impl ComponentService {
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
+            .ok_or(ComponentError::ComponentNotFound(*component_id))?;
 
         let environment = self
             .environment_service
@@ -78,7 +78,7 @@ impl ComponentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id.clone())
+                    ComponentError::ComponentNotFound(*component_id)
                 }
                 other => other.into(),
             })?;
@@ -88,7 +88,7 @@ impl ComponentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -108,7 +108,7 @@ impl ComponentService {
             .component_repo
             .get_deployed_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
+            .ok_or(ComponentError::ComponentNotFound(*component_id))?;
 
         let environment = self
             .environment_service
@@ -116,7 +116,7 @@ impl ComponentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id.clone())
+                    ComponentError::ComponentNotFound(*component_id)
                 }
                 other => other.into(),
             })?;
@@ -126,7 +126,7 @@ impl ComponentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -151,7 +151,7 @@ impl ComponentService {
             if let Some(environment_id) = records.first().map(|r| &r.environment_id) {
                 (*environment_id).into()
             } else {
-                return Err(ComponentError::ComponentNotFound(component_id.clone()));
+                return Err(ComponentError::ComponentNotFound(*component_id));
             };
 
         let environment = self
@@ -160,7 +160,7 @@ impl ComponentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id.clone())
+                    ComponentError::ComponentNotFound(*component_id)
                 }
                 other => other.into(),
             })?;
@@ -170,14 +170,14 @@ impl ComponentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
         let components = records
             .into_iter()
             .map(|r| {
                 r.try_into_model(
-                    environment.application_id.clone(),
-                    environment.owner_account_id.clone(),
+                    environment.application_id,
+                    environment.owner_account_id,
                     environment.roles_from_active_shares.clone(),
                 )
             })
@@ -199,7 +199,7 @@ impl ComponentService {
             .component_repo
             .get_by_id_and_revision(&component_id.0, revision.0 as i64, include_deleted)
             .await?
-            .ok_or(ComponentError::ComponentNotFound(component_id.clone()))?;
+            .ok_or(ComponentError::ComponentNotFound(*component_id))?;
 
         let environment = self
             .environment_service
@@ -207,7 +207,7 @@ impl ComponentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    ComponentError::ComponentNotFound(component_id.clone())
+                    ComponentError::ComponentNotFound(*component_id)
                 }
                 other => other.into(),
             })?;
@@ -217,7 +217,7 @@ impl ComponentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewComponent,
         )
-        .map_err(|_| ComponentError::ComponentNotFound(component_id.clone()))?;
+        .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
         Ok(record.try_into_model(
             environment.application_id,
@@ -266,8 +266,8 @@ impl ComponentService {
             .into_iter()
             .map(|r| {
                 r.try_into_model(
-                    environment.application_id.clone(),
-                    environment.owner_account_id.clone(),
+                    environment.application_id,
+                    environment.owner_account_id,
                     environment.roles_from_active_shares.clone(),
                 )
             })
@@ -355,8 +355,8 @@ impl ComponentService {
             .into_iter()
             .map(|r| {
                 r.try_into_model(
-                    environment.application_id.clone(),
-                    environment.owner_account_id.clone(),
+                    environment.application_id,
+                    environment.owner_account_id,
                     environment.roles_from_active_shares.clone(),
                 )
             })
@@ -422,13 +422,13 @@ impl ComponentService {
         let agent_types = deployed_components
             .into_iter()
             .flat_map(|c| {
-                let component_id = c.id.clone();
+                let component_id = c.id;
                 c.metadata
                     .agent_types()
                     .iter()
                     .map(|at| RegisteredAgentType {
                         agent_type: at.clone(),
-                        implemented_by: component_id.clone(),
+                        implemented_by: component_id,
                     })
                     .collect::<Vec<_>>()
             })
@@ -494,8 +494,8 @@ impl ComponentService {
             .into_iter()
             .map(|r| {
                 r.try_into_model(
-                    environment.application_id.clone(),
-                    environment.owner_account_id.clone(),
+                    environment.application_id,
+                    environment.owner_account_id,
                     environment.roles_from_active_shares.clone(),
                 )
             })
@@ -571,13 +571,13 @@ impl ComponentService {
         let agent_types = deployed_components
             .into_iter()
             .flat_map(|c| {
-                let component_id = c.id.clone();
+                let component_id = c.id;
                 c.metadata
                     .agent_types()
                     .iter()
                     .map(|at| RegisteredAgentType {
                         agent_type: at.clone(),
-                        implemented_by: component_id.clone(),
+                        implemented_by: component_id,
                     })
                     .collect::<Vec<_>>()
             })

@@ -93,9 +93,6 @@ max_payload_size = 65536
 plugin_cache_size = 1024
 
 [public_worker_api]
-auth_cache_eviction_period = "1m"
-auth_cache_size = 1024
-auth_cache_ttl = "10m"
 connect_timeout = "10s"
 host = "localhost"
 port = 9007
@@ -322,9 +319,6 @@ without_time = false
 # plugin_cache_size = 1024
 # 
 # [public_worker_api]
-# auth_cache_eviction_period = "1m"
-# auth_cache_size = 1024
-# auth_cache_ttl = "10m"
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
@@ -511,9 +505,6 @@ without_time = false
 # plugin_cache_size = 1024
 # 
 # [public_worker_api]
-# auth_cache_eviction_period = "1m"
-# auth_cache_size = 1024
-# auth_cache_ttl = "10m"
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007

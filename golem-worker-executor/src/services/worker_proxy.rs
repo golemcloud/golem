@@ -25,7 +25,6 @@ use golem_api_grpc::proto::golem::worker::v1::{
     UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentRevision;
@@ -33,8 +32,6 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::RevertWorkerTarget;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
-use golem_common::SafeDisplay;
-use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::{Value, ValueAndType, WitValue};
@@ -42,7 +39,6 @@ use http::Uri;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -219,20 +215,10 @@ impl From<WorkerExecutorError> for WorkerProxyError {
 
 pub struct RemoteWorkerProxy {
     worker_service_client: GrpcClient<WorkerServiceClient<OtelGrpcService<Channel>>>,
-    registry_service_client: Arc<dyn RegistryService>,
-    auth_cache: Cache<AccountId, (), AuthCtx, WorkerProxyError>,
 }
 
 impl RemoteWorkerProxy {
-    pub fn new(
-        endpoint: Uri,
-        retry_config: RetryConfig,
-        connect_timeout: Duration,
-        auth_cache_max_capacity: usize,
-        auth_cache_ttl: Duration,
-        auth_cache_eviction_period: Duration,
-        registry_service_client: Arc<dyn RegistryService>,
-    ) -> Self {
+    pub fn new(endpoint: Uri, retry_config: RetryConfig, connect_timeout: Duration) -> Self {
         Self {
             worker_service_client: GrpcClient::new(
                 "worker_service",
@@ -247,35 +233,11 @@ impl RemoteWorkerProxy {
                     connect_timeout,
                 },
             ),
-            registry_service_client,
-            auth_cache: Cache::new(
-                Some(auth_cache_max_capacity),
-                FullCacheEvictionMode::LeastRecentlyUsed(1),
-                BackgroundEvictionMode::OlderThan {
-                    ttl: auth_cache_ttl,
-                    period: auth_cache_eviction_period,
-                },
-                "remote_worker_proxy_auth",
-            ),
         }
     }
 
-    async fn get_auth_ctx(&self, account_id: &AccountId) -> Result<AuthCtx, WorkerProxyError> {
-        self.auth_cache
-            .get_or_insert_simple(account_id, async || {
-                let auth_ctx = self
-                    .registry_service_client
-                    .auth_ctx_for_account_id(account_id, &AuthCtx::System)
-                    .await
-                    .map_err(|e| {
-                        WorkerProxyError::InternalError(WorkerExecutorError::unknown(format!(
-                            "failed getting auth ctx for account_id: {}",
-                            e.to_safe_string()
-                        )))
-                    })?;
-                Ok(auth_ctx)
-            })
-            .await
+    fn get_auth_ctx(&self, account_id: &AccountId) -> AuthCtx {
+        AuthCtx::impersonated_user(*account_id)
     }
 }
 
@@ -291,7 +253,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_worker_id=%owned_worker_id, "Starting remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: LaunchNewWorkerResponse = self
             .worker_service_client
@@ -341,7 +303,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             "Invoking remote worker function {function_name} with parameters {function_params:?}"
         );
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let proto_params = function_params
             .into_iter()
@@ -411,7 +373,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!("Invoking remote worker function {function_name} with parameters {function_params:?} without awaiting for the result");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let proto_params = function_params
             .into_iter()
@@ -463,7 +425,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to version {target_version} in {mode:?} mode");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: UpdateWorkerResponse = self
             .worker_service_client
@@ -495,7 +457,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!("Resuming remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: ResumeWorkerResponse = self
             .worker_service_client
@@ -527,7 +489,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
 
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response = self
             .worker_service_client
@@ -559,7 +521,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         target: RevertWorkerTarget,
         caller_account_id: &AccountId,
     ) -> Result<(), WorkerProxyError> {
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: RevertWorkerResponse = self
             .worker_service_client
@@ -588,7 +550,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         data: Vec<u8>,
         caller_account_id: &AccountId,
     ) -> Result<bool, WorkerProxyError> {
-        let auth_ctx = self.get_auth_ctx(caller_account_id).await?;
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
 
         let response: CompletePromiseResponse = self
             .worker_service_client

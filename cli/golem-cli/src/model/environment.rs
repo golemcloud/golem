@@ -159,7 +159,7 @@ impl ResolvedEnvironmentIdentity {
             account_id: application.account_id,
             application_id: application.id,
             application_name: application.name,
-            environment_id: environment.id.clone(),
+            environment_id: environment.id,
             environment_name: environment.name.clone(),
             remote_environment: environment,
         }

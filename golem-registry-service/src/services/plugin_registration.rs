@@ -195,7 +195,7 @@ impl PluginRegistrationService {
             .delete(&plugin_id.0, &auth.account_id().0)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
-                plugin_id.clone(),
+                *plugin_id,
             ))?
             .try_into()?;
 
@@ -213,12 +213,12 @@ impl PluginRegistrationService {
             .get_by_id(&plugin_id.0, include_deleted)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
-                plugin_id.clone(),
+                *plugin_id,
             ))?
             .try_into()?;
 
         auth.authorize_account_action(&plugin.account_id, AccountAction::ViewPlugin)
-            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id.clone()))?;
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(*plugin_id))?;
 
         Ok(plugin)
     }

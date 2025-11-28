@@ -120,10 +120,10 @@ impl FileSystemComponentWriter {
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
-            account_id: account_id.clone(),
-            environment_id: environment_id.clone(),
-            application_id: application_id.clone(),
-            component_id: component_id.clone(),
+            account_id,
+            environment_id,
+            application_id,
+            component_id: *component_id,
             component_name: component_name.to_string(),
             version: component_version,
             files,

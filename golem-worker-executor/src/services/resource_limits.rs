@@ -138,7 +138,7 @@ impl ResourceLimitsGrpc {
         self.current_limits
             .iter_mut_async(|mut entry| {
                 if entry.1.delta != 0 {
-                    updates.insert(entry.0.clone(), entry.1.delta);
+                    updates.insert(entry.0, entry.1.delta);
                     entry.1.delta = 0;
                 }
                 true
@@ -248,7 +248,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         self.current_limits
-            .entry_async(account_id.clone())
+            .entry_async(*account_id)
             .await
             .and_modify(|entry| {
                 entry.limits.fuel = last_known_limits.fuel + entry.delta;

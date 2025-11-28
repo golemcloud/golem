@@ -49,8 +49,10 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
+indexmap.workspace = true
 lazy_static = { workspace = true }
 nom.workspace = true
+openapiv3.workspace = true
 openidconnect.workspace = true
 pin-project = { workspace = true }
 poem = { workspace = true }

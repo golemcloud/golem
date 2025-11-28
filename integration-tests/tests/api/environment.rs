@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentError,
@@ -25,7 +24,6 @@ use golem_test_framework::dsl::TestDslExtended;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -53,7 +51,7 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
 
         let env_ids = envs.into_iter().map(|a| a.id).collect::<HashSet<_>>();
 
-        assert!(env_ids == HashSet::from_iter([env_1.id.clone(), env_2.id.clone()]));
+        assert!(env_ids == HashSet::from_iter([env_1.id, env_2.id]));
     }
 
     client
@@ -81,7 +79,7 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
 
         let env_ids = envs.into_iter().map(|a| a.id).collect::<Vec<_>>();
 
-        assert!(env_ids == vec![env_1.id.clone()]);
+        assert!(env_ids == vec![env_1.id]);
     }
 
     Ok(())
@@ -125,7 +123,10 @@ async fn deleting_account_hides_environments(
 
     let (app, env) = user.app_and_env().await?;
 
-    user_client.delete_account(&user.account_id.0).await?;
+    let account = user_client.get_account(&user.account_id.0).await?;
+    user_client
+        .delete_account(&account.id.0, account.revision.0)
+        .await?;
 
     {
         let result = admin_client.list_application_environments(&app.id.0).await;

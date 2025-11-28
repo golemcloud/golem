@@ -22,6 +22,7 @@ import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
+import "golem/apidefinition/api_definition.proto";
 
 service RegistryService {
   // auth api
@@ -47,6 +48,9 @@ service RegistryService {
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
+
+  // active routes api
+  rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
 }
 
 message AuthenticateTokenRequest {
@@ -264,4 +268,19 @@ message GetAgentTypeResponse {
 
 message GetAgentTypeSuccessResponse {
   RegisteredAgentType agent_type = 1;
+}
+
+message GetActiveRoutesForDomainRequest {
+  string domain = 1;
+}
+
+message GetActiveRoutesForDomainResponse {
+  oneof result {
+    GetActiveRoutesForDomainSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetActiveRoutesForDomainSuccessResponse {
+  golem.apidefinition.CompiledRoutes compiled_routes = 1;
 }
