@@ -18,7 +18,6 @@
 pub mod tuples;
 pub mod type_builder;
 
-use golem_rust_macro::{FromValueAndType, IntoValue};
 use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId, ValueAndType};
 use golem_wasm::{
     ComponentId, NodeIndex, ResourceMode, Uri, Uuid, WitNode, WitType, WitTypeNode, WitValue,
