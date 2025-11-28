@@ -487,7 +487,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         if let WorkerInstance::Running(running) = &*self.lock_non_stopping_worker().await {
-            running.interrupt(interrupt_kind.clone());
+            running.interrupt(interrupt_kind);
         }
 
         let mut execution_status = self.execution_status.write().unwrap();
@@ -496,7 +496,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ExecutionStatus::Running {
                 interrupt_signal, ..
             } => {
-                let _ = interrupt_signal.send(());
+                let _ = interrupt_signal.send(interrupt_kind);
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,

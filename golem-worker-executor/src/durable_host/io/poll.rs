@@ -114,9 +114,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let either_result = futures::future::select(poll, interrupt_signal).await;
                 match either_result {
                     Either::Left((result, _)) => result,
-                    Either::Right(_) => {
+                    Either::Right((interrupt_kind, _)) => {
                         tracing::info!("Interrupted while waiting for poll result");
-                        return Err(InterruptKind::Interrupt.into());
+                        return Err(interrupt_kind.into());
                     }
                 }
             };

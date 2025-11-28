@@ -44,7 +44,7 @@ use golem_common::model::{
     AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
 };
 use golem_common::serialization::{deserialize, serialize};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
@@ -169,9 +169,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .await;
             let result = match either_result {
                 Either::Left((result, _)) => result,
-                Either::Right(_) => {
+                Either::Right((interrupt_kind, _)) => {
                     tracing::info!("Interrupted while waiting for RPC result");
-                    return Err(InterruptKind::Interrupt.into());
+                    return Err(interrupt_kind.into());
                 }
             };
             durability.try_trigger_retry(self, &result).await?;

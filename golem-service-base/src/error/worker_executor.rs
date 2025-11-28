@@ -417,7 +417,7 @@ impl From<InterruptKind> for WorkerExecutorError {
 impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => Self::Interrupted { kind: kind.clone() },
+            Some(kind) => Self::Interrupted { kind: *kind },
             None => Self::runtime(format!("{error:#?}")),
         }
     }
@@ -908,6 +908,7 @@ impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialOrd,
     PartialEq,

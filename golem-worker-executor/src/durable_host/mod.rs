@@ -1279,7 +1279,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         let execution_status = self.execution_status.read().unwrap();
         match &*execution_status {
-            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(interrupt_kind.clone()),
+            ExecutionStatus::Interrupting { interrupt_kind, .. } => Some(*interrupt_kind),
             _ => None,
         }
     }
