@@ -205,7 +205,10 @@ impl From<DeployedRoutesError> for GrpcApiError {
             DeployedRoutesError::NoActiveRoutesForDomain(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
-            _ => Self::InternalError(ErrorBody {
+            DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+            DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

@@ -4147,6 +4147,91 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_http_api_definition_in_deployment
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions/{http_api_definition_name}/openapi:
+    get:
+      tags:
+      - RegistryService
+      - HttpApiDefinition
+      - Environment
+      - Deployment
+      summary: Get openapi spec of http api definition in the deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_revision
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: http_api_definition_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/UntypedJsonBody'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_openapi_of_http_api_definition_in_deployment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-definitions:
     get:
       tags:
@@ -8576,6 +8661,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
+    UntypedJsonBody:
+      type: object
+      description: A json body without a static schema
     VersionInfo:
       type: object
       title: VersionInfo

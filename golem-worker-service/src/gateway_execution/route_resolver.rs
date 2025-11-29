@@ -23,14 +23,14 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::RouteMethod;
+use golem_common::model::http_api_definition::{HttpApiDefinitionId, RouteMethod};
 use golem_common::model::security_scheme::SecuritySchemeId;
-use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
-use golem_service_base::custom_api::openapi::OpenApiHttpApiDefinition;
+use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
+use golem_service_base::custom_api::{GatewayBindingCompiled, SwaggerUiBindingCompiled};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -131,8 +131,12 @@ impl RouteResolver {
         domain: &Domain,
         compiled_routes: CompiledRoutes,
     ) -> Result<Vec<RichCompiledRoute>, String> {
-        let maybe_swagger_html =
-            Self::precompute_swagger_ui_html_if_needed(domain, &compiled_routes.routes).await?;
+        let swagger_ui_htmls = Self::precompute_swagger_ui_htmls(
+            domain,
+            &compiled_routes.routes,
+            &compiled_routes.security_schemes,
+        )
+        .await?;
 
         let cors_routes: HashMap<AllPathPatterns, HttpCors> = compiled_routes
             .routes
@@ -169,7 +173,7 @@ impl RouteResolver {
                 path: route.path,
                 binding: RichGatewayBindingCompiled::from_compiled_binding(
                     route.binding,
-                    maybe_swagger_html.as_ref(),
+                    &swagger_ui_htmls,
                 )?,
                 middlewares,
                 account_id: compiled_routes.account_id,
@@ -197,21 +201,45 @@ impl RouteResolver {
         Ok(transformed_routes)
     }
 
-    async fn precompute_swagger_ui_html_if_needed(
+    async fn precompute_swagger_ui_htmls(
         domain: &Domain,
         compiled_routes: &[CompiledRoute],
-    ) -> Result<Option<Arc<SwaggerHtml>>, String> {
-        let ui_needed = compiled_routes
-            .iter()
-            .any(|r| matches!(r.binding, GatewayBindingCompiled::SwaggerUi(_)));
-        if ui_needed {
-            let openapi_definition =
-                OpenApiHttpApiDefinition::from_compiled_routes(compiled_routes).await?;
+        security_schemes: &HashMap<SecuritySchemeId, SecuritySchemeDetails>,
+    ) -> Result<HashMap<HttpApiDefinitionId, Arc<SwaggerHtml>>, String> {
+        let definitions_that_need_ui: HashMap<HttpApiDefinitionId, SwaggerUiBindingCompiled> =
+            compiled_routes
+                .iter()
+                .filter_map(|r| match &r.binding {
+                    GatewayBindingCompiled::SwaggerUi(inner) => {
+                        Some((inner.http_api_definition_id, *inner.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+        let mut swagger_uis = HashMap::with_capacity(definitions_that_need_ui.len());
+        for (_, swagger_ui_binding) in definitions_that_need_ui {
+            let matching_routes: Vec<&CompiledRoute> = compiled_routes
+                .iter()
+                .filter(|cr| cr.http_api_definition_id == swagger_ui_binding.http_api_definition_id)
+                .collect();
+
+            let openapi_definition = HttpApiDefinitionOpenApiSpec::from_routes(
+                &swagger_ui_binding.http_api_definition_name,
+                &swagger_ui_binding.http_api_definition_version,
+                matching_routes,
+                security_schemes,
+            )
+            .await?;
+
             let swagger_html = generate_swagger_html(&domain.0, openapi_definition)?;
-            Ok(Some(Arc::new(swagger_html)))
-        } else {
-            Ok(None)
+            swagger_uis.insert(
+                swagger_ui_binding.http_api_definition_id,
+                Arc::new(swagger_html),
+            );
         }
+
+        Ok(swagger_uis)
     }
 
     fn get_auth_call_back_routes(

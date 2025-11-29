@@ -16,17 +16,18 @@
 // use crate::gateway_api_deployment::ApiSite;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::RouteMethod;
+use golem_common::model::http_api_definition::{HttpApiDefinitionId, RouteMethod};
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::ScanCursor;
-use golem_service_base::custom_api::compiled_gateway_binding::{
-    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
-    HttpHandlerBindingCompiled, WorkerBindingCompiled,
-};
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
+    HttpHandlerBindingCompiled, WorkerBindingCompiled,
+};
 use poem_openapi::Object;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -63,7 +64,7 @@ pub enum RichGatewayBindingCompiled {
 impl RichGatewayBindingCompiled {
     pub fn from_compiled_binding(
         binding: GatewayBindingCompiled,
-        precomputed_swagger_html: Option<&Arc<SwaggerHtml>>,
+        precomputed_swagger_ui_htmls: &HashMap<HttpApiDefinitionId, Arc<SwaggerHtml>>,
     ) -> Result<Self, String> {
         match binding {
             GatewayBindingCompiled::FileServer(inner) => {
@@ -76,8 +77,9 @@ impl RichGatewayBindingCompiled {
             GatewayBindingCompiled::HttpHandler(inner) => {
                 Ok(RichGatewayBindingCompiled::HttpHandler(inner))
             }
-            GatewayBindingCompiled::SwaggerUi(_) => {
-                let swagger_html = precomputed_swagger_html
+            GatewayBindingCompiled::SwaggerUi(inner) => {
+                let swagger_html = precomputed_swagger_ui_htmls
+                    .get(&inner.http_api_definition_id)
                     .ok_or("no precomputed swagger html".to_string())?
                     .clone();
                 Ok(RichGatewayBindingCompiled::SwaggerUi(SwaggerUiBinding {

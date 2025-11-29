@@ -90,9 +90,16 @@ pub trait DeploymentRepo: Send + Sync {
         version_check: bool,
     ) -> Result<CurrentDeploymentExtRevisionRecord, DeployRepoError>;
 
-    async fn list_active_compiled_http_api_routes(
+    async fn list_active_compiled_http_api_routes_for_domain(
         &self,
         domain: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
+
+    async fn list_compiled_http_api_routes_for_http_api_definition(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
 }
 
@@ -232,13 +239,34 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn list_active_compiled_http_api_routes(
+    async fn list_active_compiled_http_api_routes_for_domain(
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
         self.repo
-            .list_active_compiled_http_api_routes(domain)
+            .list_active_compiled_http_api_routes_for_domain(domain)
             .instrument(Self::span_domain(domain))
+            .await
+    }
+
+    async fn list_compiled_http_api_routes_for_http_api_definition(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        http_api_definition_name: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+        self.repo
+            .list_compiled_http_api_routes_for_http_api_definition(
+                environment_id,
+                deployment_revision_id,
+                http_api_definition_name,
+            )
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                deployment_revision_id,
+                http_api_definition_name
+            ))
             .await
     }
 }
@@ -520,19 +548,21 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         .await
     }
 
-    async fn list_active_compiled_http_api_routes(
+    async fn list_active_compiled_http_api_routes_for_domain(
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
-        self.with_ro("list_active_compiled_http_api_routes")
+        self.with_ro("list_active_compiled_http_api_routes_for_domain")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
                         ac.account_id,
                         e.environment_id,
                         d.deployment_revision_id,
-                        d.domain,
+                        r.http_api_definition_id,
+                        FALSE as security_scheme_missing,
                         s.security_scheme_id,
+                        s.name AS security_scheme_name,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -578,10 +608,75 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                       ON sr.security_scheme_id = s.security_scheme_id
                      AND sr.revision_id = s.current_revision_id
 
-                    WHERE d.domain = $1
-                      AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL);
+                    WHERE d.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
+
+                    ORDER BY r.http_api_definition_id, r.id
                 "#})
                 .bind(domain),
+            )
+            .await
+    }
+
+    async fn list_compiled_http_api_routes_for_http_api_definition(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+        http_api_definition_name: &str,
+    ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>> {
+        self.with_ro("list_compiled_http_api_routes_for_http_api_definition")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        ac.account_id,
+                        e.environment_id,
+                        r.deployment_revision_id,
+                        r.http_api_definition_id,
+                        (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
+                        s.security_scheme_id,
+                        s.name AS security_scheme_name,
+                        sr.provider_type AS security_scheme_provider_type,
+                        sr.client_id AS security_scheme_client_id,
+                        sr.client_secret AS security_scheme_client_secret,
+                        sr.redirect_url AS security_scheme_redirect_url,
+                        sr.scopes AS security_scheme_scopes,
+                        r.compiled_route
+
+                    FROM deployment_compiled_http_api_definition_routes r
+
+                    JOIN http_api_definitions d
+                        ON r.environment_id = d.environment_id
+                        AND r.http_api_definition_id = d.http_api_definition_id
+
+                    -- parent objects not deleted
+                    JOIN environments e
+                      ON d.environment_id = e.environment_id
+                     AND e.deleted_at IS NULL
+                    JOIN applications a
+                      ON e.application_id = a.application_id
+                     AND a.deleted_at IS NULL
+                    JOIN accounts ac
+                      ON a.account_id = ac.account_id
+                     AND ac.deleted_at IS NULL
+
+                    -- route-level optional security scheme
+                    LEFT JOIN security_schemes s
+                      ON r.environment_id = s.environment_id
+                     AND r.security_scheme = s.name
+                     AND s.deleted_at IS NULL
+
+                    LEFT JOIN security_scheme_revisions sr
+                      ON sr.security_scheme_id = s.security_scheme_id
+                     AND sr.revision_id = s.current_revision_id
+
+                     WHERE r.environment_id = $1
+                       AND r.deployment_revision_id = $2
+                       AND d.name = $3
+
+                    ORDER BY r.http_api_definition_id, r.id
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(http_api_definition_name),
             )
             .await
     }

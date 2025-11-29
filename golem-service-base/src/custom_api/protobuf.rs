@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use super::SecuritySchemeDetails;
-use super::compiled_gateway_binding::{
-    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
-    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
-};
 use super::path_pattern::AllPathPatterns;
 use super::{CompiledRoute, CompiledRoutes, HttpCors};
-use golem_common::model::Empty;
+use super::{
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
+    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
+    ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+};
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::security_scheme::Provider;
+use golem_common::model::http_api_definition::{HttpApiDefinitionName, HttpApiDefinitionVersion};
+use golem_common::model::security_scheme::SecuritySchemeName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -78,13 +78,17 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails>
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails,
     ) -> Result<Self, Self::Error> {
-        let provider_type =
-            Provider::try_from(value.provider()).map_err(|e| format!("invalid provider: {}", e))?;
-
         let id = value
             .id
-            .ok_or_else(|| "scheme_identifier field missing".to_string())?
+            .ok_or_else(|| "id field missing".to_string())?
             .try_into()?;
+
+        let provider_type = value
+            .provider()
+            .try_into()
+            .map_err(|e| format!("invalid provider: {}", e))?;
+
+        let name = SecuritySchemeName(value.name);
 
         let client_id = ClientId::new(value.client_id);
 
@@ -97,6 +101,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecuritySchemeDetails>
 
         Ok(Self {
             id,
+            name,
             provider_type,
             client_id,
             client_secret,
@@ -112,6 +117,7 @@ impl From<SecuritySchemeDetails>
     fn from(value: SecuritySchemeDetails) -> Self {
         Self {
             id: Some(value.id.into()),
+            name: value.name.0,
             provider: golem_api_grpc::proto::golem::apidefinition::Provider::from(
                 value.provider_type,
             )
@@ -132,11 +138,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled>
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled,
     ) -> Result<Self, Self::Error> {
-        let worker_name = value
-            .expr
-            .ok_or_else(|| "expr field missing".to_string())?
-            .try_into()?;
-
         let compiled_worker_name = value
             .compiled_expr
             .ok_or_else(|| "compiled_expr field missing".to_string())?
@@ -148,7 +149,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::WorkerNameCompiled>
             .try_into()?;
 
         Ok(Self {
-            worker_name,
             compiled_worker_name,
             rib_input,
         })
@@ -161,7 +161,6 @@ impl TryFrom<WorkerNameCompiled>
     type Error = String;
     fn try_from(value: WorkerNameCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
-            expr: Some(value.worker_name.into()),
             compiled_expr: Some(value.compiled_worker_name.try_into()?),
             rib_input: Some(value.rib_input.into()),
         })
@@ -176,11 +175,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled,
     ) -> Result<Self, Self::Error> {
-        let idempotency_key = value
-            .expr
-            .ok_or_else(|| "expr field missing".to_string())?
-            .try_into()?;
-
         let compiled_idempotency_key = value
             .compiled_expr
             .ok_or_else(|| "compiled_expr field missing".to_string())?
@@ -192,7 +186,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::IdempotencyKeyCompiled
             .try_into()?;
 
         Ok(Self {
-            idempotency_key,
             compiled_idempotency_key,
             rib_input,
         })
@@ -205,7 +198,6 @@ impl TryFrom<IdempotencyKeyCompiled>
     type Error = String;
     fn try_from(value: IdempotencyKeyCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
-            expr: Some(value.idempotency_key.into()),
             compiled_expr: Some(value.compiled_idempotency_key.try_into()?),
             rib_input: Some(value.rib_input.into()),
         })
@@ -220,11 +212,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::InvocationContextCompi
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::InvocationContextCompiled,
     ) -> Result<Self, Self::Error> {
-        let invocation_context = value
-            .expr
-            .ok_or_else(|| "expr field missing".to_string())?
-            .try_into()?;
-
         let compiled_invocation_context = value
             .compiled_expr
             .ok_or_else(|| "compiled_expr field missing".to_string())?
@@ -236,7 +223,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::InvocationContextCompi
             .try_into()?;
 
         Ok(Self {
-            invocation_context,
             compiled_invocation_context,
             rib_input,
         })
@@ -250,7 +236,6 @@ impl TryFrom<InvocationContextCompiled>
 
     fn try_from(value: InvocationContextCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
-            expr: Some(value.invocation_context.into()),
             compiled_expr: Some(value.compiled_invocation_context.try_into()?),
             rib_input: Some(value.rib_input.into()),
         })
@@ -265,11 +250,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompile
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompiled,
     ) -> Result<Self, Self::Error> {
-        let response_mapping_expr = value
-            .expr
-            .ok_or_else(|| "expr field missing".to_string())?
-            .try_into()?;
-
         let response_mapping_compiled = value
             .compiled_expr
             .ok_or_else(|| "compiled_expr field missing".to_string())?
@@ -291,7 +271,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::ResponseMappingCompile
         };
 
         Ok(Self {
-            response_mapping_expr,
             response_mapping_compiled,
             rib_input,
             worker_calls,
@@ -307,7 +286,6 @@ impl TryFrom<ResponseMappingCompiled>
 
     fn try_from(value: ResponseMappingCompiled) -> Result<Self, Self::Error> {
         Ok(Self {
-            expr: Some(value.response_mapping_expr.into()),
             compiled_expr: Some(value.response_mapping_compiled.try_into()?),
             rib_input: Some(value.rib_input.into()),
             worker_functions: value.worker_calls.map(|wc| wc.into()),
@@ -528,6 +506,42 @@ impl From<HttpCorsBindingCompiled>
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledSwaggerUiBinding>
+    for SwaggerUiBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledSwaggerUiBinding,
+    ) -> Result<Self, Self::Error> {
+        let http_api_definition_id = value
+            .http_api_definition_id
+            .ok_or_else(|| "http_api_definition_id field missing".to_string())?
+            .try_into()?;
+        let http_api_definition_name = HttpApiDefinitionName(value.http_api_definition_name);
+        let http_api_definition_version =
+            HttpApiDefinitionVersion(value.http_api_definition_version);
+
+        Ok(Self {
+            http_api_definition_id,
+            http_api_definition_name,
+            http_api_definition_version,
+        })
+    }
+}
+
+impl From<SwaggerUiBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledSwaggerUiBinding
+{
+    fn from(value: SwaggerUiBindingCompiled) -> Self {
+        Self {
+            http_api_definition_id: Some(value.http_api_definition_id.into()),
+            http_api_definition_name: value.http_api_definition_name.0,
+            http_api_definition_version: value.http_api_definition_version.0,
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding>
     for GatewayBindingCompiled
 {
@@ -549,8 +563,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
             golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::HttpCorsBinding(v) => {
                 Ok(GatewayBindingCompiled::HttpCorsPreflight(Box::new(v.try_into()?)))
             }
-            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(_) => {
-                Ok(GatewayBindingCompiled::SwaggerUi(Empty { }))
+            golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(v) => {
+                Ok(GatewayBindingCompiled::SwaggerUi(Box::new(v.try_into()?)))
             }
         }
     }
@@ -583,8 +597,10 @@ impl TryFrom<GatewayBindingCompiled>
                     (*b).into()
                 )
             }
-            GatewayBindingCompiled::SwaggerUi(_) => {
-                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(golem_api_grpc::proto::golem::common::Empty { })
+            GatewayBindingCompiled::SwaggerUi(b) => {
+                golem_api_grpc::proto::golem::apidefinition::compiled_gateway_binding::Binding::SwaggerUiBinding(
+                    (*b).into()
+                )
             }
         };
 
@@ -600,6 +616,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     fn try_from(
         value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute,
     ) -> Result<Self, Self::Error> {
+        let http_api_definition_id = value
+            .http_api_definition_id
+            .ok_or_else(|| "http_api_definition_id field missing".to_string())?
+            .try_into()?;
+
         let method = value.method().try_into()?;
 
         let path =
@@ -616,6 +637,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
         };
 
         Ok(Self {
+            http_api_definition_id,
             method,
             path,
             binding,
@@ -629,6 +651,7 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
 
     fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
         Ok(Self {
+            http_api_definition_id: Some(value.http_api_definition_id.into()),
             method: golem_api_grpc::proto::golem::apidefinition::HttpMethod::from(value.method)
                 .into(),
             path: value.path.to_string(),

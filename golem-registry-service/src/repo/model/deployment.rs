@@ -32,7 +32,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionId};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
+use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
@@ -424,10 +424,12 @@ pub struct DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord {
     pub account_id: Uuid,
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
+    pub http_api_definition_id: Uuid,
 
-    pub domain: String,
+    pub security_scheme_missing: bool,
 
     pub security_scheme_id: Option<Uuid>,
+    pub security_scheme_name: Option<String>,
     pub security_scheme_provider_type: Option<String>,
     pub security_scheme_client_id: Option<String>,
     pub security_scheme_client_secret: Option<String>,
@@ -449,6 +451,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
 
         let security_scheme = match (
             value.security_scheme_id,
+            value.security_scheme_name,
             value.security_scheme_provider_type,
             value.security_scheme_client_id,
             value.security_scheme_client_secret,
@@ -457,6 +460,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
         ) {
             (
                 Some(security_scheme_id),
+                Some(security_scheme_name),
                 Some(provider_type),
                 Some(client_id),
                 Some(client_secret),
@@ -464,6 +468,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
                 Some(scopes),
             ) => {
                 let id = SecuritySchemeId(security_scheme_id);
+                let name = SecuritySchemeName(security_scheme_name);
                 let scopes: Vec<Scope> = serde_json::from_str(&scopes)
                     .map_err(|e| anyhow::Error::from(e).context("Failed parsing scopes"))?;
                 let redirect_url: RedirectUrl = serde_json::from_str(&redirect_url)
@@ -475,6 +480,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
 
                 Some(SecuritySchemeDetails {
                     id,
+                    name,
                     scopes,
                     redirect_url,
                     provider_type,
@@ -489,7 +495,8 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
             account_id: AccountId(value.account_id),
             environment_id: EnvironmentId(value.environment_id),
             deployment_revision: value.deployment_revision_id.into(),
-            domain: Domain(value.domain),
+            http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
+            security_scheme_missing: value.security_scheme_missing,
             security_scheme,
             route: value.compiled_route.value,
         })

@@ -8,11 +8,19 @@ import "golem/rib/rib_output.proto";
 import "golem/rib/rib_byte_code.proto";
 import "golem/rib/worker_functions_in_rib.proto";
 import "golem/component/component_id.proto";
-import "golem/common/security_scheme.proto";
 import "golem/common/empty.proto";
+import "golem/common/uuid.proto";
 import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "google/protobuf/timestamp.proto";
+
+message SecuritySchemeId {
+  golem.common.UUID value = 1;
+}
+
+message HttpApiDefinitionId {
+  golem.common.UUID value = 1;
+}
 
 message CompiledRoutes {
   golem.common.AccountId account_id = 1;
@@ -23,10 +31,11 @@ message CompiledRoutes {
 }
 
 message CompiledHttpRoute {
-   HttpMethod method = 1;
-   string path = 2;
-   CompiledGatewayBinding binding = 3;
-   golem.common.SecuritySchemeId security_scheme_id = 4;
+  HttpApiDefinitionId http_api_definition_id = 1;
+   HttpMethod method = 2;
+   string path = 3;
+   CompiledGatewayBinding binding = 4;
+   optional SecuritySchemeId security_scheme_id = 5;
 }
 
 enum HttpMethod {
@@ -48,34 +57,8 @@ message CompiledGatewayBinding {
     CompiledHttpHandlerBinding http_handler_binding = 2;
     CompiledFileServerBinding file_server_binding = 3;
     CompiledHttpCorsBinding http_cors_binding = 4;
-    golem.common.Empty swagger_ui_binding = 5;
+    CompiledSwaggerUiBinding swagger_ui_binding = 5;
   }
-}
-
-message WorkerNameCompiled {
-  golem.rib.Expr expr = 1;
-  golem.rib.RibByteCode compiled_expr = 2;
-  golem.rib.RibInputType rib_input = 3;
-}
-
-message IdempotencyKeyCompiled {
-  golem.rib.Expr expr = 1;
-  golem.rib.RibByteCode compiled_expr = 2;
-  golem.rib.RibInputType rib_input = 3;
-}
-
-message InvocationContextCompiled {
-  golem.rib.Expr expr = 1;
-  golem.rib.RibByteCode compiled_expr = 2;
-  golem.rib.RibInputType rib_input = 3;
-}
-
-message ResponseMappingCompiled {
-  golem.rib.Expr expr = 1;
-  golem.rib.RibByteCode compiled_expr = 2;
-  golem.rib.RibInputType rib_input = 3;
-  optional golem.rib.WorkerFunctionsInRib worker_functions = 4;
-  optional golem.rib.RibOutputType rib_output = 5;
 }
 
 message CompiledWorkerBinding {
@@ -108,6 +91,34 @@ message CompiledHttpCorsBinding {
   HttpCors http_cors = 1;
 }
 
+message CompiledSwaggerUiBinding {
+  HttpApiDefinitionId http_api_definition_id = 1;
+  string http_api_definition_name = 2;
+  string http_api_definition_version = 3;
+}
+
+message WorkerNameCompiled {
+  golem.rib.RibByteCode compiled_expr = 1;
+  golem.rib.RibInputType rib_input = 2;
+}
+
+message IdempotencyKeyCompiled {
+  golem.rib.RibByteCode compiled_expr = 1;
+  golem.rib.RibInputType rib_input = 2;
+}
+
+message InvocationContextCompiled {
+  golem.rib.RibByteCode compiled_expr = 1;
+  golem.rib.RibInputType rib_input = 2;
+}
+
+message ResponseMappingCompiled {
+  golem.rib.RibByteCode compiled_expr = 1;
+  golem.rib.RibInputType rib_input = 2;
+  optional golem.rib.WorkerFunctionsInRib worker_functions = 3;
+  optional golem.rib.RibOutputType rib_output = 4;
+}
+
 message HttpCors {
   optional string allow_origin = 1;
   optional string allow_methods = 2;
@@ -118,12 +129,13 @@ message HttpCors {
 }
 
 message SecuritySchemeDetails {
-  golem.common.SecuritySchemeId id = 1;
-  Provider provider = 2;
-  string client_id = 3;
-  string client_secret = 4;
-  string redirect_url = 5;
-  repeated string scopes = 6;
+  SecuritySchemeId id = 1;
+  string name = 2;
+  Provider provider = 3;
+  string client_id = 4;
+  string client_secret = 5;
+  string redirect_url = 6;
+  repeated string scopes = 7;
 }
 
 enum Provider {

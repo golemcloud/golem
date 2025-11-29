@@ -424,7 +424,7 @@ impl RegistryServiceGrpcApi {
 
         let compiled_routes = self
             .deployed_routes_service
-            .get_currently_deployed_compiled_http_api_routes(&domain)
+            .get_currently_active_compiled_routes(&domain)
             .await?;
 
         Ok(GetActiveRoutesForDomainSuccessResponse {

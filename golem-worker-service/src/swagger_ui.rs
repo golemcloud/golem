@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::model::SwaggerHtml;
-use golem_service_base::custom_api::openapi::OpenApiHttpApiDefinition;
+use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
 
 pub fn generate_swagger_html(
     authority: &str,
-    http_api_definition: OpenApiHttpApiDefinition,
+    open_api_spec: HttpApiDefinitionOpenApiSpec,
 ) -> Result<SwaggerHtml, String> {
-    let mut spec = http_api_definition.0;
+    let mut spec = open_api_spec.0;
 
     // Add server information to the OpenAPI spec
     if spec.servers.is_empty() {

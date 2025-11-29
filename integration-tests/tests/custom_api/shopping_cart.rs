@@ -17,25 +17,38 @@ use axum::http::{HeaderMap, HeaderValue};
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::DeploymentCreation;
 use golem_common::model::component::ComponentName;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_common::model::Empty;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::Url;
 use serde_json::json;
+use std::fmt::{Debug, Formatter};
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-#[derive(Debug)]
 pub struct ShoppingCart {
+    pub user: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    pub env_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
     pub client: reqwest::Client,
     pub base_url: Url,
+}
+
+impl Debug for ShoppingCart {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShoppingCart")
+    }
 }
 
 #[test_dep]
@@ -44,7 +57,7 @@ async fn shopping_cart(deps: &EnvBasedTestDependencies) -> ShoppingCart {
 }
 
 async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<ShoppingCart> {
-    let user = deps.user().await?.with_auto_deploy(false);
+    let user = deps.clone().into_user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
@@ -112,6 +125,12 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
                 }),
                 security: None,
             },
+            HttpApiRoute {
+                method: RouteMethod::Get,
+                path: "/swagger-ui".to_string(),
+                binding: GatewayBinding::SwaggerUi(Empty {}),
+                security: None,
+            },
         ],
     };
 
@@ -130,7 +149,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
 
-    client
+    let deployment = client
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
@@ -151,7 +170,13 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let base_url = Url::parse(&format!("http://127.0.0.1:{}", user.custom_request_port()))?;
 
-    Ok(ShoppingCart { client, base_url })
+    Ok(ShoppingCart {
+        client,
+        base_url,
+        user,
+        env_id: env.id,
+        deployment_revision: deployment.revision,
+    })
 }
 
 #[test]
@@ -216,5 +241,171 @@ async fn add_and_get_shopping_cart_contents(cart: &ShoppingCart) -> anyhow::Resu
         assert!(body == json!([item]));
     }
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn swagger_ui(cart: &ShoppingCart) -> anyhow::Result<()> {
+    let response = cart
+        .client
+        .get(cart.base_url.join("swagger-ui")?)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn open_api_spec(cart: &ShoppingCart) -> anyhow::Result<()> {
+    let client = cart.user.registry_service_client().await;
+    let spec = client
+        .get_openapi_of_http_api_definition_in_deployment(
+            &cart.env_id.0,
+            cart.deployment_revision.0,
+            "test-api",
+        )
+        .await?;
+
+    let expected = json!(
+        {
+          "components": {},
+          "info": {
+            "title": "test-api",
+            "version": "1"
+          },
+          "openapi": "3.0.0",
+          "paths": {
+            "/swagger-ui": {
+              "get": {
+                "responses": {
+                  "200": {
+                    "content": {
+                      "text/html": {
+                        "schema": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "description": "Response"
+                  }
+                }
+              }
+            },
+            "/{user-id}/contents": {
+              "get": {
+                "parameters": [
+                  {
+                    "description": "Path parameter: user-id",
+                    "explode": false,
+                    "in": "path",
+                    "name": "user-id",
+                    "required": true,
+                    "schema": {
+                      "type": "string"
+                    },
+                    "style": "simple"
+                  }
+                ],
+                "responses": {
+                  "default": {
+                    "content": {
+                      "application/json": {
+                        "schema": {
+                          "items": {
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "price": {
+                                "format": "float",
+                                "type": "number"
+                              },
+                              "product-id": {
+                                "type": "string"
+                              },
+                              "quantity": {
+                                "format": "int32",
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "product-id",
+                              "name",
+                              "price",
+                              "quantity"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      }
+                    },
+                    "description": "Response"
+                  }
+                }
+              },
+              "post": {
+                "parameters": [
+                  {
+                    "description": "Path parameter: user-id",
+                    "explode": false,
+                    "in": "path",
+                    "name": "user-id",
+                    "required": true,
+                    "schema": {
+                      "type": "string"
+                    },
+                    "style": "simple"
+                  }
+                ],
+                "requestBody": {
+                  "content": {
+                    "application/json": {
+                      "schema": {
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "price": {
+                            "format": "float",
+                            "type": "number"
+                          },
+                          "product-id": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "format": "int32",
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "price",
+                          "product-id",
+                          "quantity"
+                        ],
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "description": "Request payload",
+                  "required": true
+                },
+                "responses": {
+                  "default": {
+                    "description": "Response"
+                  }
+                }
+              }
+            }
+          }
+        }
+    );
+
+    assert!(spec.0 == expected);
     Ok(())
 }
