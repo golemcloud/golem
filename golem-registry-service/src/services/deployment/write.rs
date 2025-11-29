@@ -24,14 +24,14 @@ use crate::services::http_api_definition::HttpApiDefinitionService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
-use golem_common::model::Empty;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_definition::{
     CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
-    HttpApiDefinitionId, HttpApiDefinitionName, HttpHandlerBinding, WorkerGatewayBinding,
+    HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpHandlerBinding,
+    WorkerGatewayBinding,
 };
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::{
@@ -39,13 +39,13 @@ use golem_common::model::{
     environment::EnvironmentId,
 };
 use golem_service_base::custom_api::HttpCors;
-use golem_service_base::custom_api::compiled_gateway_binding::{
-    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
-    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
-    ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
-};
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentInfo;
+use golem_service_base::custom_api::{
+    FileServerBindingCompiled, GatewayBindingCompiled, HttpCorsBindingCompiled,
+    HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
+    ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
 use rib::ComponentDependencyKey;
@@ -329,8 +329,15 @@ impl DeploymentContext {
                         errors
                     );
 
-                    let binding =
-                        ok_or_continue!(self.compile_gateway_binding(&route.binding), errors);
+                    let binding = ok_or_continue!(
+                        self.compile_gateway_binding(
+                            definition.id,
+                            &definition.name,
+                            &definition.version,
+                            &route.binding
+                        ),
+                        errors
+                    );
 
                     let compiled_route = CompiledRouteWithContext {
                         http_api_definition_id: definition.id,
@@ -356,6 +363,9 @@ impl DeploymentContext {
 
     fn compile_gateway_binding(
         &self,
+        http_api_definition_id: HttpApiDefinitionId,
+        http_api_definition_name: &HttpApiDefinitionName,
+        http_api_definition_version: &HttpApiDefinitionVersion,
         binding: &GatewayBinding,
     ) -> Result<GatewayBindingCompiled, DeployValidationError> {
         match binding {
@@ -363,7 +373,13 @@ impl DeploymentContext {
             GatewayBinding::FileServer(inner) => self.compile_file_server_binding(inner),
             GatewayBinding::HttpHandler(inner) => self.compile_http_handler_binding(inner),
             GatewayBinding::CorsPreflight(inner) => self.compile_cors_preflight_binding(inner),
-            GatewayBinding::SwaggerUi(_) => Ok(GatewayBindingCompiled::SwaggerUi(Empty {})),
+            GatewayBinding::SwaggerUi(_) => Ok(GatewayBindingCompiled::SwaggerUi(Box::new(
+                SwaggerUiBindingCompiled {
+                    http_api_definition_id,
+                    http_api_definition_name: http_api_definition_name.clone(),
+                    http_api_definition_version: http_api_definition_version.clone(),
+                },
+            ))),
         }
     }
 
@@ -374,23 +390,6 @@ impl DeploymentContext {
         let component = self.components.get(&binding.component_name).ok_or(
             DeployValidationError::ComponentNotFound(binding.component_name.clone()),
         )?;
-
-        let component_dependencies = {
-            let component_dependency_key = ComponentDependencyKey {
-                component_id: component.id.0,
-                component_revision: component.revision.0,
-                component_name: component.component_name.0.clone(),
-                root_package_name: component.metadata.root_package_name().clone(),
-                root_package_version: component.metadata.root_package_version().clone(),
-            };
-
-            let component_dependency = ComponentDependencyWithAgentInfo::new(
-                component_dependency_key,
-                component.metadata.clone(),
-            );
-
-            vec![component_dependency]
-        };
 
         let idempotency_key_compiled = if let Some(expr) = &binding.idempotency_key {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
@@ -405,7 +404,7 @@ impl DeploymentContext {
         let invocation_context_compiled = if let Some(expr) = &binding.idempotency_key {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                InvocationContextCompiled::from_expr(&rib_expr, &component_dependencies)
+                InvocationContextCompiled::from_expr(&rib_expr)
                     .map_err(DeployValidationError::RibCompilationFailed)?,
             )
         } else {
@@ -413,6 +412,21 @@ impl DeploymentContext {
         };
 
         let response_compiled = {
+            let component_dependency_key = ComponentDependencyKey {
+                component_id: component.id.0,
+                component_revision: component.revision.0,
+                component_name: component.component_name.0.clone(),
+                root_package_name: component.metadata.root_package_name().clone(),
+                root_package_version: component.metadata.root_package_version().clone(),
+            };
+
+            let component_dependency = ComponentDependencyWithAgentInfo::new(
+                component_dependency_key,
+                component.metadata.clone(),
+            );
+
+            let component_dependencies = vec![component_dependency];
+
             let rib_expr = rib::from_string(&binding.response)
                 .map_err(DeployValidationError::InvalidRibExpr)?;
             ResponseMappingCompiled::from_expr(&rib_expr, &component_dependencies)
@@ -503,22 +517,9 @@ impl DeploymentContext {
         };
 
         let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
-            let component_dependency_key = ComponentDependencyKey {
-                component_id: component.id.0,
-                component_revision: component.revision.0,
-                component_name: component.component_name.0.clone(),
-                root_package_name: component.metadata.root_package_name().clone(),
-                root_package_version: component.metadata.root_package_version().clone(),
-            };
-
-            let component_dependency = ComponentDependencyWithAgentInfo::new(
-                component_dependency_key,
-                component.metadata.clone(),
-            );
-
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
-                InvocationContextCompiled::from_expr(&rib_expr, &[component_dependency])
+                InvocationContextCompiled::from_expr(&rib_expr)
                     .map_err(DeployValidationError::RibCompilationFailed)?,
             )
         } else {

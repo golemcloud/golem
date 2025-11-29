@@ -26,7 +26,10 @@ use desert_rust::BinaryCodec;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(HttpApiDefinitionId);
+newtype_uuid!(
+    HttpApiDefinitionId,
+    golem_api_grpc::proto::golem::apidefinition::HttpApiDefinitionId
+);
 
 declare_revision!(HttpApiDefinitionRevision);
 
@@ -36,7 +39,8 @@ declare_transparent_newtypes! {
     pub struct HttpApiDefinitionName(pub String);
 
     // User provided version. See HttpApiDefinitionRevision for the "proper" golem version.
-    #[derive(Display)]
+    #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct HttpApiDefinitionVersion(pub String);
 }
 

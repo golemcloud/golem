@@ -14,8 +14,8 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
+use crate::services::deployment::DeployedRoutesService;
 use crate::services::http_api_definition::HttpApiDefinitionService;
-use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::HttpApiDefinitionRevision;
@@ -24,6 +24,7 @@ use golem_common::model::http_api_definition::{
     HttpApiDefinitionUpdate,
 };
 use golem_common::model::poem::NoContentResponse;
+use golem_common::model::{Page, UntypedJsonBody};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -37,6 +38,7 @@ use tracing::Instrument;
 pub struct HttpApiDefinitionsApi {
     http_api_definition_service: Arc<HttpApiDefinitionService>,
     auth_service: Arc<AuthService>,
+    deployed_routes_service: Arc<DeployedRoutesService>,
 }
 
 #[OpenApi(
@@ -48,10 +50,12 @@ impl HttpApiDefinitionsApi {
     pub fn new(
         http_api_definition_service: Arc<HttpApiDefinitionService>,
         auth_service: Arc<AuthService>,
+        deployed_routes_service: Arc<DeployedRoutesService>,
     ) -> Self {
         Self {
             http_api_definition_service,
             auth_service,
+            deployed_routes_service,
         }
     }
 
@@ -319,6 +323,65 @@ impl HttpApiDefinitionsApi {
             .await?;
 
         Ok(Json(http_api_definition))
+    }
+
+    /// Get openapi spec of http api definition in the deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_revision/http-api-definitions/:http_api_definition_name/openapi",
+        method = "get",
+        operation_id = "get_openapi_of_http_api_definition_in_deployment",
+        tag = ApiTags::Environment,
+        tag = ApiTags::Deployment,
+    )]
+    async fn get_openapi_of_http_api_definition_in_deployment(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_revision: Path<DeploymentRevision>,
+        http_api_definition_name: Path<HttpApiDefinitionName>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<UntypedJsonBody>> {
+        let record = recorded_http_api_request!(
+            "get_openapi_of_http_api_definition_in_deployment",
+            environment_id = environment_id.0.to_string(),
+            deployment_revision = deployment_revision.0.to_string(),
+            http_api_definition_name = http_api_definition_name.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_openapi_of_http_api_definition_in_deployment_internal(
+                environment_id.0,
+                deployment_revision.0,
+                http_api_definition_name.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_openapi_of_http_api_definition_in_deployment_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        http_api_definition_name: HttpApiDefinitionName,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<UntypedJsonBody>> {
+        let open_api_spec = self
+            .deployed_routes_service
+            .get_openapi_spec_for_http_api_definition(
+                &environment_id,
+                deployment_revision,
+                &http_api_definition_name,
+                &auth,
+            )
+            .await?;
+
+        let serialized = serde_json::to_value(open_api_spec.0).map_err(anyhow::Error::from)?;
+
+        Ok(Json(UntypedJsonBody(serialized)))
     }
 
     /// List http api definitions in the environment

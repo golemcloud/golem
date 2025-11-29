@@ -285,8 +285,10 @@ impl Services {
             http_api_deployment_service.clone(),
         ));
 
-        let deployed_routes_service =
-            Arc::new(DeployedRoutesService::new(repos.deployment_repo.clone()));
+        let deployed_routes_service = Arc::new(DeployedRoutesService::new(
+            repos.deployment_repo.clone(),
+            http_api_definition_service.clone(),
+        ));
 
         Ok(Self {
             account_service,

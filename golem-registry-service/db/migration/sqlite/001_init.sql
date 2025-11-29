@@ -793,7 +793,7 @@ CREATE TABLE deployment_domain_http_api_definitions (
 CREATE INDEX deployment_domain_http_api_definitions_domain_idx
     ON deployment_domain_http_api_definitions(domain);
 
-CREATE TABLE deployment_compiled_http_api_routes (
+CREATE TABLE deployment_compiled_http_api_definition_routes (
     environment_id         UUID    NOT NULL,
     deployment_revision_id BIGINT  NOT NULL,
     http_api_definition_id UUID    NOT NULL,

@@ -271,6 +271,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
             ("ScanCursor", "golem_common::model::ScanCursor"),
+            ("UntypedJsonBody", "golem_common::model::UntypedJsonBody"),
             ("VersionInfo", "golem_common::model::VersionInfo"),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),

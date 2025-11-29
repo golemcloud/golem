@@ -133,12 +133,8 @@ impl IdentityProvider for DefaultIdentityProvider {
         &self,
         provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
-        let issue_url = provider.issue_url().map_err(|err| {
-            IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
-        })?;
-
         let provide_metadata = CoreProviderMetadata::discover_async(
-            issue_url,
+            provider.issuer_url(),
             openidconnect::reqwest::async_http_client,
         )
         .await

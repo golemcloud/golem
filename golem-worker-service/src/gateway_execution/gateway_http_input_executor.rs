@@ -38,11 +38,11 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::compiled_gateway_binding::{
+use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{
     FileServerBindingCompiled, HttpHandlerBindingCompiled, IdempotencyKeyCompiled,
     InvocationContextCompiled, ResponseMappingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
-use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::headers::TraceContextHeaders;
 use golem_wasm::analysis::analysed_type::record;
 use golem_wasm::analysis::{AnalysedType, NameTypePair};

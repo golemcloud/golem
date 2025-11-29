@@ -24,7 +24,7 @@ use std::str::FromStr;
 
 newtype_uuid!(
     SecuritySchemeId,
-    golem_api_grpc::proto::golem::common::SecuritySchemeId
+    golem_api_grpc::proto::golem::apidefinition::SecuritySchemeId
 );
 
 declare_revision!(SecuritySchemeRevision);
@@ -76,16 +76,14 @@ declare_enums! {
 }
 
 impl Provider {
-    pub fn issue_url(&self) -> Result<IssuerUrl, String> {
+    pub fn issuer_url(&self) -> IssuerUrl {
         match self {
-            Provider::Google => IssuerUrl::new("https://accounts.google.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Google, {err}")),
-            Provider::Facebook => IssuerUrl::new("https://www.facebook.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Facebook, {err}")),
-            Provider::Microsoft => IssuerUrl::new("https://login.microsoftonline.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Microsoft, {err}")),
-            Provider::Gitlab => IssuerUrl::new("https://gitlab.com".to_string())
-                .map_err(|err| format!("Invalid Issuer URL for Gitlab, {err}")),
+            Provider::Google => IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+            Provider::Facebook => IssuerUrl::new("https://www.facebook.com".to_string()).unwrap(),
+            Provider::Microsoft => {
+                IssuerUrl::new("https://login.microsoftonline.com".to_string()).unwrap()
+            }
+            Provider::Gitlab => IssuerUrl::new("https://gitlab.com".to_string()).unwrap(),
         }
     }
 }
