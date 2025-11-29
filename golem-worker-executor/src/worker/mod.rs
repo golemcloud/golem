@@ -342,7 +342,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(true)
             }
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
-                debug!("Worker is already running or waiting for permit");
+                tracing::warn!("Worker is already running or waiting for permit");
                 Ok(false)
             }
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(

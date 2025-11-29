@@ -601,37 +601,4 @@ impl OplogEntry {
             _ => None,
         }
     }
-
-    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
-        match self {
-            OplogEntry::Create {
-                timestamp,
-                component_version,
-                args,
-                env,
-                project_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                wasi_config_vars,
-                worker_id: _,
-            } => Some(OplogEntry::Create {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_version: *component_version,
-                args: args.clone(),
-                env: env.clone(),
-                project_id: project_id.clone(),
-                created_by: created_by.clone(),
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins.clone(),
-                wasi_config_vars: wasi_config_vars.clone(),
-            }),
-            _ => None,
-        }
-    }
 }

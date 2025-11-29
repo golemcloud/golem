@@ -14,7 +14,7 @@
 
 use super::file_loader::FileLoader;
 use crate::metrics::workers::record_worker_call;
-use crate::model::ExecutionStatus;
+use crate::model::{ExecutionStatus, WorkerConfig};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
@@ -38,11 +38,12 @@ use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
-    HostResponseGolemApiFork, OplogIndex, OplogIndexRange,
+    HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
@@ -473,11 +474,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
         // Update the oplog initial entry with the new worker
-        let target_initial_oplog_entry = initial_oplog_entry
-            .update_worker_id(&target_worker_id)
-            .ok_or(WorkerExecutorError::unknown(
-                "Failed to update worker id in oplog entry",
-            ))?;
+        let component_metadata = self
+            .component_service()
+            .get_metadata(
+                &target_worker_id.component_id,
+                Some(target_worker_metadata.last_known_status.component_version),
+            )
+            .await?;
+        let target_agent_id =
+            AgentId::parse(&target_worker_id.worker_name, &component_metadata.metadata).ok();
+        let target_initial_oplog_entry =
+            Self::update_worker_id(initial_oplog_entry, &target_worker_id, &target_agent_id)
+                .ok_or(WorkerExecutorError::unknown(
+                    "Failed to update worker id in oplog entry",
+                ))?;
 
         // Note: Features of the oplog that rely on the current status / execution status will not work correctly as we are not updating them here.
         let new_oplog = self
@@ -506,6 +516,47 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         }
 
         Ok(new_oplog)
+    }
+
+    pub fn update_worker_id(
+        entry: OplogEntry,
+        worker_id: &WorkerId,
+        agent_id: &Option<AgentId>,
+    ) -> Option<OplogEntry> {
+        match entry {
+            OplogEntry::Create {
+                timestamp,
+                component_version,
+                args,
+                env,
+                project_id,
+                created_by,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+                wasi_config_vars,
+                worker_id: _,
+            } => {
+                let mut updated_env = env.clone();
+                WorkerConfig::enrich_env(&mut updated_env, worker_id, agent_id, component_version);
+                Some(OplogEntry::Create {
+                    timestamp,
+                    worker_id: worker_id.clone(),
+                    component_version,
+                    args,
+                    env: updated_env,
+                    project_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    wasi_config_vars,
+                })
+            }
+            _ => None,
+        }
     }
 }
 
