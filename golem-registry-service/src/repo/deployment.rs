@@ -610,7 +610,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
                     WHERE d.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
 
-                    ORDER BY (r.http_api_definition_id, r.id)
+                    ORDER BY r.http_api_definition_id, r.id
                 "#})
                 .bind(domain),
             )
@@ -672,7 +672,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                        AND r.deployment_revision_id = $2
                        AND d.name = $3
 
-                    ORDER BY (r.http_api_definition_id, r.id)
+                    ORDER BY r.http_api_definition_id, r.id
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id)
