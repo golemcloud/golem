@@ -13,7 +13,7 @@ x-aliases:
 
 services:
   router:
-    image: nginx:latest
+    image: nginx:${NGINX_IMAGE_VERSION}
     pull_policy: always
     ports:
       - "${GOLEM_ROUTER_PORT}:80"
@@ -38,13 +38,13 @@ services:
         - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
 
   redis:
-    image: redis:latest
+    image: redis:${REDIS_IMAGE_VERSION}
     volumes:
       - redis_data:/data
     command: --port ${REDIS_PORT}
 
   postgres:
-    image: postgres:latest
+    image: postgres:${POSTGRES_IMAGE_VERSION}
     environment:
       POSTGRES_DB: golem_db
       POSTGRES_USER: golem_user
