@@ -18,17 +18,18 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::agentic::{
-        Multimodal, MultimodalAdvanced, UnstructuredBinary, UnstructuredText,
+        Multimodal, MultimodalAdvanced, MultimodalCustom, UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
+    use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
-    use golem_rust_macro::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use test_r::test;
 
     #[agent_definition]
     trait Echo {
-        fn new(init: UserId) -> Self;
+        fn new(init: UserId, llm_config: Config) -> Self;
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
         fn get_id(&self) -> String;
@@ -36,11 +37,15 @@ mod tests {
         fn echo_result_err(&self, result: Result<(), String>) -> Result<(), String>;
         fn echo_result_ok(&self, result: Result<String, ()>) -> Result<String, ()>;
         fn echo_option(&self, option: Option<String>) -> Option<String>;
-        fn echo_multimodal_custom(
+        fn echo_multimodal_advanced(
             &self,
             input: MultimodalAdvanced<TextOrImage>,
         ) -> MultimodalAdvanced<TextOrImage>;
         fn echo_multimodal(&self, input: Multimodal) -> Multimodal;
+        fn echo_multimodal_custom(
+            &self,
+            input: MultimodalCustom<TextOrImage>,
+        ) -> MultimodalCustom<TextOrImage>;
 
         fn echo_unstructured_text(&self, input: UnstructuredText) -> UnstructuredText;
         fn echo_unstructured_text_lc(
@@ -56,6 +61,7 @@ mod tests {
 
     struct EchoImpl {
         _id: UserId,
+        _llm_config: Config,
     }
 
     #[derive(AllowedLanguages)]
@@ -75,8 +81,11 @@ mod tests {
 
     #[agent_implementation]
     impl Echo for EchoImpl {
-        fn new(id: UserId) -> Self {
-            EchoImpl { _id: id }
+        fn new(id: UserId, llm_config: Config) -> Self {
+            EchoImpl {
+                _id: id,
+                _llm_config: llm_config,
+            }
         }
         fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
@@ -106,7 +115,7 @@ mod tests {
             option
         }
 
-        fn echo_multimodal_custom(
+        fn echo_multimodal_advanced(
             &self,
             input: MultimodalAdvanced<TextOrImage>,
         ) -> MultimodalAdvanced<TextOrImage> {
@@ -114,6 +123,13 @@ mod tests {
         }
 
         fn echo_multimodal(&self, input: Multimodal) -> Multimodal {
+            input
+        }
+
+        fn echo_multimodal_custom(
+            &self,
+            input: MultimodalCustom<TextOrImage>,
+        ) -> MultimodalCustom<TextOrImage> {
             input
         }
 
@@ -229,7 +245,7 @@ mod tests {
 
     #[agent_definition]
     trait EchoAsync {
-        async fn new(init: UserId) -> Self;
+        async fn new(init: UserId, llm_config: Config) -> Self;
         async fn echo_mut(&mut self, message: String) -> String;
         async fn echo(&self, message: String) -> String;
         async fn get_id(&self) -> String;
@@ -254,12 +270,13 @@ mod tests {
 
     struct EchoAsyncImpl {
         id: UserId,
+        llm_config: Config,
     }
 
     #[agent_implementation]
     impl EchoAsync for EchoAsyncImpl {
-        async fn new(id: UserId) -> Self {
-            EchoAsyncImpl { id }
+        async fn new(id: UserId, llm_config: Config) -> Self {
+            EchoAsyncImpl { id, llm_config }
         }
         async fn echo_mut(&mut self, message: String) -> String {
             format!("Echo: {}", message)
@@ -312,17 +329,17 @@ mod tests {
         }
 
         async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.echo(string).await
         }
 
         fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.trigger_echo(string);
         }
 
         fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone());
+            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
             client.schedule_echo(
                 string,
                 Datetime {
@@ -333,7 +350,7 @@ mod tests {
         }
     }
 
-    #[derive(MultimodalSchema)]
+    #[derive(Schema, MultimodalSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
@@ -344,6 +361,7 @@ mod tests {
         id: String,
     }
 
+    #[allow(clippy::assertions_on_constants)]
     #[test] // only to verify that the agent compiles correctly
     fn test_agent_compilation() {
         assert!(true);

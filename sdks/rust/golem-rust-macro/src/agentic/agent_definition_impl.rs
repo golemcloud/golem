@@ -95,9 +95,10 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 remote_client,
             } = agent_type_with_remote_client;
 
-            let my_registration_function: syn::TraitItem = syn::parse_quote! {
+            let registration_function: syn::TraitItem = syn::parse_quote! {
                 fn __register_agent_type() {
                     let agent_type = #agent_type;
+
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
@@ -110,7 +111,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
             item_trait.items.push(load_snapshot_item);
             item_trait.items.push(save_snapshot_item);
-            item_trait.items.push(my_registration_function);
+            item_trait.items.push(registration_function);
 
             let result = quote! {
                 #[allow(async_fn_in_trait)]

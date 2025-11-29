@@ -17,6 +17,7 @@ use crate::{
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
 use golem_wasm::AgentId;
+use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
@@ -48,7 +49,7 @@ pub fn get_state() -> &'static State {
 
 #[derive(Default)]
 pub struct AgentInstance {
-    pub resolved_agent: Option<Arc<ResolvedAgent>>,
+    pub resolved_agent: Option<Rc<ResolvedAgent>>,
 }
 
 #[derive(Default)]
@@ -102,14 +103,14 @@ pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
     let state = get_state();
     let agent_id = resolved_agent.agent_id.clone();
 
-    state.agent_instance.borrow_mut().resolved_agent = Some(Arc::new(resolved_agent));
+    state.agent_instance.borrow_mut().resolved_agent = Some(Rc::new(resolved_agent));
     state.agent_id.borrow_mut().replace(agent_id);
 }
 
 // To be used only in agent implementation
 pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
 where
-    F: FnOnce(Arc<ResolvedAgent>) -> Fut,
+    F: FnOnce(Rc<ResolvedAgent>) -> Fut,
     Fut: Future<Output = R>,
 {
     let agent_instance = get_state()
@@ -140,7 +141,7 @@ pub fn get_agent_id() -> AgentId {
     get_state().agent_id.borrow().clone().unwrap()
 }
 
-pub fn get_resolved_agent() -> Option<Arc<ResolvedAgent>> {
+pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
     get_state().agent_instance.borrow().resolved_agent.clone()
 }
 
