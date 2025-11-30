@@ -28,8 +28,8 @@ use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
-    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection,
-    ComponentSelection, ComponentView, SelectedComponents,
+    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
+    SelectedComponents,
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::{
@@ -66,7 +66,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
-use uuid::Uuid;
 
 pub mod ifs;
 mod staging;
@@ -933,18 +932,12 @@ impl ComponentCommandHandler {
     pub async fn resolve_component(
         &self,
         environment: &ResolvedEnvironmentIdentity,
-        component_name_or_id: ComponentSelection<'_>,
+        component_name: &ComponentName,
         component_version_selection: Option<ComponentRevisionSelection<'_>>,
     ) -> anyhow::Result<Option<ComponentDto>> {
-        let component = match component_name_or_id {
-            ComponentSelection::Name(component_name) => {
-                self.get_latest_deployed_server_component_by_name(environment, component_name)
-                    .await?
-            }
-            ComponentSelection::Id(component_id) => {
-                self.server_component_by_id(&component_id).await?
-            }
-        };
+        let component = self
+            .get_latest_deployed_server_component_by_name(environment, component_name)
+            .await?;
 
         match (component, component_version_selection) {
             (Some(component), Some(component_version_selection)) => {

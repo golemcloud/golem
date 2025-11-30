@@ -317,7 +317,7 @@ impl RibDependencyManager for RibReplHandler {
 impl WorkerFunctionInvoke for RibReplHandler {
     async fn invoke(
         &self,
-        component_id: Uuid,
+        _component_id: Uuid,
         component_name: &str,
         worker_name: &str,
         function_name: &str,
@@ -332,6 +332,8 @@ impl WorkerFunctionInvoke for RibReplHandler {
         .to_string()
         .into();
 
+        let component_name = ComponentName(component_name.to_string());
+
         let environment = self
             .ctx
             .environment_handler()
@@ -343,7 +345,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component_handler()
             .resolve_component(
                 &environment,
-                component_id.into(),
+                &component_name,
                 Some(ComponentRevisionSelection::ByWorkerName(&worker_name)),
             )
             .await?;

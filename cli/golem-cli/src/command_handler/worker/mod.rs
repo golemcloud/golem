@@ -39,7 +39,7 @@ use crate::model::text::fmt::{
 };
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
-    AvailableFunctionNamesHelp, ComponentNameHelp, ParameterErrorTableView, WorkerNameHelp,
+    AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{
     format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
