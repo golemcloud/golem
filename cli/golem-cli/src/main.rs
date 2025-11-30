@@ -84,7 +84,7 @@ fn main() -> ExitCode {
                 .block_on(async {
                     match server::serve(
                         Arc::new(McpContext::new(std::env::current_dir().unwrap())),
-                        std::env::current_dir().unwrap(),
+                        // std::env::current_dir().unwrap(),
                         port,
                     )
                     .await

@@ -142,6 +142,7 @@ fn test_mcp_server_starts() {
     match child.try_wait() {
         Ok(None) => {
             child.kill().expect("Failed to kill server");
+            child.wait().ok();
         }
         Ok(Some(status)) => {
             panic!("Server exited unexpectedly with status: {}", status);
@@ -165,9 +166,10 @@ fn test_mcp_initialize() {
     let (session_id, init_result) = initialize_session(&client, port);
 
     child.kill().expect("Failed to kill server");
+    child.wait().ok();
 
     // Validate initialize response structure
-    assert!(session_id.len() > 0, "Session ID should not be empty");
+    assert!(!session_id.is_empty(), "Session ID should not be empty");
 
     let result = init_result.get("result").expect("No result in response");
 
@@ -223,7 +225,7 @@ fn test_mcp_tools_list() {
     let tools_result = responses.first().expect("No tools response");
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     // Validate tools list response
     let result = tools_result.get("result").expect("No result in response");
     let tools = result["tools"]
@@ -284,7 +286,7 @@ fn test_mcp_expected_tools_present() {
     let tools_result = responses.first().expect("No tools response");
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     let result = tools_result.get("result").expect("No result");
     let tools = result["tools"]
         .as_array()
@@ -344,6 +346,7 @@ fn test_mcp_sensitive_commands_filtered() {
     let tools_result = responses.first().expect("No tools response");
 
     child.kill().expect("Failed to kill server");
+    child.wait().ok();
 
     let result = tools_result.get("result").expect("No result");
     let tools = result["tools"]
@@ -409,6 +412,7 @@ fn test_mcp_call_tool_valid_command() {
     let call_result = responses.first().expect("No call response");
 
     child.kill().expect("Failed to kill server");
+    child.wait().ok();
 
     assert!(
         call_result.get("result").is_some(),
@@ -448,7 +452,7 @@ fn test_mcp_call_nonexistent_tool() {
     let responses = parse_sse_response(&response_text);
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     // Should get an error response
     let error_response = responses.first().expect("Should have response");
     assert!(
@@ -491,7 +495,7 @@ fn test_mcp_resources_list() {
         .expect("No resource response");
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     let result = response_result.get("result").expect("No result");
     let resources = result["resources"]
         .as_array()
@@ -552,7 +556,7 @@ fn test_mcp_resources_read() {
         .expect("No read response with result");
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     let result = response_result.get("result").expect("No result");
     let contents = result["contents"]
         .as_array()
@@ -602,7 +606,7 @@ fn test_mcp_resources_read_path_traversal() {
     let responses = parse_sse_response(&response_text);
 
     child.kill().expect("Failed to kill server");
-
+    child.wait().ok();
     // Should get an error
     let error_response = responses.first().expect("Should have response");
     assert!(
@@ -637,6 +641,7 @@ fn test_mcp_multiple_sessions_parallel() {
     assert!(!session2.is_empty());
 
     child.kill().expect("Failed to kill server");
+    child.wait().ok();
     // Sessions must be different
     assert_ne!(
         session1, session2,
@@ -670,6 +675,7 @@ fn test_mcp_invalid_session_id() {
         .unwrap();
 
     child.kill().expect("Failed to kill server");
+    child.wait().ok();
 
     // Should fail or return error
     let status = response.status();

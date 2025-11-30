@@ -1,7 +1,8 @@
+use crate::mcp::context::McpContext;
 use anyhow::{Context, Result};
 use rmcp::model::{RawResource, Resource, ResourceContents};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::{path::Path, path::PathBuf, sync::Arc};
 use tokio::fs;
 use walkdir::WalkDir;
 
@@ -13,11 +14,14 @@ pub struct ResourceScanner {
 }
 
 impl ResourceScanner {
-    pub fn new(working_dir: PathBuf) -> Result<Self> {
-        let root_dir = working_dir.canonicalize().context(format!(
-            "Failed to canonicalize working dir: {:?}",
-            working_dir
-        ))?;
+    pub fn new(context: Arc<McpContext>) -> Result<Self> {
+        let root_dir = context.working_dir.canonicalize().with_context(|| {
+            format!(
+                "Failed to canonicalize working dir: {:?}",
+                context.working_dir
+            )
+        })?;
+
         Ok(Self { root_dir })
     }
 
@@ -42,18 +46,14 @@ impl ResourceScanner {
     ) -> Result<()> {
         let mut current = self.root_dir.as_path();
 
-        while let Some(parent) = current.parent() {
-            let parent_canonical = parent
-                .canonicalize()
-                .with_context(|| format!("Failed to canonicalize parent: {:?}", parent))?;
-
-            // Security: do NOT go above root_dir
-            if !parent_canonical.starts_with(&self.root_dir) {
-                break; // stop immediately
+        loop {
+            // Ensure we never escape root_dir
+            if !current.starts_with(&self.root_dir) {
+                break;
             }
 
-            // Check any manifest files inside this parent directory
-            for entry in std::fs::read_dir(&parent_canonical)? {
+            // Check this directory for manifest files
+            for entry in std::fs::read_dir(current)? {
                 let entry = entry?;
                 let path = entry.path();
 
@@ -72,7 +72,13 @@ impl ResourceScanner {
                 }
             }
 
-            current = parent;
+            // Move to parent – but stop if we reach root_dir itself
+            match current.parent() {
+                Some(parent) if parent.starts_with(&self.root_dir) => {
+                    current = parent;
+                }
+                _ => break, // reached outside root_dir or no more parents
+            }
         }
 
         Ok(())
@@ -162,10 +168,9 @@ impl ResourceScanner {
     /// Get MIME type for file
     fn get_mime_type(&self, path: &Path) -> String {
         match path.extension().and_then(|e| e.to_str()) {
-            Some("yaml") | Some("yml") => "application/yaml",
-            _ => "text/plain",
+            Some("yaml") | Some("yml") => "application/x-yaml".to_string(),
+            _ => "text/plain".to_string(),
         }
-        .to_string()
     }
 
     /// Read resource file contents from a file:// URI — only allows files under root_dir
@@ -226,7 +231,8 @@ mod tests {
         tokio::fs::create_dir(&component_dir).await?;
         tokio::fs::write(component_dir.join("golem.yaml"), "component: test").await?;
 
-        let scanner = ResourceScanner::new(working_dir.clone())?;
+        let ctx = Arc::new(McpContext { working_dir });
+        let scanner = ResourceScanner::new(ctx)?;
         let resources = scanner.discover_manifests().await?;
 
         // Must find both manifests inside the working_dir subtree
@@ -248,7 +254,8 @@ mod tests {
         let manifest_path = working_dir.join("golem.yaml");
         tokio::fs::write(&manifest_path, test_content).await?;
 
-        let scanner = ResourceScanner::new(working_dir.clone())?;
+        let ctx = Arc::new(McpContext { working_dir });
+        let scanner = ResourceScanner::new(ctx)?;
         let resources = scanner.discover_manifests().await?;
         assert_eq!(resources.len(), 1);
 
@@ -274,7 +281,8 @@ mod tests {
         let outside_file = outside_dir.path().join("golem.yaml");
         tokio::fs::write(&outside_file, "bad: content").await?;
 
-        let scanner = ResourceScanner::new(working_dir.clone())?;
+        let ctx = Arc::new(McpContext { working_dir });
+        let scanner = ResourceScanner::new(ctx)?;
         let uri = format!("file://{}", outside_file.canonicalize()?.display());
 
         // Should be denied because file is not under the scanner's root_dir
@@ -291,10 +299,12 @@ mod tests {
 
         tokio::fs::write(working_dir.join("golem.yaml"), "safe: content").await?;
 
-        let scanner = ResourceScanner::new(working_dir.clone())?;
+        let wd = working_dir.clone();
+        let ctx = Arc::new(McpContext { working_dir });
+        let scanner = ResourceScanner::new(ctx)?;
 
         // Try to read with path traversal
-        let uri = format!("file://{}/../../etc/passwd", working_dir.display());
+        let uri = format!("file://{}/../../etc/passwd", wd.display());
         let result = scanner.read_resources(&uri).await;
 
         assert!(result.is_err(), "Path traversal should be blocked");
@@ -310,7 +320,8 @@ mod tests {
         let secret_file = working_dir.join("secrets.txt");
         tokio::fs::write(&secret_file, "password123").await?;
 
-        let scanner = ResourceScanner::new(working_dir.clone())?;
+        let ctx = Arc::new(McpContext { working_dir });
+        let scanner = ResourceScanner::new(ctx)?;
         let uri = format!("file://{}", secret_file.canonicalize()?.display());
 
         let result = scanner.read_resources(&uri).await;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct McpContext {
     pub working_dir: PathBuf,
 }

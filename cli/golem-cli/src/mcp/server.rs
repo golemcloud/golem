@@ -10,7 +10,7 @@ use rmcp::{
     ErrorData as McpError,
 };
 use rmcp_actix_web::transport::StreamableHttpService;
-use std::{collections::HashSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 /// Main Golem MCP Server structure
@@ -18,7 +18,6 @@ use tokio::sync::Mutex;
 pub struct GolemMcpServer {
     #[allow(dead_code)]
     context: Arc<McpContext>,
-    _working_dir: PathBuf,
     scanner: Arc<resources::ResourceScanner>,
     executor: Arc<executor::CliExecutor>,
     cached_tools: Arc<Mutex<Option<Vec<Tool>>>>,
@@ -28,13 +27,12 @@ pub struct GolemMcpServer {
 }
 
 impl GolemMcpServer {
-    pub fn new(context: Arc<McpContext>, working_dir: PathBuf) -> anyhow::Result<Self> {
-        let scanner = Arc::new(resources::ResourceScanner::new(working_dir.clone())?);
-        let executor = Arc::new(executor::CliExecutor::new(working_dir.clone()));
+    pub fn new(context: Arc<McpContext>) -> anyhow::Result<Self> {
+        let scanner = Arc::new(resources::ResourceScanner::new(context.clone())?);
+        let executor = Arc::new(executor::CliExecutor::new(context.clone()));
 
         Ok(Self {
             context,
-            _working_dir: working_dir,
             scanner,
             executor,
             cached_tools: Arc::new(Mutex::new(None)),
@@ -225,16 +223,12 @@ impl ServerHandler for GolemMcpServer {
 }
 
 /// Start MCP server on specified port
-pub async fn serve(
-    context: Arc<McpContext>,
-    working_dir: PathBuf,
-    port: u16,
-) -> anyhow::Result<()> {
+pub async fn serve(context: Arc<McpContext>, port: u16) -> anyhow::Result<()> {
     if port == 0 {
         anyhow::bail!("Invalid port number: {}", port);
     }
 
-    let mcp_service = GolemMcpServer::new(context, working_dir)?;
+    let mcp_service = GolemMcpServer::new(context)?;
     let http_service = StreamableHttpService::builder()
         .service_factory(Arc::new(move || Ok(mcp_service.clone())))
         .session_manager(Arc::new(LocalSessionManager::default()))
@@ -254,7 +248,6 @@ pub async fn serve(
 
 pub async fn serve_with_shutdown(
     context: Arc<McpContext>,
-    working_dir: PathBuf,
     port: u16,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -262,7 +255,7 @@ pub async fn serve_with_shutdown(
         anyhow::bail!("Invalid port number: {}", port);
     }
 
-    let mcp_service = GolemMcpServer::new(context, working_dir)?;
+    let mcp_service = GolemMcpServer::new(context)?;
     let http_service = StreamableHttpService::builder()
         .service_factory(Arc::new(move || Ok(mcp_service.clone())))
         .session_manager(Arc::new(LocalSessionManager::default()))

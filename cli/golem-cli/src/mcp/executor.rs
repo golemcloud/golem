@@ -1,18 +1,23 @@
+use crate::mcp::context::McpContext;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{Map, Value};
-use std::path::PathBuf;
 use std::process::Stdio;
+use std::{path::PathBuf, sync::Arc};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CliExecutor {
-    working_dir: PathBuf,
+    context: Arc<McpContext>,
 }
 
 impl CliExecutor {
-    pub fn new(working_dir: PathBuf) -> Self {
-        Self { working_dir }
+    pub fn new(context: Arc<McpContext>) -> Self {
+        Self { context }
+    }
+
+    fn working_dir(&self) -> &PathBuf {
+        &self.context.working_dir
     }
 
     pub async fn execute_cli_command_streaming(
@@ -27,7 +32,7 @@ impl CliExecutor {
             .args(&cli_args)
             .arg("--format")
             .arg("json")
-            .current_dir(&self.working_dir)
+            .current_dir(self.working_dir())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -142,7 +147,10 @@ mod tests {
 
     #[test]
     fn test_build_full_args() {
-        let executor = CliExecutor::new(PathBuf::from("/tmp/work"));
+        let ctx = Arc::new(McpContext {
+            working_dir: PathBuf::from("/tmp/work"),
+        });
+        let executor = CliExecutor::new(ctx);
 
         let args = executor
             .build_full_cli_args("component-build", &None)
@@ -153,7 +161,10 @@ mod tests {
 
     #[test]
     fn test_build_args_with_flags() {
-        let executor = CliExecutor::new(PathBuf::from("/tmp/work"));
+        let ctx = Arc::new(McpContext {
+            working_dir: PathBuf::from("/tmp/work"),
+        });
+        let executor = CliExecutor::new(ctx);
 
         let mut map = Map::new();
         map.insert("force_build".to_string(), json!(true));
@@ -172,7 +183,10 @@ mod tests {
 
     #[test]
     fn test_build_args_positional() {
-        let executor = CliExecutor::new(PathBuf::from("/tmp/work"));
+        let ctx = Arc::new(McpContext {
+            working_dir: PathBuf::from("/tmp/work"),
+        });
+        let executor = CliExecutor::new(ctx);
 
         let mut map = Map::new();
         map.insert(
@@ -192,7 +206,10 @@ mod tests {
 
     #[test]
     fn test_flags_and_positionals_together() {
-        let executor = CliExecutor::new(PathBuf::from("/tmp/work"));
+        let ctx = Arc::new(McpContext {
+            working_dir: PathBuf::from("/tmp/work"),
+        });
+        let executor = CliExecutor::new(ctx);
         let mut map = Map::new();
         map.insert("set-active".to_string(), json!("golem-cloud"));
         map.insert("default-format".to_string(), json!("json"));
