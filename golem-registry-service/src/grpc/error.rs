@@ -16,6 +16,7 @@ use crate::services::account_usage::error::{AccountUsageError, LimitExceededErro
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
+use crate::services::deployment::DeployedRoutesError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -190,6 +191,24 @@ impl From<ComponentResolverError> for GrpcApiError {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
             _ => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<DeployedRoutesError> for GrpcApiError {
+    fn from(value: DeployedRoutesError) -> Self {
+        let error: String = value.to_string();
+        match value {
+            DeployedRoutesError::NoActiveRoutesForDomain(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+            DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+            DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

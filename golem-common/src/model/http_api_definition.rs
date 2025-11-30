@@ -26,16 +26,21 @@ use desert_rust::BinaryCodec;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-newtype_uuid!(HttpApiDefinitionId);
+newtype_uuid!(
+    HttpApiDefinitionId,
+    golem_api_grpc::proto::golem::apidefinition::HttpApiDefinitionId
+);
 
 declare_revision!(HttpApiDefinitionRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display, PartialOrd, Eq, Ord)]
+    #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct HttpApiDefinitionName(pub String);
 
     // User provided version. See HttpApiDefinitionRevision for the "proper" golem version.
-    #[derive(Display)]
+    #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
+    #[desert(transparent)]
     pub struct HttpApiDefinitionVersion(pub String);
 }
 
@@ -203,41 +208,7 @@ declare_unions! {
 }
 
 mod protobuf {
-    use super::{GatewayBindingType, RouteMethod};
-
-    impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType>
-        for GatewayBindingType
-    {
-        type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType,
-        ) -> Result<Self, Self::Error> {
-            use golem_api_grpc::proto::golem::apidefinition::GatewayBindingType as GrpcGatewayBindingType;
-
-            match value {
-                GrpcGatewayBindingType::Worker => Ok(Self::Worker),
-                GrpcGatewayBindingType::CorsPreflight => Ok(Self::CorsPreflight),
-                GrpcGatewayBindingType::HttpHandler => Ok(Self::HttpHandler),
-                GrpcGatewayBindingType::SwaggerUi => Ok(Self::SwaggerUi),
-                GrpcGatewayBindingType::FileServer => Ok(Self::FileServer),
-                GrpcGatewayBindingType::Unspecified => {
-                    Err("unkown gateway binding type".to_string())
-                }
-            }
-        }
-    }
-
-    impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
-        fn from(value: GatewayBindingType) -> Self {
-            match value {
-                GatewayBindingType::Worker => Self::Worker,
-                GatewayBindingType::CorsPreflight => Self::CorsPreflight,
-                GatewayBindingType::HttpHandler => Self::HttpHandler,
-                GatewayBindingType::SwaggerUi => Self::SwaggerUi,
-                GatewayBindingType::FileServer => Self::FileServer,
-            }
-        }
-    }
+    use super::RouteMethod;
 
     impl TryFrom<golem_api_grpc::proto::golem::apidefinition::HttpMethod> for RouteMethod {
         type Error = String;

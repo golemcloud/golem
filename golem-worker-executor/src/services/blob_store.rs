@@ -435,15 +435,15 @@ mod tests {
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new_v4();
         assert!(!blob_store
-            .container_exists(environment_id.clone(), "container1".to_string())
+            .container_exists(environment_id, "container1".to_string())
             .await
             .unwrap());
         blob_store
-            .create_container(environment_id.clone(), "container1".to_string())
+            .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
         assert!(blob_store
-            .container_exists(environment_id.clone(), "container1".to_string())
+            .container_exists(environment_id, "container1".to_string())
             .await
             .unwrap());
     }
@@ -451,15 +451,15 @@ mod tests {
     async fn test_container_delete(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new_v4();
         blob_store
-            .create_container(environment_id.clone(), "container1".to_string())
+            .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
         blob_store
-            .delete_container(environment_id.clone(), "container1".to_string())
+            .delete_container(environment_id, "container1".to_string())
             .await
             .unwrap();
         assert!(!blob_store
-            .container_exists(environment_id.clone(), "container1".to_string())
+            .container_exists(environment_id, "container1".to_string())
             .await
             .unwrap());
     }
@@ -468,22 +468,18 @@ mod tests {
         let environment_id = EnvironmentId::new_v4();
 
         blob_store
-            .create_container(environment_id.clone(), "container1".to_string())
+            .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
         assert!(!blob_store
-            .has_object(
-                environment_id.clone(),
-                "container1".to_string(),
-                "obj1".to_string()
-            )
+            .has_object(environment_id, "container1".to_string(), "obj1".to_string())
             .await
             .unwrap());
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
             .write_data(
-                environment_id.clone(),
+                environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
                 original_data.clone(),
@@ -493,7 +489,7 @@ mod tests {
 
         let read_data = blob_store
             .get_data(
-                environment_id.clone(),
+                environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
                 0,
@@ -504,11 +500,7 @@ mod tests {
 
         assert_eq!(original_data, read_data);
         assert!(blob_store
-            .has_object(
-                environment_id.clone(),
-                "container1".to_string(),
-                "obj1".to_string()
-            )
+            .has_object(environment_id, "container1".to_string(), "obj1".to_string())
             .await
             .unwrap());
     }
@@ -517,16 +509,16 @@ mod tests {
         let environment_id = EnvironmentId::new_v4();
 
         blob_store
-            .create_container(environment_id.clone(), "container1".to_string())
+            .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
         blob_store
-            .create_container(environment_id.clone(), "container2".to_string())
+            .create_container(environment_id, "container2".to_string())
             .await
             .unwrap();
 
         assert!(blob_store
-            .list_objects(environment_id.clone(), "container1".to_string(),)
+            .list_objects(environment_id, "container1".to_string(),)
             .await
             .unwrap()
             .is_empty());
@@ -534,7 +526,7 @@ mod tests {
         let original_data = vec![1, 2, 3, 4];
         blob_store
             .write_data(
-                environment_id.clone(),
+                environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
                 original_data.clone(),
@@ -544,7 +536,7 @@ mod tests {
 
         blob_store
             .copy_object(
-                environment_id.clone(),
+                environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
                 "container1".to_string(),
@@ -554,7 +546,7 @@ mod tests {
             .unwrap();
 
         let mut result = blob_store
-            .list_objects(environment_id.clone(), "container1".to_string())
+            .list_objects(environment_id, "container1".to_string())
             .await
             .unwrap();
 
@@ -564,7 +556,7 @@ mod tests {
 
         blob_store
             .move_object(
-                environment_id.clone(),
+                environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
                 "container2".to_string(),
@@ -575,7 +567,7 @@ mod tests {
 
         assert_eq!(
             blob_store
-                .list_objects(environment_id.clone(), "container1".to_string(),)
+                .list_objects(environment_id, "container1".to_string(),)
                 .await
                 .unwrap(),
             vec!["obj2"]
@@ -583,7 +575,7 @@ mod tests {
 
         assert_eq!(
             blob_store
-                .list_objects(environment_id.clone(), "container2".to_string(),)
+                .list_objects(environment_id, "container2".to_string(),)
                 .await
                 .unwrap(),
             vec!["obj3"]

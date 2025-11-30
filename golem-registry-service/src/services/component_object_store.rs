@@ -62,7 +62,7 @@ impl ComponentObjectStore {
                 COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::Components {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &PathBuf::from(object_key),
             )
@@ -97,7 +97,7 @@ impl ComponentObjectStore {
                 COMPONENT_FILES_LABEL,
                 "get_stream",
                 BlobStorageNamespace::Components {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &PathBuf::from(object_key),
             )
@@ -137,7 +137,7 @@ impl ComponentObjectStore {
         data: Arc<[u8]>,
     ) -> Result<(), Error> {
         let namespace = BlobStorageNamespace::Components {
-            environment_id: environment_id.clone(),
+            environment_id: *environment_id,
         };
 
         let path = &PathBuf::from(object_key);
@@ -154,7 +154,7 @@ impl ComponentObjectStore {
                         COMPONENT_FILES_LABEL,
                         "put",
                         BlobStorageNamespace::Components {
-                            environment_id: environment_id.clone(),
+                            environment_id: *environment_id,
                         },
                         &PathBuf::from(object_key),
                         data.as_ref(),

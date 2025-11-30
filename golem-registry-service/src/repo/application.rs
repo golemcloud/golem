@@ -55,13 +55,11 @@ pub trait ApplicationRepo: Send + Sync {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
 }
@@ -136,26 +134,18 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         let span = Self::span_app_id(&revision.application_id);
-        self.repo
-            .update(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.update(revision).instrument(span).await
     }
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         let span = Self::span_app_id(&revision.application_id);
-        self.repo
-            .delete(current_revision_id, revision)
-            .instrument(span)
-            .await
+        self.repo.delete(revision).instrument(span).await
     }
 }
 
@@ -302,7 +292,6 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
         let account_id = *account_id;
-        let revision = revision.ensure_first();
 
         self.with_tx_err("create", |tx| async move {
             tx.execute(
@@ -332,11 +321,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
     async fn update(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
-        let revision = revision.ensure_new(current_revision_id);
-
         self.with_tx_err("update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -345,7 +331,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     sqlx::query_as(indoc! { r#"
                         UPDATE applications
                         SET name = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
-                        WHERE application_id = $5 AND current_revision_id = $6
+                        WHERE application_id = $5
                         RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
@@ -353,7 +339,6 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
                     .bind(revision.application_id)
-                    .bind(current_revision_id)
                 )
                 .await
                 .to_error_on_unique_violation(ApplicationRepoError::ApplicationViolatesUniqueness)?
@@ -372,11 +357,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
 
     async fn delete(
         &self,
-        current_revision_id: i64,
         revision: ApplicationRevisionRecord,
     ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
-        let revision = revision.ensure_deletion(current_revision_id);
-
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -385,7 +367,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     sqlx::query_as(indoc! { r#"
                         UPDATE applications
                         SET name = $1, updated_at = $2, deleted_at = $2, modified_by = $3, current_revision_id = $4
-                        WHERE application_id = $5 AND current_revision_id = $6
+                        WHERE application_id = $5
                         RETURNING application_id, name, account_id, created_at, updated_at, deleted_at, modified_by, current_revision_id
                     "#})
                     .bind(&revision.name)
@@ -393,7 +375,6 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                     .bind(revision.audit.created_by)
                     .bind(revision.revision_id)
                     .bind(revision.application_id)
-                    .bind(current_revision_id)
                 )
                 .await?
                 .ok_or(ApplicationRepoError::ConcurrentModification)?;

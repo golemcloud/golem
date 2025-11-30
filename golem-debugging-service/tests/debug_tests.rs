@@ -454,7 +454,7 @@ async fn test_playback_and_fork(
     let playback_result = debug_executor.playback(first_boundary, None).await?;
 
     let target_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
+        component_id: worker_id.component_id,
         worker_name: "forked-worker".to_string(),
     };
 
@@ -549,7 +549,7 @@ async fn test_playback_with_overrides(
 
     // Fork from the last checkout boundary
     let target_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
+        component_id: worker_id.component_id,
         worker_name: "forked-worker".to_string(),
     };
 

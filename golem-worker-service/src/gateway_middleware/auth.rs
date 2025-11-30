@@ -20,7 +20,7 @@ use crate::gateway_execution::gateway_session_store::{
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_security::{IdentityProvider, OpenIdClient};
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::security_scheme::SecuritySchemeWithProviderMetadata;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use http::StatusCode;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims, CoreIdTokenVerifier};
 use openidconnect::{ClaimsVerificationError, Nonce};
@@ -29,13 +29,13 @@ use std::sync::Arc;
 use tracing::{debug, error};
 
 pub async fn apply_http_auth(
-    scheme: &SecuritySchemeWithProviderMetadata,
+    security_scheme: &SecuritySchemeDetails,
     input: &RichRequest,
     session_store: &Arc<dyn GatewaySessionStore>,
     identity_provider: &Arc<dyn IdentityProvider>,
 ) -> Result<MiddlewareSuccess, MiddlewareError> {
     let open_id_client = identity_provider
-        .get_client(&scheme.security_scheme)
+        .get_client(security_scheme)
         .await
         .map_err(|err| {
             MiddlewareError::Unauthorized(AuthorisationError::IdentityProviderError(err))
@@ -57,7 +57,7 @@ pub async fn apply_http_auth(
             input,
             identity_provider,
             &open_id_client,
-            scheme,
+            security_scheme,
         )
         .await
     } else {
@@ -66,7 +66,7 @@ pub async fn apply_http_auth(
             input,
             identity_provider,
             &open_id_client,
-            scheme,
+            security_scheme,
         )
         .await
     }
@@ -80,7 +80,7 @@ async fn get_session_details_or_redirect(
     input: &RichRequest,
     identity_provider: &Arc<dyn IdentityProvider>,
     open_id_client: &OpenIdClient,
-    scheme: &SecuritySchemeWithProviderMetadata,
+    security_scheme: &SecuritySchemeDetails,
 ) -> Result<MiddlewareSuccess, MiddlewareError> {
     let session_id = SessionId(state_from_request.to_string());
 
@@ -105,7 +105,7 @@ async fn get_session_details_or_redirect(
                 input,
                 identity_provider,
                 open_id_client,
-                scheme,
+                security_scheme,
             )
             .await
         }
@@ -115,7 +115,7 @@ async fn get_session_details_or_redirect(
                 input,
                 identity_provider,
                 open_id_client,
-                scheme,
+                security_scheme,
             )
             .await
         }
@@ -140,7 +140,7 @@ async fn get_claims(
     input: &RichRequest,
     identity_provider: &Arc<dyn IdentityProvider>,
     open_id_client: &OpenIdClient,
-    scheme: &SecuritySchemeWithProviderMetadata,
+    security_scheme: &SecuritySchemeDetails,
 ) -> Result<MiddlewareSuccess, MiddlewareError> {
     if let Some(nonce) = nonce.as_string() {
         let token_claims_result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
@@ -160,7 +160,7 @@ async fn get_claims(
                     input,
                     identity_provider,
                     open_id_client,
-                    scheme,
+                    security_scheme,
                 )
                 .await
             }
@@ -184,7 +184,7 @@ async fn redirect(
     input: &RichRequest,
     identity_provider: &Arc<dyn IdentityProvider>,
     client: &OpenIdClient,
-    scheme: &SecuritySchemeWithProviderMetadata,
+    security_scheme: &SecuritySchemeDetails,
 ) -> Result<MiddlewareSuccess, MiddlewareError> {
     let redirect_uri = input
         .underlying
@@ -195,12 +195,8 @@ async fn redirect(
         ))?
         .to_string();
 
-    let authorization = identity_provider.get_authorization_url(
-        client,
-        scheme.security_scheme.scopes.clone(),
-        None,
-        None,
-    );
+    let authorization =
+        identity_provider.get_authorization_url(client, security_scheme.scopes.clone(), None, None);
 
     let state = authorization.csrf_state.secret();
 

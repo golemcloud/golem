@@ -39,11 +39,10 @@ pub struct WorkerServiceConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
-    // pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
-    pub domain_records: DomainRecordsConfig,
     pub registry_service: RegistryServiceConfig,
     pub cors_origin_regex: String,
+    pub route_resolver: RouteResolverConfig,
 }
 
 impl WorkerServiceConfig {
@@ -91,26 +90,24 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.blob_storage.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "API definition service:");
-        // let _ = writeln!(
-        //     &mut result,
-        //     "{}",
-        //     self.api_definition.to_safe_string_indented()
-        // );
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
-        let _ = writeln!(&mut result, "domain records:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.domain_records.to_safe_string_indented()
-        );
         let _ = writeln!(&mut result, "registry service:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.registry_service.to_safe_string_indented()
         );
+
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
+
+        let _ = writeln!(&mut result, "route resolver:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.route_resolver.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "user auth resolver:");
 
         result
     }
@@ -141,9 +138,9 @@ impl Default for WorkerServiceConfig {
             blob_storage: BlobStorageConfig::default(),
             // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
-            domain_records: DomainRecordsConfig::default(),
             registry_service: RegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
+            route_resolver: RouteResolverConfig::default(),
         }
     }
 }
@@ -207,101 +204,39 @@ impl GatewaySessionStorageConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DomainRecordsConfig {
-    pub subdomain_black_list: Vec<String>,
-    pub domain_allow_list: Vec<String>,
-    pub register_domain_black_list: Vec<String>,
+pub struct RouteResolverConfig {
+    pub router_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub router_cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub router_cache_eviction_period: Duration,
 }
 
-impl SafeDisplay for DomainRecordsConfig {
+impl SafeDisplay for RouteResolverConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(
             &mut result,
-            "subdomain black list: {}",
-            self.subdomain_black_list.join(", ")
+            "router_cache_max_capacity: {}",
+            self.router_cache_max_capacity
         );
+        let _ = writeln!(&mut result, "router_cache_ttl: {:?}", self.router_cache_ttl);
         let _ = writeln!(
             &mut result,
-            "domain allow list: {}",
-            self.domain_allow_list.join(", ")
-        );
-        let _ = writeln!(
-            &mut result,
-            "register domain black list: {}",
-            self.register_domain_black_list.join(", ")
+            "router_cache_eviction_period: {:?}",
+            self.router_cache_eviction_period
         );
         result
     }
 }
 
-impl Default for DomainRecordsConfig {
+impl Default for RouteResolverConfig {
     fn default() -> Self {
         Self {
-            subdomain_black_list: vec![
-                "api-gateway".to_string(),
-                "release".to_string(),
-                "grafana".to_string(),
-            ],
-            domain_allow_list: vec![],
-            register_domain_black_list: vec![
-                "dev-api.golem.cloud".to_string(),
-                "api.golem.cloud".to_string(),
-            ],
+            router_cache_max_capacity: 1024,
+            router_cache_ttl: Duration::from_mins(10),
+            router_cache_eviction_period: Duration::from_mins(1),
         }
-    }
-}
-
-impl DomainRecordsConfig {
-    pub fn is_domain_available_for_registration(&self, domain_name: &str) -> bool {
-        let dn = domain_name.to_lowercase();
-        !self
-            .register_domain_black_list
-            .iter()
-            .any(|d| domain_match(&dn, d))
-    }
-
-    pub fn is_domain_available(&self, domain_name: &str) -> bool {
-        let dn = domain_name.to_lowercase();
-
-        let in_register_black_list = self
-            .register_domain_black_list
-            .iter()
-            .any(|d| domain_match(&dn, d));
-
-        if in_register_black_list {
-            let in_allow_list = self.domain_allow_list.iter().any(|d| domain_match(&dn, d));
-
-            if !in_allow_list {
-                return false;
-            }
-        }
-
-        true
-    }
-
-    pub fn is_site_available(&self, api_site: &str, hosted_zone: &str) -> bool {
-        let hz = if hosted_zone.ends_with('.') {
-            &hosted_zone[0..hosted_zone.len() - 1]
-        } else {
-            hosted_zone
-        };
-
-        let s = api_site.to_lowercase();
-
-        !self.subdomain_black_list.iter().any(|p| {
-            let d = format!("{p}.{hz}").to_lowercase();
-            d == s
-        })
-    }
-}
-
-fn domain_match(domain: &str, domain_cfg: &str) -> bool {
-    if domain.ends_with(domain_cfg) {
-        let prefix = &domain[0..domain.len() - domain_cfg.len()];
-        prefix.is_empty() || prefix.ends_with('.')
-    } else {
-        false
     }
 }
 
@@ -316,54 +251,11 @@ mod tests {
     use test_r::test;
 
     use super::make_worker_service_config_loader;
-    use crate::config::{domain_match, DomainRecordsConfig};
 
     #[test]
     pub fn config_is_loadable() {
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");
-    }
-
-    #[test]
-    pub fn test_is_domain_match() {
-        assert!(domain_match("dev-api.golem.cloud", "dev-api.golem.cloud"));
-        assert!(domain_match("api.golem.cloud", "api.golem.cloud"));
-        assert!(domain_match("dev.api.golem.cloud", "api.golem.cloud"));
-        assert!(!domain_match("dev.api.golem.cloud", "dev-api.golem.cloud"));
-        assert!(!domain_match("dev-api.golem.cloud", "api.golem.cloud"));
-    }
-
-    #[test]
-    pub fn test_is_domain_available_for_registration() {
-        let config = DomainRecordsConfig::default();
-        assert!(!config.is_domain_available_for_registration("dev-api.golem.cloud"));
-        assert!(!config.is_domain_available_for_registration("api.golem.cloud"));
-        assert!(!config.is_domain_available_for_registration("my.dev-api.golem.cloud"));
-        assert!(config.is_domain_available_for_registration("test.cloud"));
-    }
-
-    #[test]
-    pub fn test_is_domain_available() {
-        let config = DomainRecordsConfig {
-            domain_allow_list: vec!["dev-api.golem.cloud".to_string()],
-            ..Default::default()
-        };
-
-        assert!(config.is_domain_available("dev-api.golem.cloud"));
-        assert!(config.is_domain_available("test.cloud"));
-        assert!(!config.is_domain_available("api.golem.cloud"));
-    }
-
-    #[test]
-    pub fn test_is_site_available() {
-        let config = DomainRecordsConfig::default();
-
-        let hosted_zone = "dev-api.golem.cloud.";
-
-        assert!(!config.is_site_available("api-gateway.dev-api.golem.cloud", hosted_zone));
-        assert!(!config.is_site_available("RELEASE.dev-api.golem.cloud", hosted_zone));
-        assert!(!config.is_site_available("Grafana.dev-api.golem.cloud", hosted_zone));
-        assert!(config.is_site_available("foo.dev-api.golem.cloud", hosted_zone));
     }
 }

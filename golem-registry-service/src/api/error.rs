@@ -17,7 +17,7 @@ use crate::services::account_usage::error::LimitExceededError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
-use crate::services::deployment::DeploymentError;
+use crate::services::deployment::{DeployedRoutesError, DeploymentError};
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
@@ -105,6 +105,15 @@ impl ApiErrorDetails for ApiError {
             Self::Conflict(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
         }
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(value: anyhow::Error) -> Self {
+        Self::InternalError(Json(ErrorBody {
+            error: "Internal error".to_string(),
+            cause: Some(value),
+        }))
     }
 }
 
@@ -577,6 +586,23 @@ impl From<HttpApiDeploymentError> for ApiError {
 
             HttpApiDeploymentError::Unauthorized(inner) => inner.into(),
             HttpApiDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<DeployedRoutesError> for ApiError {
+    fn from(value: DeployedRoutesError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DeployedRoutesError::NoActiveRoutesForDomain(_)
+            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DeployedRoutesError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

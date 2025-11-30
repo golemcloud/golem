@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_certificate;
-pub mod api_definition;
-pub mod api_deployment;
-pub mod api_domain;
-pub mod security_scheme;
+mod shopping_cart;
+
+use golem_test_framework::config::EnvBasedTestDependencies;
+use test_r::inherit_test_dep;
+
+inherit_test_dep!(EnvBasedTestDependencies);

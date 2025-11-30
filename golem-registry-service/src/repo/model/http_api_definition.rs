@@ -75,20 +75,18 @@ pub struct HttpApiDefinitionRevisionRecord {
 }
 
 impl HttpApiDefinitionRevisionRecord {
-    pub fn ensure_first(self) -> Self {
-        Self {
-            revision_id: 0,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
+    pub fn for_recreation(
+        mut self,
+        http_api_definition_id: Uuid,
+        revision_id: i64,
+    ) -> Result<Self, HttpApiDefinitionRepoError> {
+        let revision: HttpApiDefinitionRevision = revision_id.into();
+        let next_revision_id = revision.next()?.into();
 
-    pub fn ensure_new(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
+        self.http_api_definition_id = http_api_definition_id;
+        self.revision_id = next_revision_id;
+
+        Ok(self)
     }
 
     pub fn creation(
@@ -112,7 +110,7 @@ impl HttpApiDefinitionRevisionRecord {
     pub fn from_model(value: HttpApiDefinition, audit: DeletableRevisionAuditFields) -> Self {
         let mut value = Self {
             http_api_definition_id: value.id.0,
-            revision_id: value.revision.0 as i64,
+            revision_id: value.revision.into(),
             version: value.version.0,
             hash: SqlBlake3Hash::empty(),
             audit,
@@ -131,7 +129,7 @@ impl HttpApiDefinitionRevisionRecord {
     ) -> Self {
         let mut value = Self {
             http_api_definition_id,
-            revision_id: current_revision_id + 1,
+            revision_id: current_revision_id,
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),

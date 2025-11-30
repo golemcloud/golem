@@ -12,18 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::identity_provider_metadata::GolemIdentityProviderMetadata;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeDto, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
 };
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SecuritySchemeWithProviderMetadata {
-    pub security_scheme: SecurityScheme,
-    pub provider_metadata: GolemIdentityProviderMetadata,
-}
 
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {

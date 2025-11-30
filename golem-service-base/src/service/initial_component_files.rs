@@ -46,7 +46,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "exists",
                 BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -66,7 +66,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -88,7 +88,7 @@ impl InitialComponentFilesService {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::InitialComponentFiles {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &key,
             )
@@ -103,7 +103,7 @@ impl InitialComponentFilesService {
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles {
-                        environment_id: environment_id.clone(),
+                        environment_id: *environment_id,
                     },
                     &key,
                     &data.erased(),

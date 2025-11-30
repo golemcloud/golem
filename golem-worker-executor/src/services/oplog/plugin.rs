@@ -117,7 +117,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
         let workers = self.workers.upgradable_read().await;
         let key = (
-            environment_id.clone(),
+            *environment_id,
             definition.name.to_string(),
             definition.version.to_string(),
         );
@@ -136,7 +136,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             .get_metadata(&plugin_component_id, Some(plugin_component_version))
                             .await?;
                         let owned_worker_id = OwnedWorkerId {
-                            environment_id: environment_id.clone(),
+                            environment_id: *environment_id,
                             worker_id: worker_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
@@ -159,7 +159,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     ) -> Result<WorkerId, WorkerExecutorError> {
         let current_assignment = self.shard_service.current_assignment()?;
         let worker_id = Self::generate_local_worker_id(
-            plugin_component_id.clone(),
+            *plugin_component_id,
             &current_assignment.shard_ids,
             current_assignment.number_of_shards,
         );
@@ -174,7 +174,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             PluginSpec::OplogProcessor(OplogProcessorPluginSpec {
                 component_id,
                 component_revision,
-            }) => Ok((component_id.clone(), *component_revision)),
+            }) => Ok((*component_id, *component_revision)),
             _ => Err(WorkerExecutorError::runtime(
                 "Plugin is not an oplog processor",
             )),
@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                 let uuid = Uuid::from_u128_le(current);
                 let worker_name = uuid.to_string();
                 let worker_id = WorkerId {
-                    component_id: component_id.clone(),
+                    component_id,
                     worker_name,
                 };
                 let shard_id = ShardId::from_worker_id(&worker_id, number_of_shards);
@@ -250,8 +250,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
 
         let idempotency_key = IdempotencyKey::fresh();
 
-        let val_account_info = Value::Record(vec![worker_metadata.created_by.clone().into_value()]);
-        let val_component_id = worker_metadata.worker_id.component_id.clone().into_value();
+        let val_account_info = Value::Record(vec![worker_metadata.created_by.into_value()]);
+        let val_component_id = worker_metadata.worker_id.component_id.into_value();
         let mut config_pairs = Vec::new();
         for (key, value) in running_plugin.configuration.iter() {
             config_pairs.push(Value::Tuple(vec![

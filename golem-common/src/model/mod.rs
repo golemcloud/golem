@@ -54,7 +54,7 @@ use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
 use crate::model::regions::DeletedRegions;
-use crate::SafeDisplay;
+use crate::{declare_structs, SafeDisplay};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
     SerializationContext,
@@ -67,6 +67,7 @@ use http::Uri;
 use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
@@ -230,6 +231,12 @@ impl FromValue for Timestamp {
     }
 }
 
+declare_structs! {
+    pub struct VersionInfo {
+        pub version: String,
+    }
+}
+
 /// Associates a worker-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, BinaryCodec)]
 #[desert(evolution())]
@@ -241,7 +248,7 @@ pub struct OwnedWorkerId {
 impl OwnedWorkerId {
     pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            environment_id: environment_id.clone(),
+            environment_id: *environment_id,
             worker_id: worker_id.clone(),
         }
     }
@@ -251,11 +258,11 @@ impl OwnedWorkerId {
     }
 
     pub fn environment_id(&self) -> EnvironmentId {
-        self.environment_id.clone()
+        self.environment_id
     }
 
     pub fn component_id(&self) -> ComponentId {
-        self.worker_id.component_id.clone()
+        self.worker_id.component_id
     }
 
     pub fn worker_name(&self) -> String {
@@ -1653,6 +1660,58 @@ impl Display for WorkerEvent {
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct Empty {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UntypedJsonBody(pub serde_json::Value);
+
+impl poem_openapi::types::Type for UntypedJsonBody {
+    const IS_REQUIRED: bool = true;
+    type RawValueType = Self;
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        "UntypedJsonBody".into()
+    }
+
+    fn schema_ref() -> poem_openapi::registry::MetaSchemaRef {
+        poem_openapi::registry::MetaSchemaRef::Reference(Self::name().into_owned())
+    }
+
+    fn register(registry: &mut poem_openapi::registry::Registry) {
+        registry.create_schema::<Self, _>(Self::name().into_owned(), |_| {
+            let mut schema = poem_openapi::registry::MetaSchema::new("object");
+            schema.description = Some("A json body without a static schema");
+            schema
+        });
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl poem_openapi::types::ToJSON for UntypedJsonBody {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(self.0.clone())
+    }
+}
+
+impl poem_openapi::types::ParseFromJSON for UntypedJsonBody {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        match value {
+            Some(json) => Ok(Self(json)),
+            _ => Err(poem_openapi::types::ParseError::<UntypedJsonBody>::custom(
+                "Received empty value for UntypedJsonBody",
+            )),
+        }
+    }
+}
 
 impl From<WorkerId> for golem_wasm::AgentId {
     fn from(worker_id: WorkerId) -> Self {

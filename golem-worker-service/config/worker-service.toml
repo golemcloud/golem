@@ -20,11 +20,6 @@ database = "../data/golem_worker.sqlite"
 foreign_keys = false
 max_connections = 10
 
-[domain_records]
-domain_allow_list = []
-register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-subdomain_black_list = ["api-gateway", "release", "grafana"]
-
 [gateway_session_storage]
 type = "Redis"
 
@@ -55,6 +50,11 @@ max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[route_resolver]
+router_cache_eviction_period = "1m"
+router_cache_max_capacity = 1024
+router_cache_ttl = "10m"
 
 [routing_table]
 connect_timeout = "10s"
@@ -150,11 +150,6 @@ multiplier = 10.0
 # port = 5432
 # username = "postgres"
 # 
-# [domain_records]
-# domain_allow_list = []
-# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-# subdomain_black_list = ["api-gateway", "release", "grafana"]
-# 
 # [gateway_session_storage]
 # type = "Redis"
 # 
@@ -185,6 +180,11 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [route_resolver]
+# router_cache_eviction_period = "1m"
+# router_cache_max_capacity = 1024
+# router_cache_ttl = "10m"
 # 
 # [routing_table]
 # connect_timeout = "10s"
@@ -295,11 +295,6 @@ multiplier = 10.0
 # port = 5432
 # username = "postgres"
 # 
-# [domain_records]
-# domain_allow_list = []
-# register_domain_black_list = ["dev-api.golem.cloud", "api.golem.cloud"]
-# subdomain_black_list = ["api-gateway", "release", "grafana"]
-# 
 # [gateway_session_storage]
 # type = "Redis"
 # 
@@ -330,6 +325,11 @@ multiplier = 10.0
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [route_resolver]
+# router_cache_eviction_period = "1m"
+# router_cache_max_capacity = 1024
+# router_cache_ttl = "10m"
 # 
 # [routing_table]
 # connect_timeout = "10s"

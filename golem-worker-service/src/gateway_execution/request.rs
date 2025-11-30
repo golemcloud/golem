@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::gateway_binding_resolver::ResolvedRouteEntry;
 use super::gateway_session_store::{DataKey, GatewaySessionStore, SessionId};
+use super::route_resolver::ResolvedRouteEntry;
 use crate::gateway_router::PathParamExtractor;
+use crate::model::{HttpMiddleware, RichGatewayBindingCompiled};
 use bytes::Bytes;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::compiled_gateway_binding::GatewayBindingCompiled;
-use golem_service_base::custom_api::http_middlewares::HttpMiddlewares;
 use golem_service_base::custom_api::path_pattern::QueryInfo;
 use http::HeaderMap;
 use serde_json::Value;
@@ -208,8 +207,8 @@ impl RichRequest {
 }
 
 pub struct SplitResolvedRouteEntryResult {
-    pub binding: GatewayBindingCompiled,
-    pub middlewares: Option<HttpMiddlewares>,
+    pub binding: RichGatewayBindingCompiled,
+    pub middlewares: Vec<HttpMiddleware>,
     pub rich_request: RichRequest,
     pub account_id: AccountId,
     pub environment_id: EnvironmentId,

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use anyhow::anyhow;
 use assert2::assert;
 use golem_client::api::{
@@ -38,7 +37,6 @@ use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 use tracing::{debug, info};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -219,7 +217,7 @@ async fn create_component_with_plugins_and_update_installations(
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: library_plugin.id.clone(),
+                plugin_registration_id: library_plugin.id,
             },
         )
         .await?;
@@ -323,7 +321,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: library_plugin.id.clone(),
+                plugin_registration_id: library_plugin.id,
             },
         )
         .await?;
@@ -346,7 +344,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 env: None,
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
-                    environment_plugin_grant_id: library_plugin_grant.id.clone(),
+                    environment_plugin_grant_id: library_plugin_grant.id,
                     priority: PluginPriority(0),
                     parameters: plugin_parameters.clone(),
                 })],
@@ -440,7 +438,7 @@ async fn install_component_transformer_plugin(
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_registration_id: component_transformer_plugin.id.clone(),
+                plugin_registration_id: component_transformer_plugin.id,
             },
         )
         .await?;

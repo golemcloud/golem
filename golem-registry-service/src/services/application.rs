@@ -106,7 +106,7 @@ impl ApplicationService {
             .await
             .map_err(|err| match err {
                 AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    ApplicationError::ParentAccountNotFound(account_id.clone())
+                    ApplicationError::ParentAccountNotFound(account_id)
                 }
                 other => other.into(),
             })?;
@@ -120,7 +120,7 @@ impl ApplicationService {
         let application = Application {
             id: ApplicationId::new_v4(),
             revision: ApplicationRevision::INITIAL,
-            account_id: account_id.clone(),
+            account_id,
             name: data.name,
         };
 
@@ -166,7 +166,7 @@ impl ApplicationService {
 
         let result = self
             .application_repo
-            .update(update.current_revision.into(), record)
+            .update(record)
             .await
             .map_err(|err| match err {
                 ApplicationRepoError::ConcurrentModification => {
@@ -202,7 +202,7 @@ impl ApplicationService {
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         self.application_repo
-            .delete(current_revision.into(), record)
+            .delete(record)
             .await
             .map_err(|err| match err {
                 ApplicationRepoError::ConcurrentModification => {
@@ -223,13 +223,11 @@ impl ApplicationService {
             .application_repo
             .get_by_id(&application_id.0)
             .await?
-            .ok_or(ApplicationError::ApplicationNotFound(
-                application_id.clone(),
-            ))?
+            .ok_or(ApplicationError::ApplicationNotFound(*application_id))?
             .into();
 
         auth.authorize_account_action(&application.account_id, AccountAction::ViewApplications)
-            .map_err(|_| ApplicationError::ApplicationNotFound(application_id.clone()))?;
+            .map_err(|_| ApplicationError::ApplicationNotFound(*application_id))?;
 
         Ok(application)
     }

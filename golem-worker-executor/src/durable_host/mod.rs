@@ -265,7 +265,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
-                worker_config.created_by.clone(),
+                worker_config.created_by,
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
                 shard_service,
@@ -2203,7 +2203,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         for worker in workers {
             let owned_worker_id = worker.initial_worker_metadata.owned_worker_id();
-            let created_by = worker.initial_worker_metadata.created_by.clone();
+            let created_by = worker.initial_worker_metadata.created_by;
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
                 &owned_worker_id,
@@ -2787,7 +2787,7 @@ impl PrivateDurableWorkerState {
             .schedule(
                 when,
                 ScheduledAction::CompletePromise {
-                    account_id: self.created_by.clone(),
+                    account_id: self.created_by,
                     environment_id: self.owned_worker_id.environment_id(),
                     promise_id,
                 },

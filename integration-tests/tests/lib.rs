@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod api;
+mod custom_api;
 mod fork;
 mod rib;
 mod rib_repl;

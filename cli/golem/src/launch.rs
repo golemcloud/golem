@@ -301,8 +301,7 @@ fn worker_executor_config(
             host: args.router_addr.clone(),
             port: worker_service_run_details.grpc_port,
             retries: Default::default(),
-            connect_timeout: Default::default(),
-            ..Default::default()
+            connect_timeout: Default::default()
         },
         ..Default::default()
     };

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::assert;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreatePluginError, RegistryServiceGetPluginByIdError,
@@ -28,7 +27,6 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -144,10 +142,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             .into_iter()
             .map(|p| p.id)
             .collect::<HashSet<_>>();
-        assert!(
-            plugin_ids
-                == HashSet::from_iter(vec![app_plugin.id.clone(), library_plugin.id.clone()])
-        );
+        assert!(plugin_ids == HashSet::from_iter(vec![app_plugin.id, library_plugin.id]));
     }
 
     Ok(())
@@ -211,7 +206,7 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id.clone(),
+                    component_id: component.id,
                     component_revision: component.revision,
                 }),
             },
@@ -229,7 +224,7 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id.clone(),
+                    component_id: component.id,
                     component_revision: component.revision,
                 }),
             },
@@ -269,7 +264,7 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id.clone(),
+                    component_id: component.id,
                     component_revision: component.revision,
                 }),
             },
@@ -312,7 +307,7 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.id.clone(),
+                    component_id: component.id,
                     component_revision: component.revision,
                 }),
             },

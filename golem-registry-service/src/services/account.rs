@@ -18,7 +18,9 @@ use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
-use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
+use golem_common::model::account::{
+    Account, AccountCreation, AccountId, AccountRevision, AccountUpdate,
+};
 use golem_common::model::account::{AccountSetRoles, PlanId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
@@ -86,7 +88,7 @@ impl AccountService {
             if existing_account.is_none() {
                 info!("Creating initial account {} with id {}", name, account.id);
                 self.create_internal(
-                    account_id.clone(),
+                    account_id,
                     AccountCreation {
                         name: account.name.clone(),
                         email: account.email.clone(),
@@ -169,15 +171,18 @@ impl AccountService {
     pub async fn delete(
         &self,
         account_id: &AccountId,
+        current_revision: AccountRevision,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.get(account_id, auth).await?;
 
         auth.authorize_account_action(account_id, AccountAction::DeleteAccount)?;
 
-        info!("Deleting account: {}", account_id);
+        if current_revision != account.revision {
+            return Err(AccountError::ConcurrentUpdate);
+        };
 
-        let current_revision = account.revision;
+        info!("Deleting account: {}", account_id);
 
         account.revision = account.revision.next()?;
 
@@ -186,10 +191,7 @@ impl AccountService {
             DeletableRevisionAuditFields::deletion(auth.account_id().0),
         );
 
-        let result = self
-            .account_repo
-            .delete(current_revision.into(), record)
-            .await;
+        let result = self.account_repo.delete(record).await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),
@@ -204,14 +206,13 @@ impl AccountService {
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         auth.authorize_account_action(account_id, AccountAction::ViewAccount)
-            // Visibility is not enforced in the repo, so we need to map permissions to visibility
-            .map_err(|_| AccountError::AccountNotFound(account_id.clone()))?;
+            .map_err(|_| AccountError::AccountNotFound(*account_id))?;
 
         let account = self
             .account_repo
             .get_by_id(&account_id.0)
             .await?
-            .ok_or(AccountError::AccountNotFound(account_id.clone()))?
+            .ok_or(AccountError::AccountNotFound(*account_id))?
             .try_into()?;
 
         Ok(account)
@@ -232,7 +233,6 @@ impl AccountService {
             .try_into()?;
 
         auth.authorize_account_action(&account.id, AccountAction::ViewAccount)
-            // Visibility is not enforced in the repo, so we need to map permissions to visibility
             .map_err(|_| AccountError::AccountByEmailNotFound(account_email.to_string()))?;
 
         Ok(account)
@@ -270,7 +270,7 @@ impl AccountService {
             account.email,
             plan_id,
             roles,
-            auth.account_id().clone(),
+            *auth.account_id(),
         );
 
         let result = self.account_repo.create(record).await;
@@ -289,8 +289,6 @@ impl AccountService {
         mut account: Account,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        let current_revision = account.revision;
-
         account.revision = account.revision.next()?;
 
         let record = AccountRevisionRecord::from_model(
@@ -298,10 +296,7 @@ impl AccountService {
             DeletableRevisionAuditFields::new(auth.account_id().0),
         );
 
-        let result = self
-            .account_repo
-            .update(current_revision.into(), record)
-            .await;
+        let result = self.account_repo.update(record).await;
 
         match result {
             Ok(record) => Ok(record.try_into()?),

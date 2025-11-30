@@ -126,7 +126,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "get",
                 BlobStorageNamespace::CompilationCache {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &Self::key(component_id, component_version),
             )
@@ -142,7 +142,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                     let component = unsafe {
                         Component::deserialize(engine, &bytes).map_err(|err| {
                             WorkerExecutorError::component_download_failed(
-                                component_id.clone(),
+                                *component_id,
                                 component_version,
                                 format!("Could not deserialize compiled component: {err}"),
                             )
@@ -162,7 +162,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 Ok(Some(component))
             }
             Err(err) => Err(WorkerExecutorError::component_download_failed(
-                component_id.clone(),
+                *component_id,
                 component_version,
                 format!("Could not download compiled component: {err}"),
             )),
@@ -184,7 +184,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 "compiled_component",
                 "put",
                 BlobStorageNamespace::CompilationCache {
-                    environment_id: environment_id.clone(),
+                    environment_id: *environment_id,
                 },
                 &Self::key(component_id, component_version),
                 &bytes,
@@ -192,7 +192,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             .await
             .map_err(|err| {
                 WorkerExecutorError::component_download_failed(
-                    component_id.clone(),
+                    *component_id,
                     component_version,
                     format!("Could not store compiled component: {err}"),
                 )

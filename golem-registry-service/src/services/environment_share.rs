@@ -97,7 +97,7 @@ impl EnvironmentShareService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::ParentEnvironmentNotFound(environment_id.clone())
+                    EnvironmentShareError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
@@ -109,8 +109,7 @@ impl EnvironmentShareService {
         )?;
 
         let id = EnvironmentShareId::new_v4();
-        let record =
-            EnvironmentShareRevisionRecord::creation(id, data.roles, auth.account_id().clone());
+        let record = EnvironmentShareRevisionRecord::creation(id, data.roles, *auth.account_id());
 
         let result = self
             .environment_share_repo
@@ -155,10 +154,10 @@ impl EnvironmentShareService {
 
         let result = self
             .environment_share_repo
-            .update(
-                current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, audit),
-            )
+            .update(EnvironmentShareRevisionRecord::from_model(
+                environment_share,
+                audit,
+            ))
             .await;
 
         match result {
@@ -196,10 +195,10 @@ impl EnvironmentShareService {
 
         let result = self
             .environment_share_repo
-            .delete(
-                current_revision.into(),
-                EnvironmentShareRevisionRecord::from_model(environment_share, audit),
-            )
+            .delete(EnvironmentShareRevisionRecord::from_model(
+                environment_share,
+                audit,
+            ))
             .await;
 
         match result {
@@ -233,7 +232,7 @@ impl EnvironmentShareService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::ParentEnvironmentNotFound(environment_id.clone())
+                    EnvironmentShareError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
@@ -267,9 +266,7 @@ impl EnvironmentShareService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareForGranteeNotFound(
-                        grantee_account_id.clone(),
-                    )
+                    EnvironmentShareError::EnvironmentShareForGranteeNotFound(*grantee_account_id)
                 }
                 other => other.into(),
             })?;
@@ -285,7 +282,7 @@ impl EnvironmentShareService {
             .get_for_environment_and_grantee(&environment_id.0, &grantee_account_id.0)
             .await?
             .ok_or(EnvironmentShareError::EnvironmentShareForGranteeNotFound(
-                grantee_account_id.clone(),
+                *grantee_account_id,
             ))?
             .try_into()?;
 
@@ -302,7 +299,7 @@ impl EnvironmentShareService {
             .get_by_id(&environment_share_id.0)
             .await?
             .ok_or(EnvironmentShareError::EnvironmentShareNotFound(
-                environment_share_id.clone(),
+                *environment_share_id,
             ))?
             .try_into()?;
 
@@ -312,7 +309,7 @@ impl EnvironmentShareService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
+                    EnvironmentShareError::EnvironmentShareNotFound(*environment_share_id)
                 }
                 other => other.into(),
             })?;
@@ -322,9 +319,7 @@ impl EnvironmentShareService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewShares,
         )
-        .map_err(|_| {
-            EnvironmentShareError::EnvironmentShareNotFound(environment_share_id.clone())
-        })?;
+        .map_err(|_| EnvironmentShareError::EnvironmentShareNotFound(*environment_share_id))?;
 
         Ok((environment_share, environment))
     }

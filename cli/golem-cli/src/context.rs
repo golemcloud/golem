@@ -426,11 +426,11 @@ impl Context {
     }
 
     pub async fn account_id(&self) -> anyhow::Result<AccountId> {
-        Ok(self.golem_clients().await?.account_id().clone())
+        Ok(*self.golem_clients().await?.account_id())
     }
 
     pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
-        Ok(self.golem_clients().await?.auth_token().clone())
+        Ok(*self.golem_clients().await?.auth_token())
     }
 
     fn auth_config(&self) -> AuthenticationConfigWithSource {

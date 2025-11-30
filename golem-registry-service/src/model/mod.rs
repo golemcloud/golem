@@ -16,3 +16,4 @@ pub mod api_definition;
 pub mod component;
 pub mod component_slug;
 pub mod login;
+pub mod security_scheme;

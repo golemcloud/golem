@@ -25,6 +25,10 @@ declare_transparent_newtypes! {
 }
 
 declare_structs! {
+    pub struct OAuth2DeviceflowStart {
+        pub provider: OAuth2Provider,
+    }
+
     pub struct OAuth2DeviceflowData {
         pub url: String,
         pub user_code: String,

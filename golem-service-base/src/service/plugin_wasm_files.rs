@@ -44,7 +44,7 @@ impl PluginWasmFilesService {
                 PLUGIN_WASM_FILES_LABEL,
                 "get",
                 BlobStorageNamespace::PluginWasmFiles {
-                    account_id: account_id.clone(),
+                    account_id: *account_id,
                 },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -65,7 +65,7 @@ impl PluginWasmFilesService {
                 PLUGIN_WASM_FILES_LABEL,
                 "get_metadata",
                 BlobStorageNamespace::PluginWasmFiles {
-                    account_id: account_id.clone(),
+                    account_id: *account_id,
                 },
                 &key,
             )
@@ -80,7 +80,7 @@ impl PluginWasmFilesService {
                     PLUGIN_WASM_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::PluginWasmFiles {
-                        account_id: account_id.clone(),
+                        account_id: *account_id,
                     },
                     &key,
                     &data.erased(),

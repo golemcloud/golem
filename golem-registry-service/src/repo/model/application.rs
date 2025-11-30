@@ -60,30 +60,6 @@ impl ApplicationRevisionRecord {
             audit,
         }
     }
-
-    pub fn ensure_first(self) -> Self {
-        Self {
-            revision_id: 0,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn ensure_new(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn ensure_deletion(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_deletion(),
-            ..self
-        }
-    }
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]

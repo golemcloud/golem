@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Tracing;
 use assert2::{assert, let_assert};
 use golem_client::api::{RegistryServiceClient, RegistryServiceDeployEnvironmentError};
 use golem_client::model::DeploymentCreation;
@@ -34,7 +33,6 @@ use std::collections::BTreeMap;
 use std::str::FromStr;
 use test_r::{inherit_test_dep, test};
 
-inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
@@ -264,7 +262,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             current_deployment_revision: None,
             deployment_hash: expected_hash,
             components: vec![DeploymentPlanComponentEntry {
-                id: component.id.clone(),
+                id: component.id,
                 revision: component.revision,
                 name: ComponentName("shopping-cart".to_string()),
                 hash: Hash::from_str(
@@ -272,7 +270,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 )?,
             }],
             http_api_definitions: vec![DeploymentPlanHttpApiDefintionEntry {
-                id: http_api_definition.id.clone(),
+                id: http_api_definition.id,
                 revision: http_api_definition.revision,
                 name: HttpApiDefinitionName("test-api".to_string()),
                 hash: Hash::from_str(
@@ -280,7 +278,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 )?,
             }],
             http_api_deployments: vec![DeploymentPlanHttpApiDeploymentEntry {
-                id: http_api_deployment.id.clone(),
+                id: http_api_deployment.id,
                 revision: http_api_deployment.revision,
                 domain: domain.clone(),
                 hash: Hash::from_str(

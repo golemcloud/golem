@@ -112,20 +112,20 @@ impl ComponentServiceLocalFileSystem {
             }
 
             for metadata in new_metadata {
-                let component_id = metadata.component_id.clone();
+                let component_id = metadata.component_id;
                 let component_version = metadata.version;
                 let component_name = metadata.component_name.clone();
 
                 current
                     .latest_versions
-                    .entry(component_id.clone())
+                    .entry(component_id)
                     .and_modify(|e| *e = (*e).max(component_version))
                     .or_insert(component_version);
 
                 current
                     .id_by_name
                     .entry(component_name)
-                    .or_insert(component_id.clone());
+                    .or_insert(component_id);
 
                 let key = CacheKey {
                     component_id,
@@ -149,10 +149,10 @@ impl ComponentServiceLocalFileSystem {
         component_version: ComponentRevision,
     ) -> Result<Component, WorkerExecutorError> {
         let key = CacheKey {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             component_version,
         };
-        let component_id = component_id.clone();
+        let component_id = *component_id;
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
         let path = wasm_path.to_path_buf();
@@ -179,11 +179,11 @@ impl ComponentServiceLocalFileSystem {
 
                             let start = Instant::now();
                             let component = spawn_blocking({
-                                let component_id = component_id.clone();
+                                let component_id = component_id;
                                 move || {
                                     Component::from_binary(&engine, &bytes).map_err(|e| {
                                         WorkerExecutorError::ComponentParseFailed {
-                                            component_id: component_id.clone(),
+                                            component_id,
                                             component_version,
                                             reason: format!("{e}"),
                                         }
@@ -228,7 +228,7 @@ impl ComponentServiceLocalFileSystem {
         component_version: ComponentRevision,
     ) -> Result<ComponentDto, WorkerExecutorError> {
         let key = CacheKey {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             component_version,
         };
         let metadata = self.index.read().await.metadata.get(&key).cloned();
@@ -259,7 +259,7 @@ impl ComponentServiceLocalFileSystem {
         let metadata = match latest_version {
             Some(component_version) => {
                 let key = CacheKey {
-                    component_id: component_id.clone(),
+                    component_id: *component_id,
                     component_version: *component_version,
                 };
                 let metadata = index.metadata.get(&key).cloned();
@@ -285,7 +285,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         component_version: ComponentRevision,
     ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
         let key = CacheKey {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             component_version,
         };
         let metadata = self.index.read().await.metadata.get(&key).cloned();

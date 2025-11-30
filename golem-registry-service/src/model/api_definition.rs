@@ -13,32 +13,21 @@
 // limitations under the License.
 
 use desert_rust::BinaryCodec;
-use golem_common::model::Empty;
-use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_definition::RouteMethod;
-use golem_common::model::security_scheme::SecuritySchemeName;
-use golem_service_base::custom_api::HttpCors;
-use golem_service_base::custom_api::compiled_gateway_binding::{
-    FileServerBindingCompiled, HttpHandlerBindingCompiled, WorkerBindingCompiled,
+use golem_common::model::account::AccountId;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, RouteMethod,
 };
+use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
+use golem_service_base::custom_api::GatewayBindingCompiled;
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(evolution())]
-// Compared to what the worker service is working with, this is missing auth callbacks and
-// the materialized swagger api spec. Reason is that these can only be built once the security scheme and active routes
-// are fully resolved at routing time.
-pub enum GatewayBindingCompiled {
-    HttpCorsPreflight(HttpCors),
-    Worker(Box<WorkerBindingCompiled>),
-    FileServer(Box<FileServerBindingCompiled>),
-    HttpHandler(Box<HttpHandlerBindingCompiled>),
-    SwaggerUi(Empty),
-}
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub struct CompiledRoute {
+pub struct CompiledRouteWithoutSecurity {
     pub method: RouteMethod,
     pub path: AllPathPatterns,
     pub binding: GatewayBindingCompiled,
@@ -46,7 +35,54 @@ pub struct CompiledRoute {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRouteWithContext {
-    pub domain: Domain,
+    pub http_api_definition_id: HttpApiDefinitionId,
     pub security_scheme: Option<SecuritySchemeName>,
-    pub route: CompiledRoute,
+    pub route: CompiledRouteWithoutSecurity,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledRouteWithSecuritySchemeDetails {
+    pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
+    pub http_api_definition_id: HttpApiDefinitionId,
+    pub deployment_revision: DeploymentRevision,
+    pub security_scheme_missing: bool,
+    pub security_scheme: Option<SecuritySchemeDetails>,
+    pub route: CompiledRouteWithoutSecurity,
+}
+
+#[derive(Debug, Clone)]
+pub struct MaybeDisabledCompiledRoute {
+    pub security_scheme_missing: bool,
+    pub security_scheme: Option<SecuritySchemeId>,
+    pub method: RouteMethod,
+    pub path: AllPathPatterns,
+    pub binding: GatewayBindingCompiled,
+}
+
+impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
+    fn security_scheme_missing(&self) -> bool {
+        self.security_scheme_missing
+    }
+    fn security_scheme(&self) -> Option<SecuritySchemeId> {
+        self.security_scheme
+    }
+    fn method(&self) -> &RouteMethod {
+        &self.method
+    }
+    fn path(&self) -> &AllPathPatterns {
+        &self.path
+    }
+    fn binding(&self) -> &GatewayBindingCompiled {
+        &self.binding
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompiledRoutesForHttpApiDefinition {
+    pub http_api_definition_id: HttpApiDefinitionId,
+    pub http_api_definition_name: HttpApiDefinitionName,
+    pub http_api_definition_version: HttpApiDefinitionVersion,
+    pub security_schemes: HashMap<SecuritySchemeId, SecuritySchemeDetails>,
+    pub routes: Vec<MaybeDisabledCompiledRoute>,
 }

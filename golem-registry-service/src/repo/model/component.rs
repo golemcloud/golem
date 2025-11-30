@@ -32,6 +32,7 @@ use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::blob::Blob;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::types::Json;
@@ -136,140 +137,6 @@ where
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct SqlComponentMetadata {
-    metadata: ComponentMetadata,
-}
-
-impl SqlComponentMetadata {
-    pub fn new(metadata: ComponentMetadata) -> Self {
-        Self { metadata }
-    }
-
-    pub fn as_common_model(&self) -> &ComponentMetadata {
-        &self.metadata
-    }
-
-    pub fn into_common_model(self) -> ComponentMetadata {
-        self.metadata
-    }
-}
-
-impl Debug for SqlComponentMetadata {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.metadata.fmt(f)
-    }
-}
-
-impl Deref for SqlComponentMetadata {
-    type Target = ComponentMetadata;
-
-    fn deref(&self) -> &Self::Target {
-        &self.metadata
-    }
-}
-
-impl From<SqlComponentMetadata> for ComponentMetadata {
-    fn from(metadata: SqlComponentMetadata) -> Self {
-        metadata.metadata
-    }
-}
-
-impl From<ComponentMetadata> for SqlComponentMetadata {
-    fn from(metadata: ComponentMetadata) -> Self {
-        Self::new(metadata)
-    }
-}
-
-impl<DB: Database> sqlx::Type<DB> for SqlComponentMetadata
-where
-    Vec<u8>: sqlx::Type<DB>,
-{
-    fn type_info() -> DB::TypeInfo {
-        <Vec<u8>>::type_info()
-    }
-
-    fn compatible(ty: &DB::TypeInfo) -> bool {
-        <Vec<u8>>::compatible(ty)
-    }
-}
-
-#[repr(u8)]
-enum ComponentMetadataSerializationVersion {
-    V1 = 1,
-}
-
-impl ComponentMetadataSerializationVersion {
-    fn from_u8(version: u8) -> Option<Self> {
-        match version {
-            1 => Some(Self::V1),
-            _ => None,
-        }
-    }
-}
-
-impl TryFrom<u8> for ComponentMetadataSerializationVersion {
-    type Error = String;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match Self::from_u8(value) {
-            Some(version) => Ok(version),
-            None => Err(format!(
-                "Unknown component metadata serialization version: {value}"
-            )),
-        }
-    }
-}
-
-impl<'q, DB: Database> sqlx::Encode<'q, DB> for SqlComponentMetadata
-where
-    Vec<u8>: sqlx::Encode<'q, DB>,
-{
-    fn encode_by_ref(
-        &self,
-        buf: &mut <DB as Database>::ArgumentBuffer<'q>,
-    ) -> Result<IsNull, BoxDynError> {
-        use golem_api_grpc::proto::golem::component::ComponentMetadata as ComponentMetadataProto;
-        use prost::Message;
-
-        let metadata_proto = ComponentMetadataProto::from(self.metadata.clone());
-
-        let mut buffer_proto = Vec::with_capacity(metadata_proto.encoded_len());
-        buffer_proto.push(ComponentMetadataSerializationVersion::V1 as u8);
-        metadata_proto.encode(&mut buffer_proto)?;
-
-        buffer_proto.encode_by_ref(buf)
-    }
-
-    fn size_hint(&self) -> usize {
-        blake3::OUT_LEN
-    }
-}
-
-impl<'r, DB: Database> sqlx::Decode<'r, DB> for SqlComponentMetadata
-where
-    Vec<u8>: sqlx::Decode<'r, DB>,
-{
-    fn decode(value: <DB as Database>::ValueRef<'r>) -> Result<Self, BoxDynError> {
-        use golem_api_grpc::proto::golem::component::ComponentMetadata as ComponentMetadataProto;
-        use prost::Message;
-
-        let bytes = <Vec<u8> as sqlx::Decode<DB>>::decode(value)?;
-        let (version, data) = bytes.split_at(1);
-        let version: u8 = version[0];
-
-        match ComponentMetadataSerializationVersion::try_from(version)? {
-            ComponentMetadataSerializationVersion::V1 => Ok(Self {
-                metadata: ComponentMetadata::try_from(
-                    ComponentMetadataProto::decode(data).map_err(|err| {
-                        format!("Failed to deserialize component metadata v1: {err}")
-                    })?,
-                )?,
-            }),
-        }
-    }
-}
-
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentRecord {
     pub component_id: Uuid,
@@ -283,13 +150,13 @@ pub struct ComponentRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentRevisionRecord {
     pub component_id: Uuid,
-    pub revision_id: i64, // NOTE: set by repo during insert
+    pub revision_id: i64,
     pub version: String,
     pub hash: SqlBlake3Hash, // NOTE: set by repo during insert
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
     pub size: i32,
-    pub metadata: SqlComponentMetadata,
+    pub metadata: Blob<ComponentMetadata>,
     pub original_env: Json<BTreeMap<String, String>>,
     pub env: Json<BTreeMap<String, String>>,
     pub object_store_key: String,
@@ -306,31 +173,42 @@ pub struct ComponentRevisionRecord {
 }
 
 impl ComponentRevisionRecord {
-    pub fn ensure_first(self) -> Self {
-        Self {
-            revision_id: 0,
-            audit: self.audit.ensure_new(),
-            ..self
+    pub fn for_recreation(
+        mut self,
+        component_id: Uuid,
+        revision_id: i64,
+    ) -> Result<Self, ComponentRepoError> {
+        let revision: ComponentRevision = revision_id.into();
+        let next_revision_id = revision.next()?.into();
+
+        for file in &mut self.original_files {
+            file.component_id = component_id;
+            file.revision_id = next_revision_id;
         }
+        for file in &mut self.files {
+            file.component_id = component_id;
+            file.revision_id = next_revision_id;
+        }
+        for plugin in &mut self.plugins {
+            plugin.component_id = component_id;
+            plugin.revision_id = next_revision_id;
+        }
+
+        self.component_id = component_id;
+        self.revision_id = next_revision_id;
+
+        Ok(self)
     }
 
-    pub fn ensure_new(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn deletion(created_by: Uuid, component_id: Uuid, current_revision_id: i64) -> Self {
-        Self {
+    pub fn deletion(created_by: Uuid, component_id: Uuid, revision_id: i64) -> Self {
+        let mut value = Self {
             component_id,
-            revision_id: current_revision_id + 1,
+            revision_id,
             version: "".to_string(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::deletion(created_by),
             size: 0,
-            metadata: ComponentMetadata::default().into(),
+            metadata: Blob::new(ComponentMetadata::default()),
             env: Default::default(),
             original_env: Default::default(),
             object_store_key: "".to_string(),
@@ -339,7 +217,9 @@ impl ComponentRevisionRecord {
             original_files: vec![],
             plugins: vec![],
             files: vec![],
-        }
+        };
+        value.update_hash();
+        value
     }
 
     pub fn to_diffable(&self) -> diff::Component {
@@ -352,7 +232,7 @@ impl ComponentRevisionRecord {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.dynamic_linking(),
+                    self.metadata.value.dynamic_linking(),
                 ),
             }
             .into(),
@@ -431,7 +311,7 @@ impl ComponentRevisionRecord {
                 .clone()
                 .unwrap_or_default(),
             size: value.component_size as i32,
-            metadata: value.metadata.into(),
+            metadata: Blob::new(value.metadata),
             hash: SqlBlake3Hash::empty(),
             original_env: Json(value.original_env),
             env: Json(value.env),
@@ -466,7 +346,7 @@ impl ComponentExtRevisionRecord {
             account_id,
             component_name: ComponentName(self.name),
             component_size: self.revision.size as u64,
-            metadata: self.revision.metadata.into(),
+            metadata: self.revision.metadata.value,
             created_at: self.revision.audit.created_at.into(),
             files: self
                 .revision
@@ -510,18 +390,6 @@ pub struct ComponentFileRecord {
 }
 
 impl ComponentFileRecord {
-    pub fn ensure_component(self, component_id: Uuid, revision_id: i64, created_by: Uuid) -> Self {
-        Self {
-            component_id,
-            revision_id,
-            audit: RevisionAuditFields {
-                created_by,
-                ..self.audit
-            },
-            ..self
-        }
-    }
-
     fn from_model(
         file: InitialComponentFile,
         component_id: Uuid,
@@ -565,18 +433,6 @@ pub struct ComponentPluginInstallationRecord {
 }
 
 impl ComponentPluginInstallationRecord {
-    pub fn ensure_component(self, component_id: Uuid, revision_id: i64, created_by: Uuid) -> Self {
-        Self {
-            component_id,
-            revision_id,
-            audit: RevisionAuditFields {
-                created_by,
-                ..self.audit
-            },
-            ..self
-        }
-    }
-
     fn from_model(
         plugin_installation: InstalledPlugin,
         component_id: Uuid,

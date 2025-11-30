@@ -72,7 +72,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
-        let account_id = account_id.clone();
+        let account_id = *account_id;
         let deps = deps.clone();
         let invocation_context_stack = invocation_context_stack.clone();
         self.workers

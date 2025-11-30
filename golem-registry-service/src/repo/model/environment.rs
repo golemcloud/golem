@@ -72,7 +72,7 @@ pub struct EnvironmentRevisionRecord {
 }
 
 impl EnvironmentRevisionRecord {
-    pub fn from_new_model(environment: EnvironmentCreation, actor: AccountId) -> Self {
+    pub fn creation(environment: EnvironmentCreation, actor: AccountId) -> Self {
         Self {
             environment_id: EnvironmentId::new_v4().0,
             revision_id: EnvironmentRevision::INITIAL.into(),
@@ -98,30 +98,6 @@ impl EnvironmentRevisionRecord {
         }
     }
 
-    pub fn ensure_first(self) -> Self {
-        Self {
-            revision_id: 0,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn ensure_new(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_new(),
-            ..self
-        }
-    }
-
-    pub fn ensure_deletion(self, current_revision_id: i64) -> Self {
-        Self {
-            revision_id: current_revision_id + 1,
-            audit: self.audit.ensure_deletion(),
-            ..self
-        }
-    }
-
     pub fn to_diffable(&self) -> diff::Environment {
         diff::Environment {
             compatibility_check: self.compatibility_check,
@@ -138,14 +114,6 @@ impl EnvironmentRevisionRecord {
         self.update_hash();
         self
     }
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct MinimalEnvironmentExtRevisionRecord {
-    pub application_id: Uuid,
-
-    #[sqlx(flatten)]
-    pub revision: EnvironmentRevisionRecord,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]

@@ -149,7 +149,7 @@ async fn agent_env_inheritance(
         .await?;
 
     let child_worker_id = WorkerId {
-        component_id: worker_id.component_id.clone(),
+        component_id: worker_id.component_id,
         worker_name: "child-agent(0)".to_string(),
     };
 

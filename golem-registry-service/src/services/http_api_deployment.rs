@@ -135,11 +135,8 @@ impl HttpApiDeploymentService {
             })?;
 
         let id = HttpApiDeploymentId::new_v4();
-        let record = HttpApiDeploymentRevisionRecord::creation(
-            id,
-            &data.api_definitions,
-            auth.account_id().clone(),
-        );
+        let record =
+            HttpApiDeploymentRevisionRecord::creation(id, data.api_definitions, *auth.account_id());
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
@@ -154,7 +151,7 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .into();
 
         Ok(stored_http_api_deployment)
     }
@@ -170,9 +167,9 @@ impl HttpApiDeploymentService {
             .get_staged_by_id(&http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                http_api_deployment_id.clone(),
+                *http_api_deployment_id,
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -180,9 +177,7 @@ impl HttpApiDeploymentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                        http_api_deployment_id.clone(),
-                    )
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
@@ -192,9 +187,7 @@ impl HttpApiDeploymentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| {
-            HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id.clone())
-        })?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -218,7 +211,7 @@ impl HttpApiDeploymentService {
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
-            .update(update.current_revision.into(), record)
+            .update(record)
             .await
             .map_err(|err| match err {
                 HttpApiDeploymentRepoError::ConcurrentModification => {
@@ -226,7 +219,7 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .into();
 
         Ok(stored_http_api_deployment)
     }
@@ -242,9 +235,9 @@ impl HttpApiDeploymentService {
             .get_staged_by_id(&http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                http_api_deployment_id.clone(),
+                *http_api_deployment_id,
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -252,9 +245,7 @@ impl HttpApiDeploymentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                        http_api_deployment_id.clone(),
-                    )
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
@@ -264,9 +255,7 @@ impl HttpApiDeploymentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| {
-            HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id.clone())
-        })?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -282,7 +271,7 @@ impl HttpApiDeploymentService {
             .delete(
                 &auth.account_id().0,
                 &http_api_deployment_id.0,
-                current_revision.into(),
+                current_revision.next()?.into(),
             )
             .await
             .map_err(|err| match err {
@@ -330,8 +319,8 @@ impl HttpApiDeploymentService {
             .list_staged(&environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+            .map(|r| r.into())
+            .collect();
 
         Ok(http_api_deployments)
     }
@@ -364,8 +353,8 @@ impl HttpApiDeploymentService {
             .list_by_deployment(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<_, _>>()?;
+            .map(|r| r.into())
+            .collect();
 
         Ok(http_api_deployments)
     }
@@ -380,9 +369,9 @@ impl HttpApiDeploymentService {
             .get_staged_by_id(&http_api_deployment_id.0)
             .await?
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                http_api_deployment_id.clone(),
+                *http_api_deployment_id,
             ))?
-            .try_into()?;
+            .into();
 
         let environment = self
             .environment_service
@@ -390,9 +379,7 @@ impl HttpApiDeploymentService {
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDeploymentError::HttpApiDeploymentNotFound(
-                        http_api_deployment_id.clone(),
-                    )
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
                 }
                 other => other.into(),
             })?;
@@ -402,9 +389,7 @@ impl HttpApiDeploymentService {
             &environment.roles_from_active_shares,
             EnvironmentAction::ViewHttpApiDeployment,
         )
-        .map_err(|_| {
-            HttpApiDeploymentError::HttpApiDeploymentNotFound(http_api_deployment_id.clone())
-        })?;
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
 
         Ok(http_api_deployment)
     }
@@ -440,7 +425,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         Ok(http_api_deployment)
     }
@@ -480,7 +465,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .try_into()?;
+            .into();
 
         Ok(http_api_deployment)
     }

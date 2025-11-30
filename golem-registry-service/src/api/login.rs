@@ -20,8 +20,8 @@ use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::login::{
-    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
-    OAuth2WebflowStateId,
+    EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2DeviceflowStart, OAuth2Provider,
+    OAuth2WebflowData, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -137,7 +137,7 @@ impl LoginApi {
     )]
     async fn start_oauth2_device_flow(
         &self,
-        request: Json<OAuth2DeviceFlowStartRequest>,
+        request: Json<OAuth2DeviceflowStart>,
     ) -> ApiResult<Json<OAuth2DeviceflowData>> {
         let record = recorded_http_api_request!("start_oauth2_device_flow",);
 
@@ -151,7 +151,7 @@ impl LoginApi {
 
     async fn start_oauth2_device_flow_internal(
         &self,
-        request: OAuth2DeviceFlowStartRequest,
+        request: OAuth2DeviceflowStart,
     ) -> ApiResult<Json<OAuth2DeviceflowData>> {
         let login_system = self.get_enabled_login_system()?;
 
@@ -355,11 +355,6 @@ impl LoginApi {
             }))),
         }
     }
-}
-
-#[derive(Debug, Clone, Object)]
-struct OAuth2DeviceFlowStartRequest {
-    provider: OAuth2Provider,
 }
 
 #[derive(Debug, Clone, ApiResponse)]

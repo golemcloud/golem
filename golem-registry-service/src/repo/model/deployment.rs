@@ -12,27 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::api_definition::{CompiledRoute, CompiledRouteWithContext};
+use crate::model::api_definition::{
+    CompiledRouteWithContext, CompiledRouteWithSecuritySchemeDetails, CompiledRouteWithoutSecurity,
+};
 use crate::model::component::Component;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
-use golem_common::model::component::ComponentName;
+use anyhow::anyhow;
+use golem_common::error_forwarding;
+use golem_common::model::account::AccountId;
 use golem_common::model::deployment::{
     Deployment, DeploymentPlan, DeploymentRevision, DeploymentSummary,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionName};
+use golem_common::model::http_api_definition::{HttpApiDefinition, HttpApiDefinitionId};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
+use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
-use rib::RibCompilationError;
 use sqlx::FromRow;
+use std::collections::HashSet;
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,54 +47,11 @@ pub enum DeployRepoError {
     ConcurrentModification,
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
-    #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
-    ValidationErrors(Vec<DeployValidationError>),
-    #[error("Deployment not found by revision: {revision_id}")]
-    DeploymentNotFoundByRevision { revision_id: i64 },
-    #[error("Deployment not found by version: {version}")]
-    DeploymentNotfoundByVersion { version: String },
-    #[error("Deployment is not unique by version: {version}")]
-    DeploymentIsNotUniqueByVersion { version: String },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
 
 error_forwarding!(DeployRepoError, RepoError);
-
-fn format_validation_errors(errors: &[DeployValidationError]) -> String {
-    errors
-        .iter()
-        .map(|err| format!("{err}"))
-        .collect::<Vec<_>>()
-        .join(",\n")
-}
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployValidationError {
-    #[error(
-        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
-    )]
-    HttpApiDeploymentMissingHttpApiDefinition {
-        http_api_deployment_domain: Domain,
-        missing_http_api_definition: HttpApiDefinitionName,
-    },
-    #[error("Invalid path pattern: {0}")]
-    HttpApiDefinitionInvalidPathPattern(String),
-    #[error("Invalid rib expression: {0}")]
-    InvalidRibExpr(String),
-    #[error("Failed rib compilation: {0}")]
-    RibCompilationFailed(RibCompilationError),
-    #[error("Invalid http cors binding expression: {0}")]
-    InvalidHttpCorsBindingExpr(String),
-    #[error("Component {0} not found in deployment")]
-    ComponentNotFound(ComponentName),
-}
-
-impl SafeDisplay for DeployValidationError {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentRevisionRecord {
@@ -316,18 +279,41 @@ impl DeploymentIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
-pub struct DeploymentCompiledHttpApiRouteRecord {
+pub struct DeploymentDomainHttpApiDefinitionRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
-    pub id: i32,
-
     pub domain: String,
-
-    pub security_scheme: Option<String>,
-    pub compiled_route: Blob<CompiledRoute>,
+    pub http_api_definition_id: Uuid,
 }
 
-impl DeploymentCompiledHttpApiRouteRecord {
+impl DeploymentDomainHttpApiDefinitionRecord {
+    pub fn new(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        domain: Domain,
+        http_api_definition_id: HttpApiDefinitionId,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            domain: domain.0,
+            http_api_definition_id: http_api_definition_id.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentCompiledHttpApiDefinitionRouteRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub http_api_definition_id: Uuid,
+    pub id: i32,
+
+    pub security_scheme: Option<String>,
+    pub compiled_route: Blob<CompiledRouteWithoutSecurity>,
+}
+
+impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     pub fn from_model(
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -337,8 +323,8 @@ impl DeploymentCompiledHttpApiRouteRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
+            http_api_definition_id: compiled_route.http_api_definition_id.0,
             id,
-            domain: compiled_route.domain.0,
             security_scheme: compiled_route.security_scheme.map(|scn| scn.0),
             compiled_route: Blob::new(compiled_route.route),
         }
@@ -355,7 +341,8 @@ pub struct DeploymentRevisionCreationRecord {
     pub components: Vec<DeploymentComponentRevisionRecord>,
     pub http_api_definitions: Vec<DeploymentHttpApiDefinitionRevisionRecord>,
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
-    pub compiled_http_api_routes: Vec<DeploymentCompiledHttpApiRouteRecord>,
+    pub domain_http_api_definitions: Vec<DeploymentDomainHttpApiDefinitionRecord>,
+    pub compiled_http_api_definition_routes: Vec<DeploymentCompiledHttpApiDefinitionRouteRecord>,
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -367,6 +354,7 @@ impl DeploymentRevisionCreationRecord {
         components: Vec<Component>,
         http_api_definitions: Vec<HttpApiDefinition>,
         http_api_deployments: Vec<HttpApiDeployment>,
+        domain_definitions: HashSet<(Domain, HttpApiDefinitionId)>,
         compiled_routes: Vec<CompiledRouteWithContext>,
     ) -> Self {
         Self {
@@ -404,11 +392,22 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
-            compiled_http_api_routes: compiled_routes
+            domain_http_api_definitions: domain_definitions
+                .into_iter()
+                .map(|(domain, http_api_definition_id)| {
+                    DeploymentDomainHttpApiDefinitionRecord::new(
+                        environment_id,
+                        deployment_revision,
+                        domain,
+                        http_api_definition_id,
+                    )
+                })
+                .collect(),
+            compiled_http_api_definition_routes: compiled_routes
                 .into_iter()
                 .enumerate()
                 .map(|(i, r)| {
-                    DeploymentCompiledHttpApiRouteRecord::from_model(
+                    DeploymentCompiledHttpApiDefinitionRouteRecord::from_model(
                         environment_id,
                         deployment_revision,
                         i32::try_from(i).expect("too many routes for i32"),
@@ -417,5 +416,89 @@ impl DeploymentRevisionCreationRecord {
                 })
                 .collect(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord {
+    pub account_id: Uuid,
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub http_api_definition_id: Uuid,
+
+    pub security_scheme_missing: bool,
+
+    pub security_scheme_id: Option<Uuid>,
+    pub security_scheme_name: Option<String>,
+    pub security_scheme_provider_type: Option<String>,
+    pub security_scheme_client_id: Option<String>,
+    pub security_scheme_client_secret: Option<String>,
+    pub security_scheme_redirect_url: Option<String>,
+    pub security_scheme_scopes: Option<String>,
+
+    pub compiled_route: Blob<CompiledRouteWithoutSecurity>,
+}
+
+impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
+    for CompiledRouteWithSecuritySchemeDetails
+{
+    type Error = DeployRepoError;
+
+    fn try_from(
+        value: DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord,
+    ) -> Result<Self, Self::Error> {
+        use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
+
+        let security_scheme = match (
+            value.security_scheme_id,
+            value.security_scheme_name,
+            value.security_scheme_provider_type,
+            value.security_scheme_client_id,
+            value.security_scheme_client_secret,
+            value.security_scheme_redirect_url,
+            value.security_scheme_scopes,
+        ) {
+            (
+                Some(security_scheme_id),
+                Some(security_scheme_name),
+                Some(provider_type),
+                Some(client_id),
+                Some(client_secret),
+                Some(redirect_url),
+                Some(scopes),
+            ) => {
+                let id = SecuritySchemeId(security_scheme_id);
+                let name = SecuritySchemeName(security_scheme_name);
+                let scopes: Vec<Scope> = serde_json::from_str(&scopes)
+                    .map_err(|e| anyhow::Error::from(e).context("Failed parsing scopes"))?;
+                let redirect_url: RedirectUrl = serde_json::from_str(&redirect_url)
+                    .map_err(|e| anyhow::Error::from(e).context("Failed parsing redirect_url"))?;
+                let provider_type = Provider::from_str(&provider_type)
+                    .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?;
+                let client_id = ClientId::new(client_id);
+                let client_secret = ClientSecret::new(client_secret);
+
+                Some(SecuritySchemeDetails {
+                    id,
+                    name,
+                    scopes,
+                    redirect_url,
+                    provider_type,
+                    client_id,
+                    client_secret,
+                })
+            }
+            _ => None,
+        };
+
+        Ok(Self {
+            account_id: AccountId(value.account_id),
+            environment_id: EnvironmentId(value.environment_id),
+            deployment_revision: value.deployment_revision_id.into(),
+            http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
+            security_scheme_missing: value.security_scheme_missing,
+            security_scheme,
+            route: value.compiled_route.value,
+        })
     }
 }

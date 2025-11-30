@@ -21,8 +21,8 @@ use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationError
 use crate::gateway_execution::gateway_session_store::{GatewaySessionStore, SessionId};
 use crate::gateway_execution::request::RichRequest;
 use crate::gateway_security::IdentityProvider;
+use crate::model::HttpMiddleware;
 use golem_common::SafeDisplay;
-use golem_service_base::custom_api::http_middlewares::{HttpMiddleware, HttpMiddlewares};
 use std::sync::Arc;
 
 pub enum MiddlewareSuccess {
@@ -54,26 +54,21 @@ impl SafeDisplay for MiddlewareError {
 }
 
 pub async fn process_middleware_in(
-    middlewars: &HttpMiddlewares,
+    middlewares: &Vec<HttpMiddleware>,
     rich_request: &RichRequest,
     session_store: &Arc<dyn GatewaySessionStore>,
     identity_provider: &Arc<dyn IdentityProvider>,
 ) -> Result<MiddlewareSuccess, MiddlewareError> {
     let mut final_session_id = None;
 
-    for middleware in &middlewars.0 {
+    for middleware in middlewares {
         match middleware {
             HttpMiddleware::Cors(cors) => {
                 apply_cors(cors, rich_request).map_err(MiddlewareError::CorsError)?;
             }
             HttpMiddleware::AuthenticateRequest(auth) => {
-                let result = apply_http_auth(
-                    &auth.security_scheme_with_metadata,
-                    rich_request,
-                    session_store,
-                    identity_provider,
-                )
-                .await?;
+                let result =
+                    apply_http_auth(auth, rich_request, session_store, identity_provider).await?;
 
                 match result {
                     MiddlewareSuccess::Redirect(response) => {
@@ -93,10 +88,10 @@ pub async fn process_middleware_in(
 }
 
 pub async fn process_middleware_out(
-    middlewares: &HttpMiddlewares,
+    middlewares: &Vec<HttpMiddleware>,
     response: &mut poem::Response,
 ) -> Result<(), MiddlewareError> {
-    for middleware in &middlewares.0 {
+    for middleware in middlewares {
         match middleware {
             HttpMiddleware::Cors(cors) => {
                 add_cors_headers_to_response(cors, response);

@@ -30,6 +30,8 @@ pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
 static SYSTEM_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> =
     LazyLock::new(|| HashSet::from_iter([AccountRole::Admin]));
+static IMPERSONATED_USER_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> =
+    LazyLock::new(HashSet::new);
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -245,9 +247,18 @@ pub struct UserAuthCtx {
 }
 
 #[derive(Debug, Clone)]
+/// AuthCtx for systems that do requests on behalf of users.
+/// A bit more limited in what they can execute, but can be constructed
+/// without any data lookups
+pub struct ImpersonatedUserAuthCtx {
+    pub account_id: AccountId,
+}
+
+#[derive(Debug, Clone)]
 pub enum AuthCtx {
     System,
     User(UserAuthCtx),
+    ImpersonatedUser(ImpersonatedUserAuthCtx),
 }
 
 // Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
@@ -264,6 +275,10 @@ impl AuthCtx {
         AuthCtx::System
     }
 
+    pub fn impersonated_user(account_id: AccountId) -> AuthCtx {
+        AuthCtx::ImpersonatedUser(ImpersonatedUserAuthCtx { account_id })
+    }
+
     pub fn is_system(&self) -> bool {
         matches!(self, AuthCtx::System)
     }
@@ -272,6 +287,7 @@ impl AuthCtx {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ID,
             Self::User(user) => &user.account_id,
+            Self::ImpersonatedUser(user) => &user.account_id,
         }
     }
 
@@ -279,6 +295,7 @@ impl AuthCtx {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
+            Self::ImpersonatedUser(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
         }
     }
 
@@ -286,6 +303,7 @@ impl AuthCtx {
         match self {
             Self::System => None,
             Self::User(user) => Some(&user.account_plan_id),
+            Self::ImpersonatedUser(_) => None,
         }
     }
 
@@ -369,11 +387,9 @@ impl AuthCtx {
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
         // Environment owners and system users are allowed to do everything with their environments
-        match self {
-            Self::User(user) if user.account_id == *account_owning_enviroment => return Ok(()),
-            Self::System => return Ok(()),
-            _ => {}
-        };
+        if self.account_id() == account_owning_enviroment || self.is_system() {
+            return Ok(());
+        }
 
         let is_allowed = match action {
             // environments
@@ -794,7 +810,7 @@ mod test {
 }
 
 mod protobuf {
-    use super::{AuthCtx, AuthorizationError, UserAuthCtx};
+    use super::{AuthCtx, AuthorizationError, ImpersonatedUserAuthCtx, UserAuthCtx};
     use golem_common::model::auth::AccountRole;
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
@@ -827,6 +843,27 @@ mod protobuf {
         }
     }
 
+    impl TryFrom<golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx>
+        for ImpersonatedUserAuthCtx
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+            })
+        }
+    }
+
+    impl From<ImpersonatedUserAuthCtx> for golem_api_grpc::proto::golem::auth::ImpersonatedUserAuthCtx {
+        fn from(value: ImpersonatedUserAuthCtx) -> Self {
+            Self {
+                account_id: Some(value.account_id.into()),
+            }
+        }
+    }
+
     impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
         type Error = String;
         fn try_from(
@@ -839,6 +876,9 @@ mod protobuf {
                 Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => {
                     Ok(AuthCtx::User(user.try_into()?))
                 }
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
+                    impersonated_user,
+                )) => Ok(AuthCtx::ImpersonatedUser(impersonated_user.try_into()?)),
                 None => Err("No auth_ctx value present".to_string()),
             }
         }
@@ -856,6 +896,13 @@ mod protobuf {
                     value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(
                         user.into(),
                     )),
+                },
+                AuthCtx::ImpersonatedUser(impersonated_user) => Self {
+                    value: Some(
+                        golem_api_grpc::proto::golem::auth::auth_ctx::Value::ImpersonatedUser(
+                            impersonated_user.into(),
+                        ),
+                    ),
                 },
             }
         }
