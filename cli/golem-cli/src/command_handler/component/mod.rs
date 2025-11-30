@@ -29,11 +29,15 @@ use crate::model::app::DependencyType;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
     ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection,
-    ComponentSelection, SelectedComponents,
+    ComponentSelection, ComponentView, SelectedComponents,
 };
 use crate::model::deploy::TryUpdateAllWorkersResult;
-use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::fmt::log_error;
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+};
+use crate::model::text::component::ComponentGetView;
+use crate::model::text::fmt::{log_error, log_text_view};
+use crate::model::text::help::ComponentNameHelp;
 use crate::model::worker::AgentUpdateMode;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -42,6 +46,7 @@ use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
 use golem_common::model::agent::AgentType;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
@@ -50,6 +55,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
+use golem_common::model::environment::EnvironmentName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName,
@@ -57,6 +63,7 @@ use golem_templates::model::{
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
@@ -106,9 +113,7 @@ impl ComponentCommandHandler {
                 )
                 .await
             }
-            ComponentSubcommand::List { component_name } => {
-                self.cmd_list(component_name.component_name).await
-            }
+            ComponentSubcommand::List => self.cmd_list().await,
             ComponentSubcommand::Get {
                 component_name,
                 revision,
@@ -290,95 +295,42 @@ impl ComponentCommandHandler {
         }
     }
 
-    async fn cmd_list(&self, _component_name: Option<ComponentName>) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
+    async fn cmd_list(&self) -> anyhow::Result<()> {
         let show_sensitive = self.ctx.show_sensitive();
 
-        let selected_component_names = self
-            .opt_select_components_by_app_dir_or_name(component_name.as_ref())
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
-        let mut component_views = Vec::<ComponentView>::new();
+        let results = self
+            .ctx
+            .golem_clients()
+            .await?
+            .component
+            .get_environment_components(&environment.environment_id.0)
+            .await?
+            .values
+            .into_iter()
+            .map(|component| ComponentView::new_wit_style(show_sensitive, component))
+            .collect::<Vec<_>>();
 
-        let clients = self.ctx.golem_clients().await?;
-        if selected_component_names.component_names.is_empty() {
-            let results = clients
-                .component
-                .get_components(
-                    selected_component_names
-                        .project
-                        .as_ref()
-                        .map(|p| &p.project_id.0),
-                    None,
-                )
-                .await
-                .map_service_error()?;
-
-            component_views.extend(
-                results.into_iter().map(|meta| {
-                    ComponentView::new_wit_style(show_sensitive, Component::from(meta))
-                }),
-            );
-        } else {
-            for component_name in selected_component_names.component_names.iter() {
-                let results = clients
-                    .component
-                    .get_components(
-                        selected_component_names
-                            .project
-                            .as_ref()
-                            .map(|p| &p.project_id.0),
-                        Some(&component_name.0),
-                    )
-                    .await
-                    .map_service_error()?
-                    .into_iter()
-                    .map(|meta| ComponentView::new_wit_style(show_sensitive, Component::from(meta)))
-                    .collect::<Vec<_>>();
-
-                if results.is_empty() {
-                    log_warn(format!(
-                        "No versions found for component {}",
-                        component_name.0.log_color_highlight()
-                    ));
-                } else {
-                    component_views.extend(results);
-                }
-            }
-        }
-
-        if component_views.is_empty() && component_name.is_some() {
-            // Retry selection (this time with not allowing "not founds")
-            // so we get error messages for app component names.
-            self.ctx
-                .app_handler()
-                .opt_select_components(
-                    component_name.iter().cloned().collect(),
-                    &ApplicationComponentSelectMode::CurrentDir,
-                )
-                .await?;
-        }
-
-        self.ctx.log_handler().log_view(&component_views);
+        self.ctx.log_handler().log_view(&results);
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_get(
         &self,
-        _component_name: Option<ComponentName>,
-        _revision: Option<u64>,
+        component_name: Option<ComponentName>,
+        revision: Option<u64>,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         let selected_components = self
             .must_select_components_by_app_dir_or_name(component_name.as_ref())
             .await?;
 
-        if version.is_some() && selected_components.component_names.len() > 1 {
+        if revision.is_some() && selected_components.component_names.len() > 1 {
             log_error("Version cannot be specified when multiple components are selected!");
             logln("");
             logln(format!(
@@ -396,16 +348,15 @@ impl ComponentCommandHandler {
         }
 
         let mut component_views = Vec::<ComponentView>::new();
+        let component_handler = self.ctx.component_handler();
 
         for component_name in &selected_components.component_names {
-            let component = self
-                .component(
-                    selected_components.environment.as_ref(),
-                    component_name.into(),
-                    version.map(|version| version.into()),
+            let component = component_handler
+                .get_latest_deployed_server_component_by_name(
+                    &selected_components.environment,
+                    component_name,
                 )
                 .await?;
-
             if let Some(component) = component {
                 component_views.push(ComponentView::new_wit_style(
                     self.ctx.show_sensitive(),
@@ -435,11 +386,11 @@ impl ComponentCommandHandler {
         }
 
         if no_matches {
-            if version.is_some() && selected_components.component_names.len() == 1 {
-                log_error("Component version not found");
-                let clients = self.ctx.golem_clients().await?;
+            if revision.is_some() && selected_components.component_names.len() == 1 {
+                log_error("Component revision not found");
 
-                let versions = clients
+                // TODO: atomic: list revisions for component
+                /*let versions = clients
                     .component
                     .get_components(
                         selected_components
@@ -467,7 +418,7 @@ impl ComponentCommandHandler {
                     for version in versions {
                         logln(format!("- {}", version.versioned_component_id.version));
                     }
-                }
+                }*/
             } else {
                 log_error("Component not found");
             }
@@ -476,8 +427,6 @@ impl ComponentCommandHandler {
         }
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_update_workers(
@@ -524,7 +473,6 @@ impl ComponentCommandHandler {
             .await
     }
 
-    // TODO: atomic: cleanup before release
     async fn cmd_manifest_trace(
         &self,
         _component_names: ComponentOptionalComponentNames,
@@ -750,12 +698,10 @@ impl ComponentCommandHandler {
 
     async fn select_components_by_app_dir_or_name_internal(
         &self,
-        _component_name: Option<&ComponentName>,
-        _allow_no_matches: bool,
+        component_name: Option<&ComponentName>,
+        allow_no_matches: bool,
     ) -> anyhow::Result<SelectedComponents> {
-        // TODO: atomic
-        /*
-        fn empty_checked<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
+        fn non_empty<'a>(name: &'a str, value: &'a str) -> anyhow::Result<&'a str> {
             if value.is_empty() {
                 log_error(format!("Missing {name} part in component name!"));
                 logln("");
@@ -765,67 +711,76 @@ impl ComponentCommandHandler {
             Ok(value)
         }
 
-        fn empty_checked_account(value: &str) -> anyhow::Result<&str> {
-            empty_checked("account", value)
+        fn validated<'a, T>(name: &'a str, value: &'a str) -> anyhow::Result<T>
+        where
+            T: FromStr<Err = String>,
+        {
+            let value = non_empty(name, value)?;
+            match T::from_str(value) {
+                Ok(value) => Ok(value),
+                Err(err) => {
+                    log_error(format!(
+                        "Invalid {name} part in component name, value: {value}, error: {err}",
+                        name = name.log_color_highlight(),
+                        value = value.log_color_error_highlight(),
+                        err = err.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&ComponentNameHelp);
+                    bail!(NonSuccessfulExit);
+                }
+            }
         }
 
-        fn empty_checked_project(value: &str) -> anyhow::Result<&str> {
-            empty_checked("project", value)
+        fn validated_account(value: &str) -> anyhow::Result<String> {
+            Ok(non_empty("account", value)?.to_string())
         }
 
-        fn empty_checked_component(value: &str) -> anyhow::Result<&str> {
-            empty_checked("component", value)
+        fn validated_application(value: &str) -> anyhow::Result<ApplicationName> {
+            validated("application", value)
+        }
+
+        fn validated_environment(value: &str) -> anyhow::Result<EnvironmentName> {
+            validated("environment", value)
+        }
+
+        fn validated_component(value: &str) -> anyhow::Result<ComponentName> {
+            Ok(ComponentName(non_empty("component", value)?.to_string()))
         }
 
         self.ctx.silence_app_context_init().await;
 
-        let (account, project, component_name): (
-            Option<AccountDetails>,
-            Option<ProjectRefAndId>,
+        let (environment_reference, component_name): (
+            Option<EnvironmentReference>,
             Option<ComponentName>,
         ) = {
             match component_name {
                 Some(component_name) => {
                     let segments = component_name.0.split("/").collect::<Vec<_>>();
                     match segments.len() {
-                        1 => (
-                            None,
-                            None,
-                            Some(empty_checked_component(segments[0])?.into()),
-                        ),
+                        1 => (None, Some(validated_component(segments[0])?.into())),
                         2 => (
-                            None,
-                            Some(
-                                self.ctx
-                                    .cloud_project_handler()
-                                    .select_project(&ProjectReference::JustName(
-                                        empty_checked_project(segments[0])?.into(),
-                                    ))
-                                    .await?,
-                            ),
-                            Some(empty_checked_component(segments[1])?.into()),
+                            Some(EnvironmentReference::Environment {
+                                environment_name: validated_environment(segments[0])?,
+                            }),
+                            Some(validated_component(segments[1])?),
                         ),
-                        3 => {
-                            let account_email = empty_checked_account(segments[0])?.to_string();
-                            let account = self
-                                .ctx
-                                .select_account_by_email_or_error(&account_email)
-                                .await?;
-                            (
-                                Some(account.clone()),
-                                Some(
-                                    self.ctx
-                                        .cloud_project_handler()
-                                        .select_project(&ProjectReference::WithAccount {
-                                            account_email,
-                                            project_name: empty_checked_project(segments[1])?
-                                                .into(),
-                                        })
-                                        .await?,
-                                ),
-                                Some(empty_checked_component(segments[2])?.into()),
-                            )
-                        }
+                        3 => (
+                            Some(EnvironmentReference::ApplicationEnvironment {
+                                application_name: validated_application(segments[0])?,
+                                environment_name: validated_environment(segments[1])?,
+                            }),
+                            Some(validated_component(segments[2])?),
+                        ),
+                        4 => (
+                            Some(EnvironmentReference::AccountApplicationEnvironment {
+                                account_email: validated_account(segments[0])?,
+                                application_name: validated_application(segments[1])?,
+                                environment_name: validated_environment(segments[2])?,
+                                auto_create: false,
+                            }),
+                            Some(validated_component(segments[3])?),
+                        ),
                         _ => {
                             log_error(format!(
                                 "Failed to parse component name: {}",
@@ -837,7 +792,7 @@ impl ComponentCommandHandler {
                         }
                     }
                 }
-                None => (None, None, None),
+                None => (None, None),
             }
         };
 
@@ -882,13 +837,19 @@ impl ComponentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_opt_environment_reference(
+                EnvironmentResolveMode::Any,
+                environment_reference.as_ref(),
+            )
+            .await?;
+
         Ok(SelectedComponents {
-            account,
-            project,
+            environment,
             component_names: selected_component_names,
         })
-         */
-        todo!()
     }
 
     pub async fn component_by_name_with_auto_deploy(
@@ -977,7 +938,7 @@ impl ComponentCommandHandler {
     ) -> anyhow::Result<Option<ComponentDto>> {
         let component = match component_name_or_id {
             ComponentSelection::Name(component_name) => {
-                self.latest_deployed_server_component_by_name(environment, component_name)
+                self.get_latest_deployed_server_component_by_name(environment, component_name)
                     .await?
             }
             ComponentSelection::Id(component_id) => {
@@ -1016,33 +977,6 @@ impl ComponentCommandHandler {
             (Some(component), None) => Ok(Some(component)),
             (None, _) => Ok(None),
         }
-    }
-
-    pub async fn latest_deployed_server_component_by_name(
-        &self,
-        environment: &ResolvedEnvironmentIdentity,
-        component_name: &ComponentName,
-    ) -> anyhow::Result<Option<ComponentDto>> {
-        self.ctx
-            .golem_clients()
-            .await?
-            .component
-            .get_environment_component(&environment.environment_id.0, component_name.0.as_str())
-            .await
-            .map_service_error_not_found_as_opt()
-    }
-
-    pub async fn server_component_by_id(
-        &self,
-        component_id: &Uuid,
-    ) -> anyhow::Result<Option<ComponentDto>> {
-        self.ctx
-            .golem_clients()
-            .await?
-            .component
-            .get_component(component_id)
-            .await
-            .map_service_error_not_found_as_opt()
     }
 
     pub async fn all_deployable_manifest_components(
@@ -1265,6 +1199,20 @@ impl ComponentCommandHandler {
             .map_service_error()?;
 
         Ok(())
+    }
+
+    pub async fn get_latest_deployed_server_component_by_name(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<Option<ComponentDto>> {
+        self.ctx
+            .golem_clients()
+            .await?
+            .component
+            .get_environment_component(&environment.environment_id.0, component_name.0.as_str())
+            .await
+            .map_service_error_not_found_as_opt()
     }
 
     pub async fn get_component_revision_by_id(

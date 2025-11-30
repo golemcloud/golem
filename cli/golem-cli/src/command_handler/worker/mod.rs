@@ -1776,7 +1776,7 @@ impl WorkerCommandHandler {
                             name = name.log_color_highlight()
                         ));
                         logln("");
-                        log_text_view(&ComponentNameHelp);
+                        log_text_view(&WorkerNameHelp);
                         bail!(NonSuccessfulExit);
                     }
                     Ok(value)
@@ -1797,7 +1797,7 @@ impl WorkerCommandHandler {
                                 err = err.log_color_error_highlight()
                             ));
                             logln("");
-                            log_text_view(&ComponentNameHelp);
+                            log_text_view(&WorkerNameHelp);
                             bail!(NonSuccessfulExit);
                         }
                     }
@@ -1816,7 +1816,7 @@ impl WorkerCommandHandler {
                 }
 
                 fn validated_component(value: &str) -> anyhow::Result<ComponentName> {
-                    validated("component", value)
+                    Ok(ComponentName(non_empty("component", value)?.to_string()))
                 }
 
                 fn validated_worker(value: &str) -> anyhow::Result<String> {
@@ -1861,23 +1861,14 @@ impl WorkerCommandHandler {
                     other => panic!("Unexpected segment count: {other}"),
                 };
 
-                let environment = match &environment_reference {
-                    Some(environment_reference) => {
-                        self.ctx
-                            .environment_handler()
-                            .resolve_environment_reference(
-                                EnvironmentResolveMode::Any,
-                                environment_reference,
-                            )
-                            .await?
-                    }
-                    None => {
-                        self.ctx
-                            .environment_handler()
-                            .resolve_environment(EnvironmentResolveMode::Any)
-                            .await?
-                    }
-                };
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_opt_environment_reference(
+                        EnvironmentResolveMode::Any,
+                        environment_reference.as_ref(),
+                    )
+                    .await?;
 
                 self.ctx
                     .app_handler()

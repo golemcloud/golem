@@ -984,10 +984,7 @@ pub mod component {
             dependency_type: Option<DependencyType>,
         },
         /// List deployed component versions' metadata
-        List {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
-        },
+        List,
         /// Get the latest or selected revision of deployed component metadata
         Get {
             #[command(flatten)]

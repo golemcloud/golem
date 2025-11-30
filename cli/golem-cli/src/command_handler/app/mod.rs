@@ -827,10 +827,17 @@ impl AppCommandHandler {
             deploy_diff.diffable_staged_deployment.hash()
         );
 
-        // Update diff with details
+        // Update diffs with details
         deploy_diff.diff_stage = deploy_diff
             .diffable_staged_deployment
             .diff_with_local(&deploy_diff.diffable_local_deployment);
+        let Some(diff) = deploy_diff
+            .diffable_server_deployment
+            .diff_with_local(&deploy_diff.diffable_local_deployment)
+        else {
+            bail!("Illegal state: empty diff between server and local deployment while adding details")
+        };
+        deploy_diff.diff = diff;
 
         Ok(deploy_diff)
     }
@@ -883,11 +890,6 @@ impl AppCommandHandler {
                         .await?
                 }
                 diff::BTreeMapDiffValue::Update(component_diff) => {
-                    log_action(
-                        "Updating",
-                        format!("component {}", component_name.0.log_color_highlight()),
-                    );
-
                     component_handler
                         .update_staged_component(
                             deploy_diff.staged_component_identity(&component_name),
