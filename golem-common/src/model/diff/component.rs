@@ -74,7 +74,6 @@ pub struct ComponentMetadata {
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub dynamic_linking_wasm_rpc: BTreeMap<String, BTreeMap<String, ComponentWasmRpcTarget>>,
-    // TODO: atomic: agents? or should consider that part of the wasm binary?
 }
 
 impl Hashable for ComponentMetadata {

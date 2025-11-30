@@ -42,7 +42,7 @@ use golem_client::api::{ApplicationClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{ComponentDto, ComponentName};
+use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_templates::add_component_by_template;
@@ -321,7 +321,7 @@ impl AppCommandHandler {
         stage: bool,
         approve_staging_steps: bool,
         version: Option<String>,
-        revision: Option<u64>,
+        revision: Option<ComponentRevision>,
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
@@ -421,7 +421,7 @@ impl AppCommandHandler {
     }
 
     async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
-        // TODO: atomic
+        // TODO: atomic: missing client method
         /*
         let project = self
             .ctx
@@ -462,7 +462,7 @@ impl AppCommandHandler {
 
     async fn deploy_by_revision(
         &self,
-        _version: u64,
+        _version: ComponentRevision,
         _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         // TODO: atomic: missing client method
@@ -493,13 +493,13 @@ impl AppCommandHandler {
         )
         .await?;
 
-        if deploy_args.reset {
-            // TODO: atomic: delete env
-            todo!()
-        }
-
         let Some(deploy_diff) = self.prepare_deployment(environment).await? else {
-            log_skipping_up_to_date("deployment, no changes detected");
+            if plan {
+                log_skipping_up_to_date("planning, no changes detected");
+            } else {
+                log_skipping_up_to_date("deployment, no changes detected");
+            }
+
             return Ok(());
         };
 
@@ -527,6 +527,36 @@ impl AppCommandHandler {
 
         self.apply_staged_changes_to_environment(&deploy_diff)
             .await?;
+
+        if deploy_args.is_any_set() {
+            let env_deploy_args = self.ctx.deploy_args();
+
+            let components = self
+                .ctx
+                .golem_clients()
+                .await?
+                .environment
+                .get_environment_components(&deploy_diff.environment.environment_id.0)
+                .await?
+                .values;
+
+            if let Some(update_mode) = &deploy_args.update_agents {
+                self.ctx
+                    .component_handler()
+                    .update_workers_by_components(&components, update_mode.clone(), true)
+                    .await?;
+            } else if deploy_args.redeploy_agents(env_deploy_args) {
+                self.ctx
+                    .component_handler()
+                    .redeploy_workers_by_components(&components)
+                    .await?;
+            } else if deploy_args.delete_agents(env_deploy_args) {
+                self.ctx
+                    .component_handler()
+                    .delete_workers(&components)
+                    .await?;
+            }
+        }
 
         Ok(())
     }

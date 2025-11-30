@@ -323,7 +323,7 @@ impl ComponentCommandHandler {
     async fn cmd_get(
         &self,
         component_name: Option<ComponentName>,
-        revision: Option<u64>,
+        revision: Option<ComponentRevision>,
     ) -> anyhow::Result<()> {
         let selected_components = self
             .must_select_components_by_app_dir_or_name(component_name.as_ref())
@@ -347,13 +347,13 @@ impl ComponentCommandHandler {
         }
 
         let mut component_views = Vec::<ComponentView>::new();
-        let component_handler = self.ctx.component_handler();
 
         for component_name in &selected_components.component_names {
-            let component = component_handler
-                .get_latest_deployed_server_component_by_name(
+            let component = self
+                .resolve_component(
                     &selected_components.environment,
                     component_name,
+                    revision.map(|revision| revision.into()),
                 )
                 .await?;
             if let Some(component) = component {
@@ -386,38 +386,20 @@ impl ComponentCommandHandler {
 
         if no_matches {
             if revision.is_some() && selected_components.component_names.len() == 1 {
-                log_error("Component revision not found");
-
-                // TODO: atomic: list revisions for component
-                /*let versions = clients
-                    .component
-                    .get_components(
-                        selected_components
-                            .project
-                            .as_ref()
-                            .map(|p| &p.project_id.0),
-                        Some(&selected_components.component_names[0].0),
+                let latest = self
+                    .get_latest_deployed_server_component_by_name(
+                        &selected_components.environment,
+                        &selected_components.component_names[0],
                     )
-                    .await
-                    .map_service_error()
-                    .map(|components| {
-                        components
-                            .into_iter()
-                            .map(Component::from)
-                            .collect::<Vec<_>>()
-                    });
-
-                if let Ok(versions) = versions {
-                    logln("");
-                    logln(
-                        "Available component versions:"
-                            .log_color_help_group()
-                            .to_string(),
-                    );
-                    for version in versions {
-                        logln(format!("- {}", version.versioned_component_id.version));
-                    }
-                }*/
+                    .await;
+                if let Ok(Some(latest)) = latest {
+                    log_error(format!(
+                        "Component revision not found, latest deployed revision: {}",
+                        latest.revision.to_string().log_color_highlight()
+                    ));
+                } else {
+                    log_error("Component revision not found");
+                }
             } else {
                 log_error("Component not found");
             }

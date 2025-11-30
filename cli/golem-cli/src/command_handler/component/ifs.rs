@@ -29,8 +29,6 @@ use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
 use url::Url;
 
-// TODO: atomic
-#[allow(unused)]
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
@@ -43,7 +41,6 @@ pub struct HashedFile {
     pub target: ComponentFilePathWithPermissions,
 }
 
-#[allow(unused)]
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
@@ -71,8 +68,6 @@ impl IfsFileManager {
         Self { client }
     }
 
-    // TODO: atomic
-    #[allow(unused)]
     pub async fn build_files_archive(
         &self,
         component_files: &[InitialComponentFile],
@@ -259,8 +254,6 @@ impl IfsFileManager {
     }
 }
 
-// TODO: atomic
-#[allow(unused)]
 #[async_trait]
 trait FileProcessor<R> {
     async fn process_local_file(
@@ -276,8 +269,6 @@ trait FileProcessor<R> {
     ) -> anyhow::Result<R>;
 }
 
-// TODO: atomic
-#[allow(unused)]
 struct FileLoader {
     client: reqwest::Client,
 }
@@ -338,8 +329,6 @@ impl FileProcessor<LoadedFile> for FileLoader {
     }
 }
 
-// TODO: atomic
-#[allow(unused)]
 struct FileHasher {
     client: reqwest::Client,
 }

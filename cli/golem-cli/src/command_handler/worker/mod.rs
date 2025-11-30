@@ -816,7 +816,7 @@ impl WorkerCommandHandler {
         &self,
         _worker_name: AgentIdArgs,
         _mode: AgentUpdateMode,
-        _target_revision: Option<u64>, // TODO: atomic ComponentRevision
+        _target_revision: Option<ComponentRevision>, // TODO: atomic ComponentRevision
         _await_update: bool,
     ) -> anyhow::Result<()> {
         // TODO: atomic

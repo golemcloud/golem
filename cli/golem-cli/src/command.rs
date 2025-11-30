@@ -37,6 +37,7 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::component::ComponentRevision;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -624,7 +625,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: ComponentOptionalComponentName,
         /// Optional component revision to use, defaults to latest deployed component revision
-        revision: Option<u64>,
+        revision: Option<ComponentRevision>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
@@ -844,6 +845,7 @@ pub mod app {
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::component::ComponentRevision;
     use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
@@ -878,7 +880,7 @@ pub mod app {
             version: Option<String>,
             /// Revert to the specified revision
             #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
-            revision: Option<u64>,
+            revision: Option<ComponentRevision>,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
@@ -934,7 +936,7 @@ pub mod component {
     use crate::model::app::DependencyType;
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::component::ComponentName;
+    use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
@@ -990,7 +992,7 @@ pub mod component {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
             /// Optional component revision to get
-            revision: Option<u64>,
+            revision: Option<ComponentRevision>,
         },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
@@ -1094,6 +1096,7 @@ pub mod worker {
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
+    use golem_common::model::component::ComponentRevision;
     use golem_common::model::IdempotencyKey;
 
     #[derive(Debug, Subcommand)]
@@ -1184,7 +1187,7 @@ pub mod worker {
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
             /// The new revision of the updated agent (default is the latest revision)
-            target_revision: Option<u64>,
+            target_revision: Option<ComponentRevision>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,

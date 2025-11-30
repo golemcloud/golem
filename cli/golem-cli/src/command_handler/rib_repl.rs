@@ -60,7 +60,7 @@ impl RibReplHandler {
     pub async fn cmd_repl(
         &self,
         component_name: Option<ComponentName>,
-        component_revision: Option<u64>,
+        component_revision: Option<ComponentRevision>,
         deploy_args: Option<&DeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
@@ -104,7 +104,7 @@ impl RibReplHandler {
                 &selected_components.environment,
                 ComponentNameMatchKind::App,
                 &component_name,
-                component_revision.map(|v| ComponentRevision(v).into()),
+                component_revision.map(|r| r.into()),
                 deploy_args,
             )
             .await?;
