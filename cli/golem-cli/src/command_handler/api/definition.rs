@@ -17,14 +17,18 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_warn_action, LogColorize};
-use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
-use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::log::{log_action, logln, LogColorize};
+use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::fmt::log_error;
+use crate::model::text::http_api_definition::HttpApiDefinitionGetView;
 use crate::model::OpenApiDefinitionOutputFormat;
-use anyhow::{bail, Context as AnyhowContext};
-use itertools::Itertools;
-use serde::de::DeserializeOwned;
+use anyhow::bail;
+use golem_client::api::HttpApiDefinitionClient;
+use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinition, HttpApiDefinitionName, HttpApiDefinitionRevision,
+};
+use serde_json::Value;
 use std::sync::Arc;
 use warp;
 use webbrowser;
@@ -40,70 +44,67 @@ impl ApiDefinitionCommandHandler {
 
     pub async fn handle_command(&self, command: ApiDefinitionSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiDefinitionSubcommand::Get { id, version } => self.cmd_get(id, version).await,
-            ApiDefinitionSubcommand::List { id } => self.cmd_list(id).await,
-            ApiDefinitionSubcommand::Export {
-                id,
-                version,
+            ApiDefinitionSubcommand::Get { name, revision } => self.cmd_get(name, revision).await,
+            ApiDefinitionSubcommand::List => self.cmd_list().await,
+            ApiDefinitionSubcommand::OpenApi {
+                name,
+                deployment_revision,
                 format,
                 output_name,
-            } => self.cmd_export(id, version, format, output_name).await,
-            ApiDefinitionSubcommand::Swagger { id, version, port } => {
-                self.cmd_swagger(id, version, port).await
+            } => {
+                self.cmd_export(name, deployment_revision, format, output_name)
+                    .await
             }
+            ApiDefinitionSubcommand::Swagger {
+                name,
+                revision,
+                port,
+            } => self.cmd_swagger(name, revision, port).await,
         }
     }
 
     async fn cmd_get(
         &self,
-        api_def_id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
+        name: HttpApiDefinitionName,
+        revision: Option<HttpApiDefinitionRevision>,
     ) -> anyhow::Result<()> {
-        let project = self
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        match self
-            .api_definition(project.as_ref(), &api_def_id.0, &version.0)
+        let Some(definition) = self
+            .resolve_http_api_definition(&environment, &name, revision.as_ref())
             .await?
-        {
-            Some(result) => {
-                self.ctx
-                    .log_handler()
-                    .log_view(&ApiDefinitionGetView(result));
-                Ok(())
-            }
-            None => {
-                log_error("Not found");
-                bail!(NonSuccessfulExit)
-            }
-        }
+        else {
+            // TODO: atomic: log latest revision
+            log_error("HTTP API definition not found");
+            bail!(NonSuccessfulExit)
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&HttpApiDefinitionGetView(definition));
+
+        Ok(())
     }
 
-    async fn cmd_list(&self, api_definition_id: Option<ApiDefinitionId>) -> anyhow::Result<()> {
-        let project = self
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
         let clients = self.ctx.golem_clients().await?;
 
         let definitions = clients
             .api_definition
-            .list_definitions(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                api_definition_id.as_ref().map(|id| id.0.as_str()),
-            )
+            .list_environment_http_api_definitions(&environment.environment_id.0)
             .await
-            .map_service_error()?;
+            .map_service_error()?
+            .values;
 
         self.ctx.log_handler().log_view(&definitions);
 
@@ -112,36 +113,22 @@ impl ApiDefinitionCommandHandler {
 
     async fn cmd_export(
         &self,
-        id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
+        name: HttpApiDefinitionName,
+        deployment_revision: Option<DeploymentRevision>,
         format: OpenApiDefinitionOutputFormat,
         output_name: Option<String>,
     ) -> anyhow::Result<()> {
-        let project = self
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
+        let openapi_spec = self
+            .get_deployed_openapi_spec(&environment, &name, deployment_revision.as_ref())
+            .await?;
 
-        let response = clients
-            .api_definition
-            .export_definition(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                &id.0,
-                &version.0,
-            )
-            .await
-            .map_service_error()?;
-
-        let openapi_spec = response.openapi_yaml;
-        let file_name = output_name.unwrap_or_else(|| format!("{}_{}", id.0, version.0));
+        let file_name = output_name.unwrap_or_else(|| name.0.clone());
         let file_path = match format {
             OpenApiDefinitionOutputFormat::Json => format!("{file_name}.json"),
             OpenApiDefinitionOutputFormat::Yaml => format!("{file_name}.yaml"),
@@ -149,66 +136,49 @@ impl ApiDefinitionCommandHandler {
 
         match format {
             OpenApiDefinitionOutputFormat::Json => {
-                // Convert YAML to JSON for the JSON format option
-                let yaml_obj: serde_yaml::Value = serde_yaml::from_str(&openapi_spec)?;
-                let json_obj: serde_json::Value = serde_json::to_value(yaml_obj)?;
+                let json_obj: serde_json::Value = serde_json::to_value(openapi_spec)?;
                 let json_str = serde_json::to_string_pretty(&json_obj)?;
                 std::fs::write(&file_path, json_str)?;
             }
             OpenApiDefinitionOutputFormat::Yaml => {
-                // Use YAML directly for the YAML format option
-                std::fs::write(&file_path, openapi_spec)?;
+                let yaml_str = serde_json::to_string_pretty(&openapi_spec)?;
+                std::fs::write(&file_path, yaml_str)?;
             }
         }
 
-        let result = format!("Exported to {file_path}");
-
-        self.ctx
-            .log_handler()
-            .log_view(&ApiDefinitionExportView(result));
+        log_action(
+            "Exported",
+            format!(
+                "OpenAPI spec for {} to {}",
+                name.0.log_color_highlight(),
+                file_path.log_color_highlight()
+            ),
+        );
 
         Ok(())
     }
 
     async fn cmd_swagger(
         &self,
-        project: ProjectOptionalFlagArg,
-        id: ApiDefinitionId,
-        version: ApiDefinitionVersion,
+        name: HttpApiDefinitionName,
+        deployment_revision: Option<DeploymentRevision>,
         port: u16,
     ) -> anyhow::Result<()> {
-        let project = self
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
-
-        // First export the API spec
-        let response = clients
-            .api_definition
-            .export_definition(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                &id.0,
-                &version.0,
-            )
-            .await
-            .map_service_error()?;
-
-        let openapi_spec = response.openapi_yaml;
-
-        // Parse the YAML spec into JSON Value
-        let mut spec: serde_json::Value = serde_yaml::from_str(&openapi_spec)?;
+        let mut openapi_spec = self
+            .get_deployed_openapi_spec(&environment, &name, deployment_revision.as_ref())
+            .await?;
 
         // Filter paths to only include methods with binding-type: default
-        filter_routes(&mut spec);
+        filter_routes(&mut openapi_spec);
 
+        // TODO: atomic
+        /*
         // Fetch deployments
         let project_id = self
             .ctx
@@ -251,6 +221,7 @@ impl ApiDefinitionCommandHandler {
                 }
             }
         }
+        */
 
         // Validate port
         if port == 0 {
@@ -261,9 +232,18 @@ impl ApiDefinitionCommandHandler {
         }
 
         // Start local Swagger UI server
-        self.start_local_swagger_ui(serde_yaml::to_string(&spec)?, port)
+        self.start_local_swagger_ui(serde_yaml::to_string(&openapi_spec)?, port)
             .await?;
 
+        log_action(
+            "Started",
+            format!("Swagger UI, running at http://localhost:{}", port),
+        );
+        logln("");
+        logln("Press Ctrl+C to quit");
+
+        // TODO: atomic
+        /*
         self.ctx
             .log_handler()
             .log_view(&ApiDefinitionExportView(format!(
@@ -276,6 +256,7 @@ impl ApiDefinitionCommandHandler {
                     format!("API is deployed at {} locations", deployments.len())
                 }
             )));
+        */
 
         // Wait for ctrl+c
         tokio::signal::ctrl_c().await?;
@@ -363,81 +344,61 @@ impl ApiDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn api_definition(
+    async fn resolve_http_api_definition(
         &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        name: &str,
-        version: &str,
-    ) -> anyhow::Result<Option<HttpApiDefinitionResponseData>> {
+        environment: &ResolvedEnvironmentIdentity,
+        name: &HttpApiDefinitionName,
+        revision: Option<&HttpApiDefinitionRevision>,
+    ) -> anyhow::Result<Option<HttpApiDefinition>> {
         let clients = self.ctx.golem_clients().await?;
 
-        clients
+        let Some(definition) = clients
             .api_definition
-            .get_definition(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                name,
-                version,
-            )
+            .get_http_api_definition_in_environment(&environment.environment_id.0, &name.0)
             .await
-            .map_service_error_not_found_as_opt()
+            .map_service_error_not_found_as_opt()?
+        else {
+            return Ok(None);
+        };
+
+        let Some(_revision) = revision else {
+            return Ok(Some(definition));
+        };
+
+        // TODO: atomic: missing client method
+        todo!()
     }
 
-    async fn update_api_definition(
+    async fn get_deployed_openapi_spec(
         &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        manifest_api_definition: &HttpApiDefinitionRequest,
-    ) -> anyhow::Result<HttpApiDefinitionResponseData> {
-        let clients = self.ctx.golem_clients().await?;
+        environment: &ResolvedEnvironmentIdentity,
+        name: &HttpApiDefinitionName,
+        deployment_revision: Option<&DeploymentRevision>,
+    ) -> anyhow::Result<Value> {
+        let deployment_revision = match deployment_revision {
+            Some(deployment_revision) => deployment_revision.to_owned(),
+            None => match &environment.remote_environment.current_deployment {
+                Some(deployment) => deployment.revision,
+                None => {
+                    log_error("The application is not deployed. Run {}, then export!");
+                    bail!(NonSuccessfulExit);
+                }
+            },
+        };
 
-        clients
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
             .api_definition
-            .update_definition_json(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                &manifest_api_definition.id,
-                &manifest_api_definition.version,
-                // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
-                &parse_api_definition(&serde_yaml::to_string(&manifest_api_definition)?)?,
+            .get_openapi_of_http_api_definition_in_deployment(
+                &environment.environment_id.0,
+                deployment_revision.0,
+                &name.0,
             )
-            .await
-            .map_service_error()
+            .await?
+            .0)
     }
-
-    async fn new_api_definition(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        api_definition: &HttpApiDefinitionRequest,
-    ) -> anyhow::Result<HttpApiDefinitionResponseData> {
-        let clients = self.ctx.golem_clients().await?;
-
-        clients
-            .api_definition
-            .create_definition_json(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                // TODO: would be nice to share the model between oss and cloud instead of "re-encoding"
-                &parse_api_definition(&serde_yaml::to_string(&api_definition)?)?,
-            )
-            .await
-            .map_service_error()
-    }
-}
-
-fn parse_api_definition<T: DeserializeOwned>(input: &str) -> anyhow::Result<T> {
-    serde_yaml::from_str(input).context("Failed to parse API definition")
 }
 
 /// Filters the OpenAPI specification to only include methods with `binding-type: default`.

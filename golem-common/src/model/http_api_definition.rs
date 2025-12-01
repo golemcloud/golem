@@ -34,7 +34,7 @@ newtype_uuid!(
 declare_revision!(HttpApiDefinitionRevision);
 
 declare_transparent_newtypes! {
-    #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
+    #[derive(Display, PartialOrd, Eq, Ord, Hash, BinaryCodec)]
     #[desert(transparent)]
     pub struct HttpApiDefinitionName(pub String);
 
@@ -42,6 +42,37 @@ declare_transparent_newtypes! {
     #[derive(Display, PartialOrd, Eq, Ord, BinaryCodec)]
     #[desert(transparent)]
     pub struct HttpApiDefinitionVersion(pub String);
+}
+
+impl TryFrom<&str> for HttpApiDefinitionName {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_string().try_into()
+    }
+}
+
+impl TryFrom<String> for HttpApiDefinitionName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // TODO: atomic: Add validations
+        Ok(HttpApiDefinitionName(value.to_string()))
+    }
+}
+
+impl FromStr for HttpApiDefinitionName {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
+    }
+}
+
+impl HttpApiDefinitionName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 declare_enums! {
@@ -204,6 +235,18 @@ declare_unions! {
         HttpHandler(HttpHandlerBinding),
         CorsPreflight(CorsPreflightBinding),
         SwaggerUi(Empty)
+    }
+}
+
+impl GatewayBinding {
+    pub fn component_name(&self) -> Option<&ComponentName> {
+        match self {
+            GatewayBinding::Worker(binding) => Some(&binding.component_name),
+            GatewayBinding::FileServer(binding) => Some(&binding.component_name),
+            GatewayBinding::HttpHandler(binding) => Some(&binding.component_name),
+            GatewayBinding::CorsPreflight(_) => None,
+            GatewayBinding::SwaggerUi(_) => None,
+        }
     }
 }
 

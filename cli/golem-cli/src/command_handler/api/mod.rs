@@ -17,7 +17,7 @@ use crate::context::Context;
 use std::sync::Arc;
 
 pub mod cloud;
-// TODO: atomic: pub mod definition;
+pub mod definition;
 // TODO: atomic: pub mod deployment;
 // TODO: atomic: pub mod security_scheme;
 

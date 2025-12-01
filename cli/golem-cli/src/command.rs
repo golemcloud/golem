@@ -1291,37 +1291,30 @@ pub mod api {
     }
 
     pub mod definition {
-        use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
         use crate::model::OpenApiDefinitionOutputFormat;
         use clap::Subcommand;
+        use golem_common::model::deployment::DeploymentRevision;
+        use golem_common::model::http_api_definition::{
+            HttpApiDefinitionName, HttpApiDefinitionRevision,
+        };
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDefinitionSubcommand {
             /// Retrieves metadata about an existing API definition
             Get {
-                /// API definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+                /// HTTP API definition name to get
+                name: HttpApiDefinitionName,
+                /// Optional revision to get
+                revision: Option<HttpApiDefinitionRevision>,
             },
-            /// Lists all API definitions
-            List {
-                /// API definition id to get all versions. Optional.
-                #[arg(short, long)]
-                id: Option<ApiDefinitionId>,
-            },
-            /// Exports an api definition in OpenAPI format
-            Export {
-                // TODO: atomic: should be name based, with app context
-                /// Api definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                // TODO: atomic: why this version is needed?
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+            /// Lists all HTPP API definitions
+            List,
+            /// Gets an HTTP API definition in OpenAPI format
+            OpenApi {
+                /// HTTP API definition name to export
+                name: HttpApiDefinitionName,
+                /// Optional deployment revision to get
+                deployment_revision: Option<DeploymentRevision>,
                 /// Output format (json or yaml)
                 #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
                 format: OpenApiDefinitionOutputFormat,
@@ -1329,16 +1322,12 @@ pub mod api {
                 #[arg(short, long)]
                 output_name: Option<String>,
             },
-            /// Opens Swagger UI for an API definition
+            /// Opens Swagger UI for an HTTP API definition
             Swagger {
-                // TODO: atomic: should be name based, with app context
-                /// Api definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                // TODO: atomic: why this version is needed?
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+                /// HTTP API definition name
+                name: HttpApiDefinitionName,
+                /// Optional deployment revision
+                revision: Option<DeploymentRevision>,
                 /// Port to open Swagger UI on (defaults to 9007)
                 #[arg(long, short, default_value_t = 9007)]
                 port: u16,
@@ -1347,7 +1336,6 @@ pub mod api {
     }
 
     pub mod deployment {
-        use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -1355,20 +1343,17 @@ pub mod api {
             /// Get API deployment
             Get {
                 /// Deployment site
-                #[arg(value_name = "subdomain.host")]
+                #[arg(value_name = "<subdomain>.host")]
                 site: String,
             },
             /// List API deployment for API definition
-            List {
-                /// API definition id
-                definition: Option<ApiDefinitionId>,
-            },
+            List,
         }
     }
 
     pub mod security_scheme {
-        use crate::model::api::IdentityProviderType;
         use clap::Subcommand;
+        use golem_common::model::security_scheme::Provider;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1378,7 +1363,7 @@ pub mod api {
                 security_scheme_id: String,
                 /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
                 #[arg(long)]
-                provider_type: IdentityProviderType,
+                provider_type: Provider,
                 /// Security Scheme client ID
                 #[arg(long)]
                 client_id: String,

@@ -28,14 +28,16 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
@@ -219,52 +221,6 @@ pub enum AppBuildStep {
     Componentize,
     Link,
     AddMetadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct HttpApiDefinitionName(String);
-
-impl HttpApiDefinitionName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl Display for HttpApiDefinitionName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for HttpApiDefinitionName {
-    fn from(value: String) -> Self {
-        HttpApiDefinitionName(value)
-    }
-}
-
-impl From<&str> for HttpApiDefinitionName {
-    fn from(value: &str) -> Self {
-        Self(value.to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HttpApiDeploymentSite {
-    pub host: String,
-    pub subdomain: Option<String>,
-}
-
-impl Display for HttpApiDeploymentSite {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.subdomain {
-            Some(subdomain) => write!(f, "{}.{}", subdomain, self.host),
-            None => write!(f, "{}", self.host),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -494,10 +450,8 @@ pub struct Application {
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
-    http_api_deployments: BTreeMap<
-        EnvironmentName,
-        BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
-    >,
+    http_api_deployments:
+        BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
 }
 
 impl Application {
@@ -678,7 +632,7 @@ impl Application {
     pub fn http_api_deployments(
         &self,
         environment: &EnvironmentName,
-    ) -> Option<&BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>> {
+    ) -> Option<&BTreeMap<Domain, Vec<WithSource<Vec<HttpApiDefinitionName>>>>> {
         self.http_api_deployments.get(environment)
     }
 }
@@ -1602,9 +1556,8 @@ mod app_builder {
         Application, ApplicationNameAndEnvironments, BinaryComponentSource, ComponentLayer,
         ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
         ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
-        DependentComponent, HttpApiDefinitionName, HttpApiDeploymentSite,
-        MultiSourceHttpApiDefinitionNames, PartitionedComponentPresets, TemplateName, WithSource,
-        DEFAULT_TEMP_DIR,
+        DependentComponent, MultiSourceHttpApiDefinitionNames, PartitionedComponentPresets,
+        TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1613,8 +1566,9 @@ mod app_builder {
     use colored::Colorize;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
+    use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::http_api_definition::RouteMethod;
+    use golem_common::model::http_api_definition::{HttpApiDefinitionName, RouteMethod};
     use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1658,7 +1612,7 @@ mod app_builder {
         },
         HttpApiDeployment {
             environment: EnvironmentName,
-            site: HttpApiDeploymentSite,
+            domain: Domain,
             definition: HttpApiDefinitionName,
         },
         Environment(EnvironmentName),
@@ -1730,21 +1684,13 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::HttpApiDeployment {
                     environment,
-                    site,
+                    domain,
                     definition,
                 } => {
                     format!(
-                        "{} - {}{} - {}",
+                        "{} - {} - {}",
                         environment.0.as_str().log_color_highlight(),
-                        match site.subdomain {
-                            Some(subdomain) => {
-                                format!("{}.", subdomain.as_str().log_color_highlight())
-                            }
-                            None => {
-                                "".to_string()
-                            }
-                        },
-                        site.host.as_str().log_color_highlight(),
+                        domain.0.log_color_highlight(),
                         definition.as_str().log_color_highlight(),
                     )
                 }
@@ -1780,10 +1726,8 @@ mod app_builder {
 
         http_api_definitions:
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
-        http_api_deployments: BTreeMap<
-            EnvironmentName,
-            BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
-        >,
+        http_api_deployments:
+            BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -2019,8 +1963,6 @@ mod app_builder {
 
                     if let Some(http_api) = app.application.http_api {
                         for (api_definition_name, api_definition) in http_api.definitions {
-                            let api_definition_name =
-                                HttpApiDefinitionName::from(api_definition_name);
                             if self.add_entity_source(
                                 UniqueSourceCheckedEntityKey::HttpApiDefinition(
                                     api_definition_name.clone(),
@@ -2053,23 +1995,17 @@ mod app_builder {
 
                         for (environment, deployments) in http_api.deployments {
                             let mut collected_deployments =
-                                BTreeMap::<HttpApiDeploymentSite, Vec<HttpApiDefinitionName>>::new(
-                                );
+                                BTreeMap::<Domain, Vec<HttpApiDefinitionName>>::new();
 
                             for api_deployment in deployments {
-                                let api_deployment_site = HttpApiDeploymentSite {
-                                    host: api_deployment.host.clone(),
-                                    subdomain: api_deployment.subdomain.clone(),
-                                };
-
                                 let mut unique_definitions =
                                     Vec::with_capacity(api_deployment.definitions.len());
                                 for definition in api_deployment.definitions {
-                                    let definition = HttpApiDefinitionName::from(definition);
+                                    let definition = HttpApiDefinitionName(definition);
                                     if self.add_entity_source(
                                         UniqueSourceCheckedEntityKey::HttpApiDeployment {
                                             environment: environment.clone(),
-                                            site: api_deployment_site.clone(),
+                                            domain: api_deployment.domain.clone(),
                                             definition: definition.clone(),
                                         },
                                         &app.source,
@@ -2080,7 +2016,7 @@ mod app_builder {
 
                                 if !unique_definitions.is_empty() {
                                     collected_deployments
-                                        .insert(api_deployment_site, unique_definitions);
+                                        .insert(api_deployment.domain, unique_definitions);
                                 }
                             }
 
@@ -2725,46 +2661,22 @@ mod app_builder {
                                         ("HTTP API deployment site", site.to_string()),
                                     ],
                                     |validation| {
-                                        for def_name in &api_definitions.value {
-                                            let parts = def_name.as_str().split("@").collect::<Vec<_>>();
-                                            let (name, version) = match parts.len() {
-                                                1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
-                                                2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
-                                                _ => {
-                                                    validation.add_error(
-                                                        format!(
-                                                            "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
-                                                            def_name.as_str().log_color_error_highlight(),
-                                                        ),
-                                                    );
-                                                    continue;
-                                                }
-                                            };
+                                        for name in &api_definitions.value {
                                             if name.0.is_empty() {
                                                 validation.add_error(
                                                     format!(
                                                         "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
-                                                        def_name.as_str().log_color_error_highlight(),
+                                                        name.as_str().log_color_error_highlight(),
                                                     ),
                                                 );
                                             } else if !self.http_api_definitions.contains_key(&name) {
                                                 validation.add_error(
                                                     format!(
                                                         "Unknown HTTP API definition name: {}\n\n{}",
-                                                        def_name.as_str().log_color_error_highlight(),
-                                                        self.available_http_api_definitions(def_name.as_str())
+                                                        name.as_str().log_color_error_highlight(),
+                                                        self.available_http_api_definitions(name.as_str())
                                                     ),
                                                 )
-                                            }
-                                            if let Some(version) = version {
-                                                if version.is_empty() {
-                                                    validation.add_error(
-                                                        format!(
-                                                            "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
-                                                            def_name.as_str().log_color_error_highlight(),
-                                                        ),
-                                                    );
-                                                }
                                             }
                                         }
                                     },

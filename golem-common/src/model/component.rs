@@ -74,7 +74,7 @@ impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: Add validations (non-empty, no "/", no " ", ...)
+        // TODO: atomic: Add validations (non-empty, no "/", no " ", ...)
         Ok(ComponentName(value.to_string()))
     }
 }

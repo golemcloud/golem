@@ -20,12 +20,14 @@ use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use anyhow::{anyhow, Context};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use url::Url;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 
 #[derive(Clone, Debug)]
 pub struct ApplicationWithSource {
@@ -114,7 +116,7 @@ pub struct Component {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApi {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub definitions: IndexMap<String, HttpApiDefinition>,
+    pub definitions: IndexMap<HttpApiDefinitionName, HttpApiDefinition>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub deployments: IndexMap<EnvironmentName, Vec<HttpApiDeployment>>,
 }
@@ -170,9 +172,7 @@ pub struct HttpApiDefinitionBinding {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDeployment {
-    pub host: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subdomain: Option<String>,
+    pub domain: Domain,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub definitions: Vec<String>,
 }

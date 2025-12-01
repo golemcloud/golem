@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod agent;
-pub mod api;
+pub mod http_api;
 pub mod app;
 pub mod app_raw;
 pub mod cascade;

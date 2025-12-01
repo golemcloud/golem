@@ -12,21 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod account;
-pub mod agent;
-pub mod http_api_definition;
-pub mod http_api_deployment;
-pub mod http_api_domain;
-// TODO: atomic: pub mod api_security;
-pub mod certificate;
-pub mod component;
-pub mod environment;
-pub mod fmt;
-pub mod help;
-// TODO: atomic: pub mod plugin;
-pub mod diff;
-pub mod profile;
-pub mod server;
-pub mod template;
-pub mod token;
-pub mod worker;
+// TODO: atomic: delete if not needed
