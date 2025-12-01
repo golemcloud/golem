@@ -20,8 +20,8 @@ use crate::repo::model::account_usage::{AccountUsage as RepoAccountUsage, UsageT
 use crate::repo::model::datetime::SqlDateTime;
 use crate::services::account_usage::error::AccountUsageError;
 use golem_common::model::account::AccountId;
-use golem_service_base::model::ResourceLimits;
 use golem_service_base::model::auth::{AccountAction, AuthCtx};
+use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -159,20 +159,44 @@ impl AccountUsageService {
 
     pub async fn record_fuel_consumption(
         &self,
-        updates: &HashMap<AccountId, i64>,
+        updates: HashMap<AccountId, i64>,
         auth: &AuthCtx,
-    ) -> Result<(), AccountUsageError> {
+    ) -> Result<AccountResourceLimits, AccountUsageError> {
+        let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
-            auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-            let mut account_usage = self
-                .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-                .await?;
+            auth.authorize_account_action(&account_id, AccountAction::UpdateUsage)?;
+            let mut account_usage = match self
+                .get_account_usage(&account_id, Some(UsageType::MonthlyGasLimit))
+                .await
+            {
+                Ok(value) => value,
+                Err(AccountUsageError::AccountNotfound(_)) => continue,
+                Err(other) => return Err(other),
+            };
 
-            self.add_checked(&mut account_usage, UsageType::MonthlyGasLimit, *update)?;
+            // fuel usage is allowed to exceeded the montly limit slightly.
+            // The worker executor will stop the worker at the next opportunity.
+            account_usage.add_change(UsageType::MonthlyGasLimit, update);
 
             self.account_usage_repo.add(&account_usage).await?;
+
+            limits_of_updates_accounts.insert(account_id, account_usage.resource_limits());
         }
-        Ok(())
+        Ok(AccountResourceLimits(limits_of_updates_accounts))
+    }
+
+    pub async fn get_resouce_limits(
+        &self,
+        account_id: &AccountId,
+        auth: &AuthCtx,
+    ) -> Result<ResourceLimits, AccountUsageError> {
+        auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
+
+        let account_usage = self
+            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
+            .await?;
+
+        Ok(account_usage.resource_limits())
     }
 
     async fn get_account_usage(
@@ -199,35 +223,13 @@ impl AccountUsageService {
         }
     }
 
-    pub async fn get_resouce_limits(
-        &self,
-        account_id: &AccountId,
-        auth: &AuthCtx,
-    ) -> Result<ResourceLimits, AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::ViewUsage)?;
-
-        let record = self
-            .get_account_usage(account_id, Some(UsageType::MonthlyGasLimit))
-            .await?;
-
-        let available_fuel = record
-            .plan
-            .monthly_gas_limit
-            .saturating_sub(record.usage(UsageType::MonthlyGasLimit));
-
-        Ok(ResourceLimits {
-            available_fuel,
-            max_memory_per_worker: record.plan.max_memory_per_worker as u64,
-        })
-    }
-
     fn add_checked(
         &self,
         account_usage: &mut RepoAccountUsage,
         usage_type: UsageType,
         value: i64,
     ) -> Result<(), AccountUsageError> {
-        if !account_usage.add_change(usage_type, value)? {
+        if !account_usage.add_change(usage_type, value) {
             return Err(AccountUsageError::LimitExceeded(LimitExceededError {
                 limit_name: format!("{usage_type:?}"),
                 limit_value: account_usage.plan.limit(usage_type),

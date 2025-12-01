@@ -14,9 +14,7 @@
 
 pub mod default;
 
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
@@ -42,7 +40,7 @@ use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    CachableComponent, ComponentFilePath, ComponentRevision, PluginPriority,
+    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
 };
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -172,7 +170,7 @@ pub trait WorkerCtx:
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;
 
-    fn component_metadata(&self) -> &CachableComponent;
+    fn component_metadata(&self) -> &ComponentDto;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -212,12 +210,12 @@ pub trait FuelManagement {
     /// Borrows some fuel for the execution. The amount borrowed is not used by the execution engine,
     /// but the worker context can store it and use it in `is_out_of_fuel` to check if the worker is
     /// within the limits.
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError>;
+    async fn borrow_fuel(&mut self, current_level: i64) -> Result<(), WorkerExecutorError>;
 
     /// Same as `borrow_fuel` but synchronous as it is called from the epoch_deadline_callback.
     /// This assumes that there is a cached available resource limits that can be used to calculate
     /// borrow fuel without reaching out to external services.
-    fn borrow_fuel_sync(&mut self);
+    fn borrow_fuel_sync(&mut self, current_level: i64);
 
     /// Returns the remaining fuel that was previously borrowed. The remaining amount can be calculated
     /// by the current fuel level and some internal state of the worker context.
@@ -378,13 +376,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
-    /// Records the last known resource limits of a worker without activating it
-    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError>;
-
     /// Callback called when the executor's shard assignment has been changed
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
@@ -455,7 +446,7 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &CachableComponent,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()>;
 }
 

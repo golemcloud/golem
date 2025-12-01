@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
-use golem_common::model::component::{CachableComponent, ComponentRevision};
+use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -37,7 +37,7 @@ use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+    ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
@@ -93,11 +93,11 @@ impl FuelManagement for DebugContext {
         false
     }
 
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn borrow_fuel(&mut self, _current_level: i64) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
-    fn borrow_fuel_sync(&mut self) {}
+    fn borrow_fuel_sync(&mut self, _current_level: i64) {}
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
@@ -135,15 +135,6 @@ impl ExternalOperations<Self> for DebugContext {
         store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::prepare_instance(worker_id, instance, store).await
-    }
-
-    async fn record_last_known_limits<This: HasAll<Self> + Send + Sync>(
-        this: &This,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::record_last_known_limits(this, account_id, last_known_limits)
-            .await
     }
 
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
@@ -446,7 +437,7 @@ impl DynamicLinking<Self> for DebugContext {
         engine: &Engine,
         linker: &mut Linker<Self>,
         component: &Component,
-        component_metadata: &CachableComponent,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -617,7 +608,7 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &CachableComponent {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 

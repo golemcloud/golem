@@ -26,7 +26,7 @@ import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
-  rpc InvokeAndAwaitTyped (InvokeAndAwaitRequest) returns (InvokeAndAwaitTypedResponse);
+  rpc InvokeAndAwait (InvokeAndAwaitRequest) returns (InvokeAndAwaitResponse);
   rpc Invoke (InvokeRequest) returns (InvokeResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc ResumeWorker (ResumeWorkerRequest) returns (ResumeWorkerResponse);
@@ -57,13 +57,6 @@ message LaunchNewWorkerSuccessResponse {
   uint64 component_version = 2;
 }
 
-message ForkWorkerRequest {
-  golem.worker.WorkerId source_worker_id = 2;
-  golem.worker.WorkerId target_worker_id = 3;
-  uint64 oplog_index_cutoff = 4;
-  golem.auth.AuthCtx auth_ctx = 5;
-}
-
 message CompletePromiseRequest {
   golem.worker.WorkerId workerId = 1;
   golem.worker.CompleteParameters completeParameters = 2;
@@ -75,6 +68,13 @@ message CompletePromiseResponse {
     bool success = 1;
     golem.worker.v1.WorkerError error = 2;
   }
+}
+
+message ForkWorkerRequest {
+  golem.worker.WorkerId source_worker_id = 1;
+  golem.worker.WorkerId target_worker_id = 2;
+  uint64 oplog_index_cutoff = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
 }
 
 message ForkWorkerResponse {
@@ -93,7 +93,7 @@ message InvokeAndAwaitRequest {
   golem.auth.AuthCtx auth_ctx = 6;
 }
 
-message InvokeAndAwaitTypedResponse {
+message InvokeAndAwaitResponse {
   oneof result {
     golem.worker.InvokeResultTyped success = 1;
     golem.worker.v1.WorkerError error = 2;

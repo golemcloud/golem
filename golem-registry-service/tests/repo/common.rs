@@ -1233,7 +1233,7 @@ pub async fn test_account_usage(deps: &Deps) {
         assert!(plan_limit == limit);
 
         check!(usage.usage(usage_type) == 0, "{usage_type:?}");
-        assert!(usage.add_change(usage_type, 1).unwrap());
+        assert!(usage.add_change(usage_type, 1));
         check!(usage.change(usage_type) == 1, "{usage_type:?}");
     }
 
@@ -1286,7 +1286,7 @@ pub async fn test_account_usage(deps: &Deps) {
             .unwrap();
 
         for usage_type in UsageType::iter() {
-            check!(!usage.add_change(usage_type, 1000000).unwrap());
+            check!(!usage.add_change(usage_type, 1000000));
         }
     }
 

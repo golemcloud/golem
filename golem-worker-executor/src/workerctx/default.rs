@@ -15,9 +15,7 @@
 use super::{HasWasiConfigVars, LogEventEmitBehaviour};
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
@@ -50,7 +48,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    CachableComponent, ComponentFilePath, ComponentRevision, PluginPriority,
+    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
 };
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -80,7 +78,8 @@ use wasmtime_wasi_http::WasiHttpView;
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     config: Arc<GolemConfig>,
-    environment_owner_account_id: AccountId,
+    // AccountId owning the environment/component/etc. of the worker
+    account_id: AccountId,
     resource_limits: Arc<dyn ResourceLimits>,
     last_fuel_level: i64,
     min_fuel_level: i64,
@@ -90,13 +89,13 @@ impl Context {
     pub fn new(
         golem_ctx: DurableWorkerCtx<Context>,
         config: Arc<GolemConfig>,
-        project_owner_account_id: AccountId,
-        resource_limits: Arc<dyn ResourceLimits + Send + Sync>,
+        account_id: AccountId,
+        resource_limits: Arc<dyn ResourceLimits>,
     ) -> Self {
         Self {
             durable_ctx: golem_ctx,
             config,
-            environment_owner_account_id: project_owner_account_id,
+            account_id,
             resource_limits,
             last_fuel_level: i64::MAX,
             min_fuel_level: i64::MAX,
@@ -104,9 +103,7 @@ impl Context {
     }
 
     pub async fn get_max_memory(&self) -> Result<usize, WorkerExecutorError> {
-        self.resource_limits
-            .get_max_memory(&self.environment_owner_account_id)
-            .await
+        self.resource_limits.get_max_memory(&self.account_id).await
     }
 }
 
@@ -126,30 +123,33 @@ impl FuelManagement for Context {
         current_level < self.min_fuel_level
     }
 
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn borrow_fuel(&mut self, current_level: i64) -> Result<(), WorkerExecutorError> {
         let amount = self
             .resource_limits
             .borrow_fuel(
-                &self.environment_owner_account_id,
-                self.config.limits.fuel_to_borrow,
+                &self.account_id,
+                Ord::max(
+                    self.config.limits.fuel_to_borrow,
+                    Ord::max(self.min_fuel_level.saturating_sub(current_level), 0),
+                ),
             )
             .await?;
         self.min_fuel_level -= amount;
-        debug!(
-            "borrowed fuel for {}: {}",
-            self.environment_owner_account_id, amount
-        );
+        debug!("borrowed fuel for {}: {}", self.account_id, amount);
         Ok(())
     }
 
-    fn borrow_fuel_sync(&mut self) {
+    fn borrow_fuel_sync(&mut self, current_level: i64) {
         let amount = self.resource_limits.borrow_fuel_sync(
-            &self.environment_owner_account_id,
-            self.config.limits.fuel_to_borrow,
+            &self.account_id,
+            Ord::max(
+                self.config.limits.fuel_to_borrow,
+                Ord::max(self.min_fuel_level.saturating_sub(current_level), 0),
+            ),
         );
         match amount {
             Some(amount) => {
-                debug!("borrowed fuel for {}: {}", self.environment_owner_account_id, amount);
+                debug!("borrowed fuel for {}: {}", self.account_id, amount);
                 self.min_fuel_level -= amount;
             }
             None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
@@ -162,20 +162,14 @@ impl FuelManagement for Context {
             debug!("current_level: {current_level}");
             debug!("min_fuel_level: {}", self.min_fuel_level);
             debug!("last_fuel_level: {}", self.last_fuel_level);
-            debug!(
-                "returning unused fuel for {}: {}",
-                self.environment_owner_account_id, unused
-            );
+            debug!("returning unused fuel for {}: {}", self.account_id, unused);
             self.resource_limits
-                .return_fuel(&self.environment_owner_account_id, unused)
+                .return_fuel(&self.account_id, unused)
                 .await?
         }
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
-        debug!(
-            "reset fuel mark for {}: {}",
-            self.environment_owner_account_id, current_level
-        );
+        debug!("reset fuel mark for {}: {}", self.account_id, current_level);
         Ok(consumed)
     }
 }
@@ -333,16 +327,6 @@ impl ExternalOperations<Context> for Context {
         store: &mut (impl AsContextMut<Data = Self> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
-    }
-
-    async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        this.resource_limits()
-            .update_last_known_limits(account_id, last_known_limits)
-            .await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
@@ -530,7 +514,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &CachableComponent,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -699,7 +683,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &CachableComponent {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 

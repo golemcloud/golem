@@ -43,6 +43,7 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
 use golem_common::tracing::{init_tracing, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -151,6 +152,10 @@ pub enum TestMode {
         registry_service_admin_account_email: String,
         #[arg(long)]
         registry_service_admin_account_token: Uuid,
+        #[arg(long)]
+        registry_service_default_plan_id: Uuid,
+        #[arg(long)]
+        registry_service_low_fuel_plan_id: Uuid,
         #[arg(long, default_value = "localhost")]
         component_compilation_service_host: String,
         #[arg(long, default_value = "9092")]
@@ -419,6 +424,8 @@ impl BenchmarkTestDependencies {
                 registry_service_admin_account_id,
                 registry_service_admin_account_email,
                 registry_service_admin_account_token,
+                registry_service_default_plan_id,
+                registry_service_low_fuel_plan_id,
                 component_compilation_service_host,
                 component_compilation_service_grpc_port,
                 worker_service_host,
@@ -463,6 +470,8 @@ impl BenchmarkTestDependencies {
                         AccountId(*registry_service_admin_account_id),
                         registry_service_admin_account_email.clone(),
                         TokenSecret(*registry_service_admin_account_token),
+                        PlanId(*registry_service_default_plan_id),
+                        PlanId(*registry_service_low_fuel_plan_id),
                     )
                     .await,
                 );

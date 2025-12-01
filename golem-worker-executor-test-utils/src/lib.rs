@@ -27,11 +27,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
 };
 use golem_common::config::RedisConfig;
-use golem_common::model::account::{AccountId, PlanId};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::component::CachableComponent;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
@@ -41,6 +40,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{
     OplogEntry, PayloadId, PersistenceLevel, RawOplogPayload, TimestampedUpdateDescription,
 };
+use golem_common::model::plan::PlanId;
 use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::{
     IdempotencyKey, OplogIndex, OwnedWorkerId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -70,7 +70,7 @@ use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
+    ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;
 use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
@@ -119,7 +119,7 @@ use golem_worker_executor::workerctx::{
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
 use regex::Regex;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -283,7 +283,7 @@ pub struct TestContext {
     // plan of the account id to use
     pub account_plan_id: PlanId,
     // roles of the account plan
-    pub account_roles: HashSet<AccountRole>,
+    pub account_roles: BTreeSet<AccountRole>,
     // tokens of account to use
     pub account_token: TokenSecret,
     // application id to use during tests
@@ -299,7 +299,7 @@ impl TestContext {
 
         let account_id = AccountId::new_v4();
         let account_plan_id = PlanId::new_v4();
-        let account_roles = HashSet::new();
+        let account_roles = BTreeSet::new();
         let application_id = ApplicationId::new_v4();
         let default_environment_id = EnvironmentId::new_v4();
         let account_token = TokenSecret::new_v4();
@@ -464,11 +464,11 @@ impl FuelManagement for TestWorkerCtx {
         false
     }
 
-    async fn borrow_fuel(&mut self) -> Result<(), WorkerExecutorError> {
+    async fn borrow_fuel(&mut self, _current_level: i64) -> Result<(), WorkerExecutorError> {
         Ok(())
     }
 
-    fn borrow_fuel_sync(&mut self) {}
+    fn borrow_fuel_sync(&mut self, _current_level: i64) {}
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
@@ -507,19 +507,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
     ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
-    }
-
-    async fn record_last_known_limits<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::record_last_known_limits(
-            this,
-            account_id,
-            last_known_limits,
-        )
-        .await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -774,7 +761,7 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &CachableComponent {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 
@@ -950,7 +937,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &CachableComponent,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)

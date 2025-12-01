@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::auth::{AuthService, AuthServiceError};
 use crate::debug_context::DebugContext;
 use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
-use axum_jrpc::error::{JsonRpcError, JsonRpcErrorReason};
 use gethostname::gethostname;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedWorkerId, WorkerId, WorkerMetadata};
+use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::component::ComponentService;
@@ -35,7 +36,6 @@ use golem_worker_executor::services::{
 };
 use golem_worker_executor::worker::Worker;
 use log::debug;
-use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -85,7 +85,6 @@ pub trait DebugService: Send + Sync {
 pub enum DebugServiceError {
     Internal {
         worker_id: Option<WorkerId>,
-        message: String,
     },
     Unauthorized {
         message: String,
@@ -94,24 +93,10 @@ pub enum DebugServiceError {
         worker_id: WorkerId,
         message: String,
     },
-
     ValidationFailed {
         worker_id: Option<WorkerId>,
         errors: Vec<String>,
     },
-}
-
-impl Display for DebugServiceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DebugServiceError::Internal { message, .. } => write!(f, "Internal error: {message}"),
-            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {message}"),
-            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {message}"),
-            DebugServiceError::ValidationFailed { errors, .. } => {
-                write!(f, "Validation failed: {:?}", errors.join(", "))
-            }
-        }
-    }
 }
 
 impl DebugServiceError {
@@ -124,7 +109,8 @@ impl DebugServiceError {
     }
 
     pub fn internal(message: String, worker_id: Option<WorkerId>) -> Self {
-        DebugServiceError::Internal { worker_id, message }
+        tracing::warn!("internal error in debugging service: {message}");
+        DebugServiceError::Internal { worker_id }
     }
 
     pub fn validation_failed(errors: Vec<String>, worker_id: Option<WorkerId>) -> Self {
@@ -139,29 +125,28 @@ impl DebugServiceError {
             DebugServiceError::ValidationFailed { worker_id, .. } => (*worker_id).clone(),
         }
     }
+}
 
-    pub fn to_rpc_error(&self) -> JsonRpcError {
+impl SafeDisplay for DebugServiceError {
+    fn to_safe_string(&self) -> String {
         match self {
-            DebugServiceError::Internal { message, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::InternalError,
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::Unauthorized { message } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32001),
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::Conflict { message, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32002),
-                message.to_string(),
-                Value::Null,
-            ),
-            DebugServiceError::ValidationFailed { errors, .. } => JsonRpcError::new(
-                JsonRpcErrorReason::ApplicationError(-32004),
-                errors.join(", "),
-                Value::Null,
-            ),
+            DebugServiceError::Internal { .. } => "Internal error".to_string(),
+            DebugServiceError::Unauthorized { .. } => self.to_string(),
+            DebugServiceError::Conflict { .. } => self.to_string(),
+            DebugServiceError::ValidationFailed { .. } => self.to_string(),
+        }
+    }
+}
+
+impl Display for DebugServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DebugServiceError::Internal { .. } => write!(f, "Internal error"),
+            DebugServiceError::Unauthorized { message } => write!(f, "Unauthorized: {message}"),
+            DebugServiceError::Conflict { message, .. } => write!(f, "Conflict: {message}"),
+            DebugServiceError::ValidationFailed { errors, .. } => {
+                write!(f, "Validation failed: {:?}", errors.join(", "))
+            }
         }
     }
 }
@@ -169,6 +154,7 @@ impl DebugServiceError {
 pub struct DebugServiceDefault {
     component_service: Arc<dyn ComponentService>,
     debug_session: Arc<dyn DebugSessions>,
+    auth_service: Arc<dyn AuthService>,
     all: All<DebugContext>,
 }
 
@@ -177,10 +163,12 @@ impl DebugServiceDefault {
         let component_service = all.component_service();
         let extra_deps = all.extra_deps();
         let debug_session = extra_deps.debug_session();
+        let auth_service = extra_deps.auth_service();
 
         Self {
             component_service,
             debug_session,
+            auth_service,
             all,
         }
     }
@@ -202,10 +190,10 @@ impl DebugServiceDefault {
             .get(&owned_worker_id)
             .await
             .ok_or_else(|| {
-                DebugServiceError::internal(
+                DebugServiceError::conflict(
+                    worker_id.clone(),
                     "Worker doesn't exist in live/real worker executor for it to connect to"
                         .to_string(),
-                    Some(worker_id.clone()),
                 )
             })?;
 
@@ -324,9 +312,19 @@ impl DebugService for DebugServiceDefault {
     {
         let component = self
             .component_service
-            .get_caller_specific_latest_metadata(&worker_id.component_id, auth_ctx)
+            .get_metadata(&worker_id.component_id, None)
             .await
-            .map_err(|e| DebugServiceError::unauthorized(format!("Unauthorized: {e}")))?;
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+
+        self.auth_service
+            .check_user_allowed_to_debug_in_environment(&component.environment_id, auth_ctx)
+            .await
+            .map_err(|e| match e {
+                AuthServiceError::DebuggingNotAllowed => DebugServiceError::Unauthorized {
+                    message: e.to_safe_string(),
+                },
+                e => DebugServiceError::internal(e.to_string(), Some(worker_id.clone())),
+            })?;
 
         let owned_worker_id = OwnedWorkerId::new(&component.environment_id, worker_id);
 

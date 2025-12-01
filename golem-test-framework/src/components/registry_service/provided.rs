@@ -17,6 +17,7 @@ use crate::components::new_reqwest_client;
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::plan::PlanId;
 use tokio::sync::OnceCell;
 use tracing::info;
 
@@ -28,6 +29,8 @@ pub struct ProvidedRegistryService {
     admin_account_id: AccountId,
     admin_account_email: String,
     admin_account_token: TokenSecret,
+    default_plan_id: PlanId,
+    low_fuel_plan_id: PlanId,
 }
 
 impl ProvidedRegistryService {
@@ -38,6 +41,8 @@ impl ProvidedRegistryService {
         admin_account_id: AccountId,
         admin_account_email: String,
         admin_account_token: TokenSecret,
+        default_plan_id: PlanId,
+        low_fuel_plan_id: PlanId,
     ) -> Self {
         info!("Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}");
         Self {
@@ -48,6 +53,8 @@ impl ProvidedRegistryService {
             admin_account_id,
             admin_account_email,
             admin_account_token,
+            default_plan_id,
+            low_fuel_plan_id,
         }
     }
 }
@@ -76,6 +83,13 @@ impl RegistryService for ProvidedRegistryService {
     }
     fn admin_account_token(&self) -> TokenSecret {
         self.admin_account_token
+    }
+
+    fn default_plan(&self) -> PlanId {
+        self.default_plan_id
+    }
+    fn low_fuel_plan(&self) -> PlanId {
+        self.low_fuel_plan_id
     }
 
     async fn base_http_client(&self) -> reqwest::Client {

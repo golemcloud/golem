@@ -34,13 +34,13 @@ use std::sync::Arc;
 use tracing::debug;
 
 pub struct GatewayWorkerRequestExecutor {
-    worker_service: Arc<dyn WorkerService>,
+    worker_service: Arc<WorkerService>,
     component_service: Arc<dyn ComponentService>,
 }
 
 impl GatewayWorkerRequestExecutor {
     pub fn new(
-        worker_service: Arc<dyn WorkerService>,
+        worker_service: Arc<WorkerService>,
         component_service: Arc<dyn ComponentService>,
     ) -> Self {
         Self {
@@ -74,7 +74,6 @@ impl GatewayWorkerRequestExecutor {
             .get_revision(
                 &resolved_worker_request.component_id,
                 resolved_worker_request.component_revision,
-                &AuthCtx::System,
             )
             .await
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
@@ -94,7 +93,7 @@ impl GatewayWorkerRequestExecutor {
 
         let result = self
             .worker_service
-            .validate_and_invoke_and_await_typed(
+            .invoke_and_await_typed(
                 &worker_id,
                 resolved_worker_request.idempotency_key,
                 resolved_worker_request.function_name.to_string(),
@@ -106,8 +105,6 @@ impl GatewayWorkerRequestExecutor {
                     wasi_config_vars: Some(BTreeMap::new().into()),
                     tracing: Some(resolved_worker_request.invocation_context.into()),
                 }),
-                component.environment_id,
-                component.account_id,
                 AuthCtx::impersonated_user(component.account_id),
             )
             .await

@@ -17,6 +17,7 @@ use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::DeployedRoutesError;
+use crate::services::environment::EnvironmentError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -202,13 +203,35 @@ impl From<DeployedRoutesError> for GrpcApiError {
     fn from(value: DeployedRoutesError) -> Self {
         let error: String = value.to_string();
         match value {
-            DeployedRoutesError::NoActiveRoutesForDomain(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
-            DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+            DeployedRoutesError::NoActiveRoutesForDomain(_)
+            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
                 Self::NotFound(ErrorBody { error, cause: None })
             }
             DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
+impl From<EnvironmentError> for GrpcApiError {
+    fn from(value: EnvironmentError) -> Self {
+        let error: String = value.to_string();
+        match value {
+            EnvironmentError::EnvironmentNotFound(_)
+            | EnvironmentError::EnvironmentByNameNotFound(_)
+            | EnvironmentError::ParentApplicationNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+
+            EnvironmentError::Unauthorized(inner) => inner.into(),
+
+            EnvironmentError::LimitExceeded(inner) => inner.into(),
+
+            EnvironmentError::InternalError(_)
+            | EnvironmentError::EnvironmentWithNameAlreadyExists
+            | EnvironmentError::ConcurrentModification => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             }),

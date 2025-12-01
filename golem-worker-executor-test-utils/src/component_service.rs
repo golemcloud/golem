@@ -19,11 +19,10 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{CachableComponent, ComponentDto};
+use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_worker_executor::services::component::ComponentService;
 use std::collections::{HashMap, HashSet};
@@ -283,7 +282,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
+    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
         let key = CacheKey {
             component_id: *component_id,
             component_version,
@@ -312,27 +311,19 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             )
             .await?;
 
-        Ok((component, ComponentDto::from(metadata).into()))
+        Ok((component, ComponentDto::from(metadata)))
     }
 
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
-    ) -> Result<CachableComponent, WorkerExecutorError> {
+    ) -> Result<ComponentDto, WorkerExecutorError> {
         let result = match forced_version {
             Some(version) => self.get_metadata_for_version(component_id, version).await?,
             None => self.get_latest_metadata(component_id).await?,
         };
-        Ok(result.into())
-    }
-
-    async fn get_caller_specific_latest_metadata(
-        &self,
-        component_id: &ComponentId,
-        _auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
-        self.get_latest_metadata(component_id).await
+        Ok(result)
     }
 
     async fn resolve_component(
@@ -351,13 +342,13 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             .cloned())
     }
 
-    async fn all_cached_metadata(&self) -> Vec<CachableComponent> {
+    async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
         self.index
             .read()
             .await
             .metadata
             .values()
-            .map(|local_metadata| ComponentDto::from(local_metadata.clone()).into())
+            .map(|local_metadata| ComponentDto::from(local_metadata.clone()))
             .collect()
     }
 }

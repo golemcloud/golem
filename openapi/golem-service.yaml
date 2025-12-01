@@ -2189,6 +2189,80 @@ paths:
       security:
       - Cookie: []
       - Token: []
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Update plan of an accout
+      operationId: set_account_plan
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AccountSetPlan'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/accounts/{account_id}/roles:
     put:
       tags:
@@ -10773,6 +10847,19 @@ components:
       enum:
       - admin
       - marketing-admin
+    AccountSetPlan:
+      title: AccountSetPlan
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        plan:
+          type: string
+          format: uuid
+      required:
+      - currentRevision
+      - plan
     AccountSetRoles:
       title: AccountSetRoles
       type: object
@@ -11137,10 +11224,6 @@ components:
         wasmHash:
           type: string
           format: hash
-        environmentRolesFromShares:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
       required:
       - id
       - revision
@@ -11158,7 +11241,6 @@ components:
       - env
       - originalEnv
       - wasmHash
-      - environmentRolesFromShares
     ComponentFileOptions:
       title: ComponentFileOptions
       type: object

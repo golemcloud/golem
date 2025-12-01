@@ -39,8 +39,7 @@ use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
-    WorkerConfig,
+    ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
@@ -81,7 +80,7 @@ use futures::TryStreamExt;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{
-    CachableComponent, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
+    ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
     InitialComponentFile, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -345,7 +344,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.execution_status.read().unwrap().agent_mode()
     }
 
-    pub fn component_metadata(&self) -> &CachableComponent {
+    pub fn component_metadata(&self) -> &ComponentDto {
         &self.state.component_metadata
     }
 
@@ -2180,14 +2179,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         }
     }
 
-    async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        Ctx::record_last_known_limits(this, account_id, last_known_limits).await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
@@ -2623,7 +2614,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: CachableComponent,
+    component_metadata: ComponentDto,
 
     total_linear_memory_size: u64,
 
@@ -2688,7 +2679,7 @@ impl PrivateDurableWorkerState {
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
-        component_metadata: CachableComponent,
+        component_metadata: ComponentDto,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,

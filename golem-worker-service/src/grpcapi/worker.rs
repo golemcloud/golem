@@ -14,16 +14,15 @@
 
 use super::error::WorkerTraceErrorKind;
 use super::{bad_request_error, validate_protobuf_worker_id};
-use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
+use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, ForkWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
+    update_worker_response, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest,
+    ForkWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
     RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
     WorkerError as GrpcWorkerError,
@@ -38,16 +37,14 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::WorkerUpdateMode;
 use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: Arc<dyn ComponentService>,
-    worker_service: Arc<dyn WorkerService>,
+    worker_service: Arc<WorkerService>,
 }
 
 #[async_trait::async_trait]
@@ -112,13 +109,13 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    async fn invoke_and_await_typed(
+    async fn invoke_and_await(
         &self,
         request: Request<InvokeAndAwaitRequest>,
-    ) -> Result<Response<InvokeAndAwaitTypedResponse>, Status> {
+    ) -> Result<Response<InvokeAndAwaitResponse>, Status> {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
-            "invoke_and_await_typed",
+            "invoke_and_await",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
@@ -127,18 +124,18 @@ impl GrpcWorkerService for WorkerGrpcApi {
         );
 
         let response = match self
-            .invoke_and_await_typed(request)
+            .invoke_and_await(request)
             .instrument(record.span.clone())
             .await
         {
-            Ok(result) => record.succeed(invoke_and_await_typed_response::Result::Success(result)),
+            Ok(result) => record.succeed(invoke_and_await_response::Result::Success(result)),
             Err(error) => record.fail(
-                invoke_and_await_typed_response::Result::Error(error.clone()),
+                invoke_and_await_response::Result::Error(error.clone()),
                 &mut WorkerTraceErrorKind(&error),
             ),
         };
 
-        Ok(Response::new(InvokeAndAwaitTypedResponse {
+        Ok(Response::new(InvokeAndAwaitResponse {
             result: Some(response),
         }))
     }
@@ -281,14 +278,8 @@ impl GrpcWorkerService for WorkerGrpcApi {
 }
 
 impl WorkerGrpcApi {
-    pub fn new(
-        component_service: Arc<dyn ComponentService>,
-        worker_service: Arc<dyn WorkerService>,
-    ) -> Self {
-        Self {
-            component_service,
-            worker_service,
-        }
+    pub fn new(worker_service: Arc<WorkerService>) -> Self {
+        Self { worker_service }
     }
 
     async fn launch_new_worker(
@@ -311,44 +302,24 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("no wasi_config_vars field"))?
             .into();
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &component_id),
-                })),
-            })?;
-
         let worker_id = WorkerId {
             component_id,
             worker_name: request.name,
         };
 
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::CreateWorker,
-        )?;
-
-        let worker = self
+        let latest_component_revision = self
             .worker_service
             .create(
                 &worker_id,
-                latest_component.revision,
                 request.args,
                 request.env,
                 wasi_config_vars,
                 request.ignore_already_existing,
-                latest_component.account_id,
-                latest_component.environment_id,
                 auth,
             )
             .await?;
 
-        Ok((worker, latest_component.revision))
+        Ok((worker_id, latest_component_revision))
     }
 
     async fn complete_promise(
@@ -366,32 +337,9 @@ impl WorkerGrpcApi {
             .complete_parameters
             .ok_or_else(|| bad_request_error("Missing complete parameters"))?;
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let result = self
             .worker_service
-            .complete_promise(
-                &worker_id,
-                parameters.oplog_idx,
-                parameters.data,
-                latest_component.environment_id,
-                auth,
-            )
+            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, auth)
             .await?;
 
         Ok(result)
@@ -409,23 +357,6 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
             .invoke(
                 &worker_id,
@@ -433,8 +364,6 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 request.context,
-                latest_component.environment_id,
-                latest_component.account_id,
                 auth,
             )
             .await?;
@@ -442,7 +371,7 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
-    async fn invoke_and_await_typed(
+    async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
     ) -> Result<InvokeResultTyped, GrpcWorkerError> {
@@ -462,33 +391,14 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let result = self
             .worker_service
-            .invoke_and_await_typed(
+            .invoke_and_await(
                 &worker_id,
                 Some(idempotency_key),
                 request.function,
                 params.params,
                 request.context,
-                latest_component.environment_id,
-                latest_component.account_id,
                 auth,
             )
             .await?;
@@ -506,30 +416,8 @@ impl WorkerGrpcApi {
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .resume(
-                &worker_id,
-                request.force.unwrap_or(false),
-                latest_component.environment_id,
-                auth,
-            )
+            .resume(&worker_id, request.force.unwrap_or(false), auth)
             .await?;
 
         Ok(())
@@ -545,31 +433,8 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let target_version = ComponentRevision(request.target_version);
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .update(
-                &worker_id,
-                worker_update_mode,
-                target_version,
-                latest_component.environment_id,
-                auth,
-            )
+            .update(&worker_id, worker_update_mode, target_version, auth)
             .await?;
 
         Ok(())
@@ -585,32 +450,8 @@ impl WorkerGrpcApi {
         let target_worker_id = validate_protobuf_worker_id(request.target_worker_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
 
-        let latest_source_component = self
-            .component_service
-            .get_latest_by_id(&source_worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &source_worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_source_component.account_id,
-            &latest_source_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .fork_worker(
-                &source_worker_id,
-                &target_worker_id,
-                oplog_idx,
-                latest_source_component.environment_id,
-                latest_source_component.account_id,
-                auth,
-            )
+            .fork_worker(&source_worker_id, &target_worker_id, oplog_idx, auth)
             .await?;
 
         Ok(())
@@ -622,6 +463,7 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let target = request
@@ -630,25 +472,8 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|err| bad_request_error(format!("Invalid target {err}")))?;
 
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(
-            &latest_component.account_id,
-            &latest_component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .revert_worker(&worker_id, target, latest_component.environment_id, auth)
+            .revert_worker(&worker_id, target, auth)
             .await?;
 
         Ok(())
