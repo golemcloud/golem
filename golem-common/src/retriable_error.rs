@@ -30,6 +30,7 @@ impl IsRetriableError for tonic::Status {
 
         match self.code() {
             Code::Ok
+            | Code::Cancelled
             | Code::InvalidArgument
             | Code::NotFound
             | Code::AlreadyExists
@@ -40,7 +41,6 @@ impl IsRetriableError for tonic::Status {
             | Code::DataLoss
             | Code::Unauthenticated => false,
             Code::Unknown
-            | Code::Cancelled
             | Code::DeadlineExceeded
             | Code::ResourceExhausted
             | Code::Aborted

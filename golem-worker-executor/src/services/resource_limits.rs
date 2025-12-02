@@ -160,6 +160,8 @@ impl ResourceLimitsGrpc {
         &self,
         account_id: &AccountId,
     ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
+        debug!("Fetching resource limits for account {account_id}");
+
         let fetched_limits = self
             .client
             .get_resource_limits(account_id, &AuthCtx::System)
@@ -237,7 +239,17 @@ impl ResourceLimits for ResourceLimitsGrpc {
         amount: i64,
     ) -> Result<i64, WorkerExecutorError> {
         loop {
-            let borrowed = self.borrow_fuel_sync(account_id, amount);
+            let mut borrowed = None;
+            self.current_limits
+                .update_async(account_id, |_, entry| {
+                    let available = max(0, min(amount, entry.limits.fuel));
+                    record_fuel_borrow(available);
+                    entry.limits.fuel -= available;
+                    entry.delta += available;
+
+                    borrowed = Some(available);
+                })
+                .await;
 
             match borrowed {
                 Some(fuel) => {
@@ -271,11 +283,13 @@ impl ResourceLimits for ResourceLimitsGrpc {
         account_id: &AccountId,
         remaining: i64,
     ) -> Result<(), WorkerExecutorError> {
-        self.current_limits.update_sync(account_id, |_, entry| {
-            record_fuel_return(remaining);
-            entry.limits.fuel += remaining;
-            entry.delta -= remaining;
-        });
+        self.current_limits
+            .update_async(account_id, |_, entry| {
+                record_fuel_return(remaining);
+                entry.limits.fuel += remaining;
+                entry.delta -= remaining;
+            })
+            .await;
         Ok(())
     }
 
