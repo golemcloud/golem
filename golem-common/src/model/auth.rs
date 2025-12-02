@@ -53,14 +53,14 @@ impl TokenWithSecret {
 }
 
 declare_enums! {
-    #[derive(Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter, PartialOrd, Ord)]
     #[repr(i32)]
     pub enum AccountRole {
         Admin = 0,
         MarketingAdmin = 1,
     }
 
-    #[derive(Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter, PartialOrd, Ord)]
     #[repr(i32)]
     pub enum EnvironmentRole {
         Admin = 0,

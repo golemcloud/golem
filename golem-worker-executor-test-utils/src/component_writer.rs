@@ -25,7 +25,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata,
 };
-use golem_common::model::diff::Hash;
+use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,9 @@ impl FileSystemComponentWriter {
             root_package_version: raw_component_metadata.root_package_version.clone(),
             wasm_hash,
             environment_roles_from_shares,
-        };
+            final_hash: Hash::empty(),
+        }
+        .with_updated_hash();
 
         write_metadata_to_file(
             &metadata,
@@ -401,6 +403,18 @@ pub(super) struct LocalFileSystemComponentMetadata {
 
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
+
+    pub final_hash: Hash,
+}
+
+impl LocalFileSystemComponentMetadata {
+    pub fn with_updated_hash(self) -> Self {
+        let diffable = ComponentDto::from(self.clone()).to_diffable();
+        Self {
+            final_hash: diffable.hash(),
+            ..self
+        }
+    }
 }
 
 impl From<LocalFileSystemComponentMetadata> for ComponentDto {
@@ -428,9 +442,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
             original_env: value.env.clone(),
             env: value.env,
             wasm_hash: value.wasm_hash,
-            environment_roles_from_shares: value.environment_roles_from_shares,
-            // TODO: slimmer model for worker-executor
-            hash: Hash::empty(),
+            hash: value.final_hash,
         }
     }
 }

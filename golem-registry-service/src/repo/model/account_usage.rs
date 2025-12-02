@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::plan::PlanRecord;
-use golem_service_base::repo::RepoResult;
+use golem_service_base::model::ResourceLimits;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -107,7 +107,7 @@ impl AccountUsage {
         self.changes.get(&usage_type).copied().unwrap_or(0)
     }
 
-    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> RepoResult<bool> {
+    pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> bool {
         let limit = self.plan.limit(usage_type);
 
         self.changes
@@ -118,6 +118,18 @@ impl AccountUsage {
         let change = self.change(usage_type);
         let final_value = self.usage(usage_type).saturating_add(change);
 
-        Ok(final_value <= limit)
+        final_value <= limit
+    }
+
+    pub fn resource_limits(&self) -> ResourceLimits {
+        let available_fuel = self
+            .plan
+            .monthly_gas_limit
+            .saturating_sub(self.usage(UsageType::MonthlyGasLimit));
+
+        ResourceLimits {
+            available_fuel,
+            max_memory_per_worker: self.plan.max_memory_per_worker as u64,
+        }
     }
 }

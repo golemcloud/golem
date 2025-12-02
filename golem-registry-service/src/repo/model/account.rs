@@ -15,9 +15,9 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
-use golem_common::model::account::PlanId;
 use golem_common::model::account::{Account, AccountId, AccountRevision};
 use golem_common::model::auth::AccountRole;
+use golem_common::model::plan::PlanId;
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use strum::IntoEnumIterator;

@@ -251,13 +251,14 @@ impl SchedulerServiceDefault {
 
                     let result = self
                         .promise_service
-                        .complete(promise_id.clone(), vec![])
+                        .complete(promise_id.clone(), vec![], &account_id)
                         .await;
 
                     // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
                     match result {
                         Ok(_) => {
                             // activate worker so it starts processing the newly completed promises
+                            // TODO: this is probably redundant with the wakeup in PromiseService. check and fix
                             {
                                 let span = span!(
                                     Level::INFO,

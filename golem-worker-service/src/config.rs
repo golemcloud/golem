@@ -43,6 +43,8 @@ pub struct WorkerServiceConfig {
     pub registry_service: RegistryServiceConfig,
     pub cors_origin_regex: String,
     pub route_resolver: RouteResolverConfig,
+    pub component_service: ComponentServiceConfig,
+    pub auth_service: AuthServiceConfig,
 }
 
 impl WorkerServiceConfig {
@@ -107,7 +109,19 @@ impl SafeDisplay for WorkerServiceConfig {
             self.route_resolver.to_safe_string_indented()
         );
 
-        let _ = writeln!(&mut result, "user auth resolver:");
+        let _ = writeln!(&mut result, "component service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_service.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "auth service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.auth_service.to_safe_string_indented()
+        );
 
         result
     }
@@ -141,6 +155,8 @@ impl Default for WorkerServiceConfig {
             registry_service: RegistryServiceConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             route_resolver: RouteResolverConfig::default(),
+            component_service: ComponentServiceConfig::default(),
+            auth_service: AuthServiceConfig::default(),
         }
     }
 }
@@ -236,6 +252,100 @@ impl Default for RouteResolverConfig {
             router_cache_max_capacity: 1024,
             router_cache_ttl: Duration::from_mins(10),
             router_cache_eviction_period: Duration::from_mins(1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentServiceConfig {
+    pub component_cache_max_capacity: usize,
+}
+
+impl SafeDisplay for ComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "component_cache_max_capacity: {}",
+            self.component_cache_max_capacity
+        );
+        result
+    }
+}
+
+impl Default for ComponentServiceConfig {
+    fn default() -> Self {
+        Self {
+            component_cache_max_capacity: 1024,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthServiceConfig {
+    pub auth_ctx_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub auth_ctx_cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub auth_ctx_cache_eviction_period: Duration,
+
+    pub environment_auth_details_cache_max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub environment_auth_details_cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub environment_auth_details_cache_eviction_period: Duration,
+}
+
+impl SafeDisplay for AuthServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(
+            &mut result,
+            "auth_ctx_cache_max_capacity: {}",
+            self.auth_ctx_cache_max_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "auth_ctx_cache_ttl: {:?}",
+            self.auth_ctx_cache_ttl
+        );
+        let _ = writeln!(
+            &mut result,
+            "auth_ctx_cache_eviction_period: {:?}",
+            self.auth_ctx_cache_eviction_period
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "environment_auth_details_cache_max_capacity: {}",
+            self.environment_auth_details_cache_max_capacity
+        );
+        let _ = writeln!(
+            &mut result,
+            "environment_auth_details_cache_ttl: {:?}",
+            self.environment_auth_details_cache_ttl
+        );
+        let _ = writeln!(
+            &mut result,
+            "environment_auth_details_cache_eviction_period: {:?}",
+            self.environment_auth_details_cache_eviction_period
+        );
+
+        result
+    }
+}
+
+impl Default for AuthServiceConfig {
+    fn default() -> Self {
+        Self {
+            auth_ctx_cache_max_capacity: 1024,
+            auth_ctx_cache_ttl: Duration::from_mins(10),
+            auth_ctx_cache_eviction_period: Duration::from_mins(1),
+
+            environment_auth_details_cache_max_capacity: 1024,
+            environment_auth_details_cache_ttl: Duration::from_mins(10),
+            environment_auth_details_cache_eviction_period: Duration::from_mins(1),
         }
     }
 }

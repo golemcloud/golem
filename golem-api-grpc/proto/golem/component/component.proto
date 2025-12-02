@@ -29,6 +29,5 @@ message Component {
   map<string, string> original_env = 13;
   golem.common.Hash wasm_hash = 14;
   golem.common.ApplicationId application_id = 15;
-  repeated golem.auth.EnvironmentRole environment_roles_from_shares = 16;
-  golem.common.Hash hash = 17;
+  golem.common.Hash hash = 16;
 }

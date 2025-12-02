@@ -21,10 +21,12 @@ import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 import "golem/apidefinition/api_definition.proto";
+import "golem/auth/auth_details_for_environment.proto";
 
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+  rpc GetAuthDetailsForEnvironment (GetAuthDetailsForEnvironmentRequest) returns (GetAuthDetailsForEnvironmentResponse);
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
@@ -63,6 +65,23 @@ message AuthenticateTokenResponse {
 
 message AuthenticateTokenSuccessResponse {
     golem.auth.UserAuthCtx auth_ctx = 1;
+}
+
+message GetAuthDetailsForEnvironmentRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  bool include_deleted = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message GetAuthDetailsForEnvironmentResponse {
+  oneof result {
+      GetAuthDetailsForEnvironmentSuccessResponse success = 1;
+      RegistryServiceError error = 2;
+  }
+}
+
+message GetAuthDetailsForEnvironmentSuccessResponse {
+  golem.auth.AuthDetailsForEnvironment auth_details_for_environment = 1;
 }
 
 message GetResourceLimitsRequest {
@@ -116,9 +135,13 @@ message BatchUpdateFuelUsageRequest {
 
 message BatchUpdateFuelUsageResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    BatchUpdateFuelUsageSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
+}
+
+message BatchUpdateFuelUsageSuccessResponse {
+  golem.common.AccountResourceLimits account_resource_limits = 1;
 }
 
 message GetPluginRegistrationByIdRequest {

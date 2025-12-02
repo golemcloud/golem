@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ComponentServiceConfig;
+use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::{error_forwarding, SafeDisplay};
@@ -41,78 +44,158 @@ error_forwarding!(ComponentServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
+    async fn get_latest_by_id_in_cache(&self, component_id: &ComponentId) -> Option<ComponentDto>;
+
+    // Might be outdated. Use get_latest_by_id_uncached if you always need the latest version
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
+    ) -> Result<ComponentDto, ComponentServiceError> {
+        match self.get_latest_by_id_in_cache(component_id).await {
+            Some(cached) => Ok(cached),
+            None => self.get_latest_by_id_uncached(component_id).await,
+        }
+    }
+
+    async fn get_latest_by_id_uncached(
+        &self,
+        component_id: &ComponentId,
     ) -> Result<ComponentDto, ComponentServiceError>;
 
     async fn get_revision(
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError>;
 
-    async fn get_all_versions(
+    async fn get_all_revisions(
         &self,
         component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, ComponentServiceError>;
+}
+
+// The error is not actually cached, just something that can be cloned and returned
+// from the cache
+#[derive(Clone)]
+enum CacheError {
+    // Note: Don't cache not founds as ids/revisions might be created later
+    NotFound,
+    Error,
+}
+
+impl From<CacheError> for ComponentServiceError {
+    fn from(value: CacheError) -> Self {
+        match value {
+            CacheError::NotFound => ComponentServiceError::ComponentNotFound,
+            CacheError::Error => {
+                ComponentServiceError::InternalError(anyhow!("Cached request failed"))
+            }
+        }
+    }
 }
 
 pub struct RemoteComponentService {
     client: Arc<dyn RegistryService>,
+    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, CacheError>,
 }
 
 impl RemoteComponentService {
-    pub fn new(client: Arc<dyn RegistryService>) -> Self {
-        Self { client }
+    pub fn new(client: Arc<dyn RegistryService>, config: &ComponentServiceConfig) -> Self {
+        Self {
+            client,
+            cache: Cache::new(
+                Some(config.component_cache_max_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "component_metadata",
+            ),
+        }
+    }
+
+    async fn store_component_in_cache(&self, component: ComponentDto) {
+        let _ = self
+            .cache
+            .get_or_insert_simple(&(component.id, component.revision), async move || {
+                Ok(component)
+            })
+            .await;
     }
 }
 
 #[async_trait]
 impl ComponentService for RemoteComponentService {
-    async fn get_latest_by_id(
+    async fn get_latest_by_id_in_cache(&self, component_id: &ComponentId) -> Option<ComponentDto> {
+        let mut keys = self.cache.keys().await;
+        keys.retain(|(id, _)| id == component_id);
+        keys.sort_by_key(|(_, revision)| *revision);
+        for idx in (0..keys.len()).rev() {
+            let key = &keys[idx];
+            let entry = self.cache.try_get(key).await;
+            if let Some(metadata) = entry {
+                return Some(metadata);
+            }
+        }
+        None
+    }
+
+    async fn get_latest_by_id_uncached(
         &self,
         component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client
-            .get_latest_component_metadata(component_id, auth_ctx)
+        let component = self
+            .client
+            .get_latest_component_metadata(component_id, &AuthCtx::System)
             .await
-            .map_err(|e| match e {
+            .map_err(|err| match err {
                 RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
                 other => other.into(),
-            })
+            })?;
+
+        self.store_component_in_cache(component.clone()).await;
+
+        Ok(component)
     }
 
     async fn get_revision(
         &self,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, ComponentServiceError> {
-        self.client
-            .get_component_metadata(component_id, component_revision, auth_ctx)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
-                other => other.into(),
+        let component = self
+            .cache
+            .get_or_insert_simple(&(*component_id, component_revision), async move || {
+                self.client
+                    .get_component_metadata(component_id, component_revision, &AuthCtx::System)
+                    .await
+                    .map_err(|e| match e {
+                        RegistryServiceError::NotFound(_) => CacheError::NotFound,
+                        e => {
+                            tracing::warn!("Fetching component metadata failed: {e}");
+                            CacheError::Error
+                        }
+                    })
             })
+            .await?;
+        Ok(component)
     }
 
-    async fn get_all_versions(
+    async fn get_all_revisions(
         &self,
         component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
-        self.client
-            .get_all_component_versions(component_id, auth_ctx)
+        let results = self
+            .client
+            .get_all_component_versions(component_id, &AuthCtx::System)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
                 other => other.into(),
-            })
+            })?;
+
+        for result in &results {
+            self.store_component_in_cache(result.clone()).await;
+        }
+
+        Ok(results)
     }
 }

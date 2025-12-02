@@ -19,9 +19,7 @@ use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{
-    CachableComponent, ComponentDto, ComponentId, ComponentRevision,
-};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -46,7 +44,7 @@ pub trait ComponentService: Send + Sync {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, CachableComponent), WorkerExecutorError>;
+    ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
 
     // If a version is provided, deleted components will also be returned.
     // If no version is provided, only the latest non-deleted version is returned.
@@ -54,13 +52,6 @@ pub trait ComponentService: Send + Sync {
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
-    ) -> Result<CachableComponent, WorkerExecutorError>;
-
-    // Get uncached latest metadata of the component including caller specific permissions.
-    async fn get_caller_specific_latest_metadata(
-        &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<ComponentDto, WorkerExecutorError>;
 
     /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
@@ -75,7 +66,7 @@ pub trait ComponentService: Send + Sync {
 
     /// Returns all the component metadata the implementation has cached.
     /// This is useful for some mock/local implementations.
-    async fn all_cached_metadata(&self) -> Vec<CachableComponent>;
+    async fn all_cached_metadata(&self) -> Vec<ComponentDto>;
 }
 
 pub fn configured(
@@ -98,7 +89,7 @@ pub fn configured(
 
 pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    component_metadata_cache: Cache<ComponentKey, (), CachableComponent, WorkerExecutorError>,
+    component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
 }
@@ -130,7 +121,7 @@ impl ComponentService for ComponentServiceDefault {
         engine: &Engine,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-    ) -> Result<(Component, CachableComponent), WorkerExecutorError> {
+    ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
         let key = ComponentKey {
             component_id: *component_id,
             component_version,
@@ -237,7 +228,7 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         component_id: &ComponentId,
         forced_version: Option<ComponentRevision>,
-    ) -> Result<CachableComponent, WorkerExecutorError> {
+    ) -> Result<ComponentDto, WorkerExecutorError> {
         match forced_version {
             Some(version) => {
                 let client = self.registry_client.clone();
@@ -263,7 +254,7 @@ impl ComponentService for ComponentServiceDefault {
                                             e.to_safe_string()
                                         ))
                                     })?;
-                                Ok(metadata.into())
+                                Ok(metadata)
                             })
                         },
                     )
@@ -288,44 +279,13 @@ impl ComponentService for ComponentServiceDefault {
                             component_id: *component_id,
                             component_version: metadata.revision,
                         },
-                        || Box::pin(async move { Ok(metadata.into()) }),
+                        || Box::pin(async move { Ok(metadata) }),
                     )
                     .await?;
 
                 Ok(metadata)
             }
         }
-    }
-
-    async fn get_caller_specific_latest_metadata(
-        &self,
-        component_id: &ComponentId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<ComponentDto, WorkerExecutorError> {
-        let metadata = self
-            .registry_client
-            .get_latest_component_metadata(component_id, auth_ctx)
-            .await
-            .map_err(|e| {
-                WorkerExecutorError::runtime(format!(
-                    "Failed getting component metadata: {}",
-                    e.to_safe_string()
-                ))
-            })?;
-
-        let metadata_clone = metadata.clone();
-
-        self.component_metadata_cache
-            .get_or_insert_simple(
-                &ComponentKey {
-                    component_id: *component_id,
-                    component_version: metadata.revision,
-                },
-                || Box::pin(async move { Ok(metadata_clone.into()) }),
-            )
-            .await?;
-
-        Ok(metadata)
     }
 
     async fn resolve_component(
@@ -356,7 +316,7 @@ impl ComponentService for ComponentServiceDefault {
         }
     }
 
-    async fn all_cached_metadata(&self) -> Vec<CachableComponent> {
+    async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
         self.component_metadata_cache
             .iter()
             .await
@@ -375,7 +335,7 @@ struct ComponentKey {
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentKey, (), CachableComponent, WorkerExecutorError> {
+) -> Cache<ComponentKey, (), ComponentDto, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),

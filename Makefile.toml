@@ -454,7 +454,7 @@ cargo-test-r run --package integration-tests --test integration -- --nocapture -
 [tasks.integration-tests-group2]
 description = "Runs integration tests (group 2/4)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", GOLEM_TEST_DB="sqlite" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB"="sqlite" }
 script = '''
 cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
@@ -473,9 +473,9 @@ cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $
 [tasks.integration-tests-group4]
 description = "Runs integration tests (group 4/4)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
-cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test sharding -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -533,6 +533,8 @@ export RUST_BACKTRACE=1
 export GOLEM__TRACING__FILE_DIR=../logs
 export GOLEM__TRACING__FILE_TRUNCATE=false
 export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS=20
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY="1s"
 
 cargo-test-r run \
 --package integration-tests \

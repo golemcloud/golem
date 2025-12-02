@@ -197,11 +197,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(
-                environment.application_id,
-                environment.owner_account_id,
-                environment.roles_from_active_shares,
-            )?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         self.component_compilation
             .enqueue_compilation(environment_id, &component_id, stored_component.revision)
@@ -250,11 +246,8 @@ impl ComponentWriteService {
             EnvironmentAction::UpdateComponent,
         )?;
 
-        let component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares.clone(),
-        )?;
+        let component = component_record
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if component_update.current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
@@ -338,11 +331,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(
-                environment.application_id,
-                environment.owner_account_id,
-                environment.roles_from_active_shares,
-            )?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         self.component_compilation
             .enqueue_compilation(&environment_id, &component_id, stored_component.revision)
@@ -387,11 +376,8 @@ impl ComponentWriteService {
             EnvironmentAction::UpdateComponent,
         )?;
 
-        let component = component_record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares.clone(),
-        )?;
+        let component = component_record
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?

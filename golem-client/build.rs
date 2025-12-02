@@ -42,6 +42,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::account::AccountCreation",
             ),
             (
+                "AccountSetPlan",
+                "golem_common::model::account::AccountSetPlan",
+            ),
+            (
                 "AccountSetRoles",
                 "golem_common::model::account::AccountSetRoles",
             ),
@@ -49,7 +53,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
             ),
-            ("Plan", "golem_common::model::account::Plan"),
             // application
             (
                 "Application",
@@ -162,6 +165,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "OAuth2WebflowData",
                 "golem_common::model::login::OAuth2WebflowData",
             ),
+            // plan
+            ("Plan", "golem_common::model::plan::Plan"),
             // plugin_registration
             (
                 "ComponentTransformerPluginSpec",

@@ -774,18 +774,18 @@ CREATE TABLE deployment_domain_http_api_definitions (
     domain                 TEXT    NOT NULL,
     http_api_definition_id UUID    NOT NULL,
 
-    CONSTRAINT deployment_domain_http_api_definitions_pk
+    CONSTRAINT deployment_domains_pk
         PRIMARY KEY (environment_id, deployment_revision_id, domain, http_api_definition_id),
 
-    CONSTRAINT deployment_domain_http_api_definitions_environments_fk
+    CONSTRAINT deployment_domains_environments_fk
         FOREIGN KEY (environment_id)
         REFERENCES environments(environment_id),
 
-    CONSTRAINT deployment_domain_http_api_definitions_http_api_definitions_fk
+    CONSTRAINT deployment_domains_http_api_definitions_fk
         FOREIGN KEY (http_api_definition_id)
         REFERENCES http_api_definitions(http_api_definition_id),
 
-    CONSTRAINT deployment_domain_http_api_definitions_deployment_revisions_fk
+    CONSTRAINT deployment_domains_deployment_revisions_fk
         FOREIGN KEY (environment_id, deployment_revision_id)
         REFERENCES deployment_revisions(environment_id, revision_id)
 );
@@ -802,21 +802,21 @@ CREATE TABLE deployment_compiled_http_api_definition_routes (
     security_scheme        TEXT,                   -- nullable if no security
     compiled_route         BYTEA   NOT NULL,       -- full compiled route as blob
 
-    CONSTRAINT deployment_compiled_http_api_definition_routes_pk
+    CONSTRAINT deployment_routes_pk
         PRIMARY KEY (environment_id, deployment_revision_id, http_api_definition_id, id),
 
-    CONSTRAINT deployment_compiled_http_api_definition_routes_environments_fk
+    CONSTRAINT deployment_routes_environments_fk
         FOREIGN KEY (environment_id)
         REFERENCES environments(environment_id),
 
-    CONSTRAINT deployment_compiled_http_api_definition_routes_http_api_definitions_fk
+    CONSTRAINT deployment_routes_http_api_definitions_fk
         FOREIGN KEY (http_api_definition_id)
         REFERENCES http_api_definitions(http_api_definition_id),
 
-    CONSTRAINT deployment_compiled_http_api_definition_routes_deployment_revisions_fk
+    CONSTRAINT deployment_routes_deployment_revisions_fk
         FOREIGN KEY (environment_id, deployment_revision_id)
         REFERENCES deployment_revisions(environment_id, revision_id)
 );
 
-CREATE INDEX deployment_compiled_http_api_definition_routes_routes_def_idx
+CREATE INDEX deployment_routes_routes_def_idx
     ON deployment_compiled_http_api_definition_routes(environment_id, deployment_revision_id, http_api_definition_id);

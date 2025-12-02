@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::repo::model::account_usage::UsageType;
-use golem_common::model::account::PlanId;
-use golem_common::model::account::{Plan, PlanName};
+use golem_common::model::plan::{Plan, PlanId, PlanName};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;

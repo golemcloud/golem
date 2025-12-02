@@ -186,6 +186,8 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         )
         .await;
 
+        info!("Restarted golem-worker-executor {}", self.grpc_port);
+
         let mut child_field = self.child.lock().unwrap();
         let mut logger_field = self.logger.lock().unwrap();
 

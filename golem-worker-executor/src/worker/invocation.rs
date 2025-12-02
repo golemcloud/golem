@@ -411,8 +411,6 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
     let proxy = Proxy::new(&mut *store, instance)?;
     let mut store_context = store.as_context_mut();
 
-    store_context.data_mut().borrow_fuel().await?;
-
     let idempotency_key = store_context.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {
         store_context
@@ -516,7 +514,6 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
     if let Some((_, resource)) = store.data_mut().get(resource_id).await {
         debug!("Dropping resource {resource:?} in {raw_function_name}");
-        store.data_mut().borrow_fuel().await?;
 
         let result = resource.resource_drop_async(&mut store).await;
 
@@ -549,8 +546,6 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     raw_function_name: &str,
 ) -> Result<(anyhow::Result<Vec<Val>>, i64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
-
-    store.data_mut().borrow_fuel().await?;
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {

@@ -21,8 +21,9 @@ use super::{wait_for_startup_grpc, wait_for_startup_http, EnvVarBuilder};
 use async_trait::async_trait;
 use golem_client::api::RegistryServiceClientLive;
 use golem_client::{Context, Security};
-use golem_common::model::account::{AccountId, PlanId};
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::plan::PlanId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +41,9 @@ pub trait RegistryService: Send + Sync {
     fn admin_account_id(&self) -> AccountId;
     fn admin_account_email(&self) -> String;
     fn admin_account_token(&self) -> TokenSecret;
+
+    fn default_plan(&self) -> PlanId;
+    fn low_fuel_plan(&self) -> PlanId;
 
     async fn kill(&self);
 
@@ -74,6 +78,7 @@ async fn env_vars(
     admin_account_email: &str,
     admin_token: &TokenSecret,
     default_plan_id: &PlanId,
+    low_fuel_plan_id: &PlanId,
     otlp: bool,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
@@ -119,27 +124,27 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__APP_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__COMPONENT_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__ENV_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__PLAN_ID",
@@ -147,15 +152,55 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__STORAGE_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__APP_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__COMPONENT_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
+            "1".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__PLAN_ID",
+            low_fuel_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_LIMIT",
+            "10000000000000000".to_string(),
         )
         //
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())

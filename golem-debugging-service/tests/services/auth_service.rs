@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::environment::EnvironmentId;
 use golem_debugging_service::services::auth::{AuthService, AuthServiceError};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor_test_utils::TestContext;
 
-// This will be used by debugging service in tests
 pub struct TestAuthService {
     test_ctx: TestContext,
 }
@@ -26,5 +26,12 @@ impl AuthService for TestAuthService {
             account_plan_id: self.test_ctx.account_plan_id,
             account_roles: self.test_ctx.account_roles.clone(),
         }))
+    }
+    async fn check_user_allowed_to_debug_in_environment(
+        &self,
+        _environment_id: &EnvironmentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<(), AuthServiceError> {
+        Ok(())
     }
 }

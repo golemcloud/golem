@@ -19,7 +19,7 @@ use golem_common::model::account::Account;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -66,7 +66,7 @@ impl AuthService {
 
         let account: Account = record.value.try_into()?;
 
-        let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
+        let account_roles: BTreeSet<AccountRole> = BTreeSet::from_iter(account.roles.clone());
 
         Ok(UserAuthCtx {
             account_id: account.id,

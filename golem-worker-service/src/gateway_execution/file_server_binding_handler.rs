@@ -37,14 +37,14 @@ use std::sync::Arc;
 pub struct FileServerBindingHandler {
     component_service: Arc<dyn ComponentService>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    worker_service: Arc<dyn WorkerService>,
+    worker_service: Arc<WorkerService>,
 }
 
 impl FileServerBindingHandler {
     pub fn new(
         component_service: Arc<dyn ComponentService>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        worker_service: Arc<dyn WorkerService>,
+        worker_service: Arc<WorkerService>,
     ) -> Self {
         Self {
             component_service,
@@ -65,7 +65,7 @@ impl FileServerBindingHandler {
             .map_err(FileServerBindingError::InvalidRibResult)?;
 
         let component_metadata = self
-            .get_component_metadata(worker_name, component_id, environment_id)
+            .get_component_metadata(worker_name, component_id, account_id)
             .await?;
 
         // if we are serving a read_only file, we can just go straight to the blob storage.
@@ -115,10 +115,8 @@ impl FileServerBindingHandler {
                 .get_file_contents(
                     &worker_id,
                     binding_details.file_path.clone(),
-                    *environment_id,
-                    *account_id,
-                    AuthCtx::system(),
-                ) // TODO: gateway execution specific auth ctx
+                    AuthCtx::impersonated_user(*account_id),
+                )
                 .await?;
 
             let stream = stream.map_err(|e| std::io::Error::other(e.to_string()));
@@ -134,7 +132,7 @@ impl FileServerBindingHandler {
         &self,
         worker_name: &str,
         component_id: &ComponentId,
-        environment_id: &EnvironmentId,
+        account_id: &AccountId,
     ) -> Result<ComponentDto, FileServerBindingError> {
         // Two cases, we either have an existing worker or not (either not configured or not existing).
         // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
@@ -148,8 +146,7 @@ impl FileServerBindingHandler {
                         component_id: *component_id,
                         worker_name: worker_name.to_string(),
                     },
-                    *environment_id,
-                    AuthCtx::system(), // TODO: custom request specific auth ctx
+                    AuthCtx::impersonated_user(*account_id),
                 )
                 .await;
 
@@ -162,12 +159,12 @@ impl FileServerBindingHandler {
 
         let component_metadata = if let Some(component_revision) = component_revision {
             self.component_service
-                .get_revision(component_id, component_revision, &AuthCtx::System) // TODO: dedicated auth ctx for custom requests
+                .get_revision(component_id, component_revision)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         } else {
             self.component_service
-                .get_latest_by_id(component_id, &AuthCtx::System) // TODO: dedicated auth ctx for custom requests
+                .get_latest_by_id(component_id)
                 .await
                 .map_err(FileServerBindingError::ComponentServiceError)?
         };

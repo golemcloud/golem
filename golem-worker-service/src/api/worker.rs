@@ -15,8 +15,8 @@
 use super::common::ApiEndpointError;
 use crate::model;
 use crate::service::component::ComponentService;
-use crate::service::worker::{proxy_worker_connection, InvocationParameters};
-use crate::service::worker::{ConnectWorkerStream, WorkerService};
+use crate::service::worker::ConnectWorkerStream;
+use crate::service::worker::{proxy_worker_connection, InvocationParameters, WorkerService};
 use futures::StreamExt;
 use futures::TryStreamExt;
 // use golem_common::model::auth::{AuthCtx, Namespace};
@@ -54,7 +54,7 @@ type Result<T> = std::result::Result<T, ApiEndpointError>;
 
 pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
-    worker_service: Arc<dyn WorkerService>,
+    worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
 }
 
@@ -62,7 +62,7 @@ pub struct WorkerApi {
 impl WorkerApi {
     pub fn new(
         component_service: Arc<dyn ComponentService>,
-        worker_service: Arc<dyn WorkerService>,
+        worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
@@ -121,33 +121,25 @@ impl WorkerApi {
         } = request;
 
         let (worker_id, component) = self
-            .normalize_worker_id_by_latest_version(component_id, &name, &auth)
+            .normalize_worker_id_by_latest_version(component_id, &name)
             .await?;
 
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::CreateWorker,
-        )?;
-
-        let _worker = self
+        let component_revision = self
             .worker_service
-            .create(
+            .create_with_component(
                 &worker_id,
-                component.revision,
+                component,
                 args,
                 env,
                 wasi_config_vars.into(),
                 false,
-                component.account_id,
-                component.environment_id,
                 auth,
             )
             .await?;
 
         Ok(Json(WorkerCreationResponse {
             worker_id,
-            component_revision: component.revision,
+            component_revision,
         }))
     }
 
@@ -168,7 +160,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -187,25 +179,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         auth: AuthCtx,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::DeleteWorker,
-        )?;
-
-        self.worker_service
-            .delete(
-                &worker_id,
-                component.environment_id,
-                &component.account_id,
-                auth,
-            )
-            .await?;
+        self.worker_service.delete(&worker_id, auth).await?;
         Ok(Json(DeleteWorkerResponse {}))
     }
 
@@ -229,7 +203,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
@@ -261,17 +235,6 @@ impl WorkerApi {
         params: InvokeParameters,
         auth: AuthCtx,
     ) -> Result<Json<InvokeResult>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&target_worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| {
@@ -283,31 +246,30 @@ impl WorkerApi {
 
         let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
-                self.worker_service.validate_and_invoke_and_await_typed(
-                    &target_worker_id,
-                    idempotency_key,
-                    function,
-                    vals,
-                    None,
-                    component.environment_id,
-                    component.account_id,
-                    auth,
-                )
+                self.worker_service
+                    .invoke_and_await_typed(
+                        &target_worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        None,
+                        auth,
+                    )
+                    .await
             }
             InvocationParameters::RawJsonStrings(jsons) => {
-                self.worker_service.invoke_and_await_json(
-                    &target_worker_id,
-                    idempotency_key,
-                    function,
-                    jsons,
-                    None,
-                    component.environment_id,
-                    component.account_id,
-                    auth,
-                )
+                self.worker_service
+                    .invoke_and_await_json(
+                        &target_worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        None,
+                        auth,
+                    )
+                    .await
             }
-        }
-        .await?;
+        }?;
 
         Ok(Json(InvokeResult { result }))
     }
@@ -333,7 +295,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
@@ -359,17 +321,6 @@ impl WorkerApi {
         params: InvokeParameters,
         auth: AuthCtx,
     ) -> Result<Json<InvokeResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&target_worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
                 .map_err(|errors| {
@@ -380,28 +331,31 @@ impl WorkerApi {
                 })?;
 
         match params {
-            InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
-                &target_worker_id,
-                idempotency_key,
-                function,
-                vals,
-                None,
-                component.environment_id,
-                component.account_id,
-                auth,
-            ),
-            InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
-                &target_worker_id,
-                idempotency_key,
-                function,
-                jsons,
-                None,
-                component.environment_id,
-                component.account_id,
-                auth,
-            ),
-        }
-        .await?;
+            InvocationParameters::TypedProtoVals(vals) => {
+                self.worker_service
+                    .invoke_typed(
+                        &target_worker_id,
+                        idempotency_key,
+                        function,
+                        vals,
+                        None,
+                        auth,
+                    )
+                    .await
+            }
+            InvocationParameters::RawJsonStrings(jsons) => {
+                self.worker_service
+                    .invoke_json(
+                        &target_worker_id,
+                        idempotency_key,
+                        function,
+                        jsons,
+                        None,
+                        auth,
+                    )
+                    .await
+            }
+        }?;
         Ok(Json(InvokeResponse {}))
     }
 
@@ -425,7 +379,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -447,20 +401,9 @@ impl WorkerApi {
     ) -> Result<Json<bool>> {
         let CompleteParameters { oplog_idx, data } = params;
 
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let response = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, component.environment_id, auth)
+            .complete_promise(&worker_id, oplog_idx, data, auth)
             .await?;
 
         Ok(Json(response))
@@ -489,7 +432,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -509,24 +452,8 @@ impl WorkerApi {
         recover_immediately: Option<bool>,
         auth: AuthCtx,
     ) -> Result<Json<InterruptResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .interrupt(
-                &worker_id,
-                recover_immediately.unwrap_or(false),
-                component.environment_id,
-                auth,
-            )
+            .interrupt(&worker_id, recover_immediately.unwrap_or(false), auth)
             .await?;
 
         Ok(Json(InterruptResponse {}))
@@ -563,7 +490,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -582,21 +509,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         auth: AuthCtx,
     ) -> Result<Json<WorkerMetadataDto>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
-        let response = self
-            .worker_service
-            .get_metadata(&worker_id, component.environment_id, auth)
-            .await?;
+        let response = self.worker_service.get_metadata(&worker_id, auth).await?;
 
         Ok(Json(response))
     }
@@ -671,17 +584,6 @@ impl WorkerApi {
         precise: Option<bool>,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
         let filter = match filter {
             Some(filters) if !filters.is_empty() => {
                 Some(WorkerFilter::from(filters).map_err(|e| {
@@ -712,7 +614,6 @@ impl WorkerApi {
                 cursor.unwrap_or_default(),
                 count.unwrap_or(50),
                 precise.unwrap_or(false),
-                component.environment_id,
                 auth,
             )
             .await?;
@@ -773,17 +674,6 @@ impl WorkerApi {
         params: WorkersMetadataRequest,
         auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
         let (cursor, workers) = self
             .worker_service
             .find_metadata(
@@ -792,7 +682,6 @@ impl WorkerApi {
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
-                component.environment_id,
                 auth,
             )
             .await?;
@@ -815,7 +704,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
@@ -833,20 +722,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         auth: AuthCtx,
     ) -> Result<Json<ResumeResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
-        self.worker_service
-            .resume(&worker_id, false, component.environment_id, auth)
-            .await?;
+        self.worker_service.resume(&worker_id, false, auth).await?;
 
         Ok(Json(ResumeResponse {}))
     }
@@ -867,7 +743,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
@@ -886,25 +762,8 @@ impl WorkerApi {
         params: UpdateWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .update(
-                &worker_id,
-                params.mode,
-                params.target_revision,
-                component.environment_id,
-                auth,
-            )
+            .update(&worker_id, params.mode, params.target_revision, auth)
             .await?;
 
         Ok(Json(UpdateWorkerResponse {}))
@@ -929,7 +788,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
@@ -951,17 +810,6 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
         match (from, query) {
             (Some(_), Some(_)) => Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![
@@ -972,14 +820,7 @@ impl WorkerApi {
             (Some(from), None) => {
                 let response = self
                     .worker_service
-                    .get_oplog(
-                        &worker_id,
-                        OplogIndex::from_u64(from),
-                        cursor,
-                        count,
-                        component.environment_id,
-                        auth,
-                    )
+                    .get_oplog(&worker_id, OplogIndex::from_u64(from), cursor, count, auth)
                     .await?;
 
                 Ok(Json(response))
@@ -987,14 +828,7 @@ impl WorkerApi {
             (None, Some(query)) => {
                 let response = self
                     .worker_service
-                    .search_oplog(
-                        &worker_id,
-                        cursor,
-                        count,
-                        query,
-                        component.environment_id,
-                        auth,
-                    )
+                    .search_oplog(&worker_id, cursor, count, query, auth)
                     .await?;
 
                 Ok(Json(response))
@@ -1002,14 +836,7 @@ impl WorkerApi {
             (None, None) => {
                 let response = self
                     .worker_service
-                    .get_oplog(
-                        &worker_id,
-                        OplogIndex::INITIAL,
-                        cursor,
-                        count,
-                        component.environment_id,
-                        auth,
-                    )
+                    .get_oplog(&worker_id, OplogIndex::INITIAL, cursor, count, auth)
                     .await?;
 
                 Ok(Json(response))
@@ -1033,7 +860,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
@@ -1054,26 +881,9 @@ impl WorkerApi {
     ) -> Result<Json<GetFilesResponse>> {
         let path = make_component_file_path(file_name)?;
 
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
         let nodes = self
             .worker_service
-            .get_file_system_node(
-                &worker_id,
-                path,
-                component.environment_id,
-                component.account_id,
-                auth,
-            )
+            .get_file_system_node(&worker_id, path, auth)
             .await?;
 
         Ok(Json(GetFilesResponse {
@@ -1097,7 +907,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
@@ -1120,24 +930,20 @@ impl WorkerApi {
 
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
+            .get_latest_by_id(&worker_id.component_id)
             .await?;
 
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
+        self.auth_service
+            .authorize_environment_actions(
+                &component.environment_id,
+                EnvironmentAction::ViewWorker,
+                &auth,
+            )
+            .await?;
 
         let bytes = self
             .worker_service
-            .get_file_contents(
-                &worker_id,
-                path,
-                component.environment_id,
-                component.account_id,
-                auth,
-            )
+            .get_file_contents(&worker_id, path, auth)
             .await?;
 
         Ok(Binary(Body::from_bytes_stream(
@@ -1163,7 +969,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
@@ -1188,17 +994,19 @@ impl WorkerApi {
     ) -> Result<Json<ActivatePluginResponse>> {
         let component = self
             .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
+            .get_latest_by_id(&worker_id.component_id)
             .await?;
 
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
+        self.auth_service
+            .authorize_environment_actions(
+                &component.environment_id,
+                EnvironmentAction::UpdateWorker,
+                &auth,
+            )
+            .await?;
 
         self.worker_service
-            .activate_plugin(&worker_id, plugin_priority, component.environment_id, auth)
+            .activate_plugin(&worker_id, plugin_priority, auth)
             .await?;
 
         Ok(Json(ActivatePluginResponse {}))
@@ -1222,7 +1030,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
@@ -1245,19 +1053,8 @@ impl WorkerApi {
         plugin_priority: PluginPriority,
         auth: AuthCtx,
     ) -> Result<Json<DeactivatePluginResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .deactivate_plugin(&worker_id, plugin_priority, component.environment_id, auth)
+            .deactivate_plugin(&worker_id, plugin_priority, auth)
             .await?;
 
         Ok(Json(DeactivatePluginResponse {}))
@@ -1281,7 +1078,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -1301,19 +1098,8 @@ impl WorkerApi {
         target: RevertWorkerTarget,
         auth: AuthCtx,
     ) -> Result<Json<RevertWorkerResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
-            .revert_worker(&worker_id, target, component.environment_id, auth)
+            .revert_worker(&worker_id, target, auth)
             .await?;
 
         Ok(Json(RevertWorkerResponse {}))
@@ -1337,7 +1123,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record =
@@ -1357,24 +1143,11 @@ impl WorkerApi {
         request: ForkWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<ForkWorkerResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         self.worker_service
             .fork_worker(
                 &worker_id,
                 &request.target_worker_id,
                 request.oplog_index_cutoff,
-                component.environment_id,
-                component.account_id,
                 auth,
             )
             .await?;
@@ -1400,7 +1173,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id.0, worker_name.as_str())
             .await?;
 
         let record = recorded_http_api_request!(
@@ -1423,20 +1196,9 @@ impl WorkerApi {
         idempotency_key: IdempotencyKey,
         auth: AuthCtx,
     ) -> Result<Json<CancelInvocationResponse>> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::UpdateWorker,
-        )?;
-
         let canceled = self
             .worker_service
-            .cancel_invocation(&worker_id, &idempotency_key, component.environment_id, auth)
+            .cancel_invocation(&worker_id, &idempotency_key, auth)
             .await?;
 
         Ok(Json(CancelInvocationResponse { canceled }))
@@ -1486,7 +1248,7 @@ impl WorkerApi {
         let auth = self.auth_service.authenticate_token(token).await?;
 
         let worker_id = self
-            .normalize_worker_id(component_id, worker_name.as_str(), &auth)
+            .normalize_worker_id(component_id, worker_name.as_str())
             .await?;
 
         let record =
@@ -1506,26 +1268,7 @@ impl WorkerApi {
         worker_id: WorkerId,
         auth: AuthCtx,
     ) -> Result<ConnectWorkerStream> {
-        let component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await?;
-
-        auth.authorize_environment_action(
-            &component.account_id,
-            &component.environment_roles_from_shares,
-            EnvironmentAction::ViewWorker,
-        )?;
-
-        let stream = self
-            .worker_service
-            .connect(
-                &worker_id,
-                component.environment_id,
-                component.account_id,
-                auth,
-            )
-            .await?;
+        let stream = self.worker_service.connect(&worker_id, auth).await?;
         Ok(stream)
     }
 
@@ -1534,11 +1277,10 @@ impl WorkerApi {
         &self,
         component_id: ComponentId,
         worker_id: &str,
-        auth: &AuthCtx,
     ) -> Result<(WorkerId, ComponentDto)> {
         let latest_component = self
             .component_service
-            .get_latest_by_id(&component_id, auth)
+            .get_latest_by_id_uncached(&component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1564,12 +1306,27 @@ impl WorkerApi {
         &self,
         component_id: ComponentId,
         worker_id: &str,
-        auth: &AuthCtx,
     ) -> Result<WorkerId> {
-        // First we try with the latest version which we have to fetch from the registry service
+        // First, we try with the latest cached version to avoid the overhead of calling the component service
+        let latest_cached_component = self
+            .component_service
+            .get_latest_by_id_in_cache(&component_id)
+            .await;
+
+        if let Some(component) = latest_cached_component {
+            let id = validated_worker_id(component_id, &component.metadata, worker_id);
+
+            if id.is_ok() || !component.metadata.is_agent() {
+                // Normalization worked with the cached metadata,
+                // or this is a non-agent component => returning the result
+                return id;
+            }
+        }
+
+        // Next we try with the latest version which we have to fetch from the component service        let latest_component_version = self
         let latest_component_version = self
             .component_service
-            .get_latest_by_id(&component_id, auth)
+            .get_latest_by_id_uncached(&component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1596,7 +1353,7 @@ impl WorkerApi {
         // Fallback for previous versions
         let all_component_versions = self
             .component_service
-            .get_all_versions(&component_id, auth)
+            .get_all_revisions(&component_id)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {

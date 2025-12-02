@@ -16,10 +16,10 @@ use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response,
+    complete_promise_response, fork_worker_response, invoke_and_await_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, revert_worker_response,
     update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest,
+    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeRequest,
     InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
     ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
     UpdateWorkerResponse, WorkerError,
@@ -316,10 +316,10 @@ impl WorkerProxy for RemoteWorkerProxy {
             params: proto_params,
         });
 
-        let response: InvokeAndAwaitTypedResponse = self
+        let response: InvokeAndAwaitResponse = self
             .worker_service_client
-            .call("invoke_and_await_typed", move |client| {
-                Box::pin(client.invoke_and_await_typed(InvokeAndAwaitRequest {
+            .call("invoke_and_await", move |client| {
+                Box::pin(client.invoke_and_await(InvokeAndAwaitRequest {
                     worker_id: Some(owned_worker_id.worker_id().into()),
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
                     function: function_name.clone(),
@@ -338,7 +338,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .into_inner();
 
         match response.result {
-            Some(invoke_and_await_typed_response::Result::Success(result)) => {
+            Some(invoke_and_await_response::Result::Success(result)) => {
                 let result = result
                     .result
                     .map(|proto_vnt| {
@@ -351,7 +351,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     .transpose()?;
                 Ok(result)
             }
-            Some(invoke_and_await_typed_response::Result::Error(error)) => Err(error.into()),
+            Some(invoke_and_await_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),

@@ -262,7 +262,6 @@ impl TestDsl for TestWorkerExecutor {
                 worker_id: Some(worker_id.clone().into()),
                 component_version: latest_version.revision.0,
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 environment_id: Some(latest_version.environment_id.into()),
                 args,
                 env,
@@ -322,7 +321,6 @@ impl TestDsl for TestWorkerExecutor {
                     .map(|param| param.value.into())
                     .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -368,7 +366,6 @@ impl TestDsl for TestWorkerExecutor {
                     .map(|param| param.value.into())
                     .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -423,7 +420,6 @@ impl TestDsl for TestWorkerExecutor {
                     .map(|param| param.value.into())
                     .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -481,7 +477,6 @@ impl TestDsl for TestWorkerExecutor {
                     })
                     .collect(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 context: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -760,7 +755,6 @@ impl TestDsl for TestWorkerExecutor {
             .connect_worker(ConnectWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                account_limits: None,
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -978,7 +972,6 @@ impl TestDsl for TestWorkerExecutor {
                 path: path.to_string(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
             .await?
@@ -1030,7 +1023,6 @@ impl TestDsl for TestWorkerExecutor {
                 file_path: path.to_string(),
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
-                account_limits: None,
                 auth_ctx: Some(self.auth_ctx().into()),
             })
             .await?

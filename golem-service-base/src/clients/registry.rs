@@ -14,24 +14,26 @@
 
 use super::RegistryServiceConfig;
 use crate::custom_api::CompiledRoutes;
-use crate::model::ResourceLimits;
-use crate::model::auth::{AuthCtx, UserAuthCtx};
+use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
 use crate::model::plugin_registration::PluginRegistration;
+use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
-    GetAllComponentVersionsRequest, GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
+    GetAllComponentVersionsRequest, GetAuthDetailsForEnvironmentRequest,
+    GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
     GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
     UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
     batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
-    get_all_component_versions_response, get_component_metadata_response,
-    get_latest_component_metadata_response, get_plugin_registration_by_id_response,
-    get_resource_limits_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    get_all_component_versions_response, get_auth_details_for_environment_response,
+    get_component_metadata_response, get_latest_component_metadata_response,
+    get_plugin_registration_by_id_response, get_resource_limits_response,
+    resolve_component_response, update_worker_connection_limit_response,
+    update_worker_limit_response,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;
@@ -56,6 +58,12 @@ pub trait RegistryService: Send + Sync {
     // auth api
     async fn authenticate_token(&self, token: TokenSecret)
     -> Result<AuthCtx, RegistryServiceError>;
+    async fn get_auth_details_for_environment(
+        &self,
+        environment_id: &EnvironmentId,
+        include_deleted: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError>;
 
     // limits api
     async fn get_resource_limits(
@@ -81,11 +89,12 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<(), RegistryServiceError>;
 
     // will be a noop if the account no longer exists
+    // will return all current limits of updated accounts
     async fn batch_update_fuel_usage(
         &self,
         updates: HashMap<AccountId, i64>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RegistryServiceError>;
+    ) -> Result<AccountResourceLimits, RegistryServiceError>;
 
     // plugins api
     // will return the plugin registration even if it is deleted
@@ -214,6 +223,40 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
+    async fn get_auth_details_for_environment(
+        &self,
+        environment_id: &EnvironmentId,
+        include_deleted: bool,
+        auth_ctx: &AuthCtx,
+    ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_auth_details_for_environment", move |client| {
+                let request = GetAuthDetailsForEnvironmentRequest {
+                    environment_id: Some((*environment_id).into()),
+                    include_deleted,
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                };
+                Box::pin(client.get_auth_details_for_environment(request))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_auth_details_for_environment_response::Result::Success(payload)) => {
+                let auth_details: AuthDetailsForEnvironment = payload
+                    .auth_details_for_environment
+                    .ok_or("missing auth_details_for_environment field")?
+                    .try_into()?;
+                Ok(auth_details)
+            }
+            Some(get_auth_details_for_environment_response::Result::Error(error)) => {
+                Err(error.into())
+            }
+        }
+    }
+
     async fn get_resource_limits(
         &self,
         account_id: &AccountId,
@@ -304,7 +347,7 @@ impl RegistryService for GrpcRegistryService {
         &self,
         updates: HashMap<AccountId, i64>,
         auth_ctx: &AuthCtx,
-    ) -> Result<(), RegistryServiceError> {
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
         let updates: Vec<FuelUsageUpdate> = updates
             .into_iter()
             .map(|(k, v)| FuelUsageUpdate {
@@ -328,7 +371,13 @@ impl RegistryService for GrpcRegistryService {
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(batch_update_fuel_usage_response::Result::Success(_)) => Ok(()),
+            Some(batch_update_fuel_usage_response::Result::Success(payload)) => {
+                let converted = payload
+                    .account_resource_limits
+                    .ok_or("missing account_resource_limits field")?
+                    .try_into()?;
+                Ok(converted)
+            }
             Some(batch_update_fuel_usage_response::Result::Error(error)) => Err(error.into()),
         }
     }

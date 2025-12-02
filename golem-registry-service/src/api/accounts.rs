@@ -20,8 +20,10 @@ use crate::services::plugin_registration::PluginRegistrationService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountSetRoles, AccountUpdate, Plan,
+    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountSetRoles,
+    AccountUpdate,
 };
+use golem_common::model::plan::Plan;
 use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -231,6 +233,44 @@ impl AccountsApi {
         let result = self
             .account_service
             .set_roles(&account_id, payload, &auth)
+            .await?;
+        Ok(Json(result))
+    }
+
+    /// Update plan of an accout
+    #[oai(
+        path = "/:account_id/plan",
+        method = "put",
+        operation_id = "set_account_plan"
+    )]
+    async fn set_account_plan(
+        &self,
+        account_id: Path<AccountId>,
+        payload: Json<AccountSetPlan>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Account>> {
+        let record =
+            recorded_http_api_request!("set_account_plan", account_id = account_id.0.to_string());
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .set_account_plan_internal(account_id.0, payload.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn set_account_plan_internal(
+        &self,
+        account_id: AccountId,
+        payload: AccountSetPlan,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Account>> {
+        let result = self
+            .account_service
+            .set_plan(&account_id, payload, &auth)
             .await?;
         Ok(Json(result))
     }

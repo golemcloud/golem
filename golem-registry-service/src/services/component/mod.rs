@@ -90,11 +90,7 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn get_deployed_component(
@@ -128,11 +124,7 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn get_all_deployed_component_versions(
@@ -174,13 +166,7 @@ impl ComponentService {
 
         let components = records
             .into_iter()
-            .map(|r| {
-                r.try_into_model(
-                    environment.application_id,
-                    environment.owner_account_id,
-                    environment.roles_from_active_shares.clone(),
-                )
-            })
+            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
             .collect::<Result<_, _>>()?;
 
         Ok(components)
@@ -219,11 +205,7 @@ impl ComponentService {
         )
         .map_err(|_| ComponentError::ComponentNotFound(*component_id))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn list_staged_components(
@@ -264,13 +246,7 @@ impl ComponentService {
             .list_staged(&environment.id.0)
             .await?
             .into_iter()
-            .map(|r| {
-                r.try_into_model(
-                    environment.application_id,
-                    environment.owner_account_id,
-                    environment.roles_from_active_shares.clone(),
-                )
-            })
+            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -314,11 +290,7 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn list_deployed_components(
@@ -353,13 +325,7 @@ impl ComponentService {
             .list_deployed(&environment_id.0)
             .await?
             .into_iter()
-            .map(|r| {
-                r.try_into_model(
-                    environment.application_id,
-                    environment.owner_account_id,
-                    environment.roles_from_active_shares.clone(),
-                )
-            })
+            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -403,11 +369,8 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        let converted = record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?;
+        let converted =
+            record.try_into_model(environment.application_id, environment.owner_account_id)?;
 
         Ok(converted)
     }
@@ -492,13 +455,7 @@ impl ComponentService {
             .list_by_deployment(&environment_id.0, deployment_revision.0 as i64)
             .await?
             .into_iter()
-            .map(|r| {
-                r.try_into_model(
-                    environment.application_id,
-                    environment.owner_account_id,
-                    environment.roles_from_active_shares.clone(),
-                )
-            })
+            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -551,11 +508,7 @@ impl ComponentService {
                 component_name.clone(),
             ))?;
 
-        Ok(record.try_into_model(
-            environment.application_id,
-            environment.owner_account_id,
-            environment.roles_from_active_shares,
-        )?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn get_deployment_agent_types(

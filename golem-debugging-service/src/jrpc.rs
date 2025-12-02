@@ -19,6 +19,7 @@ use axum_jrpc::{Id, JsonRpcRequest, JsonRpcResponse};
 use futures::{SinkExt, StreamExt};
 use golem_common::model::account::AccountId;
 use golem_common::model::OwnedWorkerId;
+use golem_common::SafeDisplay;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::worker_event::WorkerEventReceiver;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
@@ -470,7 +471,7 @@ impl JrpcHandlerError {
                 self.jrpc_id.clone(),
                 JsonRpcError::new(
                     JsonRpcErrorReason::ApplicationError(-1),
-                    e.to_string(),
+                    e.to_safe_string(),
                     Value::Null,
                 ),
             ),

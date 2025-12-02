@@ -14,24 +14,25 @@
 
 use axum::http::header;
 use golem_common::SafeDisplay;
-use golem_common::model::account::{AccountId, PlanId, SYSTEM_ACCOUNT_ID};
+use golem_common::model::account::{AccountId, SYSTEM_ACCOUNT_ID};
 use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
+use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
 use poem::Request;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
-static SYSTEM_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> =
-    LazyLock::new(|| HashSet::from_iter([AccountRole::Admin]));
-static IMPERSONATED_USER_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> =
-    LazyLock::new(HashSet::new);
+static SYSTEM_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
+    LazyLock::new(|| BTreeSet::from_iter([AccountRole::Admin]));
+static IMPERSONATED_USER_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> =
+    LazyLock::new(BTreeSet::new);
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -172,6 +173,7 @@ pub enum AccountAction {
     ListAllApplicationEnvironments,
     RegisterPlugin,
     SetRoles,
+    SetPlan,
     UpdateAccount,
     UpdateApplication,
     UpdateUsage,
@@ -192,6 +194,7 @@ pub enum EnvironmentAction {
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
+    DebugWorker,
     DeleteDomainRegistration,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
@@ -239,14 +242,22 @@ impl SafeDisplay for AuthorizationError {
     }
 }
 
+/// All information required to answer environment level authorization questions
+/// together with an AuthCtx
 #[derive(Debug, Clone)]
+pub struct AuthDetailsForEnvironment {
+    pub account_id_owning_environment: AccountId,
+    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
     pub account_plan_id: PlanId,
-    pub account_roles: HashSet<AccountRole>,
+    pub account_roles: BTreeSet<AccountRole>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// AuthCtx for systems that do requests on behalf of users.
 /// A bit more limited in what they can execute, but can be constructed
 /// without any data lookups
@@ -254,7 +265,7 @@ pub struct ImpersonatedUserAuthCtx {
     pub account_id: AccountId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AuthCtx {
     System,
     User(UserAuthCtx),
@@ -291,12 +302,17 @@ impl AuthCtx {
         }
     }
 
-    pub fn account_roles(&self) -> &HashSet<AccountRole> {
+    pub fn account_roles(&self) -> &BTreeSet<AccountRole> {
         match self {
             Self::System => &SYSTEM_ACCOUNT_ROLES,
             Self::User(user) => &user.account_roles,
             Self::ImpersonatedUser(_) => &IMPERSONATED_USER_ACCOUNT_ROLES,
         }
+    }
+
+    fn has_any_account_role(&self, allowed: &[AccountRole]) -> bool {
+        let account_roles = self.account_roles();
+        allowed.iter().any(|r| account_roles.contains(r))
     }
 
     fn account_plan_id(&self) -> Option<&PlanId> {
@@ -310,18 +326,16 @@ impl AuthCtx {
     /// Whether storage level visibility rules (e.g. does this account have any shares for this environment / does this user own the environment)
     /// should be disabled for this user.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
-        has_any_role(self.account_roles(), &[AccountRole::Admin])
+        self.has_any_account_role(&[AccountRole::Admin])
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
-        let account_roles = self.account_roles();
         let is_allowed = match action {
-            GlobalAction::CreateAccount => has_any_role(account_roles, &[AccountRole::Admin]),
-            GlobalAction::GetDefaultPlan => has_any_role(account_roles, &[AccountRole::Admin]),
-            GlobalAction::GetReports => has_any_role(
-                account_roles,
-                &[AccountRole::Admin, AccountRole::MarketingAdmin],
-            ),
+            GlobalAction::CreateAccount => self.has_any_account_role(&[AccountRole::Admin]),
+            GlobalAction::GetDefaultPlan => self.has_any_account_role(&[AccountRole::Admin]),
+            GlobalAction::GetReports => {
+                self.has_any_account_role(&[AccountRole::Admin, AccountRole::MarketingAdmin])
+            }
         };
 
         if !is_allowed {
@@ -346,7 +360,7 @@ impl AuthCtx {
                 }
 
                 // admins are allowed to see all plans
-                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
+                if self.has_any_account_role(&[AccountRole::Admin]) {
                     return Ok(());
                 }
 
@@ -354,7 +368,7 @@ impl AuthCtx {
             }
             PlanAction::CreateOrUpdatePlan => {
                 // Only admins can change plan details
-                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
+                if self.has_any_account_role(&[AccountRole::Admin]) {
                     Ok(())
                 } else {
                     Err(AuthorizationError::PlanActionNotAllowed(action))
@@ -368,10 +382,15 @@ impl AuthCtx {
         target_account_id: &AccountId,
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
-        // Accounts owners are allowed to do everything with their accounts
-
-        let is_allowed = (self.account_id() == target_account_id)
-            || has_any_role(self.account_roles(), &[AccountRole::Admin]);
+        let is_allowed = match action {
+            AccountAction::SetPlan | AccountAction::SetRoles => {
+                self.has_any_account_role(&[AccountRole::Admin])
+            }
+            _ => {
+                (self.account_id() == target_account_id)
+                    || self.has_any_account_role(&[AccountRole::Admin])
+            }
+        };
 
         if !is_allowed {
             Err(AuthorizationError::AccountActionNotAllowed(action))?
@@ -386,8 +405,10 @@ impl AuthCtx {
         roles_from_shares: &HashSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
-        // Environment owners and system users are allowed to do everything with their environments
-        if self.account_id() == account_owning_enviroment || self.is_system() {
+        // Environment owners, admins and system users are allowed to do everything with their environments
+        if self.account_id() == account_owning_enviroment
+            || self.has_any_account_role(&[AccountRole::Admin])
+        {
             return Ok(());
         }
 
@@ -497,6 +518,14 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            EnvironmentAction::DebugWorker => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
             EnvironmentAction::DeleteWorker => has_any_role(
                 roles_from_shares,
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
@@ -583,7 +612,7 @@ impl AuthCtx {
     }
 }
 
-fn has_any_role<T: Eq + Hash>(roles: &HashSet<T>, allowed: &[T]) -> bool {
+fn has_any_role<T: Eq + Hash + Ord>(roles: &HashSet<T>, allowed: &[T]) -> bool {
     allowed.iter().any(|r| roles.contains(r))
 }
 
@@ -810,8 +839,48 @@ mod test {
 }
 
 mod protobuf {
+    use super::AuthDetailsForEnvironment;
     use super::{AuthCtx, AuthorizationError, ImpersonatedUserAuthCtx, UserAuthCtx};
-    use golem_common::model::auth::AccountRole;
+    use golem_common::model::auth::{AccountRole, EnvironmentRole};
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment>
+        for AuthDetailsForEnvironment
+    {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment,
+        ) -> Result<Self, Self::Error> {
+            let environment_roles_from_shares = value
+                .environment_roles_from_shares()
+                .map(EnvironmentRole::try_from)
+                .collect::<Result<_, _>>()?;
+
+            let account_id_owning_environment = value
+                .account_id_owning_environment
+                .ok_or("missing account_id")?
+                .try_into()?;
+
+            Ok(Self {
+                account_id_owning_environment,
+                environment_roles_from_shares,
+            })
+        }
+    }
+
+    impl From<AuthDetailsForEnvironment>
+        for golem_api_grpc::proto::golem::auth::AuthDetailsForEnvironment
+    {
+        fn from(value: AuthDetailsForEnvironment) -> Self {
+            Self {
+                account_id_owning_environment: Some(value.account_id_owning_environment.into()),
+                environment_roles_from_shares: value
+                    .environment_roles_from_shares
+                    .into_iter()
+                    .map(|er| golem_api_grpc::proto::golem::auth::EnvironmentRole::from(er) as i32)
+                    .collect(),
+            }
+        }
+    }
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
         type Error = String;
