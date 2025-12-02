@@ -14,7 +14,7 @@
 
 import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.3.0';
 import { parseUuid } from 'golem:rpc/types@0.2.2';
-import * as process from 'node:process';
+import process from 'node:process';
 import { AgentId } from '../agentId';
 
 // reexport golem host api
