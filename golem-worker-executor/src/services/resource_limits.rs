@@ -122,6 +122,8 @@ impl ResourceLimitsGrpc {
         &self,
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
+        tracing::debug!("Sending batch fuel updates");
+
         let updated_limits = self
             .client
             .batch_update_fuel_usage(updates, &AuthCtx::System)

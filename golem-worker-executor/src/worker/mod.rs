@@ -2049,9 +2049,9 @@ impl RunningWorker {
             }
         });
 
-        let current_level = i64::MAX as u64;
-        store.set_fuel(current_level)?;
-        store.data_mut().borrow_fuel(current_level as i64).await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        let initial_fuel_level = i64::MAX;
+        store.set_fuel(initial_fuel_level as u64)?;
+        store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

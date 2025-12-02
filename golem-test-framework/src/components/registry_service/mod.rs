@@ -124,27 +124,27 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__APP_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__COMPONENT_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__ENV_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__PLAN_ID",
@@ -152,31 +152,31 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__STORAGE_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__APP_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__COMPONENT_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__ENV_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__MAX_MEMORY_PER_WORKER",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
@@ -184,7 +184,7 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__PLAN_ID",
@@ -192,15 +192,15 @@ async fn env_vars(
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__STORAGE_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         .with(
             "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_LIMIT",
-            "1000000000000000000".to_string(),
+            "10000000000000000".to_string(),
         )
         //
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())

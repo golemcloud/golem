@@ -849,7 +849,7 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
     ) -> Result<Response<GetActiveRoutesForDomainResponse>, tonic::Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
-            "get_agent_type",
+            "get_active_routes_for_domain",
             get_active_routes_for_domain = request.domain,
         );
 

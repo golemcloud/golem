@@ -130,11 +130,11 @@ impl FuelManagement for Context {
                 &self.account_id,
                 Ord::max(
                     self.config.limits.fuel_to_borrow,
-                    Ord::max(self.min_fuel_level.saturating_sub(current_level), 0),
+                    self.min_fuel_level.saturating_sub(current_level),
                 ),
             )
             .await?;
-        self.min_fuel_level -= amount;
+        self.min_fuel_level = self.min_fuel_level.saturating_sub(amount);
         debug!("borrowed fuel for {}: {}", self.account_id, amount);
         Ok(())
     }
@@ -144,32 +144,36 @@ impl FuelManagement for Context {
             &self.account_id,
             Ord::max(
                 self.config.limits.fuel_to_borrow,
-                Ord::max(self.min_fuel_level.saturating_sub(current_level), 0),
+                self.min_fuel_level.saturating_sub(current_level),
             ),
         );
         match amount {
             Some(amount) => {
+                self.min_fuel_level = self.min_fuel_level.saturating_sub(amount);
                 debug!("borrowed fuel for {}: {}", self.account_id, amount);
-                self.min_fuel_level -= amount;
             }
             None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
         }
     }
 
     async fn return_fuel(&mut self, current_level: i64) -> Result<i64, WorkerExecutorError> {
-        let unused = current_level - self.min_fuel_level;
+        let unused = current_level.saturating_sub(self.min_fuel_level);
         if unused > 0 {
-            debug!("current_level: {current_level}");
-            debug!("min_fuel_level: {}", self.min_fuel_level);
-            debug!("last_fuel_level: {}", self.last_fuel_level);
-            debug!("returning unused fuel for {}: {}", self.account_id, unused);
             self.resource_limits
                 .return_fuel(&self.account_id, unused)
-                .await?
+                .await?;
+            self.min_fuel_level = self.min_fuel_level.saturating_add(unused);
         }
+
+        assert!(
+            self.last_fuel_level >= current_level,
+            "Fuel use during an invocation needs to be monotonically decreasing"
+        );
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
+
         debug!("reset fuel mark for {}: {}", self.account_id, current_level);
+
         Ok(consumed)
     }
 }
