@@ -73,7 +73,7 @@ The `golem` command line interface provides a set of commands to create, build, 
 
 To get started, you create an application and a single component using one of the supported programming languages with the `golem app new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
   <Tabs.Tab>
   Create a TypeScript agent using the default template:
 
@@ -84,11 +84,25 @@ To get started, you create an application and a single component using one of th
   > Select language for the new component TypeScript
   > Select a template for the new component: default: The default agent template for TypeScript
   > Component Package Name: example:counter
-  > Add another component or create application? Create application
+  > Create application or Add another component? Create application
   ```
 
   Note: For TypeScript, you need to have `npm` installed on your system.
   </Tabs.Tab>
+
+    <Tabs.Tab>
+    Create a Rust agent using the default template:
+
+    ```shell copy
+    golem app new
+
+    > Application name: agent-examples
+    > Select language for the new component Rust
+    > Select a template for the new component: default: The default agent template for Rust
+    > Component Package Name: example:counter
+    > Create application or Add another component? Create application
+    ```
+    </Tabs.Tab>
 </Tabs>
 
 This will generate a new component in a new directory named after the provided application name, and it is ready to be compiled and deployed to Golem.
@@ -103,7 +117,7 @@ This compiles the newly created application, which consists of a _single Golem c
 
 ### Write the code
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
   <Tabs.Tab>
 The default template's source code is located in the `components-ts/example-counter/src/main.ts` file, assuming that the `example:counter` name has been used in the `app new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
 
@@ -137,6 +151,43 @@ class CounterAgent extends BaseAgent {
 ```
 
   </Tabs.Tab>
+
+ <Tabs.Tab>
+  The default template's source code is located in the `components-rust/example-counter/src/lib.rs` file, assuming that the `example:counter` name has been used in the `app new` command.
+
+  Let's use the following code snippet for this example:
+
+  ```rust
+use golem_rust::{agent_definition, agent_implementation, prompt, description};
+
+#[agent_definition]
+pub trait CounterAgent {
+    fn new(name: String) -> Self;
+
+    #[prompt("Increase the count by one")]
+    #[description("Increases the count by one and returns the new value")]
+    fn increment(&mut self) -> u32;
+}
+
+struct CounterImpl {
+    count: u32,
+    _name: String,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterImpl {
+    fn new(name: String) -> Self {
+        CounterImpl {_name: name, count: 0 }
+    }
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
+ ```
+
+    </Tabs.Tab>
 </Tabs>
 
 In this simple example we define a very simple agent that is identified by a `name` string, and exposes a single agent method `increment` that increments the count by one and returns the new value.

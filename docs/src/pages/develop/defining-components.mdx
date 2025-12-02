@@ -6,7 +6,7 @@ import { Callout, Tabs } from "nextra/components"
 
 Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 To get started from scratch, first create a new application using the `TS` template:
 
@@ -15,6 +15,16 @@ golem app new my-app ts
 cd my-app
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the `TS` template:
+
+```shell copy
+golem app new my-app rust
+cd my-app
+```
+    </Tabs.Tab>
+
 </Tabs>
 
 An application can consist of multiple components. Add a new component by choosing from one of the available templates. To see the list of available templates, run:
@@ -25,10 +35,16 @@ golem component new
 
 Then create a new component using the chosen template:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 ```shell copy
 golem component new ts my:component
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem component new rust my:component
 ```
     </Tabs.Tab>
 </Tabs>
@@ -37,7 +53,7 @@ golem component new ts my:component
 
 Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 An agent is a TypeScript class that extends `BaseAgent` and has the `@agent` decorator:
 
@@ -55,6 +71,46 @@ class MyAgent extends BaseAgent {
 }
 ```
     </Tabs.Tab>
+    <Tabs.Tab>
+An agent is a Rust trait that is annotated with macro `#[agent_definition]`, and it should have a construction method returning `Self`.
+In order to use complex data types as parameters or return types of agent methods, these types need to implement the `Schema` trait (by deriving it using `#[derive(Schema)]`),
+so that the Golem runtime can serialize and deserialize them properly.
+Also note that you can also use `async` functions as agent methods in Rust. However, you don't need to use `async_trait` crate or similar, as the Golem SDK takes care of that for you.
+
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition]
+pub trait CounterAgent {
+  pub fn new(input: Id) -> Self;
+  pub fn increment(&mut self) -> u32;
+}
+
+struct CounterAgentImpl {
+    value: u32,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterAgentImpl {
+    pub fn new(input: Id) -> Self {
+        CounterAgentImpl { value: 0 }
+    }
+
+    pub fn increment(&mut self) -> u32 {
+        self.value += 1;
+        self.value
+    }
+}
+
+#[derive(Schema)]
+pub struct Id {
+    pub id: String,
+}
+
+```
+
+    </Tabs.Tab>
+
 </Tabs>
 
 A component must define at least one agent, but can also define multiple ones.
@@ -64,7 +120,7 @@ Every agent must define a **constructor** with an arbitrary number of parameters
 
 For example, an agent working on a particular user's particular request could be defined as:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 ```typescript
 @agent()
@@ -80,6 +136,14 @@ class RequestHandler extends BaseAgent {
 }
 ```
     </Tabs.Tab>
+    <Tabs.Tab>
+```rust
+#[agent_definition]
+trait RequestHandler {
+    pub fn new(userId: string, requestId: string) -> Self;
+}
+```
+    </Tabs.Tab>
 </Tabs>
 
 An agent with a constructor like this can be identified by `request-handler("user-123", "request-456")`.
@@ -92,21 +156,21 @@ An agent with a constructor like this can be identified by `request-handler("use
 
 Every public method of an agent class is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be mapped to HTTP APIs](/invoke/making-custom-apis).
 
-Agent methods can (and should) be also annotated with the `@prompt` and `@description` decorators:
+Agent methods can (and should) be also annotated with the metadata such as `prompt` and `description`
 - `prompt` should provide information for an external AI to understand what needs to be passed to the method as parameters
 - `description` should be a human-readable description of what the method does
 
 This metadata is stored in the Golem component and can be used when exposing the agents through MCP, for example.
 
-The following example shows the use of the decorators on a simple agent method:
+The following example shows the use of how to attach these metadata to simple agent methods in different languages
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 ```typescript
-@agent()
 type TaskDetails = // ...;
 type RequestHandlerStatus = // ...;
 
+@agent()
 class RequestHandler extends BaseAgent {
     // ...
 
@@ -118,6 +182,34 @@ class RequestHandler extends BaseAgent {
 }
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+```rust
+use golem_rust::{Schema, agent_definition, prompt, description};
+
+#[derive(Schema)]
+pub struct TaskDetails {
+    description: String,
+    priority: u8,
+}
+
+#[derive(Schema)]
+pub enum RequestHandlerStatus {
+    Success(String),
+    Failure(String),
+}
+
+#[agent_definition]
+pub trait RequestHandler {
+    async fn new(name: String) -> Self;
+
+    #[prompt("Enter new details about the task")]
+    #[description("Adds some more details to the request handler about the task being performed. The result is an update of the current status.")]
+    async fn add_details(&self, task_details: TaskDetails) -> RequestHandlerStatus;
+}
+```
+    </Tabs.Tab>
+
 </Tabs>
 
 ### Supported data types
@@ -137,7 +229,7 @@ In general Golem supports three different ways of doing this:
 
 ### Command line arguments and environment variables
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
 <Tabs.Tab>
 Command line arguments and environment variables are accessible through the `node:process` module:
 
@@ -145,6 +237,16 @@ Command line arguments and environment variables are accessible through the `nod
 import { argv, env } from "node:process";
 ```
 </Tabs.Tab>
+
+
+<Tabs.Tab>
+Command line arguments and environment variables are accessible through the `std::env` module:
+```rust
+use std::env;
+let agent_id = env::var("GOLEM_AGENT_ID").unwrap();
+```
+</Tabs.Tab>
+
 </Tabs>
 
 Environment variables can be specified when an agent is **explicitly created**, but there are some environment variables that are always set by Golem:

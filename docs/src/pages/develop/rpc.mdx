@@ -14,7 +14,7 @@ The simplest way to achieve this is to keep all the agent types that need to cal
 
 The first step of calling a remote agent is creating a _client_ for it by specifying which agent type it is and identifying the agent by providing values for its constructor parameters. If the agent identified by the parameters has not been existing yet, it is going to be created and its constructor is executed remotely. If it has been already created, the client just points to it and no action is taken until an _agent method_ is called using it.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
 
@@ -47,24 +47,88 @@ In the following example, we have two agents defined; a weather agent with a con
 
         Here `weatherInLondon` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition]
+trait ExampleAgent {
+    fn new() -> Self;
+    async fn run(&self, request: String);
+}
+
+struct ExampleAgentImpl;
+
+#[agent_implementation]
+impl ExampleAgent for ExampleAgentImpl {
+    fn new() -> Self {
+        ExampleAgentImpl
+    }
+
+    async fn run(&self, request: String) {
+
+        let weather_in_london = WeatherAgentClient::get("london".to_string());
+
+        let weather = weather_agent.current_weather().await;
+
+        println!("Request: {}, Weather: {}", request, weather);
+    }
+}
+
+#[agent_definition]
+pub trait WeatherAgent {
+    fn new(location: String) -> Self;
+    async fn current_weather(&self) -> String;
+}
+
+struct WeatherAgentImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl WeatherAgent for WeatherAgentImpl {
+    fn new(location: String) -> Self {
+        WeatherAgentImpl { name: location }
+    }
+
+    async fn current_weather(&self) -> String {
+        format!("The current weather in {} is sunny.", self.name)
+    }
+}
+
+```
+
+Given there is a `WeatherAgent` defined, we have a auto generated client with the name `WeatherAgentClient`,
+Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
+
+    </Tabs.Tab>
 </Tabs>
 
 ## Calling a remote agent method
 
 Once we have a _client_ for a remote agent, it is possible to call its methods just as if it would be a local instance.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     ```typescript
     const currentWeather = await weatherInLondon.currentWeather();
     ```
     </Tabs.Tab>
+
+     <Tabs.Tab>
+     ```rust
+      let current_weather = weather_in_london.current_weather().await;
+      ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Triggering execution of an agent method
 It is possible to trigger the remote execution of an agent method without awaiting it. This is useful for spawning background tasks, for example.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
 
@@ -73,12 +137,22 @@ It is possible to trigger the remote execution of an agent method without awaiti
     remoteAgent.runTask.trigger("hello", 1234);
     ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger` variant of the methods exposed on each remote method in the client.as
+    Example: If there is a `run_task`, its trigger variant is `trigger_run_task`:
+
+    ```rust
+    let remote_agent = BackgroundTaskAgentClient::get(background_job_id);
+    remote_agent.trigger_run_task("hello", 1234);
+    ```
+    </Tabs.Tab>
 </Tabs>
 
 ### Scheduling an agent method
 An advanced case of triggering the execution of an agent method is to **schedule it** to be executed at a later time.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
 
@@ -86,7 +160,30 @@ An advanced case of triggering the execution of an agent method is to **schedule
     const remoteAgent = BackgroundTaskAgent.get(backgroundJobId);
     remoteAgent.runTask.schedule({ seconds: X, nanoseconds: Y }, "hello", 1234);
     ```
-    </Tabs.Tab>
 
     Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
+
+    </Tabs.Tab>
+
+      <Tabs.Tab>
+        Similar to `trigger`, there is a `schedule` variant for each of the remote agent method in the client.
+        Example: If `run_task` is a method, its schedule variant is `schedule_run_task`:
+
+        ```rust
+        use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
+
+        let remote_agent = BackgroundTaskAgentClient::get(background_job_id);
+
+        remote_agent.schedule_run_task(
+           DataTime{
+             seconds: X,
+             nanoseconds: Y
+          }, "hello", 1234
+        );
+        ```
+
+        Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
+
+     </Tabs.Tab>
+
 </Tabs>

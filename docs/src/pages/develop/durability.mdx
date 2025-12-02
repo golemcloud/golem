@@ -10,9 +10,13 @@ The library allows controlling four main aspects of the durable execution engine
 
 All these features are regional - they can be changed for a section of the code within a single exported function.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         To make this easy to use in TypeScript, the library provides functions starting with `with`, they take a closure
+        parameter which will be executed with the requested mode, and then they restore the previous settings.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `golem_rust` library provides functions starting with `with`, they take a closure
         parameter which will be executed with the requested mode, and then they restore the previous settings.
     </Tabs.Tab>
 </Tabs>
@@ -27,7 +31,7 @@ The persistence level can be one of the following:
 | PersistRemoteSideEffects | Persists all the side-effects that are affecting the outside world. In case of recovery the side-effects won't be reexecuted and the persisted results will be used. |
 | Smart                    | The default setting; Let Golem decide what to persist to optimize performance                                                                                        |
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         To change the persistence level for a section of the code, use the `withPersistenceLevel` function:
 
@@ -40,13 +44,26 @@ The persistence level can be one of the following:
     })
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        To change the persistence level for a section of the code, use the `with_persistance_level` function:
+
+        ```rust
+        use golem_rust::{PersistenceLevel, with_persistence_level}
+
+        let result = with_persistence_level(PersistenceLevel::PersistNothing, || {
+         // this block run in PersistNothing mode
+          "hello"
+        });
+
+        ```
+    </Tabs.Tab>
 </Tabs>
 
 ### Idempotence mode
 
 Golem assumes that HTTP requests are idempotent by default. This means that in case of a failure, if the system cannot determine whether the request successfully reached the target or not, it will be retried.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         This behavior can be changed using the `withIdempotenceMode` function:
 
@@ -54,9 +71,21 @@ Golem assumes that HTTP requests are idempotent by default. This means that in c
         import {withIdempotenceMode} from "@golemcloud/golem-ts-sdk"
 
         const result: string = withIdempotenceMode(false, () => {
-        // this closure runs with idempotence mode disabled
-        return "hello"
-    })
+          // this closure runs with idempotence mode disabled
+          return "hello"
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        This behavior can be changed using the `withIdempotenceMode` function:
+
+        ```typescript
+        use golem_rust::with_idempotence_mode;
+
+        let result = with_idempotence_mode(false, || {
+            // this block runs with idempotence mode disabled
+            "hello"
+        });
         ```
     </Tabs.Tab>
 </Tabs>
@@ -67,7 +96,7 @@ With disabled idempotence mode, in case Golem cannot determine if the request wa
 
 By default, side effects are persisted and retried one by one. It is possible to group them together into atomic regions, in which case the execution is retried for some reason (the agent failed or interrupted within the region), all the side effects will be reexecuted.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         The `golem-ts-sdk` library exports the `atomically` function for using atomic regions:
 
@@ -81,13 +110,34 @@ By default, side effects are persisted and retried one by one. It is possible to
     })
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        The `golem-ts-sdk` library exports the `atomically` function for using atomic regions:
+
+        ```rust
+         use golem_rust::atomically;
+
+         let result = atomically(|| {
+            let first_result = first_side_effect();
+            let second_result = second_side_effect();
+            (first_result, second_result)
+         });
+        ```
+    </Tabs.Tab>
+
 </Tabs>
 
 ### Commit oplog
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         The `oplogCommit` function in `"@golemcloud/golem-ts-sdk` waits until the oplog is committed to its persistent
+        storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the
+        agent's journal is replicated to. The function will block until the oplog is committed to the specified number
+        of replicas, or, if this number is larger than the available number of replicas, until it is written to all the
+        replicas.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The `oplog_commit` function in `golem_rust` waits until the oplog is committed to its persistent
         storage. The function takes a single argument, `replicas`, with the desired number of storage replicas the
         agent's journal is replicated to. The function will block until the oplog is committed to the specified number
         of replicas, or, if this number is larger than the available number of replicas, until it is written to all the

@@ -2,7 +2,7 @@ import { Tabs } from "nextra/components"
 
 # HTTP requests
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
 <Tabs.Tab>
     HTTP requests can be made with the standard `fetch` function.
 
@@ -23,5 +23,77 @@ import { Tabs } from "nextra/components"
     console.log("Body: ", data);
 });
     ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made using `wstd` crate. Make sure to have the crate added to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    # note the version as of now has to be 0.5.4 since Golem SDK depends on this specific version
+    wstd = {version = "0.5.4", features = ["default", "json"] }
+    ```
+
+    ```rust
+   use serde::Deserialize;
+   use serde::Serialize;
+   use wstd::http::{Body, Client, HeaderValue, IntoBody, Request};
+   use wstd::http::request::JsonRequest;
+
+   #[derive(Serialize, Deserialize)]
+    struct ExampleRequest {
+        title: String,
+        body: String,
+        user_id: u16
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct ExampleResponse {
+        message: Option<String>,
+    }
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+     let request = Request::post("https://postman-echo.com/post")
+        .header("X-Test", HeaderValue::from_str("Golem").unwrap())
+        .json(&my_payload).map_err(|err| err.to_string())?;
+
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+
+    let mut response =
+       Client::new().send(request).await.map_err(|err| err.to_string())?.into_body();
+
+    let result: ExampleResponse =  response.json().unwrap();
+
+    println!("Received {:?}", result);
+    ```
+
+    It's recommended to use `wstd`, however you can also `golem-wasi-http` to write http client.
+    Make sure to have the crate added to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    golem-wasi-http = {version = "0.1", features = ["json"] }
+    ```
+
+
+    ```rust
+    use golem_wasi_http::Client;
+
+    let response = Client::new()
+      .post(&format!("http://localhost:{port}/todos"))
+      .header("X-Test", "Golem")
+      .json(&request_body)
+      .basic_auth("some", Some("body"))
+      .send()
+      .unwrap();
+
+    let result: ExampleResponse =  response.json().unwrap();
+
+    println!("Received {:?}", result);
+    ```
+
+    If you need the async client, add `async` into the list of features for `golem-wasi-http` in your `Cargo.toml`:
+
 </Tabs.Tab>
 </Tabs>

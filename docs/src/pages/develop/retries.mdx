@@ -19,7 +19,7 @@ This mechanism is automatic and applied to all kinds of failures. To rely on it,
 
 The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each agent.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         The `golem-ts-sdk` library exports the `withRetryPolicy` function to temporarily change the retry policy:
 
@@ -54,6 +54,41 @@ The retry policy which controls the maximum number of retries and the exponentia
             multiplier: number;
             maxJitterFactor?: number;
         };
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The `golem-rust` library exports the `with_retry_policy` function to temporarily change the retry policy:
+
+        ```rust
+        use golem_rust::with_retry_policy;
+
+        let policy = RetryPolicy {
+            max_attempts: 3,
+            min_delay: 100 * 1000 * 1000, // 100 milliseconds
+            max_delay: 2 * 1000 * 1000 * 1000, // 2 seconds
+            multiplier: 1.5,
+            max_jitter_factor: None
+        };
+
+        with_retry_policy(policy, || {
+            "hello".to_string()
+        })
+
+        ```
+
+        The `RetryPolicy` required by `with_retry_policy` is the following:
+
+        ```rust
+        /**
+        * Configures how the executor retries failures
+        */
+        pub struct RetryPolicy {
+            pub max_attempts: u32,
+            pub min_delay: std::time::Duration,
+            pub max_delay: std::time::Duration,
+            pub multiplier: f64,
+            pub max_jitter_factor: Option<f64>,
+        }
         ```
     </Tabs.Tab>
 </Tabs>

@@ -10,12 +10,18 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 
 To generate an idempotency key:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 ```typescript
 import { generateIdempotencyKey, Uuid } from "golem:api/host@1.1.7";
 
 const key: Uuid = generateIdempotencyKey();
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```rust
+use golem_rust::{Uuid, generate_idempotency_key};
+let key: Uuid = generate_idempotency_key();
 ```
     </Tabs.Tab>
 </Tabs>
@@ -24,7 +30,7 @@ const key: Uuid = generateIdempotencyKey();
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     ```typescript
     /**
@@ -54,6 +60,36 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     - `getAgentMetadata(agentId: AgentId)` returns the metadata for a specific agent given by its `AgentId`
 
     </Tabs.Tab>
+    <Tabs.Tab>
+    ```rust
+    /**
+     * Metadata about an agent
+     */
+     pub struct AgentMetadata {
+       // The agent ID, consists of the component ID, agent type and agent parameters
+       pub agent_id: AgentId,
+       // Command line arguments seen by the agent
+       pub args: Vec<String>,
+       // Environment variables seen by the agent
+       pub env: Vec::<(String, String,)>,
+       // Configuration variables seen by the agent
+       pub config_vars: Vec::<(String, String,)>,
+       // The current agent status
+       pub status: AgentStatus,
+       // The component version the agent is running with
+       pub component_version: u64,
+       // The agent\'s current retry count
+       pub retry_count: u64,
+     }
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `get_self_metadata()` returns the metadata for the current agent
+    - `get_agent_metadata(agent_id: &AgentId)` returns the metadata for a specific agent given by its `AgentId`
+
+    </Tabs.Tab>
+
 </Tabs>
 
 ### Enumerate agents
@@ -66,7 +102,7 @@ Agent enumeration is a feature of Golem available both through the public HTTP A
 
 The following example demonstrates how to use the agent enumeration API:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 ```typescript
 import {
@@ -105,13 +141,46 @@ while ((batch = getter.getNext()) !== undefined) {
 }
 ```
     </Tabs.Tab>
+
+   <Tabs.Tab>
+```rust
+use golem_rust::{
+    bindings::golem::api::host::{AgentAnyFilter, GetAgents},
+    wasm_rpc::{ComponentId, Uuid},
+    Uuid
+};
+
+let component_id: ComponentId = /** */
+
+let filter = AgentAnyFilter {
+   filters: vec![AgentAllFilter {
+     filters: vec![AgentPropertyFilter::Status(AgentStatusFilter {
+       comparator: FilterComparator::Equal,
+       value: AgentStatus::Idle,
+     })],
+   }],
+};
+
+let getter = GetAgents::new(component_id, Some(&filter), true);
+
+let mut batch = getter.get_next();
+
+let mut agents: Vec<AgentMetadata> = vec![];
+
+while batch.is_some() {
+  agents.extend(batch.unwrap());
+  batch = getter.get_next();
+}
+
+```
+    </Tabs.Tab>
 </Tabs>
 
 The third parameter of the `GetAgents` constructor enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned agent; otherwise, it uses only the last cached values.
 
 ### Update an agent
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
@@ -125,6 +194,20 @@ const agentId: AgentId = {
 const targetVersion: ComponentVersion = 1n
 
 updateAgent(agentId, targetVersion, "automatic")
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `update_agent` function:
+
+```rust
+use golem_rust::bindings::golem::api::host::{update_agent, AgentId, ComponentVersion, UpdateMode};
+
+let target_component_version: ComponentVersion = 1;
+
+let agent_id: AgentId = todo!("...");
+
+update_agent(&agent_id, target_component_version, UpdateMode::Automatic);
 ```
     </Tabs.Tab>
 </Tabs>
@@ -146,7 +229,7 @@ The `golem:durability` package contains an API that libraries can leverage to pr
 
 #### Types
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     The durability API can be imported from the `golem:durability/durability@1.2.1` module.
 
@@ -212,16 +295,84 @@ export type PersistenceLevel = {
 
 Here the `isLive` field indicates whether the executor is currently _replaying_ an agent's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
 
-The `PersistedTypedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
+The `PersistedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
 
 ```typescript
-export type PersistedTypedDurableFunctionInvocation = {
+export type PersistedDurableFunctionInvocation = {
   timestamp: Datetime;
   functionName: string;
   response: ValueAndType;
   functionType: DurableFunctionType;
   entryVersion: OplogEntryVersion;
 };
+```
+
+</Tabs.Tab>
+
+    <Tabs.Tab>
+    The durability API can be imported from the `golem_rust::bindings::golem::durability` module.
+
+The `DurableFunctionType` type categorizes a durable function in the following way:
+
+```rust
+pub type DurableFunctionType = WrappedFunctionType;
+
+pub enum WrappedFunctionType {
+  ReadLocal,
+  WriteLocal,
+  ReadRemote,
+  WriteRemote,
+  WriteRemoteBatched(Option<OplogIndex>),
+  WriteRemoteTransaction(Option<OplogIndex>),
+}
+```
+
+- `ReadLocal` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
+- `WriteLocal` indicates that the side effect writes to the agent's local state (for example local file system)
+- `ReadRemote` indicates that the side effect reads from external state (for example a key-value store)
+- `WriteRemote` indicates that the side effect manipulates external state (for example an RPC call)
+- `WriteRemoteBatched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
+- `WriteRemoteTransaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
+
+The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `current_durable_execution_state` function:
+
+```rust
+/**
+ * Gets the current durable execution state
+ */
+fn current_durable_execution_state(): DurableExecutionState;
+
+pub struct DurableExecutionState {
+  // If true, the executor is in live mode, side-effects should be performed and persisted
+  // If false, the executor is in replay mode, side-effects should be replayed from the persisted data
+  pub is_live: bool,
+  // The currently active persistence level
+  pub persistence_level: PersistenceLevel,
+}
+
+/**
+ * Configurable persistence level for agents
+ */
+pub enum PersistenceLevel {
+  PersistNothing,
+  PersistRemoteSideEffects,
+  Smart
+}
+
+
+pub struct PersistedDurableFunctionInvocation {
+  // The timestamp of the invocation.
+  pub timestamp: Datetime,
+  // The invoked function\'s unique name
+  pub function_name: _rt::String,
+  // Arbitrary structured value (and type) describing the invocation\'s result
+  pub response: ValueAndType,
+  // Type of the durable function invocation
+  pub function_type: DurableFunctionType,
+  // Oplog entry version
+  pub entry_version: OplogEntryVersion,
+}
+
 ```
 
 </Tabs.Tab>
@@ -233,7 +384,12 @@ The durability API consists of a couple of low-level functions that must be call
 
 The logic to be implemented is the following, in pseudocode:
 
-```ts
+
+
+<Tabs items={["TypeScript", "Rust"]}>
+    <Tabs.Tab>
+
+```typescript
 observeFunctionCall("interface", "function")
 state = currentDurableExecutionState()
 if (state.isLive) {
@@ -246,6 +402,41 @@ if (state.isLive) {
 }
 ```
 
+</Tabs.Tab>
+
+<Tabs.Tab>
+    ```rust
+  use golem_rust::Schema
+
+  #[derive(Schema)]
+  pub struct FunctionResult {
+    value: String
+  }
+
+  observe_function_call("iface", "function");
+
+  let state = current_durable_execution_state();
+
+  if (state.is_live) {
+      let input = "foo".to_string();
+      let result: FunctionResult = perform_side_effect("foo".to_string());
+
+      // the input and output must be encoded to ValueAndType
+      // `into_value_and_type` will be automatically available for all types deriving Schema
+      persist_durable_function_invocation("function",  &input.into_value_and_type() , &result.into_value_and_type(), DurableFunctionType::ReadRemote);
+  } else {
+     let persisted =  read_persisted_durable_function_invocation();
+
+     // the result must be can be decoded from ValueAndType, as long as the type derives Schema
+     let result: FunctionResult =  FunctionResult::from_value_and_type(persisted.response).expect("failed to decode");
+  }
+
+    ```
+
+  </Tabs.Tab>
+</Tabs>
+
+
 The `input` and `result` values must be encoded into `ValueAndType`, the dynamic value representation from the `golem:rpc` package.
 
 In cases when a durable function's execution interleaves with other calls, the `beginDurableFunction` and `endDurableFunction` calls can be used to mark the beginning and end of the operation.
@@ -257,7 +448,7 @@ Golem associates an **invocation context** with each invocation, which contains 
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
 To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.1.7`:
 
@@ -309,6 +500,52 @@ and then use the `Span` class's methods:
 If `finish` is not explicitly called on the span, it is going to be finished when the garbage collector deletes the span object.
 
 </Tabs.Tab>
+
+    <Tabs.Tab>
+To get the current invocation context, use the `current_context` host function, imported from `golem_rust::bindings::golem::api::context`:
+
+```rust
+/**
+ * Invocation context support
+ */
+fn current_context(): InvocationContext;
+```
+
+The `InvocationContext` itself is a **class** with various methods for querying attributes of the invocation context:
+
+| method | description |
+| ------ | ----------- |
+| `trace_id` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `span_id` | Returns the span ID associated with the context |
+| `parent` | Returns the parent invocation context, if any |
+| `get_attribute` | Gets an attribute from the context by key |
+| `get_attributes` | Gets all attributes from the context |
+| `get_attribute_chain` | Gets all values of a given attribute from the current and parent contexts |
+| `get_attribute_chains` | Get all attributes and their previous values |
+| `trace_context_headers` | Gets the W3C Trace Context headers associated with the current invocation context |
+
+Custom attributes can only be set on **custom spans**. First start a new span using `start_span`
+
+```rust
+/**
+ * Starts a new `span` with the given name, as a child of the current invocation context
+ */
+pub fn start_span(name: &str) -> Span
+```
+
+and then use the `Span` class's methods:
+
+| method | description |
+| ------ | ----------- |
+| `started_at` | Returns the timestamp when the span was started |
+| `set_attribute` | Sets an attribute on the span |
+| `set_attributes` | Sets multiple attributes on the span |
+| `finish` | Ends the current span |
+
+If `finish` is not explicitly called on the span, it is going to be finished when the garbage collector deletes the span object.
+
+</Tabs.Tab>
+
 </Tabs>
 
 The custom spans are pushed onto the invocation context stack, so whenever an RPC call or HTTP call is made, their parent span(s) will include the user-defined custom spans as well as the rest of the invocation context.
@@ -319,7 +556,7 @@ Although Golem agents can store their state completely in their own memory, it i
 
 This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. The keys are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         There are two primary modules for using the key-value store:
         - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
@@ -414,13 +651,115 @@ This can be useful if state needs to be shared between different agents or if th
         stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
         a `Uint8Array`.
     </Tabs.Tab>
+
+       <Tabs.Tab>
+            There are two primary modules for using the key-value store:
+            - `golem_rust::bindings::wasi::keyvalue::eventual` defines an API for an eventually consistent key-value store
+            - `golem_rust::bindings::wasi::keyvalue::eventual_batch` defines an API with batch operations working on multiple keys
+
+            The primary interface to work with the key-value pairs consists of the four basic operations:
+
+            ```rust
+            /**
+            * Get the value associated with the key in the bucket.
+            * The value is returned as an option. If the key-value pair exists in the
+            * bucket, it returns `Ok(value)`. If the key does not exist in the
+            * bucket, it returns `Ok(none)`.
+            * If any other error occurs, it returns an `Err(error)`.
+            * @throws Error
+            */
+            pub fn get(bucket: &Bucket, key: &str) -> Result<Option<IncomingValue>, Error>
+            /**
+            * Set the value associated with the key in the bucket. If the key already
+            * exists in the bucket, it overwrites the value.
+            * If the key does not exist in the bucket, it creates a new key-value pair.
+            * If any other error occurs, it returns an `Err(error)`.
+            * @throws Error
+            */
+            pub fn set(bucket: &Bucket, key: &str, outgoing_value: &OutgoingValue) -> Result<(), Error>
+            /**
+            * Delete the key-value pair associated with the key in the bucket.
+            * If the key does not exist in the bucket, it does nothing.
+            * If any other error occurs, it returns an `Err(error)`.
+            * @throws Error
+            */
+            pub fn delete(bucket: &Bucket, key: &str) -> Result<(), Error>
+            /**
+            * Check if the key exists in the bucket.
+            * If the key exists in the bucket, it returns `Ok(true)`. If the key does
+            * not exist in the bucket, it returns `Ok(false)`.
+            * If any other error occurs, it returns an `Err(error)`.
+            * @throws Error
+            */
+            pub fn exists(bucket: &Bucket, key: &str) -> Result<bool, Error>
+            ```
+
+            The batch API defines similar functions such as `get_many` and `set_many`, but working on multiple keys at once.
+
+            The `IncomingValue` is  basically a handle to a WASI resource that contains the value.
+            To actually extract the bytes, it defines two consume methods.
+
+            The `OutgoingValue` is a handle to a WASI resource that can be used to write the value.
+            It defines methods to write the bytes into the resource.
+
+            Similarly,
+
+            ```rust
+            impl OutgoingValue {
+                pub fn new_outgoing_value() -> OutgoingValue {
+                /**
+                 * Writes the value to the output-stream asynchronously.
+                 * If any other error occurs, it returns an `Err(error)`.
+                 * @throws Error
+                 */
+                pub fn outgoing_value_write_body_async(&self) -> Result<OutgoingValueBodyAsync, Error>
+                /**
+                 * Writes the value to the output-stream synchronously.
+                 * If any other error occurs, it returns an `Err(error)`.
+                 * @throws Error
+                 */
+                pub fn outgoing_value_write_body_sync(&self, value: &[u8]) -> Result<(), Error>
+            }
+
+
+            impl IncomingValue {
+                /**
+                 * Consumes the value synchronously and returns the value as a list of bytes.
+                 * If any other error occurs, it returns an `Err(error)`.
+                 * @throws Error
+                 */
+                pub fn incoming_value_consume_sync(&self) -> Result<IncomingValueSyncBody, Error>
+                /**
+                 * Consumes the value asynchronously and returns the value as an `input-stream`.
+                 * If any other error occurs, it returns an `Err(error)`.
+                 * @throws Error
+                 */
+                pub fn incoming_value_consume_async(&self) -> Result<IncomingValueAsyncBody, Error>
+                /**
+                 * The size of the value in bytes.
+                 * If the size is unknown or unavailable, this function returns an `Err(error)`.
+                 * @throws Error
+                 */
+                pub fn size(&self) -> u64
+            }
+
+            pub type OutgoingValueBodyAsync = OutputStream;
+            pub type OutgoingValueBodySync = Vec<u8>;
+            pub type IncomingValueAsyncBody = InputStream;
+            pub type IncomingValueSyncBody = Vec<u8>;
+            ```
+
+            The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
+            stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
+            a `Vec<u8>`.
+        </Tabs.Tab>
 </Tabs>
 
 ### The WASI Blob Store interface
 
 The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. The blobs are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
 
@@ -523,6 +862,94 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
              * @throws Error
              */
             clear(): void;
+        }
+        ```
+
+        The `IncomingValue` and `OutgoingValue` classes are, similar to the **key-value store interface**, providing two ways to work with the blobs: synchronously using `UInt8Array`s or using the `InputStream` and `OutputStream` interfaces for saving/loading the data by chunks.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        The Blob Store API organizes blobs identified by _object names_ into **containers**. The `golem_rust::bindings::wasi::blobstore::blobstore` has functions to create, get and delete these containers by name:
+
+        ```rust
+           /**
+            * creates a new empty container
+            */
+           pub fn create_container(name: &str) -> Result<Container, Error>
+           /**
+            * retrieves a container by name
+            */
+           pub fn get_container(name: &str) -> Result<Container, Error>
+           /**
+            * deletes a container and all objects within it
+            */
+           pub fn delete_container(name: &str) -> Result<(), Error>
+           /**
+            * returns true if the container exists
+            */
+           pub fn container_exists(name: &str) -> Result<bool, Error>
+           /**
+            * copies (duplicates) an object, to the same or a different container.
+            * returns an error if the target container does not exist.
+            * overwrites destination object if it already existed.
+            */
+           pub fn copy_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error>
+           /**
+            * moves or renames an object, to the same or a different container
+            * returns an error if the destination container does not exist.
+            * overwrites destination object if it already existed.
+            */
+           pub fn move_object(src: &ObjectId, dest: &ObjectId) -> Result<(), Error>
+        ```
+
+        A `Container` in  is a class providing read-write access for the blobs in it:
+
+        ```rust
+        impl Container {
+            /**
+             * returns container name
+             */
+            pub fn name(&self) -> Result<String, Error>
+            /**
+             * returns container metadata
+             */
+            pub fn info(&self) -> Result<ContainerMetadata, Error>
+            /**
+             * retrieves an object or portion of an object, as a resource.
+             * Start and end offsets are inclusive.
+             * Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
+             * of the data-blob resource, even if the object they came from is later deleted.
+             */
+            pub fn get_data(&self, name: &str, start: u64, end: u64) -> Result<IncomingValue, Error>
+            /**
+             * creates or replaces an object with the data blob.
+             */
+            pub fn write_data(&self, name: &str, data: &OutgoingValue) -> Result<(), Error>
+            /**
+             * returns list of objects in the container. Order is undefined.
+             */
+            pub fn list_objects(&self) -> Result<StreamObjectNames, Error>
+            /**
+             * deletes object.
+             * does not return error if object did not exist.
+             */
+            pub fn delete_object(&self, name: &str) -> Result<(), Error>
+            /**
+             * deletes multiple objects in the container
+             */
+            pub fn delete_objects(&self, names: &[ObjectName]) -> Result<(), Error>
+            /**
+             * returns true if the object exists in this container
+             */
+            pub fn has_object(&self, name: &str) -> Result<bool, Error>
+            /**
+             * returns metadata for the object
+             */
+            pub fn object_info(&self, name: &str) -> Result<ObjectMetadata, Error>
+            /**
+             * removes all objects within the container, leaving the container empty.
+             */
+            pub fn clear(&self) -> Result<(), Error>
         }
         ```
 

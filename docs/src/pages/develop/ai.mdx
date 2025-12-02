@@ -34,7 +34,7 @@ The list of supported LLM providers is the following:
 
 The core interface for LLMs:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:llm/llm@1.0.0' {
@@ -55,6 +55,26 @@ The core interface for LLMs:
     }
      ```
      </Tabs.Tab>
+    <Tabs.Tab>
+
+    Find the following functions in package `golem_rust::golem_ai::golem::llm::llm`
+
+     ```rust
+
+   /**
+     * --- Core Functions --- Make a single call to the LLM. To continue the conversation:
+     * - append tool responses and new messages to the events and use send again
+     * or use the chat-session wrapper, which help in maintaining the chat events
+     */
+     pub fn send(events: &[Event], config: &Config) -> Result<Response, Error>
+
+   /**
+     * Makes a single call to the LLM and gets back a streaming API to receive the response in chunks.
+     */
+     pub fn stream(events: &[Event], config: &Config) -> ChatStream
+
+     ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Graph Databases
@@ -67,7 +87,7 @@ The list of supported graph databases is the following:
 
 The core interface for graph databases:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:graph/transactions@1.0.0' {
@@ -196,6 +216,112 @@ The core interface for graph databases:
      }
      ```
      </Tabs.Tab>
+    <Tabs.Tab>
+     The `Transaction` in golem_rust::golem_ai::golem::graph::transactions module exposes the following methods
+     ```rust
+
+     impl Transaction {
+       /**
+        * === QUERY OPERATIONS ===
+        * Execute a database-specific query string
+        */
+       pub fn execute_query(&self, options: &ExecuteQueryOptions) -> Result<QueryExecutionResult, GraphError>;
+       /**
+        * == TRAVESAL OPERATIONS ==
+        * Find shortest path between two vertices
+        */
+       pub fn find_shortest_path(&self, options: &FindShortestPathOptions) -> Result<Option<Path>, GraphError>
+       /**
+        * Find all paths between two vertices (up to limit)
+        */
+       pub fn find_all_paths(&self, options: &FindAllPathsOptions) -> Result<_rt::Vec<Path>, GraphError>
+       /**
+        * Get k-hop neighborhood around a vertex
+        */
+       pub fn get_neighborhood(&self, options: &GetNeighborhoodOptions) -> Result<Subgraph, GraphError>
+       /**
+        * Check if path exists between vertices
+        */
+       pub fn path_exists(&self, options: &PathExistsOptions) -> Result<bool, GraphError>
+       /**
+        * Get vertices at specific distance from source
+        */
+       pub fn get_vertices_at_distance(&self, options: &GetVerticesAtDistanceOptions) -> Result<_rt::Vec<Vertex>, GraphError>
+       /**
+        * Get adjacent vertices through specified edge types
+        */
+       pub fn get_adjacent_vertices(&self, options: &GetAdjacentVerticesOptions) -> Result<_rt::Vec<Vertex>, GraphError>
+       /**
+        * Get edges connected to a vertex
+        */
+       pub fn get_connected_edges(&self, options: &GetConnectedEdgesOptions) -> Result<_rt::Vec<Edge>, GraphError>
+       /**
+        * === VERTEX OPERATIONS ===
+        * Create a new vertex
+        */
+       pub fn create_vertex(&self, options: &CreateVertexOptions) -> Result<Vertex, GraphError>
+       /**
+        * Create multiple vertices in a single operation
+        */
+       pub fn create_vertices(&self, vertices: &[CreateVertexOptions]) -> Result<Vec<Vertex>, GraphError>
+       /**
+        * Get vertex by ID
+        */
+       pub fn get_vertex(&self, id: &ElementId) -> Result<Option<Vertex>, GraphError>
+       /**
+        * Update vertex properties (replaces all properties)
+        */
+       pub fn update_vertex(&self, options: &UpdateVertexOptions) -> Result<Vertex, GraphError>
+       /**
+        * Delete vertex (and optionally its edges)
+        */
+       pub fn delete_vertex(&self, id: &ElementId, delete_edges: bool) -> Result<(), GraphError>
+       /**
+        * Find vertices by type and optional filters
+        */
+       pub fn find_vertices(&self, options: &FindVerticesOptions) -> Result<_rt::Vec<Vertex>, GraphError>
+       /**
+        * === EDGE OPERATIONS ===
+        * Create a new edge
+        */
+       pub fn create_edge(&self, options: &CreateEdgeOptions) -> Result<Edge, GraphError>
+       /**
+        * Create multiple edges in a single operation
+        */
+       pub fn create_edges(&self, edges: &[CreateEdgeOptions]) -> Result<Vec<Edge>, GraphError>
+       /**
+        * Get edge by ID
+        */
+       pub fn get_edge(&self, id: &ElementId) -> Result<Option<Edge>, GraphError>
+       /**
+        * Update edge properties
+        */
+       pub fn update_edge(&self, options: &UpdateEdgeOptions) -> Result<Edge, GraphError>
+       /**
+        * Delete edge
+        */
+       pub fn delete_edge(&self, id: &ElementId) -> Result<(), GraphError>
+       /**
+        * Find edges by type and optional filters
+        */
+       pub fn find_edges(&self, options: &FindEdgesOptions) -> Result<_rt::Vec<Edge>, GraphError>
+       /**
+        * === TRANSACTION CONTROL ===
+        * Commit the transaction
+        */
+       pub fn commit(&self) -> Result<(), GraphError>
+       /**
+        * Rollback the transaction
+        */
+       pub fn rollback(&self) -> Result<(), GraphError>
+       /**
+        * Check if transaction is still active
+        */
+       pub fn is_active(&self) -> bool
+     }
+
+     ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Search Engines
@@ -209,7 +335,7 @@ The list of supported search engines is the following:
 
 The core interface for search engines:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:search/core@1.0.0' {
@@ -269,6 +395,36 @@ The core interface for search engines:
      }
      ```
      </Tabs.Tab>
+     <Tabs.Tab>
+     Find the following functions in package `golem_rust::golem_ai::golem::search::core`
+
+     ```rust
+        pub fn create_index(options: &CreateIndexOptions) -> Result<(), SearchError>
+
+        pub fn delete_index(name: &str) -> Result<(), SearchError>
+
+        pub fn list_indexes() -> Result<_rt::Vec<IndexName>, SearchError>
+
+        pub fn upsert(index: &str, doc: &Doc) -> Result<(), SearchError>
+
+        pub fn upsert_many(index: &str, docs: &[Doc]) -> Result<(), SearchError>
+
+        pub fn delete(index: &str, id: &str) -> Result<(), SearchError>
+
+        pub fn delete_many(index: &str, ids: &[DocumentId]) -> Result<(), SearchError>
+
+        pub fn get(index: &str, id: &str) -> Result<Option<Doc>, SearchError>
+
+        pub fn search(index: &str, query: &SearchQuery) -> Result<SearchResults, SearchError>
+
+        pub fn stream_search(index: &str, query: &SearchQuery) -> Result<SearchStream, SearchError>
+
+        pub fn get_schema(index: &str) -> Result<Schema, SearchError>
+
+        pub fn update_schema(index: &str, schema: &Schema) -> Result<(), SearchError>
+      }
+     ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Web Search Engines
@@ -282,7 +438,7 @@ The list of supported web search engines is the following:
 
 The core interface for web search engines:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:web-search/web-search@1.0.0' {
@@ -311,6 +467,36 @@ The core interface for web search engines:
      }
      ```
      </Tabs.Tab>
+     <Tabs.Tab>
+     Find following functions in `golem_rust::golem_ai::golem::web_search::web_search`
+
+     ```rust
+        /**
+        * Start a search session, returning a search context
+        */
+        pub fn start_search(params: &SearchParams) -> Result<SearchSession, SearchError>;
+
+        /**
+          * One-shot search that returns results immediately (limited result count)
+          * @throws SearchError
+          */
+        pub fn search_once(params: &SearchParams) -> Result<(_rt::Vec<SearchResult>, Option<SearchMetadata>), SearchError>;
+
+        impl SearchSession {
+
+         /**
+           * Get the next page of results
+           */
+           pub fn next_page(&self) -> Result<_rt::Vec<SearchResult>, SearchError>
+
+         /**
+           * Retrieve session metadata (after any query)
+           */
+           pub fn get_metadata(&self) -> Option<SearchMetadata>
+
+        }
+     ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Speech to Text
@@ -325,7 +511,7 @@ The list of supported speech to text providers is the following:
 
 The core interface for speech to text providers:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:stt/transcription@1.0.0' {
@@ -341,6 +527,14 @@ The core interface for speech to text providers:
      }
      ```
      </Tabs.Tab>
+     Find the following functions in `golem_rust::golem_ai::golem::stt::transcription`
+     <Tabs.Tab>
+     ```rust
+       pub fn transcribe(request: &TranscriptionRequest) -> Result<TranscriptionResult, SttError>;
+
+       pub fn transcribe_many(requests: &[TranscriptionRequest]) -> Result<MultiTranscriptionResult, SttError>;
+     ```
+     </Tabs.Tab>
 </Tabs>
 
 ## Video Generation
@@ -354,7 +548,7 @@ The list of supported video generation providers is the following:
 
 The core interface for video generation providers:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:video-generation/video-generation@1.0.0' {
@@ -404,6 +598,26 @@ The core interface for video generation providers:
      }
      ```
      </Tabs.Tab>
+     <Tabs.Tab>
+        ```rust
+        // Find the following functions in `golem_rust::golem_ai::golem::video_generation::video_generation`
+
+        pub fn generate(input: &MediaInput, config: &GenerationConfig) -> Result<String, VideoError>
+        pub fn poll(job_id: &str) -> Result<VideoResult, VideoError>
+        pub fn cancel(job_id: &str) -> Result<String, VideoError>
+
+        // Find the following functions in `golem_rust::golem_ai::golem::video_generation::lip_sync`
+
+        pub fn generate_lip_sync(video: &LipSyncVideo, audio: &AudioSource) -> Result<_rt::String, VideoError>
+        pub fn list_voices(language: Option<&str>) -> Result<_rt::Vec<VoiceInfo>, VideoError>
+
+       // Find the following functions in `golem_rust::golem_ai::golem::video_generation::advanced`
+       pub fn extend_video(options: &ExtendVideoOptions) -> Result<_rt::String, VideoError>
+       pub fn upscale_video(input: &BaseVideo) -> Result<_rt::String, VideoError>
+       pub fn generate_video_effects(options: &GenerateVideoEffectsOptions) -> Result<_rt::String, VideoError>
+        ```
+     </Tabs.Tab>
+
 </Tabs>
 
 ## Code Snippet Execution
@@ -415,7 +629,7 @@ The list of supported languages is the following:
 
 The core interface for code snippet execution:
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
      <Tabs.Tab>
      ```typescript
      declare module 'golem:exec/executor@1.0.0' {
@@ -469,5 +683,58 @@ The core interface for code snippet execution:
        // ...
      }
      ```
+     </Tabs.Tab>
+     <Tabs.Tab>
+      Find the following in the `golem_rust::golem_ai::golem::exec::executor`
+        ```rust
+        /**
+          * Blocking, non-streaming execution
+          * - `lang` specifies the programming language and version.
+          * - `modules` are additional code files to include in the execution context. these can be imported in `snippet` in a language-specific way.
+          * - `snippet` is the top level code to execute.
+          * - `options` is controlling the script runner environment, see the run-options record for more details
+          * The returned value captures the stdout and stderr of the executed snippet.
+          */
+        pub fn run(lang: &Language, modules: &[File], snippet: &str, options: &RunOptions) -> Result<ExecResult, Error>;
+
+
+        impl Session {
+         /**
+           * Create a new session for executing code snippets in the specified language, with a set of additional
+           * code files that can be imported in the executed snippets.
+           */
+          pub fn new(lang: &Language, modules: &[File]) -> Self;
+
+         /**
+           * Upload a data file to the session, which can be accessed in the executed snippets through standard file system APIs.
+           */
+          pub fn upload(&self, file: &File) -> Result<(), Error>
+
+         /**
+           * Execute a code snippet in the session in a blocking way
+           * - `snippet` is the top level code to execute.
+           * - `options` is controlling the script runner environment, see the run-options record for more details
+           * The returned value captures the stdout and stderr of the executed snippet.
+           * @throws Error
+           */
+          pub fn run(&self, snippet: &str, options: &RunOptions) -> Result<ExecResult, Error>;
+
+        /**
+          * Downloads a data file from the session.
+          */
+          pub fn download(&self, path: &str) -> Result<Vec<u8>, Error>;
+
+        /**
+          * Lists all the data files available in the session. These will include the ones that were `upload`ed and also
+          * any other file created by the executed snippets.
+          */
+          pub fn list_files(&self, dir: &str) -> Result<Vec<String>, Error>;
+
+         /**
+          * Sets the current working directory within the session.
+          */
+          pub fn set_working_dir(&self, path: &str) -> Result<(), Error>;
+        }
+        ```
      </Tabs.Tab>
 </Tabs>

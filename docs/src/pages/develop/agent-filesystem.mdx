@@ -9,7 +9,7 @@ There is no way for an agent to access files outside its own filesystem.
 
 ## Accessing the filesystem
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     For TypeScript agents, a limited subset of the `node:fs` package is available to work with files.
 
@@ -19,6 +19,9 @@ There is no way for an agent to access files outside its own filesystem.
     - [`readFileSync`](https://nodejs.org/api/fs.html#fsreadfilesyncpath-options)
     - [`writeFile`](https://nodejs.org/api/fs.html#fswritefilefile-data-options-callback)
     - [`writeFileSync`](https://nodejs.org/api/fs.html#fswritefilesyncfile-data-options)
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Rust agents, `std::fs` module can  be used to work with files
     </Tabs.Tab>
 </Tabs>
 
@@ -70,59 +73,124 @@ This feature is not available in Golem 1.3, but will be re-introduced in the nex
 There is no built-in way to automatically expose files on the agent filesystem for the outside world, but it is easy to define an agent method
 and map that to a HTTP route in the API mapping.
 
-For example, we can define a `get` method like in the following example agent:
+For example, we can define a `get-content` method like in the following example agent:
 
-```typescript
-import * as fs from 'node:fs';
-import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+<Tabs items={["TypeScript", "Rust"]}>
+    <Tabs.Tab>
+    ```typescript
+    import * as fs from 'node:fs';
+    import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
 
-@agent()
-class FileServerAgent extends BaseAgent {
-  constructor(requestId: string) {
-    super();
-  }
-
-  get(filepath: string): { contentType: string, data: Uint8Array } {
-    try {
-      const buffer = fs.readFileSync("/web/" + filepath);
-
-      let contentType = "application/octet-stream";
-      if (filepath.endsWith(".html")) {
-        contentType = "text/html";
-      } else if (filepath.endsWith(".js")) {
-        contentType = "application/javascript";
+    @agent()
+    class FileServerAgent extends BaseAgent {
+      constructor(requestId: string) {
+        super();
       }
 
-      return {
-        contentType: contentType,
-        data: buffer
-      };
-    } catch (err) {
-      return {
-        contentType: "text/plain",
-        data: new TextEncoder().encode(`Not found! (${ err })`)
-      };
+      getContent(filepath: string): { contentType: string, data: Uint8Array } {
+        try {
+          const buffer = fs.readFileSync("/web/" + filepath);
+
+          let contentType = "application/octet-stream";
+          if (filepath.endsWith(".html")) {
+            contentType = "text/html";
+          } else if (filepath.endsWith(".js")) {
+            contentType = "application/javascript";
+          }
+
+          return {
+            contentType: contentType,
+            data: buffer
+          };
+        } catch (err) {
+          return {
+            contentType: "text/plain",
+            data: new TextEncoder().encode(`Not found! (${ err })`)
+          };
+        }
+      }
     }
-  }
-}
-```
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+   use std::fs;
+
+   use golem_rust::{agent_definition, agent_implementation, Schema};
+
+   #[derive(Schema)]
+   struct Content {
+       content_type: String,
+       data: Vec<u8>,
+   }
+
+   struct FileServerAgentImpl {
+       request_id: String,
+   }
+
+   #[agent_definition]
+   pub trait FileServerAgent {
+       fn new(request_id: String) -> Self;
+       async fn get_content(&self, file_path: String) -> Content;
+   }
+
+   #[agent_implementation]
+   impl FileServerAgent for FileServerAgentImpl {
+       fn new(request_id: String) -> Self {
+           FileServerAgentImpl { request_id }
+       }
+
+       async fn get_content(&self, file_path: String) -> Content {
+           let content_result = fs::read("/web/".to_string() + &file_path);
+
+           match content_result {
+               Ok(contents) if file_path.ends_with(".html") => Content {
+                   content_type: "text/html".to_string(),
+                   data: contents,
+               },
+
+               Ok(contents) if file_path.ends_with(".json") => Content {
+                   content_type: "application/json".to_string(),
+                   data: contents,
+               },
+
+               Ok(contents) => Content {
+                   content_type: "text/plain".to_string(),
+                   data: contents,
+               },
+
+               Err(_) => Content {
+                   content_type: "text/plain".to_string(),
+                   data: b"Not found!".to_vec(),
+               },
+           }
+       }
+   }
+
+    ```
+    </Tabs.Tab>
+
+</Tabs>
+
+
 
 Then in the HTTP API mapping we can map this method to a HTTP route:
 
 ```yaml
 httpApi:
   definitions:
-    counter-api:
+    content-api:
       version: '0.0.2'
       routes:
-        - method: POST
-          path: /{name}/increment
+        - method: GET
+          path: /{file}/get-content
           binding:
             type: default
             componentName: "example:counter"
             response: |
                 let fsa = file-server-agent(request.request_id.value);
-                let file = fsa.get(request.path.file);
+                let file = fsa.get-content(request.path.file);
                 {
                   headers: {
                     Content-Type: file.content-type

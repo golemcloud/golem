@@ -72,10 +72,17 @@ For both `file` and `stdout` logging, a set of boolean flags control the format 
 
 ## Golem agent logs
 
-<Tabs items={["TypeScript",]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     In TypeScript agents, use the standard functions of `console` to log messages. `console.log` writes to the agent's standard output,
     while `console.debug`, `console.info`, etc. are writing log entries with the specific log level.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    In Rust agents, `println!` writes to the agent's standard output.
+    Also you can use `log` method in  `golem_rust::bindings::wasi::logging::logging` package to write log entries with specific log levels.
+    ```rust
+    pub fn log(level: Level, context: &str, message: &str)
+    ```
     </Tabs.Tab>
 </Tabs>
 

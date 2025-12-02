@@ -13,7 +13,7 @@ The **automatic update** mode works as it is described in the general [Agents](/
 It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working. Future versions of Golem may also use the same snapshotting functions for optimizing recovery time of agents.
 
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         In TypeScript, all agents are inheriting the `BaseAgent` class. There are two methods in `BaseAgent` that can
         be overridden to implement snapshot saving and loading for an agent.
@@ -31,6 +31,34 @@ It is also possible to manually implement a pair of functions for saving and loa
                 let view = new DataView(bytes.buffer);
                 this.value = view.getUint32(0);
             }
+        ```
+    </Tabs.Tab>
+   <Tabs.Tab>
+        In Rust, all agent traits (i.e, annotated with `#[agent_definition]` macros) will be generated with two extra methods along with the methods defined in the trait. These methods are `save_snapshot` and `load_snapshot`.
+        These methods can be overridden to implement snapshot saving and loading for an agent.
+
+        The following example implements these methods for the simple counter example used [on the Quickstart page](/quickstart):
+        ```rust
+
+           #[agent_definition]
+           trait CounterAgent{
+             fn new(init: String) -> Self;
+             fn increment(&mut self) -> u32;
+           }
+
+           struct CounterAgentImpl{}
+
+           #[agent_implementation]
+           impl CounterAgent for CounterAgentImpl {
+             async fn load_snapshot(&self, _bytes: Vec<u8>) -> Result<(), String> {
+               let arr: [u8; 4] = bytes.try_into().unwrap();
+               self.value = u32::from_be_bytes(arr);
+             }
+
+             async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+               Ok(self.value.to_be_bytes().to_vec())
+             }
+           }
         ```
     </Tabs.Tab>
 </Tabs>

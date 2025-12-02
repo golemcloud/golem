@@ -8,7 +8,7 @@ The types used in the component's code are mapped to the types of Rib (WebAssemb
 
 This section describes how various types of the used programming language are mapping to types used by the Rib scripting language and the CLI invoke functions. These are WebAssembly component-model types, and their values are described using the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
         The following TypeScript types are supported:
 
@@ -39,6 +39,32 @@ This section describes how various types of the used programming language are ma
         | `Float32Array` | `list<f32>`            | `[3.4028235e+38, 1.175494e-38, 0, -1.175494e-38, -3.4028235e+38]` | |
         | `Float64Array` | `list<f64>`            | `[1.7976931348623157e+308, 2.2250738585072014e-308, 0, -2.2250738585072014e-308, -1.7976931348623157e+308]` | |
     </Tabs.Tab>
+    <Tabs.Tab>
+            The following Rust types are supported:
+
+            | Rust type            | WIT type               | Example Rib value                                    | Remarks
+            | -------------------- | -------------------- | ---------------------------------------------------- | -------
+            | `String`             | `string`             | `"hello world".to_string()`                          | |
+            | `bool`               | `bool`               | `true`, `false`                                     | |
+            | `f64`                | `f64`                | `1234.0`                                            | |
+            | `f32`                | `f32`                | `3.14`                                              | |
+            | `i8`                 | `s8`                 | `-128, 0, 127`                                     | |
+            | `u8`                 | `u8`                 | `0, 255`                                           | |
+            | `i16`                | `s16`                | `-32768, 0, 32767`                                 | |
+            | `u16`                | `u16`                | `0, 65535`                                         | |
+            | `i32`                | `s32`                | `-2147483648, 0, 2147483647`                       | |
+            | `u32`                | `u32`                | `0, 4294967295`                                    | |
+            | `i64`                | `s64`                | `-9223372036854775808, 0, 9223372036854775807`     | |
+            | `u64`                | `u64`                | `0, 18446744073709551615`                           | |
+            | `Vec<T>`             | `list<T>`            | `vec![1,2,3]`                                      | For arrays and slices |
+            | `[T; N]`             | `list<T>`            | `[1, 2, 3]`                                        | Fixed-size arrays |
+            | `Option<T>`          | `option<T>`          | `Some(42)`, `None`                                  | |
+            | `struct MyStruct { field1: T1, field2: T2 }` | `record { ... }` | `{ field1: "value", field2: 42 }`               | |
+            | `enum MyEnum { X(T1), Y(T2), Z }` | `variant { ... }` | `X("hello")`                                      | Variants can have optional values |
+            | `()`                 | `unit`               | `()`                                                | Unit type |
+            | `(T1, T2, T3)`      | `tuple<...>`         | `(42, "hello", true)`                               | Tuples |
+            | `HashMap<K, V>`      | `list<tuple<K, V>>`  | `[("key1", 100), ("key2", -2)]`                    | |
+     </Tabs.Tab>
 </Tabs>
 
 There are some special, Golem agent specific types that can be used in the agent constructor and methods as well:
@@ -46,7 +72,7 @@ There are some special, Golem agent specific types that can be used in the agent
 ### Unstructured text
 Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     ```typescript
     import {
@@ -77,14 +103,74 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
           languageCode?: LC[number];
         };
     ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+    use golem_rust::{}UnstructuredText, AllowedLanguages}
+
+    fn example_method(
+        unstructured_text_with_language_code: UnstructuredText<MyLanguageCode>,
+    ) {
+        // ...
+    }
+
+
+   #[derive(AllowedLanguages)]
+   enum MyLanguageCode {
+     En,
+     #[code("es")]
+     Spanish,
+     #[code("de")]
+     German,
+   }
+    ```
+
+    The type parameter is optional; if missing, there will be no restrictions for the language of the text.
+    If we are specifying the allowed languages, we need to define an enum deriving the `AllowedLanguages` trait.
+    The above code defines three allowed language codes: "en", "es", and "de". With attribute `code` we can
+    customize the actual language code name, otherwise the enum variant name in lowercase is used.
+
+    ```rust
+   /// Represents a text value that can either be inline or a URL reference.
+   ///
+   /// `LC` specifies the allowed language codes for inline text. Defaults to `AnyLanguage`,
+   /// which allows all languages.
+   pub enum UnstructuredText<LC: AllowedLanguages = AnyLanguage> {
+       Url(String),
+       Text {
+           text: String,
+           language_code: Option<LC>,
+       },
+   }
+
+   /// Trait for types representing allowed language codes.
+   ///
+   /// Implement this trait for enums representing supported languages. Provides
+   /// conversion between enum variants and their string language codes.
+   /// Use the `#[derive(AllowedLanguages)]` macro to automatically implement this trait.
+   pub trait AllowedLanguages {
+       fn all() -> &'static [&'static str];
+
+       fn from_language_code(code: &str) -> Option<Self>
+       where
+           Self: Sized;
+
+       fn to_language_code(&self) -> &'static str;
+   }
+   
+   pub struct AnyLanguage;
+
+    ```
   </Tabs.Tab>
+
 </Tabs>
 
 ### Unstructured binary
 Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
 
 
-<Tabs items={["TypeScript"]}>
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
     ```typescript
     import {
@@ -114,24 +200,195 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
         };
     ```
   </Tabs.Tab>
+      <Tabs.Tab>
+      ```rust
+      use golem_rust::{UnstructuredBinary, AllowedMimeTypes}
+
+      fn example_method(
+        unstructured_binary_with_mime_type: UnstructuredBinary<MyMimeType>,
+      ) {
+          // ...
+      }
+
+
+     #[derive(AllowedMimeTypes)]
+     enum MyMimeType {
+         #[mime_type("application/json")]
+         ApplicationJson,
+         #[mime_type("image/png")]
+         ImagePng,
+     }
+      ```
+
+      The type parameter specifies the set of allowed MIME types for the binary data.
+      The type itself represents either an inline byte array or a remote reference:
+
+      ```rust
+
+     /// Represents a binary value that can either be inline or a URL reference.
+     ///
+     /// `MT` specifies the allowed language codes for inline text.
+     pub enum UnstructuredBinary<MT: AllowedMimeTypes> {
+         Url(String),
+         Inline { data: Vec<u8>, mime_type: MT },
+     }
+
+     /// Trait for types representing allowed language codes.
+     ///
+     /// Implement this trait for enums representing supported languages. Provides
+     /// conversion between enum variants and their string language codes.
+     /// Use the `#[derive(AllowedMimeTypes)]` macro to automatically implement this trait.
+     pub trait AllowedMimeTypes {
+         fn all() -> &'static [&'static str];
+
+         fn from_string(mime_type: &str) -> Option<Self>
+         where
+             Self: Sized;
+
+         fn to_string(&self) -> String;
+     }
+      ```
+    </Tabs.Tab>
 </Tabs>
 
 
 ### Multimodal values
-Agents can work with **multimodal values** as input or output. When defining a parameter or return value as multimodal, we define the possible data types that can be used in that position, and the actual values will be an arbitrary number of values of these types, in any combination.
+Agents can work with **multimodal values** as input or output.
+It allows passing an arbitrary number of values of different types in a single parameter or return value.
+When defining a parameter or return value as multimodal, we define the possible data types that can be used in that position, and the actual values will be an arbitrary number of values of these types, in any combination.
 
-<Tabs items={["TypeScript"]}>
+There are three variants of multimodal values supported:
+
+* `Multimodal` type , allowing to pass an arbitrary number of values which is either an unstructured text or binary.
+* `MultimodalCustom<T>`, allowing to pass an arbitrary number of values which is either an unstructured text or binary or a user defined structured type `T`.
+* `MultimodalAdvanced<T>` , allowing to pass an arbitrary number of values of the user defined structured type `T`.
+
+<Tabs items={["TypeScript", "Rust"]}>
     <Tabs.Tab>
-    In TypeScript, the `Multimodal` generic type can be used in both input and output position, where the type parameter is a union of all the possible types of the multimodal value. As there is no constraint on the number of values for each type, every parameter of the multimodal method is going to be an array of values of the corresponding type:
 
     ```typescript
-    async exampleMethod(
-      input: Multimodal<MyStructuredData[] | UnstructuredText<['en', 'de']> | UnstructuredBinary<['image/jpeg', 'image/png']>>,
+
+    async exampleMultimodalMethod(
+      input: Multimodal,
     ): Promise<void> {
       // ...
     }
+
+    async exampleMultimodalCustomMethod(
+      input: MultimodalCustom<MyStructuredData>,
+    ): Promise<void> {
+      // ...
+    }
+
+    type MyStructuredData = {
+      field1: string;
+      field2: number;
+    }
+
+    async exampleMultimodalAdvanced(
+      input: MultimodalAdvanced<TextOrImage>,
+    ): Promise<void> {
+      // ...
+    }
+
+    export type TextOrImage =
+      | { tag: 'text'; val: string }
+      | { tag: 'image'; val: Uint8Array }
+
     ```
+
+    Here is the definition of all three variants of multimodal in typescript SDK:
+
+
+    ```typescript
+    export type MultimodalAdvanced<T> = T[];
+
+    export type Multimodal = MultimodalAdvanced<BasicModality>;
+
+    export type MultimodalCustom<T> = MultimodalAdvanced<CustomModality<T>>;
+
+    export type BasicModality =
+      | { tag: 'text'; val: UnstructuredText }
+      | { tag: 'binary'; val: UnstructuredBinary }
+
+    export type CustomModality<T> =
+      | { tag: 'text'; val: UnstructuredText }
+      | { tag: 'binary'; val: UnstructuredBinary }
+      | { tag: 'custom'; val: T }
+
+    ```
+
     </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    ```rust
+
+    fn example_multimodal_method(
+      input: Multimodal,
+    ) {
+      // ...
+    }
+
+    fn example_multimodal_custom_method(
+      input: MultimodalCustom<MyStructuredData>,
+    ): Promise<void> {
+      // ...
+    }
+
+    // MyStructuredData can be used to decoarate `T` in MultimodalCustom<T>, as far as it implements `Schema` trait
+    #[derive(Schema)]
+    struct MyStructuredData {
+      field1: String,
+      field2: u32,
+    }
+
+    // When it comes to MultimodalAdvanced with user-defined types, we can define an enum representing the possible types:
+    // This needs to have an instance of `MultimodalSchema` which can be derived using `#[derive(MultimodalSchema)]`
+    fn example_multimodal_advanced_method(
+      input: MultimodalAdvanced<TextOrImage>,
+    ) {
+      // ...
+    }
+
+    #[derive(MultimodalSchema)]
+    enum TextOrImage {
+      Text(String),
+      Image(Vec<u8>),
+    }
+    ```
+
+    Here is the definition of all three variants of multimodal in rust SDK:
+
+
+    ```rust
+
+    pub struct Multimodal {
+        value: MultimodalAdvanced<BasicModality>,
+    }
+
+    pub enum BasicModality {
+        Text(UnstructuredText),
+        Binary(UnstructuredBinary<String>),
+    }
+
+    pub struct MultimodalCustom<T: Schema> {
+        value: MultimodalAdvanced<CustomModality<T>>,
+    }
+
+    pub enum CustomModality<T: Schema> {
+        Basic(BasicModality),
+        Custom(T),
+    }
+
+
+    pub struct MultimodalAdvanced<T: MultimodalSchema> {
+        pub items: Vec<T>,
+    }
+    ```
+
+    </Tabs.Tab>
+
 </Tabs>
 
 ## Rib types to JSON
