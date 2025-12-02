@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_01_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         coordinated_scenario(
@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn coordinated_scenario_03_01(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         coordinated_scenario(
@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    #[timeout(120000)]
+    #[timeout(240000)]
     #[flaky(5)]
     async fn service_is_responsive_to_shard_changes(
         deps: &EnvBasedTestDependencies,

@@ -363,8 +363,6 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                 .call_on_worker_executor(description.as_ref(), self, remote_call.clone())
                 .await;
 
-            tracing::warn!("worker call result {worker_result:?}");
-
             let result = async {
                 match worker_result {
                     Ok((result, pod)) => match result {
@@ -513,6 +511,7 @@ impl<'a> RetryState<'a> {
                     invalidated,
                     ?error,
                     ?pod,
+                    attempt = self.attempt,
                     delay_ms = delay.as_millis(),
                     op = self.op,
                     "Retry calling executor after delay"
