@@ -134,3 +134,4 @@ pretty = false
 span_events_active = false
 span_events_full = false
 without_time = false
+
