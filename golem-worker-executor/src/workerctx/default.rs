@@ -165,10 +165,7 @@ impl FuelManagement for Context {
             self.min_fuel_level = self.min_fuel_level.saturating_add(unused);
         }
 
-        assert!(
-            self.last_fuel_level >= current_level,
-            "Fuel use during an invocation needs to be monotonically decreasing"
-        );
+        assert!(self.last_fuel_level >= current_level);
         let consumed = self.last_fuel_level - current_level;
         self.last_fuel_level = current_level;
 

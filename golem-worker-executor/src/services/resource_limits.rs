@@ -200,7 +200,7 @@ impl ResourceLimitsGrpc {
             .entry_async(*account_id)
             .await
             .and_modify(|entry| {
-                entry.limits.fuel = last_known_limits.fuel + entry.delta;
+                entry.limits.fuel = last_known_limits.fuel - entry.delta;
                 entry.limits.max_memory = last_known_limits.max_memory;
             })
             .or_insert(CurrentResourceLimitsEntry {
@@ -250,7 +250,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
             borrowed = Some(available);
             record_fuel_borrow(available);
             entry.limits.fuel -= available;
-            entry.delta -= available;
+            entry.delta += available;
         });
 
         borrowed
@@ -264,7 +264,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
         self.current_limits.update_sync(account_id, |_, entry| {
             record_fuel_return(remaining);
             entry.limits.fuel += remaining;
-            entry.delta += remaining;
+            entry.delta -= remaining;
         });
         Ok(())
     }

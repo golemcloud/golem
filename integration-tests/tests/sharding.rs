@@ -453,6 +453,7 @@ mod tests {
                     }
                 }
             }
+            info!("All workers finished invocation");
 
             Ok(())
         }
