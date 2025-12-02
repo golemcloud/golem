@@ -23,7 +23,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, Timestamp, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::golem_rpc_0_2_x::types::{
@@ -189,7 +189,7 @@ impl InvocationManagement for DebugContext {
 impl StatusManagement for DebugContext {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         if self.is_live() {
-            Some(InterruptKind::Suspend)
+            Some(InterruptKind::Suspend(Timestamp::now_utc()))
         } else {
             self.durable_ctx.check_interrupt()
         }

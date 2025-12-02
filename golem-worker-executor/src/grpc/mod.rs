@@ -60,7 +60,7 @@ use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, ScanCursor, ShardId,
+    OwnedWorkerId, PluginInstallationId, ProjectId, ScanCursor, ShardId, Timestamp,
     TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus,
 };
@@ -393,7 +393,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await?;
 
             info!("Interrupting worker before deletion");
-            if let Some(mut rx) = worker.set_interrupting(InterruptKind::Interrupt).await {
+            if let Some(mut rx) = worker
+                .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                .await
+            {
                 info!("Awaiting interruption");
                 let _ = rx.recv().await;
                 info!("Interrupted");
@@ -605,7 +608,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    worker.set_interrupting(InterruptKind::Interrupt).await;
+                    worker
+                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                        .await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                     self.active_workers()
                         .remove(&owned_worker_id.worker_id)
@@ -625,7 +630,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    worker.set_interrupting(InterruptKind::Interrupt).await;
+                    worker
+                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                        .await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
                     self.active_workers()
                         .remove(&owned_worker_id.worker_id)
@@ -648,7 +655,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .set_interrupting(if request.recover_immediately {
                             InterruptKind::Restart
                         } else {
-                            InterruptKind::Interrupt
+                            InterruptKind::Interrupt(Timestamp::now_utc())
                         })
                         .await;
 
@@ -1200,7 +1207,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             // We don't want 'connect' to resume interrupted workers
             Err(WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Interrupt,
+                kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             }
             .into())
         }

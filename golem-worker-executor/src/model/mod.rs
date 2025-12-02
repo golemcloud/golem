@@ -224,7 +224,11 @@ impl ExecutionStatus {
                 interrupt_signal, ..
             } => {
                 let mut rx = interrupt_signal.subscribe();
-                Box::pin(async move { rx.recv().await.unwrap_or(InterruptKind::Interrupt) })
+                Box::pin(async move {
+                    rx.recv()
+                        .await
+                        .unwrap_or(InterruptKind::Interrupt(Timestamp::now_utc()))
+                })
             }
             ExecutionStatus::Suspended { .. } => Box::pin(pending()),
             ExecutionStatus::Interrupting { .. } => Box::pin(pending()),
@@ -298,7 +302,7 @@ impl TrapType {
 
     pub fn as_golem_error(&self, error_logs: &str) -> Option<WorkerExecutorError> {
         match self {
-            TrapType::Interrupt(InterruptKind::Interrupt) => Some(WorkerExecutorError::runtime(
+            TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
             TrapType::Error { error, .. } => match error {

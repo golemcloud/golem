@@ -105,6 +105,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<tokio::sync::Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
+
+    last_resume_request: Mutex<Timestamp>,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -286,8 +288,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
-            update_state_lock: tokio::sync::Mutex::new(()),
+            update_state_lock: Mutex::new(()),
             last_known_status_detached: AtomicBool::new(false),
+            last_resume_request: Mutex::new(Timestamp::now_utc()),
         };
 
         // just some sanity checking
@@ -330,6 +333,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u32,
     ) -> Result<bool, WorkerExecutorError> {
+        {
+            *this.last_resume_request.lock().await = Timestamp::now_utc();
+        }
+
         let mut instance_guard = this.lock_non_stopping_worker().await;
         match &*instance_guard {
             WorkerInstance::Unloaded => {
@@ -552,7 +559,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
-            LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+            LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
                 self.enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
@@ -599,7 +606,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
                     Ok(LookupResult::Complete(Err(err))) => Err(err),
-                    Ok(LookupResult::Interrupted) => Err(InterruptKind::Interrupt.into()),
+                    Ok(LookupResult::Interrupted) => {
+                        Err(InterruptKind::Interrupt(Timestamp::now_utc()).into())
+                    }
                     Ok(LookupResult::Pending) => Err(WorkerExecutorError::unknown(
                         "Unexpected pending result after invoke",
                     )),
@@ -1155,7 +1164,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt),
+                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
                             ..
                         }),
                     ..
@@ -2134,7 +2143,7 @@ impl InvocationResult {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
                     Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string() }),
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())), stderr: "".to_string() }),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
             };
@@ -2152,6 +2161,9 @@ pub enum RetryDecision {
     Delayed(Duration),
     /// No retry possible
     None,
+    /// Try to stop if the worker does not get any resume request after the given timestamp,
+    /// but allow resuming if needed (unlike with None)
+    TryStop(Timestamp),
     /// Retry immediately but drop and reacquire permits
     ReacquirePermits,
 }

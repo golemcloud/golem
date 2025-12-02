@@ -416,8 +416,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         trap_type: &TrapType,
     ) -> RetryDecision {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => RetryDecision::None,
-            TrapType::Interrupt(InterruptKind::Suspend) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
+            TrapType::Interrupt(InterruptKind::Suspend(ts)) => RetryDecision::TryStop(*ts),
             TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
             TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
             TrapType::Exit => RetryDecision::None,
@@ -1383,8 +1383,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
         {
             let oplog_entry = match trap_type {
-                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
-                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
+                TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
+                TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
                 TrapType::Interrupt(InterruptKind::Jump) => None,
                 TrapType::Interrupt(InterruptKind::Restart) => None,
                 TrapType::Exit => Some(OplogEntry::exited()),

@@ -76,14 +76,14 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Interrupt,
+            interrupt_kind: InterruptKind::Interrupt(_),
             ..
         }) => {
             record_invocation(was_live_before, "interrupted");
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Suspend,
+            interrupt_kind: InterruptKind::Suspend(_),
             ..
         }) => {
             record_invocation(was_live_before, "suspended");
