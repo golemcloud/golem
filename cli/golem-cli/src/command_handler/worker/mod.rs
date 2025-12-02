@@ -1644,7 +1644,7 @@ impl WorkerCommandHandler {
             .component_handler()
             .resolve_component(
                 &worker_name_match.environment,
-                (&worker_name_match.component_name).into(),
+                &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
             )
             .await?;

@@ -543,7 +543,7 @@ impl AppCommandHandler {
             if let Some(update_mode) = &deploy_args.update_agents {
                 self.ctx
                     .component_handler()
-                    .update_workers_by_components(&components, update_mode.clone(), true)
+                    .update_workers_by_components(&components, *update_mode, true)
                     .await?;
             } else if deploy_args.redeploy_agents(env_deploy_args) {
                 self.ctx
@@ -889,10 +889,8 @@ impl AppCommandHandler {
         let interactive_handler = self.ctx.interactive_handler();
 
         let approve = || {
-            if approve_staging_steps {
-                if !interactive_handler.confirm_staging_next_step()? {
-                    bail!("Aborted staging");
-                }
+            if approve_staging_steps && !interactive_handler.confirm_staging_next_step()? {
+                bail!("Aborted staging");
             }
             Ok(())
         };

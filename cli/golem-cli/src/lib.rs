@@ -21,6 +21,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod app;
 pub mod auth;
+pub mod client;
 pub mod command;
 pub mod command_handler;
 pub mod config;
@@ -29,7 +30,6 @@ pub mod diagnose;
 pub mod error;
 pub mod fs;
 pub mod fuzzy;
-pub mod client;
 pub mod log;
 pub mod model;
 pub mod validation;

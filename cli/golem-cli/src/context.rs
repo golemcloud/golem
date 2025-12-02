@@ -898,6 +898,12 @@ pub struct Caches {
         Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<anyhow::Error>>,
 }
 
+impl Default for Caches {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Caches {
     pub fn new() -> Self {
         Self {

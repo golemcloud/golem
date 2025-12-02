@@ -2669,7 +2669,7 @@ mod app_builder {
                                                         name.as_str().log_color_error_highlight(),
                                                     ),
                                                 );
-                                            } else if !self.http_api_definitions.contains_key(&name) {
+                                            } else if !self.http_api_definitions.contains_key(name) {
                                                 validation.add_error(
                                                     format!(
                                                         "Unknown HTTP API definition name: {}\n\n{}",

@@ -739,7 +739,7 @@ impl ComponentCommandHandler {
                 Some(component_name) => {
                     let segments = component_name.0.split("/").collect::<Vec<_>>();
                     match segments.len() {
-                        1 => (None, Some(validated_component(segments[0])?.into())),
+                        1 => (None, Some(validated_component(segments[0])?)),
                         2 => (
                             Some(EnvironmentReference::Environment {
                                 environment_name: validated_environment(segments[0])?,
@@ -842,11 +842,7 @@ impl ComponentCommandHandler {
         deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<ComponentDto> {
         match self
-            .resolve_component(
-                environment,
-                component_name.into(),
-                component_revision_selection,
-            )
+            .resolve_component(environment, component_name, component_revision_selection)
             .await?
         {
             Some(component) => Ok(component),
@@ -898,7 +894,7 @@ impl ComponentCommandHandler {
                         .await?;
                     self.ctx
                         .component_handler()
-                        .resolve_component(environment, component_name.into(), None)
+                        .resolve_component(environment, component_name, None)
                         .await?
                         .ok_or_else(|| {
                             anyhow!("Component ({}) not found after deployment", component_name)
@@ -1198,7 +1194,7 @@ impl ComponentCommandHandler {
         self.ctx
             .caches()
             .component_revision
-            .get_or_insert_simple(&(component_id.clone(), revision), {
+            .get_or_insert_simple(&(*component_id, revision), {
                 let ctx = self.ctx.clone();
                 async move || {
                     ctx.golem_clients()

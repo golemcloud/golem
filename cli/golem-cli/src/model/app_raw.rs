@@ -22,12 +22,12 @@ use anyhow::{anyhow, Context};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use url::Url;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 
 #[derive(Clone, Debug)]
 pub struct ApplicationWithSource {
