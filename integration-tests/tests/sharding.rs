@@ -27,6 +27,7 @@ mod tests {
     use golem_wasm::IntoValueAndType;
     use rand::prelude::*;
     use rand::rng;
+    use std::collections::HashSet;
     use std::time::Duration;
     use test_r::{flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
@@ -419,11 +420,20 @@ mod tests {
             }
 
             info!("Workers invoked");
+            let mut pending_workers: HashSet<WorkerId> = workers.iter().cloned().collect();
             while let Some(result) = tasks.join_next().await {
                 let (worker_id, result) = result.unwrap();
                 match result {
                     Ok(_) => {
-                        info!("Worker invoke success: {worker_id}")
+                        pending_workers.remove(&worker_id);
+                        info!(
+                            "Worker invoke success: {worker_id}, pending: [{}]",
+                            pending_workers
+                                .iter()
+                                .map(|w| w.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
                     Err(err) => {
                         error!("Worker invoke error: {worker_id}, {err:?}");
