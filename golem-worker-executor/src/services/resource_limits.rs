@@ -23,9 +23,9 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::cmp::{max, min};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
+use tracing::debug;
 use tracing::{error, span, Instrument, Level};
 
 #[async_trait]
@@ -63,7 +63,7 @@ pub fn configured(
         ResourceLimitsConfig::Grpc(config) => {
             ResourceLimitsGrpc::new(registry_service, config.batch_update_interval)
         }
-        ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
+        ResourceLimitsConfig::Disabled(_) => Arc::new(ResourceLimitsDisabled),
     }
 }
 
@@ -80,7 +80,6 @@ pub struct CurrentResourceLimitsEntry {
 pub struct ResourceLimitsGrpc {
     client: Arc<dyn RegistryService>,
     current_limits: scc::HashMap<AccountId, CurrentResourceLimitsEntry>,
-    background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl ResourceLimitsGrpc {
@@ -91,17 +90,26 @@ impl ResourceLimitsGrpc {
         let svc = Self {
             client: registry_service,
             current_limits: scc::HashMap::new(),
-            background_handle: Arc::new(Mutex::new(None)),
         };
         let svc = Arc::new(svc);
-        let svc_clone = svc.clone();
-        let background_handle = tokio::spawn(
+        let svc_weak = Arc::downgrade(&svc);
+
+        // background task. Will terminate on service drop
+        tokio::spawn(
             async move {
+                let mut tick = tokio::time::interval(batch_update_interval);
                 loop {
-                    tokio::time::sleep(batch_update_interval).await;
-                    let updates = svc_clone.take_all_fuel_updates().await;
+                    tick.tick().await;
+
+                    // try to upgrade; if it fails, the service was dropped -> exit the task
+                    let svc_arc = match svc_weak.upgrade() {
+                        Some(s) => s,
+                        None => break,
+                    };
+
+                    let updates = svc_arc.take_all_fuel_updates().await;
                     if !updates.is_empty() {
-                        let r = svc_clone.send_batch_updates(updates.clone()).await;
+                        let r = svc_arc.send_batch_updates(updates.clone()).await;
                         if let Err(err) = r {
                             error!("Failed to send batched resource usage updates: {}", err);
                             error!(
@@ -114,7 +122,6 @@ impl ResourceLimitsGrpc {
             }
             .instrument(span!(parent: None, Level::INFO, "Resource limits batch updates")),
         );
-        *svc.background_handle.lock().unwrap() = Some(background_handle);
         svc
     }
 
@@ -136,9 +143,6 @@ impl ResourceLimitsGrpc {
             })?;
 
         for (account_id, resource_limits) in &updated_limits.0 {
-            const _: () = {
-                assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
-            };
             self.update_last_known_limits(
                 account_id,
                 &CurrentResourceLimits {
@@ -156,7 +160,7 @@ impl ResourceLimitsGrpc {
         &self,
         account_id: &AccountId,
     ) -> Result<CurrentResourceLimits, WorkerExecutorError> {
-        let limits = self
+        let fetched_limits = self
             .client
             .get_resource_limits(account_id, &AuthCtx::System)
             .await
@@ -166,27 +170,40 @@ impl ResourceLimitsGrpc {
                     e.to_safe_string()
                 ))
             })?;
-        const _: () = {
-            assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
+
+        let last_known_limits = CurrentResourceLimits {
+            fuel: fetched_limits.available_fuel,
+            max_memory: fetched_limits.max_memory_per_worker as usize,
         };
-        Ok(CurrentResourceLimits {
-            fuel: limits.available_fuel,
-            max_memory: limits.max_memory_per_worker as usize,
-        })
+
+        self.update_last_known_limits(account_id, &last_known_limits)
+            .await;
+
+        Ok(last_known_limits)
     }
 
     /// Takes all recorded fuel updates and resets them to 0
     async fn take_all_fuel_updates(&self) -> HashMap<AccountId, i64> {
-        let mut updates = HashMap::new();
+        let mut keys = Vec::new();
         self.current_limits
-            .iter_mut_async(|mut entry| {
-                if entry.1.delta != 0 {
-                    updates.insert(entry.0, entry.1.delta);
-                    entry.1.delta = 0;
-                }
+            .iter_async(|k, _| {
+                keys.push(*k);
                 true
             })
             .await;
+
+        let mut updates = HashMap::new();
+
+        for k in keys {
+            self.current_limits
+                .update_async(&k, |_, entry| {
+                    if entry.delta != 0 {
+                        updates.insert(k, entry.delta);
+                        entry.delta = 0;
+                    }
+                })
+                .await;
+        }
 
         updates
     }
@@ -196,6 +213,8 @@ impl ResourceLimitsGrpc {
         account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) {
+        debug!("Updating last known limits for {account_id} to {last_known_limits:?}");
+
         self.current_limits
             .entry_async(*account_id)
             .await
@@ -207,14 +226,6 @@ impl ResourceLimitsGrpc {
                 limits: last_known_limits.clone(),
                 delta: 0,
             });
-    }
-}
-
-impl Drop for ResourceLimitsGrpc {
-    fn drop(&mut self) {
-        if let Some(handle) = self.background_handle.lock().unwrap().take() {
-            handle.abort();
-        }
     }
 }
 
@@ -230,13 +241,11 @@ impl ResourceLimits for ResourceLimitsGrpc {
 
             match borrowed {
                 Some(fuel) => {
-                    record_fuel_borrow(fuel);
                     break Ok(fuel);
                 }
                 None => {
-                    let fetched_limits = self.fetch_resource_limits(account_id).await?;
-                    self.update_last_known_limits(account_id, &fetched_limits)
-                        .await;
+                    // also updates the cached limits, so the next loop should succeed
+                    self.fetch_resource_limits(account_id).await?;
                     continue;
                 }
             }
@@ -247,10 +256,11 @@ impl ResourceLimits for ResourceLimitsGrpc {
         let mut borrowed = None;
         self.current_limits.update_sync(account_id, |_, entry| {
             let available = max(0, min(amount, entry.limits.fuel));
-            borrowed = Some(available);
             record_fuel_borrow(available);
             entry.limits.fuel -= available;
             entry.delta += available;
+
+            borrowed = Some(available);
         });
 
         borrowed
@@ -287,12 +297,6 @@ impl ResourceLimits for ResourceLimitsGrpc {
 }
 
 struct ResourceLimitsDisabled;
-
-impl ResourceLimitsDisabled {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {})
-    }
-}
 
 #[async_trait]
 impl ResourceLimits for ResourceLimitsDisabled {

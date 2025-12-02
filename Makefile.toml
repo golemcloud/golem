@@ -533,6 +533,7 @@ export RUST_BACKTRACE=1
 export GOLEM__TRACING__FILE_DIR=../logs
 export GOLEM__TRACING__FILE_TRUNCATE=false
 export GOLEM__TRACING__FILE__ENABLED=true
+export GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS=20
 
 cargo-test-r run \
 --package integration-tests \

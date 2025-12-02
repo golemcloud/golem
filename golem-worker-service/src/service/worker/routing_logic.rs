@@ -12,19 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
-
+use crate::service::worker::WorkerServiceError;
 use async_trait::async_trait;
-use tokio::task::JoinSet;
-use tokio::time::{sleep, Instant};
-use tonic::transport::Channel;
-use tonic::Status;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
-use tracing::{debug, error, info, trace, warn, Instrument};
-
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::MultiTargetGrpcClient;
@@ -35,8 +24,16 @@ use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
-
-use crate::service::worker::WorkerServiceError;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
+use tokio::task::JoinSet;
+use tokio::time::{sleep, Instant};
+use tonic::transport::Channel;
+use tonic::Status;
+use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 #[async_trait]
 pub trait RoutingLogic {
@@ -52,6 +49,7 @@ pub trait RoutingLogic {
         Out: Send + 'static,
         R: Send,
         Target: CallOnExecutor<Out> + Send,
+        <Target as CallOnExecutor<Out>>::ResultOut: Debug,
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
@@ -345,6 +343,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
         Out: Send + 'static,
         R: Send,
         Target: CallOnExecutor<Out> + Send,
+        <Target as CallOnExecutor<Out>>::ResultOut: Debug,
         F: for<'a> Fn(
                 &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
             )
@@ -363,6 +362,8 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             let worker_result = target
                 .call_on_worker_executor(description.as_ref(), self, remote_call.clone())
                 .await;
+
+            tracing::warn!("worker call result {worker_result:?}");
 
             let result = async {
                 match worker_result {
@@ -429,6 +430,7 @@ impl SafeDisplay for CallWorkerExecutorError {
     }
 }
 
+#[derive(Debug)]
 pub struct CallWorkerExecutorErrorWithContext {
     error: CallWorkerExecutorError,
     pod: Option<Pod>,

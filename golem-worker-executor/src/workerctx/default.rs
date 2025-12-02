@@ -135,7 +135,7 @@ impl FuelManagement for Context {
             )
             .await?;
         self.min_fuel_level = self.min_fuel_level.saturating_sub(amount);
-        debug!("borrowed fuel for {}: {}", self.account_id, amount);
+        debug!("borrowed {} fuel from {}", amount, self.account_id);
         Ok(())
     }
 
@@ -150,7 +150,7 @@ impl FuelManagement for Context {
         match amount {
             Some(amount) => {
                 self.min_fuel_level = self.min_fuel_level.saturating_sub(amount);
-                debug!("borrowed fuel for {}: {}", self.account_id, amount);
+                debug!("borrowed {} fuel from {}", amount, self.account_id);
             }
             None => panic!("Illegal state: account's resource limits are not available when borrow_fuel_sync is called")
         }
@@ -162,6 +162,7 @@ impl FuelManagement for Context {
             self.resource_limits
                 .return_fuel(&self.account_id, unused)
                 .await?;
+            debug!("returned {} fuel to {}", unused, self.account_id);
             self.min_fuel_level = self.min_fuel_level.saturating_add(unused);
         }
 

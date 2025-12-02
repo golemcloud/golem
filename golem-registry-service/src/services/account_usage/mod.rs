@@ -165,6 +165,7 @@ impl AccountUsageService {
         let mut limits_of_updates_accounts = HashMap::new();
         for (account_id, update) in updates {
             auth.authorize_account_action(&account_id, AccountAction::UpdateUsage)?;
+
             let mut account_usage = match self
                 .get_account_usage(&account_id, Some(UsageType::MonthlyGasLimit))
                 .await
@@ -177,6 +178,8 @@ impl AccountUsageService {
             // fuel usage is allowed to exceeded the montly limit slightly.
             // The worker executor will stop the worker at the next opportunity.
             account_usage.add_change(UsageType::MonthlyGasLimit, update);
+
+            tracing::debug!("Updating monthly fuel consumption for account {account_id}: {update}");
 
             self.account_usage_repo.add(&account_usage).await?;
 
