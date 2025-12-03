@@ -20,6 +20,7 @@ use golem_client::model::AccountUpdate;
 use golem_common::model::account::{AccountCreation, AccountRevision, AccountSetRoles};
 use golem_common::model::auth::AccountRole;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslExtended;
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
 
@@ -91,10 +92,10 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 #[tracing::instrument]
 async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
-    let client = deps.registry_service().client(&user.token).await;
+    let admin_client = deps.admin().await.registry_service_client().await;
 
     {
-        let account = client
+        let account = admin_client
             .set_account_roles(
                 &user.account_id.0,
                 &AccountSetRoles {
@@ -110,7 +111,7 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     }
 
     {
-        let account = client
+        let account = admin_client
             .set_account_roles(
                 &user.account_id.0,
                 &AccountSetRoles {

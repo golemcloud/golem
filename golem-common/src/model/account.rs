@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::plan::PlanId;
 use crate::model::auth::AccountRole;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use uuid::uuid;
 
 newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
-newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
 
 impl AccountId {
     pub const SYSTEM: Self = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
@@ -57,17 +57,8 @@ declare_structs! {
         pub roles: Vec<AccountRole>
     }
 
-    pub struct Plan {
-        pub plan_id: PlanId,
-        pub name: PlanName,
-        pub app_limit: i64,
-        pub env_limit: i64,
-        pub component_limit: i64,
-        pub worker_limit: i64,
-        pub worker_connection_limit: i64,
-        pub storage_limit: i64,
-        pub monthly_gas_limit: i64,
-        pub monthly_upload_limit: i64,
-        pub max_memory_per_worker: u64,
+    pub struct AccountSetPlan {
+        pub current_revision: AccountRevision,
+        pub plan: PlanId
     }
 }

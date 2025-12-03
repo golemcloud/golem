@@ -57,7 +57,7 @@ impl HttpApiDeploymentsApi {
 
     /// Create a new api-deployment in the environment
     #[oai(
-        path = "/envs/:environment_id/http-api-deployment",
+        path = "/envs/:environment_id/http-api-deployments",
         method = "post",
         operation_id = "create_http_api_deployment",
         tag = ApiTags::Environment,

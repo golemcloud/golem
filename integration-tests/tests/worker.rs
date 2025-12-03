@@ -14,12 +14,17 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use assert2::assert;
 use assert2::check;
 use axum::extract::Query;
-use axum::routing::get;
+use axum::http::HeaderMap;
+use axum::routing::{get, post};
 use axum::Router;
+use bytes::Bytes;
 use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent};
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::ExportedFunctionInvokedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, WorkerResourceId};
@@ -41,6 +46,7 @@ use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
@@ -1660,6 +1666,97 @@ async fn stream_high_volume_log_output(deps: &EnvBasedTestDependencies) -> anyho
     result?;
 
     assert!(found_log_entry);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn worker_suspends_when_running_out_of_fuel(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let admin_client = admin.registry_service_client().await;
+
+    let user = deps.clone().into_user().await?;
+
+    // set user to plan with low fuel so workers will be suspended
+    admin_client
+        .set_account_plan(
+            &user.account_id.0,
+            &AccountSetPlan {
+                current_revision: AccountRevision::INITIAL,
+                plan: deps.registry_service().low_fuel_plan(),
+            },
+        )
+        .await?;
+
+    let (_, env) = user.app_and_env().await?;
+
+    let received_http_posts = Arc::new(AtomicU64::new(0));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server_task = tokio::spawn({
+        let received_http_posts = received_http_posts.clone();
+
+        async move {
+            let route = Router::new().route(
+                "/",
+                post(async move |headers: HeaderMap, body: Bytes| {
+                    received_http_posts.fetch_add(1, Ordering::AcqRel);
+                    let header = headers.get("X-Test").unwrap().to_str().unwrap();
+                    let body = String::from_utf8(body.to_vec()).unwrap();
+                    format!("response is {header} {body}")
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span()
+    });
+
+    let component = user.component(&env.id, "http-client").store().await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+
+    let worker_id = user
+        .start_worker_with(&component.id, "http-client-1", vec![], env, vec![])
+        .await?;
+
+    let invoker_task = tokio::spawn({
+        let user = user.clone();
+        let worker_id = worker_id.clone();
+        async move {
+            loop {
+                user.invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+
+    user.wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    let http_post_count_1 = received_http_posts.load(Ordering::Acquire);
+    assert!(http_post_count_1 < 5);
+
+    // just resuming the worker does not allow it finish running.
+    user.resume(&worker_id, false).await?;
+    user.wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await?;
+
+    let http_post_count_2 = received_http_posts.load(Ordering::Acquire);
+    assert!((http_post_count_2 - http_post_count_1) < 5);
+
+    invoker_task.abort();
+    http_server_task.abort();
 
     Ok(())
 }

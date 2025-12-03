@@ -18,7 +18,6 @@ use golem_common::model::WorkerId;
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::ResourceLimits;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -42,11 +41,6 @@ error_forwarding!(LimitServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait LimitService: Send + Sync {
-    async fn get_resource_limits(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<ResourceLimits, LimitServiceError>;
-
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,
@@ -74,16 +68,6 @@ impl RemoteLimitService {
 
 #[async_trait]
 impl LimitService for RemoteLimitService {
-    async fn get_resource_limits(
-        &self,
-        account_id: &AccountId,
-    ) -> Result<ResourceLimits, LimitServiceError> {
-        Ok(self
-            .client
-            .get_resource_limits(account_id, &AuthCtx::System)
-            .await?)
-    }
-
     async fn update_worker_limit(
         &self,
         account_id: &AccountId,

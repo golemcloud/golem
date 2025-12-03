@@ -21,6 +21,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
@@ -96,6 +97,7 @@ pub trait PromiseService: Send + Sync {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
+        completed_by: &AccountId,
     ) -> Result<bool, WorkerExecutorError>;
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -136,9 +138,13 @@ impl PromiseService for LazyPromiseService {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
+        completed_by: &AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().complete(promise_id, data).await
+        lock.as_ref()
+            .unwrap()
+            .complete(promise_id, data, completed_by)
+            .await
     }
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -292,6 +298,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
+        completed_by: &AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
@@ -350,7 +357,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             if should_activate {
                 Worker::get_or_create_running(
                     &self.services,
-                    &component_metdata.account_id,
+                    completed_by,
                     &owned_worker_id,
                     None,
                     None,
@@ -426,6 +433,7 @@ impl PromiseService for PromiseServiceMock {
         &self,
         promise_id: PromiseId,
         _data: Vec<u8>,
+        _completed_by: &AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         self.completed.lock().await.insert(promise_id);
         Ok(true)

@@ -165,7 +165,9 @@ impl From<AccountError> for ApiError {
         match value {
             AccountError::Unauthorized(inner) => inner.into(),
 
-            AccountError::AccountNotFound(_) | AccountError::AccountByEmailNotFound(_) => {
+            AccountError::AccountNotFound(_)
+            | AccountError::AccountByEmailNotFound(_)
+            | AccountError::PlanByIdNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 

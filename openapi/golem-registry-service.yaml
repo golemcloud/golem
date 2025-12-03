@@ -576,6 +576,79 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account_plan
+    put:
+      tags:
+      - RegistryService
+      - Account
+      summary: Update plan of an accout
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/AccountSetPlan'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: set_account_plan
   /v1/accounts/{account_id}/roles:
     put:
       tags:
@@ -4309,7 +4382,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: list_deployment_http_api_definitions
-  /v1/envs/{environment_id}/http-api-deployment:
+  /v1/envs/{environment_id}/http-api-deployments:
     post:
       tags:
       - RegistryService
@@ -4384,6 +4457,74 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_http_api_deployment
+    get:
+      tags:
+      - RegistryService
+      - ApiDeployment
+      - Environment
+      summary: List http api deployment by domain in the environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_HttpApiDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_http_api_deployments_in_environment
   /v1/http-api-deployments/{http_api_deployment_id}:
     get:
       tags:
@@ -4757,75 +4898,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_http_api_deployment_in_deployment
-  /v1/envs/{environment_id}/http-api-deployments:
-    get:
-      tags:
-      - RegistryService
-      - ApiDeployment
-      - Environment
-      summary: List http api deployment by domain in the environment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_HttpApiDeployment'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: list_http_api_deployments_in_environment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
@@ -6224,6 +6296,19 @@ components:
       enum:
       - admin
       - marketing-admin
+    AccountSetPlan:
+      type: object
+      title: AccountSetPlan
+      required:
+      - currentRevision
+      - plan
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        plan:
+          type: string
+          format: uuid
     AccountSetRoles:
       type: object
       title: AccountSetRoles
@@ -6872,7 +6957,6 @@ components:
       - env
       - originalEnv
       - wasmHash
-      - environmentRolesFromShares
       properties:
         id:
           type: string
@@ -6925,10 +7009,6 @@ components:
         wasmHash:
           type: string
           format: hash
-        environmentRolesFromShares:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
     ComponentFileOptions:
       type: object
       title: ComponentFileOptions

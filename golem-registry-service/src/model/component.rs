@@ -15,7 +15,6 @@
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::InitialComponentFile;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
@@ -26,7 +25,7 @@ use golem_common::model::diff::{self, Hash};
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -137,7 +136,6 @@ pub struct Component {
     pub hash: diff::Hash,
     pub application_id: ApplicationId,
     pub account_id: AccountId,
-    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -193,7 +191,6 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             original_env: value.original_env,
             env: value.env,
             wasm_hash: value.wasm_hash,
-            environment_roles_from_shares: value.environment_roles_from_shares,
             hash: value.hash,
         }
     }

@@ -36,6 +36,7 @@ pub mod invocation_context;
 pub mod login;
 pub mod lucene;
 pub mod oplog;
+pub mod plan;
 pub mod plugin_registration;
 pub mod poem;
 pub mod protobuf;

@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// mod api_certificate;
-// mod api_definition;
-// mod api_deployment;
-// mod api_domain;
-// mod api_security;
 pub mod common;
 mod custom_http_request;
 mod worker;

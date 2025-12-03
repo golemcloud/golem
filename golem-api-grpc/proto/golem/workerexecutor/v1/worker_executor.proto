@@ -9,7 +9,6 @@ import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/log_event.proto";
 import "golem/worker/promise_id.proto";
-import "golem/common/resource_limits.proto";
 import "golem/shardmanager/shard_id.proto";
 import "golem/component/component_id.proto";
 import "golem/worker/cursor.proto";
@@ -129,13 +128,11 @@ message CreateWorkerRequest {
   map<string, string> env = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 6;
   // Component's owner environment
-  golem.common.EnvironmentId environment_id = 7;
-  golem.worker.WasiConfigVars wasi_config_vars = 8;
-  bool ignore_already_existing = 9;
-  golem.auth.AuthCtx auth_ctx = 10;
+  golem.common.EnvironmentId environment_id = 6;
+  golem.worker.WasiConfigVars wasi_config_vars = 7;
+  bool ignore_already_existing = 8;
+  golem.auth.AuthCtx auth_ctx = 9;
 }
 
 message CreateWorkerResponse {
@@ -153,12 +150,10 @@ message InvokeAndAwaitWorkerRequest {
   golem.worker.IdempotencyKey idempotency_key = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 6;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 7;
-  optional golem.worker.InvocationContext context = 8;
-  golem.auth.AuthCtx auth_ctx = 9;
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
 }
 
 
@@ -192,12 +187,10 @@ message InvokeWorkerRequest {
   golem.worker.IdempotencyKey idempotency_key = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 6;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 7;
-  optional golem.worker.InvocationContext context = 8;
-  golem.auth.AuthCtx auth_ctx = 9;
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
 }
 
 message InvokeJsonWorkerRequest {
@@ -207,12 +200,10 @@ message InvokeJsonWorkerRequest {
   golem.worker.IdempotencyKey idempotency_key = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 6;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 7;
-  optional golem.worker.InvocationContext context = 8;
-  golem.auth.AuthCtx auth_ctx = 9;
+  golem.common.EnvironmentId environment_id = 6;
+  optional golem.worker.InvocationContext context = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
 }
 
 message InvokeAndAwaitWorkerJsonRequest {
@@ -222,23 +213,19 @@ message InvokeAndAwaitWorkerJsonRequest {
   golem.worker.IdempotencyKey idempotency_key = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 6;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 7;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 8;
-  optional golem.worker.InvocationContext context = 9;
-  golem.auth.AuthCtx auth_ctx = 10;
+  golem.common.EnvironmentId environment_id = 7;
+  optional golem.worker.InvocationContext context = 8;
+  golem.auth.AuthCtx auth_ctx = 9;
 }
 
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   // Account the request belongs to
   golem.common.AccountId component_owner_account_id = 2;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 3;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 4;
-  golem.auth.AuthCtx auth_ctx = 5;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
 }
 
 message InterruptWorkerRequest {
@@ -401,12 +388,10 @@ message GetFileSystemNodeRequest {
   golem.worker.WorkerId worker_id = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 3;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 4;
-  string path = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
+  golem.common.EnvironmentId environment_id = 3;
+  string path = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
 }
 
 message GetFileSystemNodeResponse {
@@ -430,12 +415,10 @@ message GetFileContentsRequest {
   golem.worker.WorkerId worker_id = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
-  // Limits associated with the component's owner project's owner account
-  golem.common.ResourceLimits account_limits = 3;
   // Component's owner project
-  golem.common.EnvironmentId environment_id = 4;
-  string file_path = 5;
-  golem.auth.AuthCtx auth_ctx = 6;
+  golem.common.EnvironmentId environment_id = 3;
+  string file_path = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
 }
 
 message GetFileContentsResponse {

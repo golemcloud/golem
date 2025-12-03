@@ -17,8 +17,9 @@ use crate::components::component_compilation_service::ComponentCompilationServic
 use crate::components::rdb::Rdb;
 use crate::components::{new_reqwest_client, ChildProcessLogger};
 use async_trait::async_trait;
-use golem_common::model::account::{AccountId, PlanId};
+use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::plan::PlanId;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -37,6 +38,8 @@ pub struct SpawnedRegistryService {
     admin_account_id: AccountId,
     admin_account_email: String,
     admin_account_token: TokenSecret,
+    default_plan_id: PlanId,
+    low_fuel_plan_id: PlanId,
 }
 
 impl SpawnedRegistryService {
@@ -63,6 +66,7 @@ impl SpawnedRegistryService {
         let admin_account_email = "admin@golem.cloud".to_string();
         let admin_account_token = TokenSecret(uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"));
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
+        let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -79,6 +83,7 @@ impl SpawnedRegistryService {
                     &admin_account_email,
                     &admin_account_token,
                     &default_plan_id,
+                    &low_fuel_plan_id,
                     otlp,
                 )
                 .await,
@@ -107,6 +112,8 @@ impl SpawnedRegistryService {
             admin_account_id,
             admin_account_email,
             admin_account_token,
+            default_plan_id,
+            low_fuel_plan_id,
         }
     }
 }
@@ -135,6 +142,13 @@ impl RegistryService for SpawnedRegistryService {
     }
     fn admin_account_token(&self) -> TokenSecret {
         self.admin_account_token
+    }
+
+    fn default_plan(&self) -> PlanId {
+        self.default_plan_id
+    }
+    fn low_fuel_plan(&self) -> PlanId {
+        self.low_fuel_plan_id
     }
 
     async fn base_http_client(&self) -> reqwest::Client {

@@ -43,7 +43,10 @@ impl From<AuthServiceError> for DebuggingApiError {
             AuthServiceError::CouldNotAuthenticate => {
                 Self::Unauthorized(Json(ErrorBody { error, cause: None }))
             }
-            AuthServiceError::InternalError(inner) => Self::Unauthorized(Json(ErrorBody {
+            AuthServiceError::DebuggingNotAllowed => {
+                Self::Forbidden(Json(ErrorBody { error, cause: None }))
+            }
+            AuthServiceError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(inner),
             })),

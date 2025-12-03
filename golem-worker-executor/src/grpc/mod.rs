@@ -217,18 +217,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        if let Some(limits) = request.account_limits {
-            let account_id = request
-                .component_owner_account_id
-                .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
-                .try_into()
-                .map_err(|e| {
-                    WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
-                })?;
-
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
-        }
-
         let component_version: ComponentRevision = ComponentRevision(request.component_version);
 
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
@@ -297,6 +285,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::CompletePromiseRequest,
     ) -> Result<golem::workerexecutor::v1::CompletePromiseSuccess, WorkerExecutorError> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
+
         let promise_id = request
             .promise_id
             .as_ref()
@@ -317,7 +314,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let completed = self.promise_service().complete(promise_id, data).await?;
+        let completed = self
+            .promise_service()
+            .complete(promise_id, data, auth_ctx.account_id())
+            .await?;
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
 
@@ -800,11 +800,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         if let Some(metadata) = &metadata {
             self.ensure_not_failed(&owned_worker_id, metadata).await?;
-        }
-
-        if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &request.component_account_id()?, &limits.into())
-                .await?;
         }
 
         let invocation_context = request

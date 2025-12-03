@@ -16,6 +16,7 @@ pub mod auth;
 pub mod component;
 pub mod plugin_registration;
 
+use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
@@ -28,6 +29,7 @@ use golem_wasm::ValueAndType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -147,9 +149,7 @@ pub struct InvokeResult {
     pub result: Option<ValueAndType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
     pub available_fuel: i64,
     pub max_memory_per_worker: u64,
@@ -169,6 +169,51 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         Self {
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountResourceLimits(pub HashMap<AccountId, ResourceLimits>);
+
+impl TryFrom<golem_api_grpc::proto::golem::common::AccountResourceLimits>
+    for AccountResourceLimits
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::common::AccountResourceLimits,
+    ) -> Result<Self, Self::Error> {
+        let entries: HashMap<AccountId, ResourceLimits> = value
+            .entries
+            .into_iter()
+            .map(|e| {
+                let account_id: AccountId =
+                    e.account_id.ok_or("missing account_id field")?.try_into()?;
+                let resource_limits: ResourceLimits = e
+                    .resource_limits
+                    .ok_or("missing resource_limits field")?
+                    .into();
+                Ok::<_, Self::Error>((account_id, resource_limits))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self(entries))
+    }
+}
+
+impl From<AccountResourceLimits> for golem_api_grpc::proto::golem::common::AccountResourceLimits {
+    fn from(value: AccountResourceLimits) -> Self {
+        Self {
+            entries: value
+                .0
+                .into_iter()
+                .map(|(account_id, resource_limits)| {
+                    golem_api_grpc::proto::golem::common::AccountResourceLimitsEntry {
+                        account_id: Some(account_id.into()),
+                        resource_limits: Some(resource_limits.into()),
+                    }
+                })
+                .collect(),
         }
     }
 }

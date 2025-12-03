@@ -2029,7 +2029,18 @@ impl RunningWorker {
             let current_level = store.get_fuel().unwrap_or(0);
             if store.data().is_out_of_fuel(current_level as i64) {
                 debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                store.data_mut().borrow_fuel_sync();
+                store.data_mut().borrow_fuel_sync(current_level as i64);
+            }
+            // If we are still out of fuel after borrowing it means we exceeded the limits for the account
+            // and cannot borrow more. Only thing to do is suspend and try later.
+            if store.data().is_out_of_fuel(current_level as i64) {
+                debug!("{worker_id_clone} could not borrow more fuel, suspending");
+
+                // TODO: The following edge case should be improved. If there are no other workers for the account
+                // of the worker and the resource limits are updated in the cloud service (end of month, plan change)
+                // the current resource limits logic will not pick that up. It will still be picked up after a few attempts
+                // at resuming the worker (after the first usage update is sent) or an instance restart, but we should have better ux here.
+                return Err(InterruptKind::Suspend.into());
             }
 
             match store.data_mut().check_interrupt() {
@@ -2038,8 +2049,9 @@ impl RunningWorker {
             }
         });
 
-        store.set_fuel(i64::MAX as u64)?;
-        store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        let initial_fuel_level = i64::MAX;
+        store.set_fuel(initial_fuel_level as u64)?;
+        store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

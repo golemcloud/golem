@@ -18,11 +18,12 @@ use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
+use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
-    Account, AccountCreation, AccountId, AccountRevision, AccountUpdate,
+    Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::account::{AccountSetRoles, PlanId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -36,6 +37,8 @@ pub enum AccountError {
     AccountNotFound(AccountId),
     #[error("Account by email not found: {0}")]
     AccountByEmailNotFound(String),
+    #[error("Plan for id not found: {0}")]
+    PlanByIdNotFound(PlanId),
     #[error("Email already in use")]
     EmailAlreadyInUse,
     #[error("Concurrent update")]
@@ -52,6 +55,7 @@ impl SafeDisplay for AccountError {
             Self::AccountNotFound(_) => self.to_string(),
             Self::AccountByEmailNotFound(_) => self.to_string(),
             Self::EmailAlreadyInUse => self.to_string(),
+            Self::PlanByIdNotFound(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -164,6 +168,36 @@ impl AccountService {
         info!("Updating account: {}", account_id);
 
         account.roles = update.roles;
+
+        self.update_internal(account, auth).await
+    }
+
+    pub async fn set_plan(
+        &self,
+        account_id: &AccountId,
+        update: AccountSetPlan,
+        auth: &AuthCtx,
+    ) -> Result<Account, AccountError> {
+        let mut account: Account = self.get(account_id, auth).await?;
+
+        auth.authorize_account_action(account_id, AccountAction::SetRoles)?;
+
+        if update.current_revision != account.revision {
+            return Err(AccountError::ConcurrentUpdate);
+        };
+
+        info!("Updating account: {}", account_id);
+
+        // check that plan exists
+        self.plan_service
+            .get(&update.plan, auth)
+            .await
+            .map_err(|e| match e {
+                PlanError::PlanNotFound(plan_id) => AccountError::PlanByIdNotFound(plan_id),
+                other => other.into(),
+            })?;
+
+        account.plan_id = update.plan;
 
         self.update_internal(account, auth).await
     }

@@ -21,6 +21,7 @@ pub mod worker;
 use self::auth::{AuthService, RemoteAuthService};
 use self::component::RemoteComponentService;
 use self::limit::{LimitService, RemoteLimitService};
+use self::worker::WorkerService;
 use crate::config::{GatewaySessionStorageConfig, WorkerServiceConfig};
 use crate::gateway_execution::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
@@ -39,7 +40,7 @@ use crate::gateway_execution::route_resolver::RouteResolver;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_security::DefaultIdentityProvider;
 use crate::service::component::ComponentService;
-use crate::service::worker::{WorkerService, WorkerServiceDefault};
+use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::RetryConfig;
@@ -59,7 +60,7 @@ pub struct Services {
     pub auth_service: Arc<dyn AuthService>,
     pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
-    pub worker_service: Arc<dyn WorkerService>,
+    pub worker_service: Arc<WorkerService>,
     pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
 }
 
@@ -68,8 +69,10 @@ impl Services {
         let registry_service_client: Arc<dyn RegistryService> =
             Arc::new(GrpcRegistryService::new(&config.registry_service));
 
-        let auth_service: Arc<dyn AuthService> =
-            Arc::new(RemoteAuthService::new(registry_service_client.clone()));
+        let auth_service: Arc<dyn AuthService> = Arc::new(RemoteAuthService::new(
+            registry_service_client.clone(),
+            &config.auth_service,
+        ));
 
         let gateway_session_store: Arc<dyn GatewaySessionStore> =
             match &config.gateway_session_storage {
@@ -127,8 +130,10 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let component_service: Arc<dyn ComponentService> =
-            Arc::new(RemoteComponentService::new(registry_service_client.clone()));
+        let component_service: Arc<dyn ComponentService> = Arc::new(RemoteComponentService::new(
+            registry_service_client.clone(),
+            &config.component_service,
+        ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
 
@@ -159,11 +164,17 @@ impl Services {
             },
         );
 
-        let worker_service: Arc<dyn WorkerService> = Arc::new(WorkerServiceDefault::new(
+        let worker_client: Arc<dyn WorkerClient> = Arc::new(WorkerExecutorWorkerClient::new(
             worker_executor_clients.clone(),
             config.worker_executor_retries.clone(),
             routing_table_service.clone(),
+        ));
+
+        let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
+            component_service.clone(),
+            auth_service.clone(),
             limit_service.clone(),
+            worker_client.clone(),
         ));
 
         let gateway_worker_request_executor: Arc<GatewayWorkerRequestExecutor> = Arc::new(
