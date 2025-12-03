@@ -113,7 +113,6 @@ where
 
 pub fn create_context(
     args: &[impl AsRef<str>],
-    env: &[(impl AsRef<str>, impl AsRef<str>)],
     root_dir: PathBuf,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
@@ -124,7 +123,6 @@ pub fn create_context(
     let table = ResourceTable::new();
     let (wasi, io_ctx) = WasiCtxBuilder::new()
         .args(args)
-        .envs(env)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)

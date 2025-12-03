@@ -141,6 +141,7 @@ impl WorkerService for DefaultWorkerService {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     wasi_config_vars,
+                    original_phantom_id,
                 },
             )) => {
                 let initial_worker_metadata = WorkerMetadata {
@@ -160,6 +161,7 @@ impl WorkerService for DefaultWorkerService {
                         active_plugins: initial_active_plugins,
                         ..WorkerStatusRecord::default()
                     },
+                    original_phantom_id,
                 };
 
                 let status_value: Option<Result<WorkerStatusRecord, String>> = self

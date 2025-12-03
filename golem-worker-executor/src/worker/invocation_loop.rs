@@ -97,6 +97,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                 };
+
                 final_decision = inner_loop.run().await;
             }
 
@@ -107,6 +108,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     debug!("Invocation queue loop notifying parent about being stopped");
                     self.parent.stop_internal(true, None).await;
                     break;
+                }
+                Some(RetryDecision::TryStop(ts)) => {
+                    if ts < *self.parent.last_resume_request.lock().await {
+                        debug!(
+                            "Suspend request ignored because there was a resume request since it"
+                        );
+                        continue;
+                    } else {
+                        debug!("Invocation queue loop notifying parent about being stopped");
+                        self.parent.stop_internal(true, None).await;
+                        break;
+                    }
                 }
                 Some(RetryDecision::Immediate) => {
                     debug!("Invocation queue loop triggering restart immediately");
@@ -308,7 +321,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs a queued invocation on the worker
     ///
-    /// The queued invocations are grouped into "external" invocations, that are observable by the users
+    /// The queued invocations are grouped into "external" invocations that are observable by the users
     /// in the worker's invocation queue, oplog, etc., and some internal invocations that we use for
     /// concurrency control.
     async fn invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
@@ -337,7 +350,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
 /// Context for performing one `QueuedWorkerInvocation`
 ///
-/// The most important part of is that unlike the `InnerInvocationLoop`, it holds a locked
+/// The most important part is that unlike the `InnerInvocationLoop`, it holds a locked
 /// mutable reference to the instance `Store`. The instance mutex is held for the whole duration
 /// of performing an invocation.
 struct Invocation<'a, Ctx: WorkerCtx> {

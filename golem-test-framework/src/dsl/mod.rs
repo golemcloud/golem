@@ -2108,6 +2108,7 @@ pub fn to_worker_metadata(
                 component_version_for_replay: metadata.component_version,
             },
             parent: None,
+            original_phantom_id: None,
         },
         metadata.last_error.clone(),
     )

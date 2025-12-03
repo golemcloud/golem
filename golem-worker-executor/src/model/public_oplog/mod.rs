@@ -243,6 +243,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 wasi_config_vars,
+                original_phantom_id,
             } => {
                 let project_owner = projects
                     .get_project_owner(&project_id)
@@ -278,6 +279,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     wasi_config_vars: wasi_config_vars.into(),
+                    original_phantom_id,
                 }))
             }
             OplogEntry::ImportedFunctionInvoked {

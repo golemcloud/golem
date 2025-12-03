@@ -618,6 +618,7 @@ impl WorkerCtx for TestWorkerCtx {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let oplog = Arc::new(TestOplog::new(
             owned_worker_id.clone(),
@@ -652,6 +653,7 @@ impl WorkerCtx for TestWorkerCtx {
             agent_types_service,
             shard_service,
             pending_update,
+            original_phantom_id,
         )
         .await?;
         Ok(Self { durable_ctx })

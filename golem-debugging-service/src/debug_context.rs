@@ -23,7 +23,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::TimestampedUpdateDescription;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, Timestamp, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::golem_rpc_0_2_x::types::{
@@ -68,6 +68,7 @@ use golem_worker_executor::workerctx::{
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
+use uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -189,7 +190,7 @@ impl InvocationManagement for DebugContext {
 impl StatusManagement for DebugContext {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         if self.is_live() {
-            Some(InterruptKind::Suspend)
+            Some(InterruptKind::Suspend(Timestamp::now_utc()))
         } else {
             self.durable_ctx.check_interrupt()
         }
@@ -548,6 +549,7 @@ impl WorkerCtx for DebugContext {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -576,6 +578,7 @@ impl WorkerCtx for DebugContext {
             agent_types_service,
             shard_service,
             pending_update,
+            original_phantom_id,
         )
         .await?;
         Ok(Self {

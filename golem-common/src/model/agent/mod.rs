@@ -1011,6 +1011,13 @@ impl AgentId {
     pub fn wrapper_agent_type(&self) -> &str {
         self.wrapper_agent_type.as_str()
     }
+
+    pub fn with_phantom_id(&self, phantom_id: Option<Uuid>) -> Self {
+        Self {
+            phantom_id,
+            ..self.clone()
+        }
+    }
 }
 
 impl Display for AgentId {

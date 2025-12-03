@@ -211,6 +211,7 @@ fn worker_filter_matches() {
             component_version: 1,
             ..WorkerStatusRecord::default()
         },
+        original_phantom_id: None,
     };
 
     assert!(
