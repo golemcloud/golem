@@ -118,6 +118,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     } else {
                         debug!("Invocation queue loop notifying parent about being stopped");
                         self.parent.stop_internal(true, None).await;
+                        break;
                     }
                 }
                 Some(RetryDecision::Immediate) => {
