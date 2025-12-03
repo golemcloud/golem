@@ -135,17 +135,12 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
                     ),
                     response:
                         r#"
-                            let user-id = request.path.user-id;
-                            let worker = "shopping-cart-${user-id}";
-                            let inst = instance(worker);
-                            inst.add-item({
-                                product-id: request.body.product-id,
-                                name: request.body.name,
-                                price: request.body.price,
-                                quantity: request.body.quantity
-                            });
+                            let worker = instance("w1");
+                            worker.test1();
                             {
-                                status: 204
+                                body: "ok",
+                                status: 200,
+                                headers: { Content-Type: "application/json" }
                             }
                         "#
                         .to_string(),
@@ -180,8 +175,9 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let response = client
         .post(format!(
             "http://localhost:{}/test-path-1/vigoo",
-            deps.worker_service().custom_request_host()
+            deps.worker_service().custom_request_port()
         ))
+        .header("host", domain.0)
         .header("traceparent", format!("00-{trace_id}-{parent_span_id}-01"))
         .header("tracestate", trace_state.clone())
         .send()
