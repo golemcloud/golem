@@ -1342,9 +1342,8 @@ pub mod api {
         pub enum ApiDeploymentSubcommand {
             /// Get API deployment
             Get {
-                /// Deployment site
-                #[arg(value_name = "<subdomain>.host")]
-                site: String,
+                /// Deployment domain
+                domain: String,
             },
             /// List API deployment for API definition
             List,

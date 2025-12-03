@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 pub mod cloud;
 pub mod definition;
-// TODO: atomic: pub mod deployment;
+pub mod deployment;
 // TODO: atomic: pub mod security_scheme;
 
 pub struct ApiCommandHandler {
