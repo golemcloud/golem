@@ -11564,6 +11564,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
+        originalPhantomId:
+          type: string
+          format: uuid
       required:
       - timestamp
       - workerId

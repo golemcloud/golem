@@ -6009,6 +6009,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
+        originalPhantomId:
+          type: string
+          format: uuid
     r#CreateResourceParams:
       type: object
       title: r#CreateResourceParams

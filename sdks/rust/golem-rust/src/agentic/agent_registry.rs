@@ -102,7 +102,7 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
 pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
     let state = get_state();
 
-    state.agent_instance.borrow_mut().resolved_agent = Some(Arc::new(resolved_agent));
+    state.agent_instance.borrow_mut().resolved_agent = Some(Rc::new(resolved_agent));
 }
 
 // To be used only in agent implementation
