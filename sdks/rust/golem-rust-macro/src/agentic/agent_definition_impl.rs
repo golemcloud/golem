@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::ItemTrait;
-
 use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
 use crate::agentic::{
-    async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
-    no_constructor_method_error,
+    async_trait_in_agent_definition_error, generic_type_in_agent_method_error,
+    generic_type_in_agent_return_type_error, generic_type_in_constructor_error, get_remote_client,
+    multiple_constructor_methods_error, no_constructor_method_error,
 };
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::spanned::Spanned;
+use syn::ItemTrait;
 
 fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
     if attrs.is_empty() {
@@ -82,13 +83,19 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
     let agent_mode = parse_agent_mode(attrs);
 
+    let type_parameters = agent_definition_trait
+        .generics
+        .type_params()
+        .map(|tp| tp.ident.to_string())
+        .collect::<Vec<_>>();
+
     let has_async_trait_attribute = agent_definition_trait.attrs.iter().any(is_async_trait_attr);
 
     if has_async_trait_attribute {
         return async_trait_in_agent_definition_error(&agent_definition_trait).into();
     }
 
-    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode) {
+    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode, &type_parameters) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,
@@ -98,7 +105,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             let registration_function: syn::TraitItem = syn::parse_quote! {
                 fn __register_agent_type() {
                     let agent_type = #agent_type;
-
+                    
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
@@ -150,9 +157,10 @@ struct AgentTypeWithRemoteClient {
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
+    type_parameters: &[String],
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
-    let trait_ident = &agent_definition_trait.ident;
-    let type_name = trait_ident.to_string();
+    let agent_def_trait_ident = &agent_definition_trait.ident;
+    let agent_trait_name = agent_def_trait_ident.to_string();
 
     let mut constructor_methods = vec![];
 
@@ -181,11 +189,14 @@ fn get_agent_type_with_remote_client(
             let prompt_hint = extract_prompt_hint(&trait_fn.attrs).unwrap_or_default();
 
             let mut input_schema_logic = vec![];
+
             let mut output_schema_logic = vec![];
+
             let input_schema_token = quote! {
                 let mut multi_modal_inputs = vec![];
                 let mut default_inputs = vec![];
             };
+
             let output_schema_token = quote! {
                let mut multi_modal_outputs = vec![];
                let mut default_outputs = vec![];
@@ -197,6 +208,18 @@ fn get_agent_type_with_remote_client(
                         syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
                         _ => "_".to_string(), // fallback for patterns like destructuring
                     };
+
+                    let type_name = match &*pat_type.ty {
+                        syn::Type::Path(type_path) => {
+                            type_path.path.segments.last().unwrap().ident.to_string()
+                        },
+                        _ => "".to_string(),
+                    };
+
+                    if type_parameters.contains(&type_name) {
+                        return generic_type_in_agent_method_error(pat_type.pat.span(), &type_name).into();
+                    }
+
                     let ty = &pat_type.ty;
                     input_schema_logic.push(quote! {
                         let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
@@ -215,6 +238,18 @@ fn get_agent_type_with_remote_client(
             match &trait_fn.sig.output {
                 syn::ReturnType::Default => (),
                 syn::ReturnType::Type(_, ty) => {
+
+                    let output_type_name = match &**ty {
+                        syn::Type::Path(type_path) => {
+                            type_path.path.segments.last().unwrap().ident.to_string()
+                        },
+                        _ => "".to_string(),
+                    };
+
+                    if type_parameters.contains(&output_type_name) {
+                        return generic_type_in_agent_return_type_error(ty.span(), &output_type_name).into();
+                    }
+
                     let is_unit = matches!(**ty, syn::Type::Tuple(ref t) if t.elems.is_empty());
 
                     if !is_unit {
@@ -306,7 +341,24 @@ fn get_agent_type_with_remote_client(
                 let param_name = match &*pat_type.pat {
                     syn::Pat::Ident(pat_ident) => {
                         let param_ident = &pat_ident.ident;
+
                         let ty = &pat_type.ty;
+
+                        let type_name = match &**ty {
+                            syn::Type::Path(type_path) => {
+                                type_path.path.segments.last().unwrap().ident.to_string()
+                            }
+                            _ => "".to_string(),
+                        };
+
+                        if type_parameters.contains(&type_name) {
+                            return Err(generic_type_in_constructor_error(
+                                pat_type.span(),
+                                &type_name,
+                            )
+                            .into());
+                        }
+
                         constructor_param_defs.push(quote! {
                             #param_ident: #ty
                         });
@@ -359,6 +411,7 @@ fn get_agent_type_with_remote_client(
         agent_definition_trait,
         constructor_param_defs,
         constructor_param_names,
+        type_parameters,
     );
 
     let agent_constructor = quote! {
@@ -377,7 +430,7 @@ fn get_agent_type_with_remote_client(
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
             golem_rust::golem_agentic::golem::agent::common::AgentType {
-                type_name: #type_name.to_string(),
+                type_name: #agent_trait_name.to_string(),
                 description: #constructor_description.to_string(),
                 methods: vec![#(#methods),*],
                 dependencies: vec![],
