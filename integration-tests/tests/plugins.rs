@@ -647,7 +647,7 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies) -> anyhow
 
 #[test]
 #[tracing::instrument]
-async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
@@ -819,214 +819,65 @@ async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies) -> anyhow
     Ok(())
 }
 
-// #[test]
-// async fn oplog_processor_project_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let user = deps.user().await;
-//     let project = user.create_project().await;
+#[test]
+async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-//     let plugin_component_id = user.component("oplog-processor").unique().store().await;
-//     let component_id = user
-//         .component("shopping-cart")
-//         .unique()
-//         .with_project(project.clone())
-//         .store()
-//         .await;
+    user
+        .create(PluginDefinitionCreation {
+            name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
 
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "oplog-processor-2".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-//             component_id: plugin_component_id.clone(),
-//             component_version: 0,
-//         }),
-//         scope: PluginScope::Project(ProjectPluginScope {
-//             project_id: project.clone(),
-//         }),
-//     })
-//     .await;
 
-//     let _installation_id = user
-//         .install_plugin_to_component(&component_id, "oplog-processor-2", "v1", 0, HashMap::new())
-//         .await;
+    let component_id = admin
+        .component("app_and_library_app")
+        .unique()
+        .store()
+        .await;
 
-//     let worker_id = user.start_worker(&component_id, "worker1").await;
+    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
 
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{initialize-cart}",
-//             vec!["test-user-1".into_value_and_type()],
-//         )
-//         .await;
+    admin
+        .create_plugin(PluginDefinitionCreation {
+            name: "library-plugin-1".to_string(),
+            version: "v1".to_string(),
+            description: "A test".to_string(),
+            icon: vec![],
+            homepage: "none".to_string(),
+            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+                blob_storage_key: plugin_wasm_key,
+            }),
+            scope: PluginScope::Global(Empty {}),
+        })
+        .await;
 
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{add-item}",
-//             vec![Record(vec![
-//                 ("product-id", "G1000".into_value_and_type()),
-//                 ("name", "Golem T-Shirt M".into_value_and_type()),
-//                 ("price", 100.0f32.into_value_and_type()),
-//                 ("quantity", 5u32.into_value_and_type()),
-//             ])
-//             .into_value_and_type()],
-//         )
-//         .await;
+    let _installation_id = admin
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
 
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{add-item}",
-//             vec![Record(vec![
-//                 ("product-id", "G1001".into_value_and_type()),
-//                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-//                 ("price", 999999.0f32.into_value_and_type()),
-//                 ("quantity", 1u32.into_value_and_type()),
-//             ])
-//             .into_value_and_type()],
-//         )
-//         .await;
+    let worker = admin.start_worker(&component_id, "worker1").await;
 
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{add-item}",
-//             vec![Record(vec![
-//                 ("product-id", "G1002".into_value_and_type()),
-//                 ("name", "Mud Golem".into_value_and_type()),
-//                 ("price", 11.0f32.into_value_and_type()),
-//                 ("quantity", 10u32.into_value_and_type()),
-//             ])
-//             .into_value_and_type()],
-//         )
-//         .await;
+    let response = admin
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await;
 
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{update-item-quantity}",
-//             vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-//         )
-//         .await;
-
-//     let _ = user
-//         .invoke_and_await(
-//             &worker_id,
-//             "golem:it/api.{force-commit}",
-//             vec![10u8.into_value_and_type()],
-//         )
-//         .await;
-
-//     let mut plugin_worker_id = None;
-//     let mut cursor = ScanCursor::default();
-
-//     loop {
-//         let (maybe_cursor, items) = user
-//             .get_workers_metadata(&plugin_component_id, None, cursor, 1, true)
-//             .await;
-
-//         for (item, _) in items {
-//             if plugin_worker_id.is_none() {
-//                 plugin_worker_id = Some(item.worker_id.clone());
-//             }
-//         }
-
-//         if plugin_worker_id.is_some() {
-//             break;
-//         }
-
-//         if let Some(new_cursor) = maybe_cursor {
-//             cursor = new_cursor;
-//         } else {
-//             break;
-//         }
-//     }
-
-//     let plugin_worker_id = plugin_worker_id.expect("Plugin worker id found");
-
-//     let mut invocations = Vec::new();
-
-//     loop {
-//         let response = user
-//             .invoke_and_await(
-//                 &plugin_worker_id,
-//                 "golem:component/api.{get-invoked-functions}",
-//                 vec![],
-//             )
-//             .await
-//             .unwrap();
-
-//         if let Value::List(items) = &response[0] {
-//             invocations.extend(items.iter().filter_map(|item| {
-//                 if let Value::String(name) = item {
-//                     Some(name.clone())
-//                 } else {
-//                     None
-//                 }
-//             }));
-//         }
-
-//         if !invocations.is_empty() {
-//             break;
-//         }
-//     }
-
-//     let account_id = user.account_id;
-
-//     let expected = vec![
-//         format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
-//         format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-//         format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-//         format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
-//         format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
-//     ];
-//     assert_eq!(invocations, expected);
-// }
-
-// #[test]
-// async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let admin = deps.admin().await;
-//     let component_id = admin
-//         .component("app_and_library_app")
-//         .unique()
-//         .store()
-//         .await;
-
-//     let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
-
-//     admin
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "library-plugin-1".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//                 blob_storage_key: plugin_wasm_key,
-//             }),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
-
-//     let _installation_id = admin
-//         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let worker = admin.start_worker(&component_id, "worker1").await;
-
-//     let response = admin
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
-
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
+    assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
 
 // #[test]
 // async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
@@ -1056,56 +907,6 @@ async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies) -> anyhow
 
 //     let _installation_id = admin
 //         .install_plugin_to_component(&component_id, "app-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let worker = admin.start_worker(&component_id, "worker1").await;
-
-//     let response = admin
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
-
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
-
-// /// Test that a plugin can be recreated after deleting it
-// #[test]
-// async fn recreate_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let admin = deps.admin().await;
-
-//     let component_id = admin
-//         .component("app_and_library_app")
-//         .unique()
-//         .store()
-//         .await;
-
-//     let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
-
-//     let plugin_definition = PluginDefinitionCreation {
-//         name: "library-plugin-2".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key,
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     };
-
-//     admin.create_plugin(plugin_definition.clone()).await;
-
-//     admin
-//         .delete_plugin(admin.account_id.clone(), "library-plugin-2", "v1")
-//         .await;
-
-//     admin.create_plugin(plugin_definition.clone()).await;
-
-//     let _installation_id = admin
-//         .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 0, HashMap::new())
 //         .await;
 
 //     let worker = admin.start_worker(&component_id, "worker1").await;
@@ -1162,499 +963,4 @@ async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies) -> anyhow
 //         .await;
 
 //     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
-
-// #[test]
-// #[tag(http_only)]
-// async fn querying_plugins_return_only_plugins_valid_in_scope(
-//     deps: &EnvBasedTestDependencies,
-//     _tracing: &Tracing,
-// ) {
-//     let user = deps.user().await;
-
-//     let project_1 = user.create_project().await;
-//     let project_2 = user.create_project().await;
-
-//     let plugin_component_id = user.component("oplog-processor").unique().store().await;
-//     let component_id = user
-//         .component("shopping-cart")
-//         .unique()
-//         .with_project(project_1.clone())
-//         .store()
-//         .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "oplog-processor-1".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-//             component_id: plugin_component_id.clone(),
-//             component_version: 0,
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "oplog-processor-2".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-//             component_id: plugin_component_id.clone(),
-//             component_version: 0,
-//         }),
-//         scope: PluginScope::project(project_1.clone()),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "oplog-processor-3".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-//             component_id: plugin_component_id.clone(),
-//             component_version: 0,
-//         }),
-//         scope: PluginScope::project(project_2.clone()),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "oplog-processor-4".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
-//             component_id: plugin_component_id.clone(),
-//             component_version: 0,
-//         }),
-//         scope: PluginScope::component(component_id.clone()),
-//     })
-//     .await;
-
-//     // querying for project should only return plugins in the project and global scope
-//     {
-//         let mut plugins = deps
-//             .component_service()
-//             .plugin_http_client(&user.token)
-//             .await
-//             .list_plugins(&PluginScope::project(project_1.clone()))
-//             .await
-//             .unwrap()
-//             .into_iter()
-//             .map(|p| p.name)
-//             .collect::<Vec<_>>();
-//         plugins.sort();
-
-//         assert_eq!(
-//             plugins,
-//             vec![
-//                 "oplog-processor-1".to_string(),
-//                 "oplog-processor-2".to_string()
-//             ]
-//         );
-//     }
-
-//     // querying for component should only return plugins in the component, the owning project and global scope
-//     {
-//         let mut plugins = deps
-//             .component_service()
-//             .plugin_http_client(&user.token)
-//             .await
-//             .list_plugins(&PluginScope::component(component_id.clone()))
-//             .await
-//             .unwrap()
-//             .into_iter()
-//             .map(|p| p.name)
-//             .collect::<Vec<_>>();
-//         plugins.sort();
-
-//         assert_eq!(
-//             plugins,
-//             vec![
-//                 "oplog-processor-1".to_string(),
-//                 "oplog-processor-2".to_string(),
-//                 "oplog-processor-4".to_string()
-//             ]
-//         );
-//     }
-
-//     // a user the project was shared with can also query the plugins
-//     {
-//         let user_2 = deps.user().await;
-//         user.grant_full_project_access(&project_1, &user_2.account_id)
-//             .await;
-
-//         // project scope
-//         {
-//             let mut plugins = deps
-//                 .component_service()
-//                 .plugin_http_client(&user_2.token)
-//                 .await
-//                 .list_plugins(&PluginScope::project(project_1))
-//                 .await
-//                 .unwrap()
-//                 .into_iter()
-//                 .map(|p| p.name)
-//                 .collect::<Vec<_>>();
-//             plugins.sort();
-
-//             assert_eq!(
-//                 plugins,
-//                 vec![
-//                     "oplog-processor-1".to_string(),
-//                     "oplog-processor-2".to_string()
-//                 ]
-//             );
-//         }
-
-//         // component scope
-//         {
-//             let mut plugins = deps
-//                 .component_service()
-//                 .plugin_http_client(&user_2.token)
-//                 .await
-//                 .list_plugins(&PluginScope::component(component_id))
-//                 .await
-//                 .unwrap()
-//                 .into_iter()
-//                 .map(|p| p.name)
-//                 .collect::<Vec<_>>();
-//             plugins.sort();
-
-//             assert_eq!(
-//                 plugins,
-//                 vec![
-//                     "oplog-processor-1".to_string(),
-//                     "oplog-processor-2".to_string(),
-//                     "oplog-processor-4".to_string()
-//                 ]
-//             );
-//         }
-//     }
-// }
-
-// #[test]
-// #[tag(http_only)]
-// async fn install_global_plugin_in_shared_project(
-//     deps: &EnvBasedTestDependencies,
-//     _tracing: &Tracing,
-// ) {
-//     // user 1 defines a project and a global plugin, user 2 installs the plugin to a component in the project
-
-//     let user_1 = deps.user().await;
-//     let user_2 = deps.user().await;
-
-//     let project = user_1.create_project().await;
-//     user_1
-//         .grant_full_project_access(&project, &user_2.account_id)
-//         .await;
-
-//     let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
-
-//     user_1
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "library-plugin-1".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//                 blob_storage_key: plugin_wasm_key,
-//             }),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
-
-//     let component_id = user_2
-//         .component("app_and_library_app")
-//         .unique()
-//         .with_project(project.clone())
-//         .store()
-//         .await;
-
-//     let _installation_id = user_2
-//         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let worker = user_2.start_worker(&component_id, "worker1").await;
-
-//     let response = user_2
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
-
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
-
-// #[test]
-// #[tag(http_only)]
-// async fn install_project_plugin_in_shared_project(
-//     deps: &EnvBasedTestDependencies,
-//     _tracing: &Tracing,
-// ) {
-//     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
-
-//     let user_1 = deps.user().await;
-//     let user_2 = deps.user().await;
-
-//     let project = user_1.create_project().await;
-//     user_1
-//         .grant_full_project_access(&project, &user_2.account_id)
-//         .await;
-
-//     // make sure the plugin is stored in the blobstorage of the user that will eventually end up owning it
-//     let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
-
-//     deps.component_service()
-//         .create_plugin(
-//             &user_2.token,
-//             &user_1.account_id,
-//             PluginDefinitionCreation {
-//                 name: "library-plugin-1".to_string(),
-//                 version: "v1".to_string(),
-//                 description: "A test".to_string(),
-//                 icon: vec![],
-//                 homepage: "none".to_string(),
-//                 specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//                     blob_storage_key: plugin_wasm_key,
-//                 }),
-//                 scope: PluginScope::project(project.clone()),
-//             },
-//         )
-//         .await
-//         .unwrap();
-
-//     let component_id = user_2
-//         .component("app_and_library_app")
-//         .unique()
-//         .with_project(project.clone())
-//         .store()
-//         .await;
-
-//     let _installation_id = user_2
-//         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let worker = user_2.start_worker(&component_id, "worker1").await;
-
-//     let response = user_2
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
-
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
-
-// #[test]
-// #[tag(http_only)]
-// async fn install_component_plugin_in_shared_project(
-//     deps: &EnvBasedTestDependencies,
-//     _tracing: &Tracing,
-// ) {
-//     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
-
-//     let user_1 = deps.user().await;
-//     let user_2 = deps.user().await;
-
-//     let project = user_1.create_project().await;
-//     user_1
-//         .grant_full_project_access(&project, &user_2.account_id)
-//         .await;
-
-//     let plugin_wasm_key = user_1.add_plugin_wasm("app_and_library_library").await;
-
-//     deps.component_service()
-//         .create_plugin(
-//             &user_2.token,
-//             &user_1.account_id,
-//             PluginDefinitionCreation {
-//                 name: "library-plugin-1".to_string(),
-//                 version: "v1".to_string(),
-//                 description: "A test".to_string(),
-//                 icon: vec![],
-//                 homepage: "none".to_string(),
-//                 specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//                     blob_storage_key: plugin_wasm_key,
-//                 }),
-//                 scope: PluginScope::project(project.clone()),
-//             },
-//         )
-//         .await
-//         .unwrap();
-
-//     let component_id = user_2
-//         .component("app_and_library_app")
-//         .unique()
-//         .with_project(project.clone())
-//         .store()
-//         .await;
-
-//     let _installation_id = user_2
-//         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let worker = user_2.start_worker(&component_id, "worker1").await;
-
-//     let response = user_2
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
-
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
-
-// #[test]
-// async fn batch_update_plugin_installations(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let user = deps.user().await;
-//     let component_id = user.component("app_and_library_app").unique().store().await;
-
-//     let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "library-plugin-1".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key.clone(),
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "library-plugin-2".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key.clone(),
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "library-plugin-3".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key.clone(),
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     })
-//     .await;
-
-//     user.create_plugin(PluginDefinitionCreation {
-//         name: "library-plugin-4".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key,
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     })
-//     .await;
-
-//     let installation_id_1 = user
-//         .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-//         .await;
-
-//     let installation_id_2 = user
-//         .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 1, HashMap::new())
-//         .await;
-
-//     let installation_id_3 = user
-//         .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 2, HashMap::new())
-//         .await;
-
-//     deps.component_service()
-//         .component_http_client(&user.token)
-//         .await
-//         .batch_update_installed_plugins(
-//             &component_id.0,
-//             &BatchPluginInstallationUpdates {
-//                 actions: vec![
-//                     PluginInstallationAction::Uninstall(PluginUninstallation {
-//                         installation_id: installation_id_2.clone(),
-//                     }),
-//                     PluginInstallationAction::Update(PluginInstallationUpdateWithId {
-//                         installation_id: installation_id_3.clone(),
-//                         priority: 3,
-//                         parameters: HashMap::from_iter(vec![(
-//                             "foo".to_string(),
-//                             "bar".to_string(),
-//                         )]),
-//                     }),
-//                     PluginInstallationAction::Install(PluginInstallationCreation {
-//                         name: "library-plugin-4".to_string(),
-//                         version: "v1".to_string(),
-//                         priority: 4,
-//                         parameters: HashMap::new(),
-//                     }),
-//                 ],
-//             },
-//         )
-//         .await
-//         .unwrap();
-
-//     let latest_version = deps
-//         .component_service()
-//         .component_http_client(&user.token)
-//         .await
-//         .get_latest_component_metadata(&component_id.0)
-//         .await
-//         .unwrap()
-//         .versioned_component_id
-//         .version;
-
-//     let installed_plugins = deps
-//         .component_service()
-//         .component_http_client(&user.token)
-//         .await
-//         .get_installed_plugins(&component_id.0, &latest_version.to_string())
-//         .await
-//         .unwrap();
-
-//     assert_eq!(installed_plugins.len(), 3);
-//     {
-//         let mut priorities = installed_plugins
-//             .iter()
-//             .map(|ip| ip.priority)
-//             .collect::<Vec<_>>();
-//         priorities.sort();
-//         assert_eq!(priorities, vec![0, 3, 4]);
-//     }
-//     {
-//         let installation_ids = installed_plugins
-//             .iter()
-//             .map(|ip| ip.id)
-//             .collect::<HashSet<_>>();
-//         assert!(installation_ids.contains(&installation_id_1.0)); // untouched
-//         assert!(!installation_ids.contains(&installation_id_2.0)); // uninstalled
-//         assert!(installation_ids.contains(&installation_id_3.0)); // updated
-//     }
 // }
