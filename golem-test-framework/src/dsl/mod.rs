@@ -625,7 +625,7 @@ pub trait TestDslExtended: TestDsl {
         let plan = client
             .get_environment_deployment_plan(&environment_id.0)
             .await?;
-        tracing::info!("plan: {plan:?}");
+
         client
             .deploy_environment(
                 &environment_id.0,

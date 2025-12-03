@@ -65,7 +65,7 @@ use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct TestDependenciesTestDsl<Deps> {
+pub struct TestUserContext<Deps> {
     pub deps: Deps,
     pub account_id: AccountId,
     pub account_email: String,
@@ -73,7 +73,7 @@ pub struct TestDependenciesTestDsl<Deps> {
     pub auto_deploy_enabled: bool,
 }
 
-impl<Deps> TestDependenciesTestDsl<Deps> {
+impl<Deps> TestUserContext<Deps> {
     pub fn with_auto_deploy(self, enabled: bool) -> Self {
         Self {
             auto_deploy_enabled: enabled,
@@ -83,7 +83,7 @@ impl<Deps> TestDependenciesTestDsl<Deps> {
 }
 
 #[async_trait]
-impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
+impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     type WorkerInvocationResult<T> = anyhow::Result<T>;
 
     fn redis(&self) -> Arc<dyn Redis> {
@@ -718,7 +718,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
 }
 
 #[async_trait]
-impl<Deps: TestDependencies> TestDslExtended for TestDependenciesTestDsl<Deps> {
+impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
     fn account_id(&self) -> &AccountId {
         &self.account_id
     }

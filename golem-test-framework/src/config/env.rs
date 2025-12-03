@@ -30,7 +30,7 @@ use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCl
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use crate::config::{DbType, GolemClientProtocol, TestDependencies};
+use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -53,8 +53,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_host: String,
     pub redis_port: u16,
     pub redis_key_prefix: String,
-    pub golem_test_components: PathBuf,
-    pub golem_client_protocol: GolemClientProtocol,
+    pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
 }
 
@@ -84,16 +83,8 @@ impl EnvBasedTestDependenciesConfig {
             self.redis_key_prefix = redis_prefix;
         }
 
-        if let Some(golem_test_components) = opt_env_var("GOLEM_TEST_COMPONENTS") {
-            self.golem_test_components = golem_test_components.into();
-        }
-
-        if let Some(golem_client_protocol) = opt_env_var("GOLEM_CLIENT_PROTOCOL") {
-            match golem_client_protocol.to_lowercase().as_str() {
-                "grpc" => self.golem_client_protocol = GolemClientProtocol::Grpc,
-                "http" => self.golem_client_protocol = GolemClientProtocol::Http,
-                _ => panic!("Unknown GOLEM_CLIENT_PROTOCOL: {golem_client_protocol}, valid values: grpc, http"),
-            }
+        if let Some(golem_repo_root) = opt_env_var("GOLEM_REPO_ROOT") {
+            self.golem_repo_root = golem_repo_root.into();
         }
 
         self
@@ -130,6 +121,23 @@ impl EnvBasedTestDependenciesConfig {
     pub fn redis_monitor_stderr_level(&self) -> Level {
         Level::ERROR
     }
+
+    fn test_components_dir(&self) -> PathBuf {
+        self.golem_repo_root.join("test-components")
+    }
+
+    fn debug_targets_dirs(&self) -> PathBuf {
+        self.golem_repo_root.join("target/debug")
+    }
+
+    fn storage_dir(&self) -> PathBuf {
+        self.golem_repo_root.join("target/test_dependencies")
+    }
+
+    async fn canonicalize_dirs(&mut self) -> anyhow::Result<()> {
+        self.golem_repo_root = tokio::fs::canonicalize(&self.golem_repo_root).await?;
+        Ok(())
+    }
 }
 
 impl Default for EnvBasedTestDependenciesConfig {
@@ -143,8 +151,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_host: "localhost".to_string(),
             redis_port: 6379,
             redis_key_prefix: "".to_string(),
-            golem_test_components: Path::new("../test-components").to_path_buf(),
-            golem_client_protocol: GolemClientProtocol::Grpc,
+            golem_repo_root: PathBuf::from(".."),
             unique_network_id: Uuid::new_v4().to_string(),
         }
     }
@@ -152,7 +159,6 @@ impl Default for EnvBasedTestDependenciesConfig {
 
 #[derive(Clone)]
 pub struct EnvBasedTestDependencies {
-    config: Arc<EnvBasedTestDependenciesConfig>,
     rdb: Arc<dyn Rdb>,
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
@@ -165,6 +171,7 @@ pub struct EnvBasedTestDependencies {
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
+    test_component_dir: PathBuf,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -177,7 +184,7 @@ impl EnvBasedTestDependencies {
     async fn make_rdb(config: &EnvBasedTestDependenciesConfig) -> Arc<dyn Rdb> {
         match config.db_type {
             DbType::Sqlite => {
-                let sqlite_path = Path::new("../target/golem_test_db");
+                let sqlite_path = &config.storage_dir().join("golem_test_db");
                 Arc::new(SqliteRdb::new(sqlite_path))
             }
             DbType::Postgres => {
@@ -215,14 +222,14 @@ impl EnvBasedTestDependencies {
     }
 
     async fn make_registry_service(
-        config: &Arc<EnvBasedTestDependenciesConfig>,
+        config: &EnvBasedTestDependenciesConfig,
         rdb: &Arc<dyn Rdb>,
         component_compilation_service: &Arc<dyn ComponentCompilationService>,
     ) -> Arc<dyn RegistryService> {
         Arc::new(
             SpawnedRegistryService::new(
-                Path::new("../target/debug/golem-registry-service"),
-                Path::new("../golem-registry-service"),
+                &config.debug_targets_dirs().join("golem-registry-service"),
+                &config.golem_repo_root.join("golem-registry-service"),
                 8081,
                 9091,
                 rdb,
@@ -242,8 +249,8 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn ShardManager> {
         Arc::new(
             SpawnedShardManager::new(
-                Path::new("../target/debug/golem-shard-manager"),
-                Path::new("../golem-shard-manager"),
+                &config.debug_targets_dirs().join("golem-shard-manager"),
+                &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
                 9021,
                 9020,
@@ -262,8 +269,12 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn ComponentCompilationService> {
         Arc::new(
             SpawnedComponentCompilationService::new(
-                Path::new("../target/debug/golem-component-compilation-service"),
-                Path::new("../golem-component-compilation-service"),
+                &config
+                    .debug_targets_dirs()
+                    .join("golem-component-compilation-service"),
+                &config
+                    .golem_repo_root
+                    .join("golem-component-compilation-service"),
                 8083,
                 9094,
                 config.default_verbosity(),
@@ -284,8 +295,8 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn WorkerService> {
         Arc::new(
             SpawnedWorkerService::new(
-                Path::new("../target/debug/golem-worker-service"),
-                Path::new("../golem-worker-service"),
+                &config.debug_targets_dirs().join("golem-worker-service"),
+                &config.golem_repo_root.join("golem-worker-service"),
                 8082,
                 9092,
                 9093,
@@ -314,8 +325,8 @@ impl EnvBasedTestDependencies {
                 config.worker_executor_cluster_size,
                 9000,
                 9100,
-                Path::new("../target/debug/worker-executor"),
-                Path::new("../golem-worker-executor"),
+                &config.debug_targets_dirs().join("worker-executor"),
+                &config.golem_repo_root.join("golem-worker-executor"),
                 redis,
                 shard_manager,
                 worker_service,
@@ -329,16 +340,13 @@ impl EnvBasedTestDependencies {
         )
     }
 
-    pub async fn new(config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
-        let config = Arc::new(config);
+    pub async fn new(mut config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
+        config.canonicalize_dirs().await?;
 
-        let blob_storage_root = "../target/golem_test_blob_storage";
+        let blob_storage_root = &config.storage_dir().join("blob_storage");
+        tokio::fs::create_dir_all(&blob_storage_root).await?;
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from(blob_storage_root))
-                .await
-                .unwrap(),
-        );
+        let blob_storage = Arc::new(FileSystemBlobStorage::new(blob_storage_root).await.unwrap());
 
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
@@ -375,7 +383,6 @@ impl EnvBasedTestDependencies {
         .await;
 
         Ok(Self {
-            config,
             rdb,
             redis,
             redis_monitor,
@@ -388,6 +395,7 @@ impl EnvBasedTestDependencies {
             component_compilation_service,
             worker_executor_cluster,
             worker_service,
+            test_component_dir: config.test_components_dir(),
         })
     }
 }
@@ -415,7 +423,7 @@ impl TestDependencies for EnvBasedTestDependencies {
     }
 
     fn component_directory(&self) -> &Path {
-        &self.config.golem_test_components
+        &self.test_component_dir
     }
 
     fn temp_directory(&self) -> &Path {
