@@ -105,7 +105,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             let registration_function: syn::TraitItem = syn::parse_quote! {
                 fn __register_agent_type() {
                     let agent_type = #agent_type;
-                    
+
                     golem_rust::agentic::register_agent_type(
                         golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
                         agent_type
