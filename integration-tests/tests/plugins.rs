@@ -41,7 +41,8 @@ use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions
 use golem_test_framework::model::IFSEntry;
 use std::path::PathBuf;
 use assert2::assert;
-use golem_common::model::ScanCursor;
+use golem_common::model::{Empty, ScanCursor};
+use golem_common::model::auth::EnvironmentRole;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -820,147 +821,286 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 }
 
 #[test]
-async fn library_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+#[tracing::instrument]
+async fn library_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
-    user
-        .create(PluginDefinitionCreation {
-            name: "library-plugin-1".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key,
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
+    let library_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "library-1".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::Library(Empty {}),
+            },
+            Some(tokio::fs::read(deps.component_directory().join("app_and_library_library.wasm")).await?),
+        )
+        .await?;
 
+    let library_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: library_plugin.id,
+            },
+        )
+        .await?;
 
-    let component_id = admin
-        .component("app_and_library_app")
-        .unique()
+    let component = user
+        .component(&env.id, "app_and_library_app")
+        .with_plugin(&library_plugin_grant.id, 0)
         .store()
-        .await;
+        .await?;
 
-    let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_library").await;
+    let worker = user.start_worker(&component.id, "worker1").await?;
 
-    admin
-        .create_plugin(PluginDefinitionCreation {
-            name: "library-plugin-1".to_string(),
-            version: "v1".to_string(),
-            description: "A test".to_string(),
-            icon: vec![],
-            homepage: "none".to_string(),
-            specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-                blob_storage_key: plugin_wasm_key,
-            }),
-            scope: PluginScope::Global(Empty {}),
-        })
-        .await;
-
-    let _installation_id = admin
-        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
-        .await;
-
-    let worker = admin.start_worker(&component_id, "worker1").await;
-
-    let response = admin
+    let response = user
         .invoke_and_await(
             &worker,
             "it:app-and-library-app/app-api.{app-function}",
             vec![],
         )
-        .await;
+        .await?;
 
-    assert_eq!(response, Ok(vec![Value::U64(2)]))
+    assert!(response == vec![Value::U64(2)]);
+    Ok(())
 }
 
-// #[test]
-// async fn app_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let admin = deps.admin().await;
 
-//     let component_id = admin
-//         .component("app_and_library_library")
-//         .unique()
-//         .store()
-//         .await;
+#[test]
+#[tracing::instrument]
+async fn app_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-//     let plugin_wasm_key = admin.add_plugin_wasm("app_and_library_app").await;
+    let library_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "app-1".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::App(Empty {}),
+            },
+            Some(tokio::fs::read(deps.component_directory().join("app_and_library_app.wasm")).await?),
+        )
+        .await?;
 
-//     admin
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "app-plugin-1".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::App(AppPluginDefinition {
-//                 blob_storage_key: plugin_wasm_key,
-//             }),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
+    let library_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: library_plugin.id,
+            },
+        )
+        .await?;
 
-//     let _installation_id = admin
-//         .install_plugin_to_component(&component_id, "app-plugin-1", "v1", 0, HashMap::new())
-//         .await;
+    let component = user
+        .component(&env.id, "app_and_library_library")
+        .with_plugin(&library_plugin_grant.id, 0)
+        .store()
+        .await?;
 
-//     let worker = admin.start_worker(&component_id, "worker1").await;
+    let worker = user.start_worker(&component.id, "worker1").await?;
 
-//     let response = admin
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
+    let response = user
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await?;
 
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
+    assert!(response == vec![Value::U64(2)]);
+    Ok(())
+}
 
-// /// Test that a component can be invoked after a plugin is unregistered that it depends on
-// #[test]
-// async fn invoke_after_deleting_plugin(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     let user = deps.user().await;
 
-//     let component_id = user.component("app_and_library_app").unique().store().await;
+#[test]
+#[tracing::instrument]
+async fn oplog_processor_in_different_env_after_unregistering(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user_1 = deps.user().await?;
+    let (_, env_1) = user_1.app_and_env().await?;
 
-//     let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
+    let user_2 = deps.user().await?;
+    let client_2 = user_2.registry_service_client().await;
 
-//     let plugin_definition = PluginDefinitionCreation {
-//         name: "library-plugin-3".to_string(),
-//         version: "v1".to_string(),
-//         description: "A test".to_string(),
-//         icon: vec![],
-//         homepage: "none".to_string(),
-//         specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
-//             blob_storage_key: plugin_wasm_key,
-//         }),
-//         scope: PluginScope::Global(Empty {}),
-//     };
+    user_1.share_environment(&user_2.account_id, &env_1.id, &[EnvironmentRole::Admin]).await?;
 
-//     user.create_plugin(plugin_definition.clone()).await;
+    let plugin_component = user_2.component(&env_1.id, "oplog-processor").store().await?;
 
-//     let _installation_id = user
-//         .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 0, HashMap::new())
-//         .await;
+    let oplog_processor_plugin = client_2
+        .create_plugin(
+            &user_2.account_id.0,
+            &PluginRegistrationCreation {
+                name: "oplog-processor-1".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision
+                }),
+            },
+            None::<Vec<u8>>,
+        )
+        .await?;
 
-//     user.delete_plugin(user.account_id.clone(), "library-plugin-3", "v1")
-//         .await;
+    let oplog_processor_plugin_grant = client_2
+        .create_environment_plugin_grant(
+            &env_1.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: oplog_processor_plugin.id,
+            },
+        )
+        .await?;
 
-//     let worker = user.start_worker(&component_id, "worker1").await;
+    let component = user_1.component(&env_1.id, "shopping-cart").with_plugin(&oplog_processor_plugin_grant.id, 0).store().await?;
 
-//     let response = user
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
+    client_2.delete_environment_plugin_grant(&oplog_processor_plugin_grant.id.0).await?;
+    client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
-//     assert_eq!(response, Ok(vec![Value::U64(2)]))
-// }
+    let worker_id = user_1.start_worker(&component.id, "worker1").await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec!["test-user-1".into_value_and_type()],
+        )
+        .await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Record(vec![
+                ("product-id", "G1000".into_value_and_type()),
+                ("name", "Golem T-Shirt M".into_value_and_type()),
+                ("price", 100.0f32.into_value_and_type()),
+                ("quantity", 5u32.into_value_and_type()),
+            ])
+            .into_value_and_type()],
+        )
+        .await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Record(vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+                ("price", 999999.0f32.into_value_and_type()),
+                ("quantity", 1u32.into_value_and_type()),
+            ])
+            .into_value_and_type()],
+        )
+        .await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Record(vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 10u32.into_value_and_type()),
+            ])
+            .into_value_and_type()],
+        )
+        .await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
+        )
+        .await?;
+
+    user_1
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{force-commit}",
+            vec![10u8.into_value_and_type()],
+        )
+        .await?;
+
+    let mut plugin_worker_id = None;
+    let mut cursor = ScanCursor::default();
+
+    loop {
+        let (maybe_cursor, items) = user_1
+            .get_workers_metadata(&plugin_component.id, None, cursor, 1, true)
+            .await?;
+
+        for item in items {
+            if plugin_worker_id.is_none() {
+                plugin_worker_id = Some(item.worker_id.clone());
+            }
+        }
+
+        if plugin_worker_id.is_some() {
+            break;
+        }
+
+        if let Some(new_cursor) = maybe_cursor {
+            cursor = new_cursor;
+        } else {
+            break;
+        }
+    }
+
+    let plugin_worker_id = plugin_worker_id.expect("Plugin worker id found");
+
+    let mut invocations = Vec::new();
+
+    loop {
+        let response = user_1
+            .invoke_and_await(
+                &plugin_worker_id,
+                "golem:component/api.{get-invoked-functions}",
+                vec![],
+            )
+            .await?;
+
+        if let Value::List(items) = &response[0] {
+            invocations.extend(items.iter().filter_map(|item| {
+                if let Value::String(name) = item {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }));
+        }
+
+        if !invocations.is_empty() {
+            break;
+        }
+    }
+
+    let account_id = user_1.account_id;
+    let component_id = component.id;
+
+    let expected = vec![
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{initialize-cart}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{add-item}}"),
+        format!("{account_id}/{component_id}/worker1/golem:it/api.{{update-item-quantity}}"),
+    ];
+    assert_eq!(invocations, expected);
+
+    Ok(())
+}

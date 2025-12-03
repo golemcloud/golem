@@ -803,6 +803,8 @@ impl ComponentWriteService {
         plugin_priority: PluginPriority,
         plugin_spec: &LibraryPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
+        tracing::debug!("applying library plugin");
+
         let plug_bytes = self
             .plugin_wasm_files_service
             .get(plugin_owner, &plugin_spec.wasm_content_hash)
@@ -830,6 +832,8 @@ impl ComponentWriteService {
         plugin_priority: PluginPriority,
         plugin_spec: &AppPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
+        tracing::debug!("applying app plugin");
+
         let socket_bytes = self
             .plugin_wasm_files_service
             .get(plugin_owner, &plugin_spec.wasm_content_hash)
