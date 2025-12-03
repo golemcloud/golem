@@ -241,7 +241,7 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         axum::Json(response)
     }
 
-    let user = deps.user().await?.with_auto_deploy(false);
+    let user = deps.user().await?;
     let client = user.registry_service_client().await;
     let (_, env) = user.app_and_env().await?;
 
@@ -252,11 +252,6 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     let port = listener.local_addr().unwrap().port();
 
     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let component = user
-        .component(&env.id, "app_and_library_library")
-        .store()
-        .await?;
 
     let component_transformer_plugin = client
         .create_plugin(
@@ -287,41 +282,26 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         )
         .await?;
 
-    let updated_component = client.update_component(
-        &component.id.0,
-        &ComponentUpdate {
-            current_revision: component.revision,
-            removed_files: Vec::new(),
-            new_file_options: BTreeMap::new(),
-            dynamic_linking: None,
-            env: None,
-            agent_types: None,
-            plugin_updates: vec![
-                PluginInstallationAction::Install(PluginInstallation {
-                    environment_plugin_grant_id: component_transformer_plugin_grant.id,
-                    priority: PluginPriority(0),
-                    parameters: BTreeMap::new()
-                })
-            ]
-        },
-        None::<Vec<u8>>,
-        None::<Vec<u8>>,
-    ).await?;
+    let component = user
+        .component(&env.id, "app_and_library_library")
+        .with_plugin(&component_transformer_plugin_grant.id, 0)
+        .store()
+        .await?;
 
     server_handle.abort();
 
-    let exports = updated_component.metadata.exports();
+    {
+        let exports = component.metadata.exports();
 
-    assert_eq!(exports.len(), 1);
-    assert!(matches!(
-        &exports[0],
-        AnalysedExport::Instance(AnalysedInstance {
-            name,
-            ..
-        }) if name == "it:app-and-library-app/app-api"
-    ));
-
-    user.deploy_environment(&env.id).await?;
+        assert_eq!(exports.len(), 1);
+        assert!(matches!(
+            &exports[0],
+            AnalysedExport::Instance(AnalysedInstance {
+                name,
+                ..
+            }) if name == "it:app-and-library-app/app-api"
+        ));
+    }
 
     let worker = user.start_worker(&component.id, "worker1").await?;
 
@@ -338,130 +318,133 @@ async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     Ok(())
 }
 
-// #[test]
-// async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
-//         while let Some(field) = multipart.next_field().await.unwrap() {
-//             let name = field.name().unwrap().to_string();
-//             let data = field.bytes().await.unwrap();
-//             debug!("Length of `{}` is {} bytes", name, data.len());
+#[test]
+#[tracing::instrument]
+async fn component_transformer_env_var(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            debug!("Length of `{}` is {} bytes", name, data.len());
 
-//             match name.as_str() {
-//                 "component" => {
-//                     info!("Received component data");
-//                 }
-//                 "metadata" => {
-//                     let json =
-//                         std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
-//                     info!("Metadata: {}", json);
-//                 }
-//                 _ => {
-//                     let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
-//                     info!("Configuration field: {} = {}", name, value);
-//                 }
-//             }
-//         }
+            match name.as_str() {
+                "component" => {
+                    info!("Received component data");
+                }
+                "metadata" => {
+                    let json =
+                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
+                    info!("Metadata: {}", json);
+                }
+                _ => {
+                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
+                    info!("Configuration field: {} = {}", name, value);
+                }
+            }
+        }
 
-//         let response = json!({
-//             "env": {
-//                 "TEST_ENV_VAR_2": "value_2"
-//             }
-//         });
+        let response = json!({
+            "env": {
+                "TEST_ENV_VAR_2": "value_2"
+            }
+        });
 
-//         axum::Json(response)
-//     }
+        axum::Json(response)
+    }
 
-//     let admin = deps.admin().await;
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+    let app = Router::new().route("/transform", post(transform));
 
-//     let app = Router::new().route("/transform", post(transform));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-//     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
 
-//     let port = listener.local_addr().unwrap().port();
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-//     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let component_transformer_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "component-transformer-env".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                }),
+            },
+            None::<Vec<u8>>,
+        )
+        .await?;
 
-//     let component_id = admin
-//         .component("environment-service")
-//         .unique()
-//         .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
-//         .store()
-//         .await;
+    let component_transformer_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: component_transformer_plugin.id,
+            },
+        )
+        .await?;
 
-//     admin
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "component-transformer-env".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::ComponentTransformer(
-//                 ComponentTransformerDefinition {
-//                     provided_wit_package: None,
-//                     json_schema: None,
-//                     validate_url: "not-used".to_string(),
-//                     transform_url: format!("http://localhost:{port}/transform"),
-//                 },
-//             ),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
+    let component = user
+        .component(&env.id, "environment-service")
+        .with_env(vec![("TEST_ENV_VAR_1".to_string(), "value_1".to_string())])
+        .with_plugin(&component_transformer_plugin_grant.id, 0)
+        .store()
+        .await?;
 
-//     admin
-//         .install_plugin_to_component(
-//             &component_id,
-//             "component-transformer-env",
-//             "v1",
-//             0,
-//             HashMap::new(),
-//         )
-//         .await;
+    server_handle.abort();
 
-//     server_handle.abort();
+    let worker = user
+        .start_worker_with(
+            &component.id,
+            "worker1",
+            vec![],
+            HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
+            vec![],
+        )
+        .await?;
 
-//     let worker = admin
-//         .start_worker_with(
-//             &component_id,
-//             "worker1",
-//             vec![],
-//             HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
-//             vec![],
-//         )
-//         .await;
+    let response = user
+        .invoke_and_await(&worker, "golem:it/api.{get-environment}", vec![])
+        .await?;
 
-//     let response = admin
-//         .invoke_and_await(&worker, "golem:it/api.{get-environment}", vec![])
-//         .await
-//         .unwrap();
+    let response_map = {
+        assert_eq!(response.len(), 1);
 
-//     let response_map = {
-//         assert_eq!(response.len(), 1);
+        let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
+        let_assert!(Value::List(response) = response.as_ref());
+        response
+            .iter()
+            .map(|env_var| {
+                let_assert!(Value::Tuple(elems) = env_var);
+                let_assert!([Value::String(key), Value::String(value)] = elems.as_slice());
+                (key.to_owned(), value.to_owned())
+            })
+            .collect::<HashMap<_, _>>()
+    };
 
-//         let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
-//         let_assert!(Value::List(response) = response.as_ref());
-//         response
-//             .iter()
-//             .map(|env_var| {
-//                 let_assert!(Value::Tuple(elems) = env_var);
-//                 let_assert!([Value::String(key), Value::String(value)] = elems.as_slice());
-//                 (key.to_owned(), value.to_owned())
-//             })
-//             .collect::<HashMap<_, _>>()
-//     };
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_1"),
+        Some(&"value_1".to_string())
+    );
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_2"),
+        Some(&"value_2".to_string())
+    );
+    assert_eq!(
+        response_map.get("TEST_ENV_VAR_3"),
+        Some(&"value_3".to_string())
+    );
 
-//     assert_eq!(
-//         response_map.get("TEST_ENV_VAR_1"),
-//         Some(&"value_1".to_string())
-//     );
-//     assert_eq!(
-//         response_map.get("TEST_ENV_VAR_2"),
-//         Some(&"value_2".to_string())
-//     );
-//     assert_eq!(
-//         response_map.get("TEST_ENV_VAR_3"),
-//         Some(&"value_3".to_string())
-//     );
-// }
+    Ok(())
+}
 
 // #[test]
 // async fn component_transformer_ifs(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
