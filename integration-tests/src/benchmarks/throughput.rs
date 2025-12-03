@@ -15,10 +15,6 @@
 use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_client::model::{
-    ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
-    GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
-};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -26,7 +22,7 @@ use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
@@ -34,6 +30,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, Level};
 use uuid::Uuid;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 
 pub struct ThroughputEcho {
     config: RunConfig,
@@ -397,6 +394,7 @@ impl From<WorkerIdPair> for WorkerIdOrPair {
 }
 
 pub struct IterationContext {
+    user: TestDependenciesTestDsl<BenchmarkTestDependencies>,
     direct_rust_worker_ids: Vec<WorkerId>,
     rust_agent_worker_ids: Vec<WorkerId>,
     ts_agent_worker_ids: Vec<WorkerId>,
@@ -479,43 +477,36 @@ impl ThroughputBenchmark {
             .get_routing_table()
             .await
             .expect("Failed to get routing table");
-
         info!("Fetched routing table: {routing_table}");
+
+        let user = self.deps.clone().into_user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
 
         info!("Registering components");
 
-        let rust_direct_component_id = self
-            .deps
-            .admin()
-            .await
-            .component("benchmark_direct_rust")
+        let rust_direct_component = user
+            .component(&env.id, "benchmark_direct_rust")
             .name("benchmark:direct-rust")
             .store()
-            .await;
-
-        let rust_agent_component_id = self
-            .deps
-            .admin()
             .await
-            .component("benchmark_agent_rust_release")
+            .unwrap();
+
+        let rust_agent_component = user
+            .component(&env.id, "benchmark_agent_rust_release")
             .name("benchmark:agent-rust")
             .store()
-            .await;
-
-        let ts_agent_component_id = self
-            .deps
-            .admin()
             .await
-            .component("benchmark_agent_ts")
+            .unwrap();
+
+        let ts_agent_component = user
+            .component(&env.id, "benchmark_agent_ts")
             .name("benchmark:agent-ts")
             .store()
-            .await;
-
-        let rust_rpc_parent_component_id = self
-            .deps
-            .admin()
             .await
-            .component("benchmark_direct_rust_rpc_parent")
+            .unwrap();
+
+        let rust_rpc_parent_component = user
+            .component(&env.id, "benchmark_direct_rust_rpc_parent")
             .name("benchmark:direct-rust-rpc-parent")
             .with_dynamic_linking(&[(
                 "benchmark:direct-rust-rpc-child-client/benchmark-direct-rust-rpc-child-client",
@@ -531,40 +522,39 @@ impl ThroughputBenchmark {
                 }),
             )])
             .store()
-            .await;
-
-        let rust_rpc_child_component_id = self
-            .deps
-            .admin()
             .await
-            .component("benchmark_direct_rust_rpc_child")
+            .unwrap();
+
+        let rust_rpc_child_component = user
+            .component(&env.id, "benchmark_direct_rust_rpc_child")
             .name("benchmark:direct-rust-rpc-child")
             .store()
-            .await;
+            .await
+            .unwrap();
 
         for n in 0..config.size {
             direct_rust_worker_ids.push(WorkerId {
-                component_id: rust_direct_component_id.clone(),
+                component_id: rust_direct_component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             });
             rust_agent_worker_ids.push(WorkerId {
-                component_id: rust_agent_component_id.clone(),
+                component_id: rust_agent_component.id,
                 worker_name: format!("rust-benchmark-agent(\"test-{n}\")"),
             });
             ts_agent_worker_ids.push(WorkerId {
-                component_id: ts_agent_component_id.clone(),
+                component_id: ts_agent_component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             });
             ts_agent_worker_ids_for_rib.push(WorkerId {
-                component_id: ts_agent_component_id.clone(),
+                component_id: ts_agent_component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}-rib\")"),
             });
             let direct_rust_rpc_parent = WorkerId {
-                component_id: rust_rpc_parent_component_id.clone(),
+                component_id: rust_rpc_parent_component.id,
                 worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),
             };
             let direct_rust_rpc_child = WorkerId {
-                component_id: rust_rpc_child_component_id.clone(),
+                component_id: rust_rpc_child_component.id,
                 worker_name: format!("rpc-benchmark-agent(\"test-{n}\")"),
             };
             direct_rust_rpc_worker_id_pairs.push(WorkerIdPair {
@@ -572,11 +562,11 @@ impl ThroughputBenchmark {
                 child: direct_rust_rpc_child,
             });
             let ts_agent_rpc_parent = WorkerId {
-                component_id: ts_agent_component_id.clone(),
+                component_id: ts_agent_component.id,
                 worker_name: format!("rpc-benchmark-agent(\"rpc-test-{n}\")"),
             };
             let ts_agent_rpc_child = WorkerId {
-                component_id: ts_agent_component_id.clone(),
+                component_id: ts_agent_component.id,
                 worker_name: format!("benchmark-agent(\"rpc-test-{n}\")"),
             };
             ts_rpc_agent_worker_id_pairs.push(WorkerIdPair {
@@ -584,11 +574,11 @@ impl ThroughputBenchmark {
                 child: ts_agent_rpc_child,
             });
             let rust_agent_rpc_parent = WorkerId {
-                component_id: rust_agent_component_id.clone(),
+                component_id: rust_agent_component.id,
                 worker_name: format!("rust-rpc-benchmark-agent(\"rpc-test-{n}\")"),
             };
             let rust_agent_rpc_child = WorkerId {
-                component_id: rust_agent_component_id.clone(),
+                component_id: rust_agent_component.id,
                 worker_name: format!("rust-benchmark-agent(\"rpc-test-{n}\")"),
             };
             rust_rpc_agent_worker_id_pairs.push(WorkerIdPair {
@@ -724,7 +714,7 @@ impl ThroughputBenchmark {
 
     pub async fn warmup(&self, iteration: &IterationContext) {
         async fn warmup_workers(
-            deps: &BenchmarkTestDependencies,
+            iteration: &IterationContext,
             length: usize,
             ids: &[WorkerId],
             function_name: &str,
@@ -734,7 +724,6 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(move |worker_id| async move {
                     let deps_clone = deps.clone();
-
                     invoke_and_await(&deps_clone, worker_id, function_name, (params)(length)).await
                 })
                 .collect::<Vec<_>>();
@@ -931,7 +920,7 @@ impl ThroughputBenchmark {
         .await;
 
         info!("Measuring TS agent throughput through HTTP mapping...");
-        let port = self.deps.worker_service().public_custom_request_port();
+        let port = self.deps.worker_service().custom_request_port();
 
         let client = reqwest::Client::builder()
             .build()
@@ -1030,12 +1019,12 @@ impl ThroughputBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&self.deps, &iteration.direct_rust_worker_ids).await;
-        delete_workers(&self.deps, &iteration.rust_agent_worker_ids).await;
-        delete_workers(&self.deps, &iteration.ts_agent_worker_ids).await;
-        delete_workers(&self.deps, &iteration.ts_agent_worker_ids_for_rib).await;
+        delete_workers(&iteration.user, &iteration.direct_rust_worker_ids).await;
+        delete_workers(&iteration.user, &iteration.rust_agent_worker_ids).await;
+        delete_workers(&iteration.user, &iteration.ts_agent_worker_ids).await;
+        delete_workers(&iteration.user, &iteration.ts_agent_worker_ids_for_rib).await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .direct_rust_rpc_worker_id_pairs
                 .iter()
@@ -1045,7 +1034,7 @@ impl ThroughputBenchmark {
         )
         .await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .direct_rust_rpc_worker_id_pairs
                 .iter()
@@ -1055,7 +1044,7 @@ impl ThroughputBenchmark {
         )
         .await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .ts_rpc_agent_worker_id_pairs
                 .iter()
@@ -1065,7 +1054,7 @@ impl ThroughputBenchmark {
         )
         .await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .ts_rpc_agent_worker_id_pairs
                 .iter()
@@ -1075,7 +1064,7 @@ impl ThroughputBenchmark {
         )
         .await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .rust_rpc_agent_worker_id_pairs
                 .iter()
@@ -1085,7 +1074,7 @@ impl ThroughputBenchmark {
         )
         .await;
         delete_workers(
-            &self.deps,
+            &iteration.user,
             &iteration
                 .rust_rpc_agent_worker_id_pairs
                 .iter()
