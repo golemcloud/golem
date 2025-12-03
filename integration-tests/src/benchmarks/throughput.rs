@@ -714,7 +714,7 @@ impl ThroughputBenchmark {
 
     pub async fn warmup(&self, iteration: &IterationContext) {
         async fn warmup_workers(
-            iteration: &IterationContext,
+            user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
             length: usize,
             ids: &[WorkerId],
             function_name: &str,
@@ -723,8 +723,8 @@ impl ThroughputBenchmark {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {
-                    let deps_clone = deps.clone();
-                    invoke_and_await(&deps_clone, worker_id, function_name, (params)(length)).await
+                    let user_clone = user.clone();
+                    invoke_and_await(&user_clone, worker_id, function_name, (params)(length)).await
                 })
                 .collect::<Vec<_>>();
 
@@ -733,7 +733,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up direct rust workers...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration.direct_rust_worker_ids,
             &self.rust_function_name,
@@ -743,7 +743,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up rust agents...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration.rust_agent_worker_ids,
             &self.rust_agent_function_name,
@@ -753,7 +753,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up TS agents...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration.ts_agent_worker_ids,
             &self.ts_function_name,
@@ -763,7 +763,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up TS agents for Rib mapping...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration.ts_agent_worker_ids_for_rib,
             &self.ts_function_name,
@@ -773,7 +773,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up direct rust RPC parent workers...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration
                 .direct_rust_rpc_worker_id_pairs
@@ -788,7 +788,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up TS RPC agents...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration
                 .ts_rpc_agent_worker_id_pairs
@@ -803,7 +803,7 @@ impl ThroughputBenchmark {
 
         info!("Warming up Rust RPC agents...");
         warmup_workers(
-            &self.deps,
+            &iteration.user,
             iteration.length,
             &iteration
                 .rust_rpc_agent_worker_id_pairs
@@ -821,7 +821,7 @@ impl ThroughputBenchmark {
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
         async fn measure_workers(
-            deps: &BenchmarkTestDependencies,
+            user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
             routing_table: &RoutingTable,
             recorder: &BenchmarkRecorder,
             length: usize,
@@ -835,13 +835,13 @@ impl ThroughputBenchmark {
                 .iter()
                 .map(move |worker_id| async move {
                     let worker_id = worker_id.worker_id();
-                    let deps_clone = deps.clone();
+                    let user_clone = user.clone();
 
                     let mut results = vec![];
                     for _ in 0..call_count {
                         results.push(
                             invoke_and_await(
-                                &deps_clone,
+                                &user_clone,
                                 worker_id,
                                 function_name,
                                 (params)(length),
@@ -864,7 +864,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring direct rust throughput");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
@@ -883,7 +883,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring rust agent throughput");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
@@ -902,7 +902,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring TS agent throughput...");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
@@ -961,7 +961,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring direct rust throughput via RPC");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
@@ -980,7 +980,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring TS agent RPC throughput...");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
@@ -999,7 +999,7 @@ impl ThroughputBenchmark {
 
         info!("Measuring Rust agent RPC throughput...");
         measure_workers(
-            &self.deps,
+            &iteration.user,
             &iteration.routing_table,
             &recorder,
             iteration.length,
