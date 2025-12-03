@@ -62,7 +62,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     let (_, env) = user.app_and_env().await?;
 
     // needs to be static as it's used for hash calculation
-    let domain = Domain("custom_api_shopping_cart.golem.cloud".to_string());
+    let domain = Domain(format!("{}.golem.cloud", env.id));
 
     client
         .create_domain_registration(
