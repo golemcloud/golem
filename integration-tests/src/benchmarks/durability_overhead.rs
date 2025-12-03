@@ -156,10 +156,7 @@ impl Benchmark for DurabilityOverhead {
                 + context.durable_nonpersistent_worker_ids.len()
         );
 
-        async fn warmup(
-            user: &TestUserContext<BenchmarkTestDependencies>,
-            ids: &[WorkerId],
-        ) {
+        async fn warmup(user: &TestUserContext<BenchmarkTestDependencies>, ids: &[WorkerId]) {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {

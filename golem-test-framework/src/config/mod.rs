@@ -107,10 +107,7 @@ pub trait TestDependencies: Send + Sync + Clone {
         })
     }
 
-    async fn user_with_roles(
-        &self,
-        roles: &[AccountRole],
-    ) -> anyhow::Result<TestUserContext<Self>>
+    async fn user_with_roles(&self, roles: &[AccountRole]) -> anyhow::Result<TestUserContext<Self>>
     where
         Self: Sized,
     {
