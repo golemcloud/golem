@@ -125,7 +125,7 @@ impl ApiDeploymentCommandHandler {
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx
             .application
-            .http_api_deployments(&environment_name)
+            .http_api_deployments(environment_name)
             .map(|deployments| {
                 deployments
                     .iter()
@@ -135,7 +135,7 @@ impl ApiDeploymentCommandHandler {
                             sources
                                 .iter()
                                 .flat_map(|source_and_value| source_and_value.value.iter())
-                                .map(|defs| defs.clone())
+                                .cloned()
                                 .collect::<Vec<_>>(),
                         )
                     })
@@ -183,7 +183,7 @@ impl ApiDeploymentCommandHandler {
                 &environment.environment_id.0,
                 &HttpApiDeploymentCreation {
                     domain: domain.clone(),
-                    api_definitions: deployable_http_api_deployment.iter().cloned().collect(),
+                    api_definitions: deployable_http_api_deployment.to_vec(),
                 },
             )
             .await
@@ -239,7 +239,7 @@ impl ApiDeploymentCommandHandler {
                 &http_api_deployment.id.0,
                 &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
-                    api_definitions: Some(deployable_http_api_deployment.iter().cloned().collect()),
+                    api_definitions: Some(deployable_http_api_deployment.to_vec()),
                 },
             )
             .await

@@ -1967,7 +1967,7 @@ mod app_builder {
                                     self.add_entity_source(
                                         UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
                                             api: api_definition_name.clone(),
-                                            method: route.method.clone(),
+                                            method: route.method,
                                             path: route.path.clone(),
                                         },
                                         &app.source,
@@ -2654,7 +2654,7 @@ mod app_builder {
                                     if let Some(binding) = binding {
                                         converted_routes.push(
                                             HttpApiRoute {
-                                                method: route.method.clone(),
+                                                method: route.method,
                                                 path: route.path.clone(),
                                                 binding,
                                                 security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
