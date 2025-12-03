@@ -16,7 +16,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::ItemTrait;
 
-use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
+use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
 use crate::agentic::{
     async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
     no_constructor_method_error,
@@ -79,16 +79,16 @@ fn parse_agent_mode(attrs: TokenStream) -> proc_macro2::TokenStream {
 }
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
+    let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
     let agent_mode = parse_agent_mode(attrs);
 
-    let has_async_trait_attribute = item_trait.attrs.iter().any(is_async_trait_attr);
+    let has_async_trait_attribute = agent_definition_trait.attrs.iter().any(is_async_trait_attr);
 
     if has_async_trait_attribute {
-        return async_trait_in_agent_definition_error(&item_trait).into();
+        return async_trait_in_agent_definition_error(&agent_definition_trait).into();
     }
 
-    match get_agent_type_with_remote_client(&item_trait, agent_mode) {
+    match get_agent_type_with_remote_client(&agent_definition_trait, agent_mode) {
         Ok(agent_type_with_remote_client) => {
             let AgentTypeWithRemoteClient {
                 agent_type,
@@ -109,13 +109,13 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             let load_snapshot_item = get_load_snapshot_item();
             let save_snapshot_item = get_save_snapshot_item();
 
-            item_trait.items.push(load_snapshot_item);
-            item_trait.items.push(save_snapshot_item);
-            item_trait.items.push(registration_function);
+            agent_definition_trait.items.push(load_snapshot_item);
+            agent_definition_trait.items.push(save_snapshot_item);
+            agent_definition_trait.items.push(registration_function);
 
             let result = quote! {
                 #[allow(async_fn_in_trait)]
-                #item_trait
+                #agent_definition_trait
                 #remote_client
             };
 
@@ -148,25 +148,29 @@ struct AgentTypeWithRemoteClient {
 }
 
 fn get_agent_type_with_remote_client(
-    item_trait: &syn::ItemTrait,
+    agent_definition_trait: &ItemTrait,
     mode_value: proc_macro2::TokenStream,
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
-    let trait_ident = &item_trait.ident;
+    let trait_ident = &agent_definition_trait.ident;
     let type_name = trait_ident.to_string();
 
     let mut constructor_methods = vec![];
 
-    for item in &item_trait.items {
+    for item in &agent_definition_trait.items {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            if is_constructor_method(&trait_fn.sig) {
+            if is_constructor_method(&trait_fn.sig, None) {
                 constructor_methods.push(trait_fn.clone());
             }
         }
     }
 
-    let methods = item_trait.items.iter().filter_map(|item| {
+    let methods = agent_definition_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
-            if is_constructor_method(&trait_fn.sig) {
+            if is_constructor_method(&trait_fn.sig, None) {
+                return None;
+            }
+
+            if is_static_method(&trait_fn.sig) {
                 return None;
             }
 
@@ -285,11 +289,11 @@ fn get_agent_type_with_remote_client(
     let mut constructor_param_names = vec![];
 
     if constructor_methods.is_empty() {
-        return Err(no_constructor_method_error(item_trait).into());
+        return Err(no_constructor_method_error(agent_definition_trait).into());
     }
 
     if constructor_methods.len() > 1 {
-        return Err(multiple_constructor_methods_error(item_trait).into());
+        return Err(multiple_constructor_methods_error(agent_definition_trait).into());
     }
 
     let mut constructor_description = String::new();
@@ -351,8 +355,11 @@ fn get_agent_type_with_remote_client(
         };
     };
 
-    let remote_client =
-        get_remote_client(item_trait, constructor_param_defs, constructor_param_names);
+    let remote_client = get_remote_client(
+        agent_definition_trait,
+        constructor_param_defs,
+        constructor_param_names,
+    );
 
     let agent_constructor = quote! {
         {

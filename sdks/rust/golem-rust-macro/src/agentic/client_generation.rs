@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::FunctionOutputInfo;
+use crate::agentic::helpers::{is_static_method, FunctionOutputInfo};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
 use syn::ItemTrait;
@@ -173,7 +173,13 @@ pub fn get_remote_client(
 
 fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macro2::TokenStream {
     let method_impls = tr.items.iter().filter_map(|item| {
+
         if let syn::TraitItem::Fn(method) = item {
+
+            if is_static_method(&method.sig) {
+                return None;
+            }
+
             if let syn::ReturnType::Type(_, ty) = &method.sig.output {
                 if let syn::Type::Path(type_path) = &**ty {
                     if type_path.path.segments.last().unwrap().ident == "Self" {
