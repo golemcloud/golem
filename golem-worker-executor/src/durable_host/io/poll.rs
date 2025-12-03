@@ -23,6 +23,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
+use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
@@ -90,7 +91,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             if all_blocked {
                 debug!("Suspending worker until a promise gets completed");
-                return Err(InterruptKind::Suspend.into());
+                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
         };
 
@@ -141,7 +142,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(result) => result.result.map_err(|err| anyhow!(err)),
             Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
-                Err(InterruptKind::Suspend.into())
+                Err(InterruptKind::Suspend(Timestamp::now_utc()).into())
             }
         }
     }

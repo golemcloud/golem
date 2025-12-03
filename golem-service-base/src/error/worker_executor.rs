@@ -16,7 +16,7 @@ use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+use golem_common::model::{ComponentId, PromiseId, ShardId, Timestamp, WorkerId};
 use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -799,7 +799,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     kind: if interrupted.recover_immediately {
                         InterruptKind::Restart
                     } else {
-                        InterruptKind::Interrupt
+                        InterruptKind::Interrupt(Timestamp::now_utc())
                     },
                 })
             }
@@ -921,18 +921,18 @@ impl Error for GolemSpecificWasmTrap {}
     FromValue,
 )]
 pub enum InterruptKind {
-    Interrupt,
+    Interrupt(Timestamp),
     Restart,
-    Suspend,
+    Suspend(Timestamp),
     Jump,
 }
 
 impl Display for InterruptKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
+            InterruptKind::Interrupt(_) => write!(f, "Interrupted via the Golem API"),
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
         }
     }

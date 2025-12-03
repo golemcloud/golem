@@ -42,6 +42,7 @@ use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use uuid::Uuid;
 
 // Generates two primary types:
 // - OplogEntry
@@ -74,6 +75,7 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginInstallationId>,
             wasi_config_vars: BTreeMap<String, String>,
+            original_phantom_id: Option<Uuid>
         }
         public {
             worker_id: WorkerId,
@@ -86,7 +88,8 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: WasiConfigVars
+            wasi_config_vars: WasiConfigVars,
+            original_phantom_id: Option<Uuid>
         }
     },
     /// The worker invoked a host function
@@ -598,39 +601,6 @@ impl OplogEntry {
                 component_version, ..
             } => Some(*component_version),
             OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
-            _ => None,
-        }
-    }
-
-    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
-        match self {
-            OplogEntry::Create {
-                timestamp,
-                component_version,
-                args,
-                env,
-                project_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                wasi_config_vars,
-                worker_id: _,
-            } => Some(OplogEntry::Create {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_version: *component_version,
-                args: args.clone(),
-                env: env.clone(),
-                project_id: project_id.clone(),
-                created_by: created_by.clone(),
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins.clone(),
-                wasi_config_vars: wasi_config_vars.clone(),
-            }),
             _ => None,
         }
     }

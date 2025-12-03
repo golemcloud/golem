@@ -526,6 +526,7 @@ pub struct WorkerMetadata {
     pub created_at: Timestamp,
     pub parent: Option<WorkerId>,
     pub last_known_status: WorkerStatusRecord,
+    pub original_phantom_id: Option<Uuid>,
 }
 
 impl WorkerMetadata {
@@ -544,6 +545,7 @@ impl WorkerMetadata {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: WorkerStatusRecord::default(),
+            original_phantom_id: None,
         }
     }
 
