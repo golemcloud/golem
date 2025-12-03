@@ -17,7 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_async_trait_attribute, is_constructor_method, Asyncness, FunctionOutputInfo,
+    get_asyncness, has_async_trait_attribute, is_constructor_method, is_static_method, Asyncness,
+    FunctionOutputInfo,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -155,7 +156,7 @@ fn extract_param_idents(method: &syn::ImplItemFn) -> Vec<syn::Ident> {
 }
 
 fn build_match_arms(
-    impl_block: &syn::ItemImpl,
+    impl_block: &ItemImpl,
     agent_type_name: String,
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
@@ -163,10 +164,21 @@ fn build_match_arms(
 
     for item in &impl_block.items {
         if let syn::ImplItem::Fn(method) = item {
-            let is_constructor_method = is_constructor_method(&method.sig);
+            let self_ty = &impl_block.self_ty;
 
-            if is_constructor_method {
+            let agent_impl_type_name = match &**self_ty {
+                syn::Type::Path(type_path) => {
+                    type_path.path.segments.last().unwrap().ident.to_string()
+                }
+                _ => String::new(),
+            };
+
+            if is_constructor_method(&method.sig, Some(&agent_impl_type_name)) {
                 constructor_method = Some(method);
+                continue;
+            }
+
+            if is_static_method(&method.sig) {
                 continue;
             }
 

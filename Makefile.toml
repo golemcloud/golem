@@ -119,6 +119,7 @@ rm -r sdks/ts/wit/deps
 mkdir sdks/rust/golem-rust/wit/deps
 mkdir sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
+glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
 glob_cp wit/deps/**/* sdks/ts/wit/deps
 """
 

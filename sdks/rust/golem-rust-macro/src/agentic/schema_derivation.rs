@@ -12,16 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::value;
 use proc_macro::TokenStream;
+use proc_macro2::Ident;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
 
-pub fn derive_schema(input: TokenStream) -> TokenStream {
+pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
 
-    let into_value_tokens: proc_macro2::TokenStream = crate::value::derive_into_value(&ast).into();
+    let into_value_tokens: proc_macro2::TokenStream =
+        value::derive_into_value(&ast, golem_rust_crate_ident).into();
+
     let from_value_tokens: proc_macro2::TokenStream =
-        crate::value::derive_from_value_and_type(&ast).into();
+        value::derive_from_value_and_type(&ast, golem_rust_crate_ident).into();
 
     quote! {
         #into_value_tokens
