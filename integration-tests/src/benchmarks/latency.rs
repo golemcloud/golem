@@ -19,11 +19,13 @@ use golem_common::model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use std::time::Duration;
 use tracing::{info, Level};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_common::model::environment::EnvironmentId;
 
 pub struct LatencySmall {
     config: RunConfig,
@@ -279,6 +281,7 @@ impl Benchmark for LatencyLarge {
 }
 
 pub struct IterationContext {
+    user: TestDependenciesTestDsl<BenchmarkTestDependencies>,
     worker_ids: Vec<WorkerId>,
     length: usize,
 }
@@ -324,26 +327,31 @@ impl LatencyBenchmark {
     }
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
+        let user = self.deps.clone().into_user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
+
         let mut worker_ids = vec![];
 
-        let component_id = self
+        let component = self
             .deps
             .admin()
             .await
-            .component(&self.component_name)
+            .component(&env.id, &self.component_name)
             .name(&self.root_package_name)
             .store()
-            .await;
+            .await
+            .unwrap();
 
         for n in 0..config.size {
             let worker_id = WorkerId {
-                component_id: component_id.clone(),
+                component_id: component.id.clone(),
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             };
             worker_ids.push(worker_id);
         }
 
         IterationContext {
+            user,
             worker_ids,
             length: config.length,
         }
@@ -364,10 +372,10 @@ impl LatencyBenchmark {
             .worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = self.deps.clone();
+                let user_clone = iteration.user.clone();
 
                 let cold_result = invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     &self.function_name,
                     self.function_params.clone(),
@@ -377,7 +385,7 @@ impl LatencyBenchmark {
                 let mut hot_results = vec![];
                 for _ in 0..iteration.length {
                     let hot_result = invoke_and_await(
-                        &deps_clone,
+                        &user_clone,
                         worker_id,
                         &self.function_name,
                         self.function_params.clone(),
@@ -400,6 +408,6 @@ impl LatencyBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&self.deps, &iteration.worker_ids).await
+        delete_workers(&iteration.user, &iteration.worker_ids).await
     }
 }

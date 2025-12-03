@@ -22,6 +22,7 @@ use reqwest::{Client, Request};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 
 pub mod cold_start_unknown;
 pub mod durability_overhead;
@@ -29,10 +30,10 @@ pub mod latency;
 pub mod sleep;
 pub mod throughput;
 
-pub async fn delete_workers(deps: &BenchmarkTestDependencies, worker_ids: &[WorkerId]) {
+pub async fn delete_workers(user: &TestDependenciesTestDsl<BenchmarkTestDependencies>, worker_ids: &[WorkerId]) {
     info!("Deleting {} workers...", worker_ids.len());
     for worker_id in worker_ids {
-        if let Err(err) = deps.admin().await.delete_worker(worker_id).await {
+        if let Err(err) = user.delete_worker(worker_id).await {
             warn!("Failed to delete worker: {:?}", err);
         }
     }
@@ -74,7 +75,7 @@ impl InvokeResult {
 }
 
 pub async fn invoke_and_await(
-    deps: &BenchmarkTestDependencies,
+    user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
     worker_id: &WorkerId,
     function_name: &str,
     params: Vec<ValueAndType>,
@@ -87,19 +88,18 @@ pub async fn invoke_and_await(
     let mut accumulated_time = Duration::from_secs(0);
     let mut retries = 0;
     let mut timeouts = 0;
-    let dsl = deps.admin().await;
 
     loop {
         let start = SystemTime::now();
         let result = tokio::time::timeout(
             TIMEOUT,
-            dsl.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
+            user.invoke_and_await_with_key(worker_id, &key, function_name, params.clone()),
         )
         .await;
         let duration = start.elapsed().expect("SystemTime elapsed failed");
 
         match result {
-            Ok(Ok(Ok(r))) => {
+            Ok(Ok(r)) => {
                 accumulated_time += duration;
                 break InvokeResult {
                     value: r,
@@ -108,28 +108,19 @@ pub async fn invoke_and_await(
                     accumulated_time,
                 };
             }
-            Ok(Ok(Err(e))) => {
-                // worker error
-                println!("Invocation failed, retrying: {e:?}");
-                retries += 1;
-                accumulated_time += duration;
-                tokio::time::sleep(RETRY_DELAY).await;
-                deps.ensure_all_deps_running().await;
-            }
             Ok(Err(e)) => {
-                // client error
                 println!("Invocation failed, retrying: {e:?}");
                 retries += 1;
                 accumulated_time += duration;
                 tokio::time::sleep(RETRY_DELAY).await;
-                deps.ensure_all_deps_running().await;
+                user.deps.ensure_all_deps_running().await;
             }
             Err(e) => {
                 // timeout
                 // not counting timeouts into the accumulated time
                 timeouts += 1;
                 println!("Invocation timed out, retrying: {e:?}");
-                deps.ensure_all_deps_running().await;
+                user.deps.ensure_all_deps_running().await;
             }
         }
     }
