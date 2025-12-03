@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Tracing;
+use assert2::assert;
 use assert2::let_assert;
 use axum::body::Bytes;
 use axum::extract::Multipart;
@@ -20,29 +20,29 @@ use axum::routing::post;
 use axum::Router;
 use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_test_framework::config::{
-    EnvBasedTestDependencies, TestDependencies
+use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
+use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::base64::Base64;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+use golem_common::model::plugin_registration::{
+    ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationCreation,
+    PluginSpecDto,
 };
+use golem_common::model::{Empty, ScanCursor};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::model::IFSEntry;
 use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm::{IntoValueAndType, Record, Value};
 use reqwest::StatusCode;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use test_r::{inherit_test_dep, tag, test};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use test_r::{inherit_test_dep, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
-use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
-use golem_common::model::plugin_registration::{ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto};
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
-use golem_common::model::base64::Base64;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentUpdate, PluginInstallation, PluginInstallationAction, PluginPriority};
-use golem_test_framework::model::IFSEntry;
-use std::path::PathBuf;
-use assert2::assert;
-use golem_common::model::{Empty, ScanCursor};
-use golem_common::model::auth::EnvironmentRole;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -151,13 +151,16 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         )
         .await?;
 
-    let component = user.component(&env.id, "logging").with_plugin(&component_transformer_plugin_grant.id, 0).store().await?;
+    let component = user
+        .component(&env.id, "logging")
+        .with_plugin(&component_transformer_plugin_grant.id, 0)
+        .store()
+        .await?;
 
     let worker = user.start_worker(&component.id, "worker1").await?;
     let mut rx = user.capture_output(&worker).await?;
 
-    user
-        .invoke_and_await(&worker, "golem:it/api.{some-random-entries}", vec![])
+    user.invoke_and_await(&worker, "golem:it/api.{some-random-entries}", vec![])
         .await?;
 
     let mut events = vec![];
@@ -537,7 +540,7 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
         .with_files(&[IFSEntry {
             source_path: PathBuf::from("ifs-update/files/bar.txt"),
             target_path: ComponentFilePath::from_abs_str("/files/bar.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly
+            permissions: ComponentFilePermissions::ReadOnly,
         }])
         .with_plugin(&component_transformer_plugin_grant.id, 0)
         .store()
@@ -628,17 +631,22 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies) -> anyhow
         )
         .await?;
 
-    let result = user.component(&env.id, "logging").with_plugin(&component_transformer_plugin_grant.id, 0).store().await;
+    let result = user
+        .component(&env.id, "logging")
+        .with_plugin(&component_transformer_plugin_grant.id, 0)
+        .store()
+        .await;
 
     server_handle.abort();
 
     let_assert!(Err(error) = result);
-    let downcasted = error.downcast_ref::<golem_client::Error<RegistryServiceCreateComponentError>>().unwrap();
+    let downcasted = error
+        .downcast_ref::<golem_client::Error<RegistryServiceCreateComponentError>>()
+        .unwrap();
 
     let_assert!(
-        golem_client::Error::Item(
-            RegistryServiceCreateComponentError::Error400(inner_error)
-        ) = downcasted
+        golem_client::Error::Item(RegistryServiceCreateComponentError::Error400(inner_error)) =
+            downcasted
     );
 
     assert!(inner_error.errors == vec!["Component transformer plugin with priority 0 failed with: HTTP status: 500 Internal Server Error"]);
@@ -666,7 +674,7 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 homepage: "none".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: plugin_component.id,
-                    component_revision: plugin_component.revision
+                    component_revision: plugin_component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -682,75 +690,73 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         )
         .await?;
 
-    let component = user.component(&env.id, "shopping-cart").with_plugin(&oplog_processor_plugin_grant.id, 0).store().await?;
+    let component = user
+        .component(&env.id, "shopping-cart")
+        .with_plugin(&oplog_processor_plugin_grant.id, 0)
+        .store()
+        .await?;
 
     let worker_id = user.start_worker(&component.id, "worker1").await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{initialize-cart}",
-            vec!["test-user-1".into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{initialize-cart}",
+        vec!["test-user-1".into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1000".into_value_and_type()),
-                ("name", "Golem T-Shirt M".into_value_and_type()),
-                ("price", 100.0f32.into_value_and_type()),
-                ("quantity", 5u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1000".into_value_and_type()),
+            ("name", "Golem T-Shirt M".into_value_and_type()),
+            ("price", 100.0f32.into_value_and_type()),
+            ("quantity", 5u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1001".into_value_and_type()),
-                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
-                ("price", 999999.0f32.into_value_and_type()),
-                ("quantity", 1u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1001".into_value_and_type()),
+            ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+            ("price", 999999.0f32.into_value_and_type()),
+            ("quantity", 1u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{add-item}",
-            vec![Record(vec![
-                ("product-id", "G1002".into_value_and_type()),
-                ("name", "Mud Golem".into_value_and_type()),
-                ("price", 11.0f32.into_value_and_type()),
-                ("quantity", 10u32.into_value_and_type()),
-            ])
-            .into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{add-item}",
+        vec![Record(vec![
+            ("product-id", "G1002".into_value_and_type()),
+            ("name", "Mud Golem".into_value_and_type()),
+            ("price", 11.0f32.into_value_and_type()),
+            ("quantity", 10u32.into_value_and_type()),
+        ])
+        .into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{update-item-quantity}",
-            vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{update-item-quantity}",
+        vec!["G1002".into_value_and_type(), 20u32.into_value_and_type()],
+    )
+    .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{force-commit}",
-            vec![10u8.into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem:it/api.{force-commit}",
+        vec![10u8.into_value_and_type()],
+    )
+    .await?;
 
     let mut plugin_worker_id = None;
     let mut cursor = ScanCursor::default();
@@ -838,7 +844,13 @@ async fn library_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 homepage: "none".to_string(),
                 spec: PluginSpecDto::Library(Empty {}),
             },
-            Some(tokio::fs::read(deps.component_directory().join("app_and_library_library.wasm")).await?),
+            Some(
+                tokio::fs::read(
+                    deps.component_directory()
+                        .join("app_and_library_library.wasm"),
+                )
+                .await?,
+            ),
         )
         .await?;
 
@@ -871,7 +883,6 @@ async fn library_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 #[test]
 #[tracing::instrument]
 async fn app_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
@@ -890,7 +901,10 @@ async fn app_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 homepage: "none".to_string(),
                 spec: PluginSpecDto::App(Empty {}),
             },
-            Some(tokio::fs::read(deps.component_directory().join("app_and_library_app.wasm")).await?),
+            Some(
+                tokio::fs::read(deps.component_directory().join("app_and_library_app.wasm"))
+                    .await?,
+            ),
         )
         .await?;
 
@@ -923,19 +937,25 @@ async fn app_plugin(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 #[test]
 #[tracing::instrument]
-async fn oplog_processor_in_different_env_after_unregistering(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn oplog_processor_in_different_env_after_unregistering(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     let user_1 = deps.user().await?;
     let (_, env_1) = user_1.app_and_env().await?;
 
     let user_2 = deps.user().await?;
     let client_2 = user_2.registry_service_client().await;
 
-    user_1.share_environment(&user_2.account_id, &env_1.id, &[EnvironmentRole::Admin]).await?;
+    user_1
+        .share_environment(&user_2.account_id, &env_1.id, &[EnvironmentRole::Admin])
+        .await?;
 
-    let plugin_component = user_2.component(&env_1.id, "oplog-processor").store().await?;
+    let plugin_component = user_2
+        .component(&env_1.id, "oplog-processor")
+        .store()
+        .await?;
 
     let oplog_processor_plugin = client_2
         .create_plugin(
@@ -948,7 +968,7 @@ async fn oplog_processor_in_different_env_after_unregistering(deps: &EnvBasedTes
                 homepage: "none".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                     component_id: plugin_component.id,
-                    component_revision: plugin_component.revision
+                    component_revision: plugin_component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -964,9 +984,15 @@ async fn oplog_processor_in_different_env_after_unregistering(deps: &EnvBasedTes
         )
         .await?;
 
-    let component = user_1.component(&env_1.id, "shopping-cart").with_plugin(&oplog_processor_plugin_grant.id, 0).store().await?;
+    let component = user_1
+        .component(&env_1.id, "shopping-cart")
+        .with_plugin(&oplog_processor_plugin_grant.id, 0)
+        .store()
+        .await?;
 
-    client_2.delete_environment_plugin_grant(&oplog_processor_plugin_grant.id.0).await?;
+    client_2
+        .delete_environment_plugin_grant(&oplog_processor_plugin_grant.id.0)
+        .await?;
     client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
     let worker_id = user_1.start_worker(&component.id, "worker1").await?;

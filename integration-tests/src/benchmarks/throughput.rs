@@ -21,7 +21,6 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::deployment::DeploymentCreation;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
@@ -680,7 +679,9 @@ impl ThroughputBenchmark {
 
         info!("Deploying environment");
 
-        user.deploy_environment(&env.id).await.expect("Failed to deploy environment");
+        user.deploy_environment(&env.id)
+            .await
+            .expect("Failed to deploy environment");
 
         IterationContext {
             user,

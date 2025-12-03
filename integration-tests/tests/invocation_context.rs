@@ -17,13 +17,19 @@ use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
+use golem_client::api::RegistryServiceClient;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::http_api_definition::{
+    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
+    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
+};
+use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use reqwest::header::{HeaderValue, USER_AGENT};
+use reqwest::header::HeaderValue;
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -31,11 +37,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::{info, Instrument};
-use uuid::Uuid;
-use golem_common::model::http_api_definition::{GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute, RouteMethod, WorkerGatewayBinding};
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
-use golem_client::api::RegistryServiceClient;
-use golem_common::model::domain_registration::Domain;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -110,31 +111,28 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let mut env_vars = HashMap::new();
     env_vars.insert("PORT".to_string(), host_http_port.to_string());
 
-    user
-        .start_worker_with(&component.id, "w1", vec![], env_vars, vec![])
+    user.start_worker_with(&component.id, "w1", vec![], env_vars, vec![])
         .await?;
 
     let http_api_definition_creation = HttpApiDefinitionCreation {
         name: HttpApiDefinitionName("test-api".to_string()),
         version: HttpApiDefinitionVersion("1".to_string()),
-        routes: vec![
-            HttpApiRoute {
-                method: RouteMethod::Post,
-                path: "/test-path-1/{name}".to_string(),
-                binding: GatewayBinding::Worker(WorkerGatewayBinding {
-                    component_name: component.component_name,
-                    idempotency_key: None,
-                    invocation_context: Some(
-                        r#"
+        routes: vec![HttpApiRoute {
+            method: RouteMethod::Post,
+            path: "/test-path-1/{name}".to_string(),
+            binding: GatewayBinding::Worker(WorkerGatewayBinding {
+                component_name: component.component_name,
+                idempotency_key: None,
+                invocation_context: Some(
+                    r#"
                             {
                                 name: request.path.name,
                                 source: "rib"
                             }
                         "#
-                        .to_string(),
-                    ),
-                    response:
-                        r#"
+                    .to_string(),
+                ),
+                response: r#"
                             let worker = instance("w1");
                             worker.test1();
                             {
@@ -143,11 +141,10 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
                                 headers: { Content-Type: "application/json" }
                             }
                         "#
-                        .to_string(),
-                }),
-                security: None,
-            },
-        ],
+                .to_string(),
+            }),
+            security: None,
+        }],
     };
 
     client
