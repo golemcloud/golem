@@ -958,7 +958,7 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
             let entry = self.table().get(&resource)?;
 
             // only the agent that originally created the promise is woken up when it is completed.
-            if &entry.promise_id.worker_id != &self_worker_id {
+            if entry.promise_id.worker_id != self_worker_id {
                 return Err(anyhow!(
                     "Tried awaiting a promise not created by the current agent"
                 ));
