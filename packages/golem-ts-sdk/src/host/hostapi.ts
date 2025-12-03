@@ -14,8 +14,8 @@
 
 import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.3.0';
 import { parseUuid } from 'golem:rpc/types@0.2.2';
-import process from 'node:process';
 import { AgentId } from '../agentId';
+import * as wasiEnv from 'wasi:cli/environment@0.2.3';
 
 // reexport golem host api
 export * from 'golem:api/host@1.3.0';
@@ -38,5 +38,12 @@ export function randomUuid(): Uuid {
  * Returns the raw string agent ID of the current agent.
  */
 export function getRawSelfAgentId(): AgentId {
-  return new AgentId(process.env.GOLEM_AGENT_ID!);
+  const env = wasiEnv.getEnvironment();
+  const agentId: [string, string] | undefined = env.find(
+    ([key, _]) => key === 'GOLEM_AGENT_ID',
+  );
+  if (!agentId) {
+    throw new Error('GOLEM_AGENT_ID is not set');
+  }
+  return new AgentId(agentId[1]);
 }

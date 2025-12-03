@@ -67,6 +67,7 @@ import {
   Result,
   UnstructuredBinary,
   UnstructuredText,
+  AgentClassName,
 } from '../src';
 import {
   serializeTsValueToBinaryReference,
@@ -77,6 +78,8 @@ import {
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
 import { TextOrImage } from './sampleAgents';
+import { RegisteredAgentType } from 'golem:agent/host';
+import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 
 test('BarAgent can be successfully initiated', () => {
   fc.assert(
@@ -937,5 +940,10 @@ function deserializeReturnValue(
 }
 
 function overrideSelfAgentId(agentId: AgentId) {
-  process.env.GOLEM_AGENT_ID = agentId.value;
+  (globalThis as any).currentAgentId = agentId.value;
+  // vi.mock('wasi:cli/environment@0.2.3', () => ({
+  //   getEnvironment: (): [string, string][] => {
+  //     return [['GOLEM_AGENT_ID', agentId.value]];
+  //   },
+  // }));
 }

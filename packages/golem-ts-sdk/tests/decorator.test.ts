@@ -817,7 +817,9 @@ describe('Annotated FooAgent class', () => {
       lowBits: BigInt(5678),
     };
 
-    process.env.GOLEM_AGENT_ID = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    (globalThis as any).currentAgentId =
+      `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+
     const fooResult = initiator.initiate({
       tag: 'tuple',
       val: [{ tag: 'component-model', val: toWitValue(value) }],
@@ -856,7 +858,9 @@ describe('Annotated SingletonAgent class', () => {
       val: [],
     };
 
-    process.env.GOLEM_AGENT_ID = `singleton-agent(${JSON.stringify(params)})`;
+    (globalThis as any).currentAgentId =
+      `singleton-agent(${JSON.stringify(params)})`;
+
     const singleton = initiator.initiate(params);
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;
