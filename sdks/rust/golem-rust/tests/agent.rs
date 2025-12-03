@@ -28,8 +28,29 @@ mod tests {
     use test_r::test;
 
     #[agent_definition]
+    trait AgentWithStaticMethods {
+        fn new(init: UserId) -> Self;
+        fn foo(param: String) -> String;
+        fn bar(param: String) -> String;
+        fn baz(&self, param: String) -> String;
+    }
+
+    #[agent_definition]
+    trait AgentWithOnlyConstructor {
+        fn new(init: UserId) -> Self;
+    }
+
+    #[agent_definition]
+    trait AgentWithOnlyStaticMethod {
+        fn new(init: UserId) -> Self;
+        fn foo(param: String) -> String;
+        fn bar(param: String) -> String;
+    }
+
+    #[agent_definition]
     trait Echo {
         fn new(init: UserId, llm_config: Config) -> Self;
+
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
         fn get_id(&self) -> String;

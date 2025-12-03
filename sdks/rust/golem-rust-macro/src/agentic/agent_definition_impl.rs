@@ -16,7 +16,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::ItemTrait;
 
-use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method};
+use crate::agentic::helpers::{is_async_trait_attr, is_constructor_method, is_static_method};
 use crate::agentic::{
     async_trait_in_agent_definition_error, get_remote_client, multiple_constructor_methods_error,
     no_constructor_method_error,
@@ -167,6 +167,10 @@ fn get_agent_type_with_remote_client(
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
             if is_constructor_method(&trait_fn.sig) {
+                return None;
+            }
+
+            if is_static_method(&trait_fn.sig) {
                 return None;
             }
 

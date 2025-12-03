@@ -53,6 +53,10 @@ pub fn is_constructor_method(sig: &syn::Signature) -> bool {
     }
 }
 
+pub fn is_static_method(sig: &syn::Signature) -> bool {
+    !sig.receiver().is_some()
+}
+
 pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
     if sig.asyncness.is_some() {
         Asyncness::Future
