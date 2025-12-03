@@ -19,7 +19,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::WorkerId;
 use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::AnalysedType;
@@ -29,13 +29,13 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub struct TestRibReplDependencyManager {
-    admin: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    admin: TestUserContext<EnvBasedTestDependencies>,
     environment_id: EnvironmentId,
 }
 
 impl TestRibReplDependencyManager {
     pub async fn new(dependencies: EnvBasedTestDependencies) -> anyhow::Result<Self> {
-        let admin = dependencies.into_admin().await;
+        let admin = dependencies.admin().await;
         let (_, env) = admin.app_and_env().await?;
         Ok(Self {
             admin,

@@ -398,7 +398,7 @@ mod tests {
         ) -> Result<(), worker::v1::worker_error::Error> {
             let mut tasks = JoinSet::new();
             for worker_id in workers {
-                let self_clone = self.clone().into_admin().await;
+                let self_clone = self.admin().await;
                 tasks.spawn({
                     let worker_id = worker_id.clone();
                     async move {

@@ -18,7 +18,7 @@ use futures_concurrency::future::Join;
 use golem_common::model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
@@ -280,7 +280,7 @@ impl Benchmark for LatencyLarge {
 }
 
 pub struct IterationContext {
-    user: TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    user: TestUserContext<BenchmarkTestDependencies>,
     worker_ids: Vec<WorkerId>,
     length: usize,
 }
@@ -326,7 +326,7 @@ impl LatencyBenchmark {
     }
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
-        let user = self.deps.clone().into_user().await.unwrap();
+        let user = self.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
         let mut worker_ids = vec![];

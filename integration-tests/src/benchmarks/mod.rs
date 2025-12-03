@@ -14,7 +14,7 @@
 
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{Value, ValueAndType};
@@ -31,7 +31,7 @@ pub mod sleep;
 pub mod throughput;
 
 pub async fn delete_workers(
-    user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    user: &TestUserContext<BenchmarkTestDependencies>,
     worker_ids: &[WorkerId],
 ) {
     info!("Deleting {} workers...", worker_ids.len());
@@ -78,7 +78,7 @@ impl InvokeResult {
 }
 
 pub async fn invoke_and_await(
-    user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    user: &TestUserContext<BenchmarkTestDependencies>,
     worker_id: &WorkerId,
     function_name: &str,
     params: Vec<ValueAndType>,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::dsl_impl::TestDependenciesTestDsl;
+use self::dsl_impl::TestUserContext;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
@@ -42,7 +42,7 @@ pub mod dsl_impl;
 mod env;
 
 #[async_trait]
-pub trait TestDependencies: Send + Sync {
+pub trait TestDependencies: Send + Sync + Clone {
     fn rdb(&self) -> Arc<dyn Rdb>;
     fn redis(&self) -> Arc<dyn Redis>;
     fn blob_storage(&self) -> Arc<dyn BlobStorage>;
@@ -55,32 +55,23 @@ pub trait TestDependencies: Send + Sync {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster>;
     fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;
     fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService>;
-
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
-    async fn admin(&self) -> TestDependenciesTestDsl<&Self> {
-        self.into_admin().await
-    }
-
-    async fn into_admin(self) -> TestDependenciesTestDsl<Self>
+    async fn admin(&self) -> TestUserContext<Self>
     where
         Self: Sized,
     {
         let registry_service = self.registry_service();
-        TestDependenciesTestDsl {
+        TestUserContext {
             account_id: registry_service.admin_account_id(),
             account_email: registry_service.admin_account_email(),
             token: registry_service.admin_account_token(),
-            deps: self,
+            deps: self.clone(),
             auto_deploy_enabled: true,
         }
     }
 
-    async fn user(&self) -> anyhow::Result<TestDependenciesTestDsl<&Self>> {
-        self.into_user().await
-    }
-
-    async fn into_user(self) -> anyhow::Result<TestDependenciesTestDsl<Self>>
+    async fn user(&self) -> anyhow::Result<TestUserContext<Self>>
     where
         Self: Sized,
     {
@@ -107,11 +98,11 @@ pub trait TestDependencies: Send + Sync {
             )
             .await?;
 
-        Ok(TestDependenciesTestDsl {
+        Ok(TestUserContext {
             account_id: account.id,
             account_email: account.email,
             token: token.secret,
-            deps: self,
+            deps: self.clone(),
             auto_deploy_enabled: true,
         })
     }
@@ -119,14 +110,7 @@ pub trait TestDependencies: Send + Sync {
     async fn user_with_roles(
         &self,
         roles: &[AccountRole],
-    ) -> anyhow::Result<TestDependenciesTestDsl<&Self>> {
-        self.into_user_with_roles(roles).await
-    }
-
-    async fn into_user_with_roles(
-        self,
-        roles: &[AccountRole],
-    ) -> anyhow::Result<TestDependenciesTestDsl<Self>>
+    ) -> anyhow::Result<TestUserContext<Self>>
     where
         Self: Sized,
     {
@@ -163,11 +147,11 @@ pub trait TestDependencies: Send + Sync {
             )
             .await?;
 
-        Ok(TestDependenciesTestDsl {
+        Ok(TestUserContext {
             account_id: account.id,
             account_email: account.email,
             token: token.secret,
-            deps: self,
+            deps: self.clone(),
             auto_deploy_enabled: true,
         })
     }
@@ -181,48 +165,6 @@ pub trait TestDependencies: Send + Sync {
         self.rdb().kill().await;
         self.redis_monitor().kill();
         self.redis().kill().await;
-    }
-}
-
-impl<T: TestDependencies + ?Sized> TestDependencies for &T {
-    fn rdb(&self) -> Arc<dyn Rdb> {
-        <T as TestDependencies>::rdb(self)
-    }
-    fn redis(&self) -> Arc<dyn Redis> {
-        <T as TestDependencies>::redis(self)
-    }
-    fn blob_storage(&self) -> Arc<dyn BlobStorage> {
-        <T as TestDependencies>::blob_storage(self)
-    }
-    fn redis_monitor(&self) -> Arc<dyn RedisMonitor> {
-        <T as TestDependencies>::redis_monitor(self)
-    }
-    fn shard_manager(&self) -> Arc<dyn ShardManager> {
-        <T as TestDependencies>::shard_manager(self)
-    }
-    fn component_directory(&self) -> &Path {
-        <T as TestDependencies>::component_directory(self)
-    }
-    fn temp_directory(&self) -> &Path {
-        <T as TestDependencies>::temp_directory(self)
-    }
-    fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService> {
-        <T as TestDependencies>::component_compilation_service(self)
-    }
-    fn worker_service(&self) -> Arc<dyn WorkerService> {
-        <T as TestDependencies>::worker_service(self)
-    }
-    fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster> {
-        <T as TestDependencies>::worker_executor_cluster(self)
-    }
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        <T as TestDependencies>::initial_component_files_service(self)
-    }
-    fn plugin_wasm_files_service(&self) -> Arc<PluginWasmFilesService> {
-        <T as TestDependencies>::plugin_wasm_files_service(self)
-    }
-    fn registry_service(&self) -> Arc<dyn RegistryService> {
-        <T as TestDependencies>::registry_service(self)
     }
 }
 

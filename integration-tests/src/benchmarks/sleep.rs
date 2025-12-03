@@ -18,7 +18,7 @@ use futures_concurrency::future::Join;
 use golem_common::base_model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::IntoValueAndType;
@@ -34,7 +34,7 @@ pub struct SleepBenchmarkContext {
 }
 
 pub struct SleepIterationContext {
-    user: TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    user: TestUserContext<BenchmarkTestDependencies>,
     worker_ids: Vec<WorkerId>,
 }
 
@@ -87,7 +87,7 @@ impl Benchmark for Sleep {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
-        let user = benchmark_context.deps.clone().into_user().await.unwrap();
+        let user = benchmark_context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
         let mut worker_ids = vec![];

@@ -23,7 +23,7 @@ use golem_common::model::WorkerId;
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -72,7 +72,7 @@ async fn test_repl_invoking_functions(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let dsl = deps.clone().into_user().await?;
+    let dsl = deps.user().await?;
     let (_, env) = dsl.app_and_env().await?;
 
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
@@ -181,7 +181,7 @@ async fn test_repl_invoking_resource_methods(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let dsl = deps.clone().into_user().await?;
+    let dsl = deps.user().await?;
     let (_, env) = dsl.app_and_env().await?;
 
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
@@ -289,13 +289,13 @@ async fn test_repl_invoking_resource_methods(
 }
 
 struct TestRibReplDependencyManager {
-    test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    test_dsl: TestUserContext<EnvBasedTestDependencies>,
     environment_id: EnvironmentId,
 }
 
 impl TestRibReplDependencyManager {
     fn new(
-        test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+        test_dsl: TestUserContext<EnvBasedTestDependencies>,
         environment_id: EnvironmentId,
     ) -> Self {
         Self {
@@ -340,11 +340,11 @@ impl RibDependencyManager for TestRibReplDependencyManager {
 }
 
 pub struct TestRibReplWorkerFunctionInvoke {
-    test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    test_dsl: TestUserContext<EnvBasedTestDependencies>,
 }
 
 impl TestRibReplWorkerFunctionInvoke {
-    pub fn new(test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>) -> Self {
+    pub fn new(test_dsl: TestUserContext<EnvBasedTestDependencies>) -> Self {
         Self { test_dsl }
     }
 }

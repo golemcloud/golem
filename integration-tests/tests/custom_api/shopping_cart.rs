@@ -26,7 +26,7 @@ use golem_common::model::http_api_definition::{
 };
 use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
 use golem_common::model::Empty;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use reqwest::Url;
@@ -38,7 +38,7 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 pub struct ShoppingCart {
-    pub user: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    pub user: TestUserContext<EnvBasedTestDependencies>,
     pub env_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub client: reqwest::Client,
@@ -57,7 +57,7 @@ async fn shopping_cart(deps: &EnvBasedTestDependencies) -> ShoppingCart {
 }
 
 async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Result<ShoppingCart> {
-    let user = deps.clone().into_user().await?.with_auto_deploy(false);
+    let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 

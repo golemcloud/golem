@@ -31,7 +31,7 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
@@ -394,7 +394,7 @@ impl From<WorkerIdPair> for WorkerIdOrPair {
 }
 
 pub struct IterationContext {
-    user: TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    user: TestUserContext<BenchmarkTestDependencies>,
     domain: Domain,
     direct_rust_worker_ids: Vec<WorkerId>,
     rust_agent_worker_ids: Vec<WorkerId>,
@@ -479,7 +479,7 @@ impl ThroughputBenchmark {
             .expect("Failed to get routing table");
         info!("Fetched routing table: {routing_table}");
 
-        let user = self.deps.clone().into_user().await.unwrap();
+        let user = self.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
 
         info!("Registering components");
@@ -714,7 +714,7 @@ impl ThroughputBenchmark {
 
     pub async fn warmup(&self, iteration: &IterationContext) {
         async fn warmup_workers(
-            user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
+            user: &TestUserContext<BenchmarkTestDependencies>,
             length: usize,
             ids: &[WorkerId],
             function_name: &str,
@@ -821,7 +821,7 @@ impl ThroughputBenchmark {
 
     pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
         async fn measure_workers(
-            user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
+            user: &TestUserContext<BenchmarkTestDependencies>,
             routing_table: &RoutingTable,
             recorder: &BenchmarkRecorder,
             length: usize,

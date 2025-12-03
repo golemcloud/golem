@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
 use golem_common::model::WorkerId;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -89,7 +89,7 @@ async fn test_simple_rib(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let user = deps.clone().into_user().await?;
+    let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
 
@@ -184,7 +184,7 @@ async fn test_rib_for_loop(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let user = deps.clone().into_user().await?;
+    let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user.component(&env.id, "shopping-cart").store().await?;
 
@@ -295,7 +295,7 @@ async fn test_rib_with_resource_methods(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
 ) -> anyhow::Result<()> {
-    let user = deps.clone().into_user().await?;
+    let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
         .component(&env.id, "shopping-cart-resource")
@@ -406,11 +406,11 @@ async fn test_rib_with_resource_methods(
 }
 
 struct TestRibFunctionInvoke {
-    test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>,
+    test_dsl: TestUserContext<EnvBasedTestDependencies>,
 }
 
 impl TestRibFunctionInvoke {
-    fn new(test_dsl: TestDependenciesTestDsl<EnvBasedTestDependencies>) -> Self {
+    fn new(test_dsl: TestUserContext<EnvBasedTestDependencies>) -> Self {
         Self { test_dsl }
     }
 }
