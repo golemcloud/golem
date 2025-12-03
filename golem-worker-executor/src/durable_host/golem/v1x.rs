@@ -155,15 +155,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Resource<GetPromiseResultEntry>> {
-        // only the agent that originally created the promise is woken up when it is completed.
-        if golem_common::base_model::WorkerId::from(promise_id.agent_id.clone())
-            != *self.worker_id()
-        {
-            return Err(anyhow!(
-                "Tried awaiting a promise not created by the current agent"
-            ));
-        }
-
         let entry =
             GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
         Ok(self.table().push(entry)?)
@@ -963,7 +954,16 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let self_worker_id = self.worker_id().clone();
             let entry = self.table().get(&resource)?;
+
+            // only the agent that originally created the promise is woken up when it is completed.
+            if &entry.promise_id.worker_id != &self_worker_id {
+                return Err(anyhow!(
+                    "Tried awaiting a promise not created by the current agent"
+                ));
+            }
+
             let result = entry.get_handle().await.get().await;
             durability
                 .persist(
