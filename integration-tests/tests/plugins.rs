@@ -33,13 +33,14 @@ use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
 use wac_graph::{plug, CompositionGraph, EncodeOptions, Processor};
-use golem_client::api::RegistryServiceClient;
+use golem_client::api::{RegistryServiceClient, RegistryServiceCreateComponentError};
 use golem_common::model::plugin_registration::{ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentUpdate, PluginInstallation, PluginInstallationAction, PluginPriority};
 use golem_test_framework::model::IFSEntry;
 use std::path::PathBuf;
+use assert2::assert;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -629,10 +630,16 @@ async fn component_transformer_failed(deps: &EnvBasedTestDependencies) -> anyhow
 
     server_handle.abort();
 
-    assert!(matches!(
-        result,
-        Err(inner) if inner.to_string().contains("Component transformation failed: HTTP status: 500")
-    ));
+    let_assert!(Err(error) = result);
+    let downcasted = error.downcast_ref::<golem_client::Error<RegistryServiceCreateComponentError>>().unwrap();
+
+    let_assert!(
+        golem_client::Error::Item(
+            RegistryServiceCreateComponentError::Error400(inner_error)
+        ) = downcasted
+    );
+
+    assert!(inner_error.errors == vec!["Component transformer plugin with priority 0 failed with: HTTP status: 500 Internal Server Error"]);
 
     Ok(())
 }
