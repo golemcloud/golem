@@ -30,7 +30,7 @@ use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCl
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
-use crate::config::{DbType, GolemClientProtocol, TestDependencies};
+use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -171,7 +171,7 @@ pub struct EnvBasedTestDependencies {
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
-    test_component_dir: PathBuf
+    test_component_dir: PathBuf,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -269,8 +269,12 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn ComponentCompilationService> {
         Arc::new(
             SpawnedComponentCompilationService::new(
-                &config.debug_targets_dirs().join("golem-component-compilation-service"),
-                &config.golem_repo_root.join("golem-component-compilation-service"),
+                &config
+                    .debug_targets_dirs()
+                    .join("golem-component-compilation-service"),
+                &config
+                    .golem_repo_root
+                    .join("golem-component-compilation-service"),
                 8083,
                 9094,
                 config.default_verbosity(),
@@ -342,11 +346,7 @@ impl EnvBasedTestDependencies {
         let blob_storage_root = &config.storage_dir().join("blob_storage");
         tokio::fs::create_dir_all(&blob_storage_root).await?;
 
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&blob_storage_root)
-                .await
-                .unwrap(),
-        );
+        let blob_storage = Arc::new(FileSystemBlobStorage::new(blob_storage_root).await.unwrap());
 
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
@@ -395,7 +395,7 @@ impl EnvBasedTestDependencies {
             component_compilation_service,
             worker_executor_cluster,
             worker_service,
-            test_component_dir: config.test_components_dir()
+            test_component_dir: config.test_components_dir(),
         })
     }
 }

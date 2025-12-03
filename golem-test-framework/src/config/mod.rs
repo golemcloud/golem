@@ -24,7 +24,6 @@ use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 pub use benchmark::{BenchmarkCliParameters, BenchmarkTestDependencies, CliTestService};
 use chrono::{DateTime, Utc};
-use clap::ValueEnum;
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
@@ -41,13 +40,6 @@ use uuid::Uuid;
 pub mod benchmark;
 pub mod dsl_impl;
 mod env;
-
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-#[clap(rename_all = "kebab-case")]
-pub enum GolemClientProtocol {
-    Grpc,
-    Http,
-}
 
 #[async_trait]
 pub trait TestDependencies: Send + Sync {

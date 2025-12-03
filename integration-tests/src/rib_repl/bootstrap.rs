@@ -15,9 +15,11 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::WorkerId;
 use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::AnalysedType;
@@ -25,20 +27,20 @@ use golem_wasm::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use uuid::Uuid;
-use golem_client::model::Environment;
-use golem_common::model::environment::EnvironmentId;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 
 pub struct TestRibReplDependencyManager {
     admin: TestDependenciesTestDsl<EnvBasedTestDependencies>,
-    environment_id: EnvironmentId
+    environment_id: EnvironmentId,
 }
 
 impl TestRibReplDependencyManager {
     pub async fn new(dependencies: EnvBasedTestDependencies) -> anyhow::Result<Self> {
         let admin = dependencies.into_admin().await;
         let (_, env) = admin.app_and_env().await?;
-        Ok(Self { admin, environment_id: env.id })
+        Ok(Self {
+            admin,
+            environment_id: env.id,
+        })
     }
 }
 
@@ -53,7 +55,8 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         _source_path: &Path,
         component_name: String,
     ) -> anyhow::Result<ComponentDependency> {
-        let component = self.admin
+        let component = self
+            .admin
             .component(&self.environment_id, component_name.as_str())
             .store()
             .await?;

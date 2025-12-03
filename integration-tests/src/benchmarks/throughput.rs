@@ -14,13 +14,24 @@
 
 use crate::benchmarks::{delete_workers, invoke_and_await, invoke_and_await_http};
 use async_trait::async_trait;
+use axum::http::{HeaderMap, HeaderValue};
 use futures_concurrency::future::Join;
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::component::ComponentName;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
+use golem_common::model::deployment::DeploymentCreation;
+use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::http_api_definition::{
+    GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
+    HttpApiRoute, RouteMethod, WorkerGatewayBinding,
+};
+use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
 use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
@@ -29,15 +40,6 @@ use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, Level};
-use uuid::Uuid;
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
-use golem_common::model::http_api_definition::{GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute, RouteMethod, WorkerGatewayBinding};
-use golem_common::model::component::ComponentName;
-use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
-use golem_client::api::RegistryServiceClient;
-use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
-use golem_common::model::deployment::DeploymentCreation;
-use axum::http::{HeaderMap, HeaderValue};
 
 pub struct ThroughputEcho {
     config: RunConfig,
@@ -86,7 +88,10 @@ impl Benchmark for ThroughputEcho {
             "benchmark:agent-ts/rpc-benchmark-agent.{echo}",
             Box::new(|_| vec!["benchmark".into_value_and_type()]),
             Box::new(|port, idx, _length| {
-                let url = Url::parse(&format!("http://localhost:{port}/test-{idx}-rib/echo/test-message")).unwrap();
+                let url = Url::parse(&format!(
+                    "http://localhost:{port}/test-{idx}-rib/echo/test-message"
+                ))
+                .unwrap();
                 Request::new(Method::POST, url)
             }),
             mode,
@@ -606,7 +611,7 @@ impl ThroughputBenchmark {
             routes: vec![
                 HttpApiRoute {
                     method: RouteMethod::Post,
-                    path: format!("/{{name}}/echo/{{param}}"),
+                    path: "/{name}/echo/{param}".to_string(),
                     binding: GatewayBinding::Worker(WorkerGatewayBinding {
                         component_name: ComponentName("benchmark:agent-ts".to_string()),
                         idempotency_key: None,
@@ -622,7 +627,7 @@ impl ThroughputBenchmark {
                 },
                 HttpApiRoute {
                     method: RouteMethod::Post,
-                    path: format!("/{{name}}/large-input"),
+                    path: "/{name}/large-input".to_string(),
                     binding: GatewayBinding::Worker(WorkerGatewayBinding {
                         component_name: ComponentName("benchmark:agent-ts".to_string()),
                         idempotency_key: None,
@@ -638,7 +643,7 @@ impl ThroughputBenchmark {
                 },
                 HttpApiRoute {
                     method: RouteMethod::Post,
-                    path: format!("/{{name}}/cpu-intensive"),
+                    path: "/{name}/cpu-intensive".to_string(),
                     binding: GatewayBinding::Worker(WorkerGatewayBinding {
                         component_name: ComponentName("benchmark:agent-ts".to_string()),
                         idempotency_key: None,
@@ -937,11 +942,7 @@ impl ThroughputBenchmark {
                     for _ in 0..self.call_count {
                         results.push(
                             invoke_and_await_http(client.clone(), || {
-                                (self.http_request)(
-                                    port,
-                                    idx,
-                                    iteration.length,
-                                )
+                                (self.http_request)(port, idx, iteration.length)
                             })
                             .await,
                         )

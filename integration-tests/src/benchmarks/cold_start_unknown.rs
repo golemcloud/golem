@@ -18,13 +18,13 @@ use futures_concurrency::future::Join;
 use golem_common::model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use std::time::Duration;
 use tracing::{info, Level};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 
 pub struct ColdStartUnknownSmall {
     config: RunConfig,

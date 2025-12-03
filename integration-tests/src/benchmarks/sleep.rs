@@ -18,13 +18,12 @@ use futures_concurrency::future::Join;
 use golem_common::base_model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
-use golem_test_framework::config::{BenchmarkTestDependencies, EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::IntoValueAndType;
 use indoc::indoc;
 use tracing::{info, Level};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
-use golem_common::model::environment::EnvironmentId;
 
 pub struct Sleep {
     config: RunConfig,
@@ -103,7 +102,7 @@ impl Benchmark for Sleep {
 
         for n in 0..self.config.size {
             let worker_id = WorkerId {
-                component_id: component.id.clone(),
+                component_id: component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             };
             worker_ids.push(worker_id);

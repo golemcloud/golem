@@ -14,7 +14,8 @@
 
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
-use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
+use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{Value, ValueAndType};
 use reqwest::header::{HeaderName, HeaderValue};
@@ -22,7 +23,6 @@ use reqwest::{Client, Request};
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 
 pub mod cold_start_unknown;
 pub mod durability_overhead;
@@ -30,7 +30,10 @@ pub mod latency;
 pub mod sleep;
 pub mod throughput;
 
-pub async fn delete_workers(user: &TestDependenciesTestDsl<BenchmarkTestDependencies>, worker_ids: &[WorkerId]) {
+pub async fn delete_workers(
+    user: &TestDependenciesTestDsl<BenchmarkTestDependencies>,
+    worker_ids: &[WorkerId],
+) {
     info!("Deleting {} workers...", worker_ids.len());
     for worker_id in worker_ids {
         if let Err(err) = user.delete_worker(worker_id).await {

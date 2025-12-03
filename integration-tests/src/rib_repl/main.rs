@@ -17,15 +17,16 @@ use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use integration_tests::rib_repl::bootstrap::*;
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = EnvBasedTestDependenciesConfig {
         golem_repo_root: PathBuf::from("."),
         ..Default::default()
-    }.with_env_overrides();
+    }
+    .with_env_overrides();
     let deps = EnvBasedTestDependencies::new(config).await?;
 
     let component_name = std::env::args()

@@ -18,14 +18,13 @@ use futures_concurrency::future::Join;
 use golem_common::model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use std::time::Duration;
 use tracing::{info, Level};
-use golem_test_framework::config::dsl_impl::TestDependenciesTestDsl;
-use golem_common::model::environment::EnvironmentId;
 
 pub struct LatencySmall {
     config: RunConfig,
@@ -332,10 +331,7 @@ impl LatencyBenchmark {
 
         let mut worker_ids = vec![];
 
-        let component = self
-            .deps
-            .admin()
-            .await
+        let component = user
             .component(&env.id, &self.component_name)
             .name(&self.root_package_name)
             .store()
@@ -344,7 +340,7 @@ impl LatencyBenchmark {
 
         for n in 0..config.size {
             let worker_id = WorkerId {
-                component_id: component.id.clone(),
+                component_id: component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             };
             worker_ids.push(worker_id);
