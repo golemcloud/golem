@@ -577,60 +577,65 @@ async fn component_transformer_ifs(deps: &EnvBasedTestDependencies) -> anyhow::R
     Ok(())
 }
 
-// #[test]
-// async fn component_transformer_failed(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     async fn transform() -> StatusCode {
-//         StatusCode::INTERNAL_SERVER_ERROR
-//     }
-//     let admin = deps.admin().await;
+#[test]
+#[tracing::instrument]
+async fn component_transformer_failed(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    async fn transform() -> StatusCode {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
 
-//     let app = Router::new().route("/transform", post(transform));
+    let app = Router::new().route("/transform", post(transform));
 
-//     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-//     let port = listener.local_addr().unwrap().port();
+    let port = listener.local_addr().unwrap().port();
 
-//     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-//     let component_id = admin.component("logging").unique().store().await;
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-//     admin
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "component-transformer-failed".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::ComponentTransformer(
-//                 ComponentTransformerDefinition {
-//                     provided_wit_package: None,
-//                     json_schema: None,
-//                     validate_url: "not-used".to_string(),
-//                     transform_url: format!("http://localhost:{port}/transform"),
-//                 },
-//             ),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
+    let component_transformer_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "component-transformer-failed".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                }),
+            },
+            None::<Vec<u8>>,
+        )
+        .await?;
 
-//     let result = <TestDependenciesDsl<_> as golem_test_framework::dsl::TestDsl>::
-//         install_plugin_to_component(
-//             &admin,
-//             &component_id,
-//             "component-transformer-failed",
-//             "v1",
-//             0,
-//             HashMap::new(),
-//         )
-//         .await;
+    let component_transformer_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: component_transformer_plugin.id,
+            },
+        )
+        .await?;
 
-//     server_handle.abort();
+    let result = user.component(&env.id, "logging").with_plugin(&component_transformer_plugin_grant.id, 0).store().await;
 
-//     assert!(matches!(
-//         result,
-//         Err(inner) if inner.to_string().contains("Component transformation failed: HTTP status: 500")
-//     ));
-// }
+    server_handle.abort();
+
+    assert!(matches!(
+        result,
+        Err(inner) if inner.to_string().contains("Component transformation failed: HTTP status: 500")
+    ));
+
+    Ok(())
+}
 
 // #[test]
 // async fn oplog_processor_global_scope(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
