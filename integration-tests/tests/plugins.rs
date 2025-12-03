@@ -28,7 +28,7 @@ use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
 use golem_wasm::{IntoValueAndType, Record, Value};
 use reqwest::StatusCode;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
@@ -37,6 +37,7 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::plugin_registration::{ComponentTransformerPluginSpec, PluginRegistrationCreation, PluginSpecDto};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::base64::Base64;
+use golem_common::model::component::{ComponentUpdate, PluginInstallation, PluginInstallationAction, PluginPriority};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -177,140 +178,165 @@ async fn component_transformer1(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     Ok(())
 }
 
-// #[test]
-// async fn component_transformer2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-//     fn transform_component(plug_bytes: Bytes) -> anyhow::Result<Vec<u8>> {
-//         let mut graph = CompositionGraph::new();
-//         let plug = Package::from_bytes("component", None, plug_bytes, graph.types_mut())?;
-//         let plug = graph.register_package(plug)?;
+#[test]
+#[tracing::instrument]
+async fn component_transformer2(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    fn transform_component(plug_bytes: Bytes) -> anyhow::Result<Vec<u8>> {
+        let mut graph = CompositionGraph::new();
+        let plug = Package::from_bytes("component", None, plug_bytes, graph.types_mut())?;
+        let plug = graph.register_package(plug)?;
 
-//         let socket_bytes = include_bytes!("../../../test-components/app_and_library_app.wasm");
+        let socket_bytes = include_bytes!("../../test-components/app_and_library_app.wasm");
 
-//         let socket = Package::from_bytes("socket", None, socket_bytes, graph.types_mut())?;
-//         let socket = graph.register_package(socket)?;
+        let socket = Package::from_bytes("socket", None, socket_bytes, graph.types_mut())?;
+        let socket = graph.register_package(socket)?;
 
-//         wac_graph::plug(&mut graph, vec![plug], socket)?;
+        wac_graph::plug(&mut graph, vec![plug], socket)?;
 
-//         let transformed_bytes = graph.encode(EncodeOptions {
-//             processor: Some(Processor {
-//                 name: "component-transformer-example1",
-//                 version: "0.1.0",
-//             }),
-//             ..Default::default()
-//         })?;
+        let transformed_bytes = graph.encode(EncodeOptions {
+            processor: Some(Processor {
+                name: "component-transformer-example1",
+                version: "0.1.0",
+            }),
+            ..Default::default()
+        })?;
 
-//         Ok(transformed_bytes)
-//     }
+        Ok(transformed_bytes)
+    }
 
-//     async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
-//         let mut component = None;
+    async fn transform(mut multipart: Multipart) -> axum::Json<serde_json::Value> {
+        let mut component = None;
 
-//         while let Some(field) = multipart.next_field().await.unwrap() {
-//             let name = field.name().unwrap().to_string();
-//             let data = field.bytes().await.unwrap();
-//             debug!("Length of `{}` is {} bytes", name, data.len());
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            debug!("Length of `{}` is {} bytes", name, data.len());
 
-//             match name.as_str() {
-//                 "component" => {
-//                     component = Some(data);
-//                 }
-//                 "metadata" => {
-//                     let json =
-//                         std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
-//                     info!("Metadata: {}", json);
-//                 }
-//                 _ => {
-//                     let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
-//                     info!("Configuration field: {} = {}", name, value);
-//                 }
-//             }
-//         }
+            match name.as_str() {
+                "component" => {
+                    component = Some(data);
+                }
+                "metadata" => {
+                    let json =
+                        std::str::from_utf8(&data).expect("Failed to parse metadata as UTF-8");
+                    info!("Metadata: {}", json);
+                }
+                _ => {
+                    let value = std::str::from_utf8(&data).expect("Failed to parse field as UTF-8");
+                    info!("Configuration field: {} = {}", name, value);
+                }
+            }
+        }
 
-//         let transformed_bytes =
-//             transform_component(component.expect("did not receive a component part"))
-//                 .expect("Failed to transform component");
+        let transformed_bytes =
+            transform_component(component.expect("did not receive a component part"))
+                .expect("Failed to transform component");
 
-//         let data_base64 = base64::engine::general_purpose::STANDARD.encode(&transformed_bytes);
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&transformed_bytes);
 
-//         let response = json!({
-//             "data": data_base64
-//         });
+        let response = json!({
+            "data": data_base64
+        });
 
-//         axum::Json(response)
-//     }
+        axum::Json(response)
+    }
 
-//     let admin = deps.admin().await;
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
 
-//     let app = Router::new().route("/transform", post(transform));
+    let app = Router::new().route("/transform", post(transform));
 
-//     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
-//     let port = listener.local_addr().unwrap().port();
+    let port = listener.local_addr().unwrap().port();
 
-//     let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-//     let component_id = admin
-//         .component("app_and_library_library")
-//         .unique()
-//         .store()
-//         .await;
+    let component = user
+        .component(&env.id, "app_and_library_library")
+        .store()
+        .await?;
 
-//     admin
-//         .create_plugin(PluginDefinitionCreation {
-//             name: "component-transformer-2".to_string(),
-//             version: "v1".to_string(),
-//             description: "A test".to_string(),
-//             icon: vec![],
-//             homepage: "none".to_string(),
-//             specs: PluginTypeSpecificDefinition::ComponentTransformer(
-//                 ComponentTransformerDefinition {
-//                     provided_wit_package: None,
-//                     json_schema: None,
-//                     validate_url: "not-used".to_string(),
-//                     transform_url: format!("http://localhost:{port}/transform"),
-//                 },
-//             ),
-//             scope: PluginScope::Global(Empty {}),
-//         })
-//         .await;
+    let component_transformer_plugin = client
+        .create_plugin(
+            &user.account_id.0,
+            &PluginRegistrationCreation {
+                name: "component-transformer-2".to_string(),
+                version: "v1".to_string(),
+                description: "A test".to_string(),
+                icon: Base64(Vec::new()),
+                homepage: "none".to_string(),
+                spec: PluginSpecDto::ComponentTransformer(ComponentTransformerPluginSpec {
+                    provided_wit_package: None,
+                    json_schema: None,
+                    validate_url: "not-used".to_string(),
+                    transform_url: format!("http://localhost:{port}/transform"),
+                }),
+            },
+            None::<Vec<u8>>,
+        )
+        .await?;
 
-//     admin
-//         .install_plugin_to_component(
-//             &component_id,
-//             "component-transformer-2",
-//             "v1",
-//             0,
-//             HashMap::new(),
-//         )
-//         .await;
+    let component_transformer_plugin_grant = client
+        .create_environment_plugin_grant(
+            &env.id.0,
+            &EnvironmentPluginGrantCreation {
+                plugin_registration_id: component_transformer_plugin.id,
+            },
+        )
+        .await?;
 
-//     server_handle.abort();
+    let updated_component = client.update_component(
+        &component.id.0,
+        &ComponentUpdate {
+            current_revision: component.revision,
+            removed_files: Vec::new(),
+            new_file_options: BTreeMap::new(),
+            dynamic_linking: None,
+            env: None,
+            agent_types: None,
+            plugin_updates: vec![
+                PluginInstallationAction::Install(PluginInstallation {
+                    environment_plugin_grant_id: component_transformer_plugin_grant.id,
+                    priority: PluginPriority(0),
+                    parameters: BTreeMap::new()
+                })
+            ]
+        },
+        None::<Vec<u8>>,
+        None::<Vec<u8>>,
+    ).await?;
 
-//     let patched_component_metadata = admin.get_latest_component_metadata(&component_id).await;
+    server_handle.abort();
 
-//     let exports = patched_component_metadata.exports();
+    let exports = updated_component.metadata.exports();
 
-//     assert_eq!(exports.len(), 1);
-//     assert!(matches!(
-//         &exports[0],
-//         AnalysedExport::Instance(AnalysedInstance {
-//             name,
-//             ..
-//         }) if name == "it:app-and-library-app/app-api"
-//     ));
+    assert_eq!(exports.len(), 1);
+    assert!(matches!(
+        &exports[0],
+        AnalysedExport::Instance(AnalysedInstance {
+            name,
+            ..
+        }) if name == "it:app-and-library-app/app-api"
+    ));
 
-//     let worker = admin.start_worker(&component_id, "worker1").await;
+    user.deploy_environment(&env.id).await?;
 
-//     let response = admin
-//         .invoke_and_await(
-//             &worker,
-//             "it:app-and-library-app/app-api.{app-function}",
-//             vec![],
-//         )
-//         .await;
+    let worker = user.start_worker(&component.id, "worker1").await?;
 
-//     assert_eq!(response, Ok(vec![Value::U64(2)]));
-// }
+    let response = user
+        .invoke_and_await(
+            &worker,
+            "it:app-and-library-app/app-api.{app-function}",
+            vec![],
+        )
+        .await?;
+
+    assert_eq!(response, vec![Value::U64(2)]);
+
+    Ok(())
+}
 
 // #[test]
 // async fn component_transformer_env_var(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
