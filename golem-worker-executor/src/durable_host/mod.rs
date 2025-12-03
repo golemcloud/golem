@@ -1394,7 +1394,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision {
         {
             let oplog_entry = match trap_type {
                 TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
@@ -1445,6 +1449,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .store_invocation_failure(&idempotency_key, trap_type)
                     .await;
+
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    self.is_live(),
+                );
             }
         }
 
@@ -1500,6 +1510,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         .worker()
                         .store_invocation_success(&idempotency_key, output.clone())
                         .await;
+
+                    self.public_state.event_service().emit_invocation_finished(
+                        full_function_name,
+                        &idempotency_key,
+                        is_live,
+                    );
                 }
             }
         } else {
@@ -1520,6 +1536,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
         debug!("Function {full_function_name} finished with {output:?}");
+
         Ok(())
     }
 
@@ -1966,7 +1983,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             let _ = store
                                                 .as_context_mut()
                                                 .data_mut()
-                                                .on_invocation_failure(&trap_type)
+                                                .on_invocation_failure(
+                                                    &full_function_name,
+                                                    &trap_type,
+                                                )
                                                 .await;
 
                                             break Err(WorkerExecutorError::invalid_request(
@@ -1985,7 +2005,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         let _ = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(&trap_type)
+                                            .on_invocation_failure(&full_function_name, &trap_type)
                                             .await;
 
                                         break Err(WorkerExecutorError::invalid_request(format!(
@@ -2009,7 +2029,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         let decision = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(&trap_type)
+                                            .on_invocation_failure(&full_function_name, &trap_type)
                                             .await;
 
                                         if decision == RetryDecision::None {

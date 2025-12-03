@@ -494,8 +494,14 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        self.durable_ctx.on_invocation_failure(trap_type).await
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision {
+        self.durable_ctx
+            .on_invocation_failure(full_function_name, trap_type)
+            .await
     }
 
     async fn on_invocation_success(
