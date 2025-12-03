@@ -401,7 +401,7 @@ impl DeploymentContext {
             None
         };
 
-        let invocation_context_compiled = if let Some(expr) = &binding.idempotency_key {
+        let invocation_context_compiled = if let Some(expr) = &binding.invocation_context {
             let rib_expr = rib::from_string(expr).map_err(DeployValidationError::InvalidRibExpr)?;
             Some(
                 InvocationContextCompiled::from_expr(&rib_expr)
