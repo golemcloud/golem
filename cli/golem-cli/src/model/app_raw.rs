@@ -20,9 +20,12 @@ use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use anyhow::{anyhow, Context};
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_definition::{
+    GatewayBindingType, HttpApiDefinitionName, RouteMethod,
+};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -124,9 +127,8 @@ pub struct HttpApi {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDefinition {
+    // TODO: atomic: drop?
     pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<HttpApiDefinitionRoute>,
 }
@@ -134,7 +136,7 @@ pub struct HttpApiDefinition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDefinitionRoute {
-    pub method: String,
+    pub method: RouteMethod,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
@@ -160,13 +162,32 @@ pub struct HttpApiDefinitionBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component_version: Option<u64>,
+    pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
+}
+
+impl HttpApiDefinitionBinding {
+    pub fn to_diffable(&self) -> diff::HttpApiDefinitionBinding {
+        diff::HttpApiDefinitionBinding {
+            binding_type: match self.type_.unwrap_or_default() {
+                HttpApiDefinitionBindingType::Default => GatewayBindingType::Worker,
+                HttpApiDefinitionBindingType::CorsPreflight => GatewayBindingType::CorsPreflight,
+                HttpApiDefinitionBindingType::FileServer => GatewayBindingType::FileServer,
+                HttpApiDefinitionBindingType::HttpHandler => GatewayBindingType::HttpHandler,
+                HttpApiDefinitionBindingType::SwaggerUi => GatewayBindingType::SwaggerUi,
+            },
+            component_name: self.component_name.clone(),
+            worker_name: None, // TODO: atomic: check if we have restore it (and if it's agent compatible now)
+            idempotency_key: self.idempotency_key.clone(),
+            invocation_context: self.invocation_context.clone(),
+            response: self.response.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

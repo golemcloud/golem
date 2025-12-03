@@ -12,20 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app;
 use crate::model::component::ComponentDeployProperties;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::component::is_sensitive_env_var_name;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::{DeploymentPlanComponentEntry, DeploymentRevision};
+use golem_common::model::deployment::{
+    DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision,
+};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub deployable_manifest_http_api_definitions:
+        BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
+    pub deployable_manifest_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
 }
@@ -48,6 +57,8 @@ impl DeployQuickDiff {
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub deployable_http_api_definitions: BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
+    pub deployable_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
     #[allow(unused)] // NOTE: for debug logs
@@ -102,6 +113,34 @@ impl DeployDiff {
             })
     }
 
+    pub fn deployable_manifest_http_api_definition(
+        &self,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &app::HttpApiDefinition {
+        self.deployable_http_api_definitions
+            .get(http_api_definition_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Illegal state, missing HTTP API definition {} from deployable manifest",
+                    http_api_definition_name
+                )
+            })
+    }
+
+    pub fn deployable_manifest_http_api_deployment(
+        &self,
+        domain: &Domain,
+    ) -> &Vec<HttpApiDefinitionName> {
+        self.deployable_http_api_deployments
+            .get(domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Illegal state, missing HTTP API deployment {} from deployable manifest",
+                    domain
+                )
+            })
+    }
+
     pub fn staged_component_identity(
         &self,
         component_name: &ComponentName,
@@ -114,6 +153,38 @@ impl DeployDiff {
                 panic!(
                     "Expected component {} not found in deployment plan",
                     component_name
+                )
+            })
+    }
+
+    pub fn staged_http_api_definition_identity(
+        &self,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &DeploymentPlanHttpApiDefintionEntry {
+        self.server_staged_deployment
+            .http_api_definitions
+            .iter()
+            .find(|def| &def.name == http_api_definition_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API definition {} not found in deployment plan",
+                    http_api_definition_name
+                )
+            })
+    }
+
+    pub fn staged_http_api_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &DeploymentPlanHttpApiDeploymentEntry {
+        self.server_staged_deployment
+            .http_api_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API deployment {} not found in deployment plan",
+                    domain
                 )
             })
     }

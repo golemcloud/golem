@@ -44,3 +44,15 @@ declare_structs! {
         pub created_at: DateTime<chrono::Utc>,
     }
 }
+
+impl HttpApiDeployment {
+    pub fn to_diffable(&self) -> diff::HttpApiDeployment {
+        diff::HttpApiDeployment {
+            apis: self
+                .api_definitions
+                .iter()
+                .map(|def| def.0.clone())
+                .collect(),
+        }
+    }
+}

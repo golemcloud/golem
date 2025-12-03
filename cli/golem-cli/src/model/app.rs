@@ -28,9 +28,12 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
+use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute,
+};
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
     ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -449,7 +452,7 @@ pub struct Application {
     no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
-    http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
+    http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
     http_api_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
 }
@@ -582,7 +585,7 @@ impl Application {
 
     pub fn http_api_definitions(
         &self,
-    ) -> &BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>> {
+    ) -> &BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>> {
         &self.http_api_definitions
     }
 
@@ -592,41 +595,6 @@ impl Application {
             .unwrap_or_else(|| panic!("HTTP API definition not found: {}", name.as_str()))
             .source
             .clone()
-    }
-
-    pub fn used_component_names_for_http_api_definition(
-        &self,
-        name: &HttpApiDefinitionName,
-    ) -> Vec<ComponentName> {
-        self.http_api_definitions
-            .get(name)
-            .unwrap_or_else(|| panic!("HTTP API definition not found: {}", name.as_str()))
-            .value
-            .routes
-            .iter()
-            .filter_map(|route| {
-                route
-                    .binding
-                    .component_name
-                    .as_ref()
-                    .map(|component_name| ComponentName(component_name.to_string()))
-            })
-            .collect()
-    }
-
-    pub fn used_component_names_for_all_http_api_definition(&self) -> Vec<ComponentName> {
-        self.http_api_definitions
-            .values()
-            .flat_map(|def| {
-                def.value.routes.iter().filter_map(|route| {
-                    route
-                        .binding
-                        .component_name
-                        .as_ref()
-                        .map(|component_name| ComponentName(component_name.to_string()))
-                })
-            })
-            .collect()
     }
 
     pub fn http_api_deployments(
@@ -1514,6 +1482,25 @@ impl InitialComponentFileSource {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HttpApiDefinition {
+    pub version: HttpApiDefinitionVersion,
+    pub routes: Vec<HttpApiRoute>,
+}
+
+impl HttpApiDefinition {
+    pub fn to_diffable(&self) -> diff::HttpApiDefinition {
+        diff::HttpApiDefinition {
+            routes: self
+                .routes
+                .iter()
+                .map(|route| route.to_diffable())
+                .collect(),
+            version: self.version.0.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallation {
@@ -1556,8 +1543,8 @@ mod app_builder {
         Application, ApplicationNameAndEnvironments, BinaryComponentSource, ComponentLayer,
         ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
         ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
-        DependentComponent, MultiSourceHttpApiDefinitionNames, PartitionedComponentPresets,
-        TemplateName, WithSource, DEFAULT_TEMP_DIR,
+        DependentComponent, HttpApiDefinition, MultiSourceHttpApiDefinitionNames,
+        PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1568,7 +1555,13 @@ mod app_builder {
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::http_api_definition::{HttpApiDefinitionName, RouteMethod};
+    use golem_common::model::http_api_definition::{
+        CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinitionName,
+        HttpApiDefinitionVersion, HttpApiRoute, HttpHandlerBinding, RouteMethod,
+        WorkerGatewayBinding,
+    };
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_common::model::Empty;
     use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1607,7 +1600,7 @@ mod app_builder {
         HttpApiDefinition(HttpApiDefinitionName),
         HttpApiDefinitionRoute {
             api: HttpApiDefinitionName,
-            method: String,
+            method: RouteMethod,
             path: String,
         },
         HttpApiDeployment {
@@ -1678,7 +1671,7 @@ mod app_builder {
                     format!(
                         "{} - {} - {}",
                         api.as_str().log_color_highlight(),
-                        method.log_color_highlight(),
+                        method.to_string().log_color_highlight(),
                         path.log_color_highlight(),
                     )
                 }
@@ -1724,8 +1717,9 @@ mod app_builder {
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
 
-        http_api_definitions:
+        raw_http_api_definitions:
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
+        http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
         http_api_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, MultiSourceHttpApiDefinitionNames>>,
 
@@ -1755,7 +1749,7 @@ mod app_builder {
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_dependency_targets(&mut validation);
             builder.validate_unique_sources(&mut validation);
-            builder.validate_http_api_definitions(&mut validation);
+            builder.validate_and_convert_http_api_definitions(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
             let dependency_sources = {
@@ -1970,23 +1964,17 @@ mod app_builder {
                                 &app.source,
                             ) {
                                 for route in &api_definition.routes {
-                                    let Ok(method) = route.method.parse::<RouteMethod>() else {
-                                        continue;
-                                    };
-
                                     self.add_entity_source(
                                         UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
                                             api: api_definition_name.clone(),
-                                            method: method.to_string(),
-                                            // TODO: atomic
-                                            // path: normalize_http_api_binding_path(&route.path),
+                                            method: route.method.clone(),
                                             path: route.path.clone(),
                                         },
                                         &app.source,
                                     );
                                 }
 
-                                self.http_api_definitions.insert(
+                                self.raw_http_api_definitions.insert(
                                     api_definition_name,
                                     WithSource::new(app.source.to_path_buf(), api_definition),
                                 );
@@ -2484,8 +2472,13 @@ mod app_builder {
             }
         }
 
-        fn validate_http_api_definitions(&self, validation: &mut ValidationBuilder) {
-            for (name, api_definition) in &self.http_api_definitions {
+        fn validate_and_convert_http_api_definitions(
+            &mut self,
+            validation: &mut ValidationBuilder,
+        ) {
+            for (name, api_definition) in &self.raw_http_api_definitions {
+                let mut converted_routes = Vec::with_capacity(api_definition.value.routes.len());
+
                 validation.with_context(
                     vec![
                         (
@@ -2496,26 +2489,16 @@ mod app_builder {
                     ],
                     |validation| {
                         let def = &api_definition.value;
-
-                        if let Some(project) = &def.project {
-                            check_not_empty(validation, "project", project);
-                        }
                         check_not_empty(validation, "version", &def.version);
 
                         for route in &def.routes {
                             validation.with_context(
                                 vec![
-                                    ("method", route.method.clone()),
+                                    ("method", route.method.to_string().clone()),
                                     ("path", route.path.clone()),
                                 ],
                                 |validation| {
-                                    if check_not_empty(validation, "method", &route.method) {
-                                        if let Err(err) = route.method.parse::<RouteMethod>() {
-                                            validation.add_error(err.to_string());
-                                        }
-                                    }
                                     check_not_empty(validation, "path", &route.path);
-
 
                                     let binding_type = route.binding.type_.unwrap_or_default();
                                     let binding_type_as_string = serde_json::to_string(&binding_type).unwrap();
@@ -2533,7 +2516,7 @@ mod app_builder {
                                         }
                                     };
 
-                                    let check_component_name_and_version = |validation: &mut ValidationBuilder|
+                                    let check_component_name = |validation: &mut ValidationBuilder|
                                         {
                                             match route.binding.component_name.as_deref() {
                                                 Some(name) => {
@@ -2590,42 +2573,109 @@ mod app_builder {
                                         }
                                     };
 
-                                    match route.binding.type_.unwrap_or_default() {
+                                    let binding = match route.binding.type_.unwrap_or_default() {
                                         app_raw::HttpApiDefinitionBindingType::Default => {
-                                            check_component_name_and_version(validation);
+                                            check_component_name(validation);
+                                            check_not_allowed(validation, "agent", &route.binding.agent);
                                             check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
                                             check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
+
+                                            match (&route.binding.component_name, &route.binding.response) {
+                                                (Some(component_name), Some(response)) => {
+                                                    Some(GatewayBinding::Worker(WorkerGatewayBinding {
+                                                        component_name: ComponentName(component_name.clone()),
+                                                        idempotency_key: route.binding.idempotency_key.clone(),
+                                                        invocation_context: route.binding.invocation_context.clone(),
+                                                        response: response.clone(),
+                                                    }))
+                                                }
+                                                _ => None
+                                            }
                                         }
                                         app_raw::HttpApiDefinitionBindingType::CorsPreflight => {
+                                            check_not_allowed(validation, "agent", &route.binding.agent);
                                             check_not_allowed(validation, "componentName", &route.binding.component_name);
                                             check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
                                             check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_rib(validation, "response", &route.binding.response, false);
+
+                                            Some(GatewayBinding::CorsPreflight(CorsPreflightBinding {
+                                                response: route.binding.response.clone(),
+                                            }))
                                         }
                                         app_raw::HttpApiDefinitionBindingType::FileServer => {
-                                            check_component_name_and_version(validation);
+                                            check_component_name(validation);
+                                            check_rib(validation, "agent", &route.binding.agent, true);
                                             check_rib(validation, "idempotencyKey", &route.binding.idempotency_key, false);
                                             check_rib(validation, "invocationContext", &route.binding.invocation_context, false);
                                             check_rib(validation, "response", &route.binding.response, true);
+
+                                            match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
+                                                (Some(component_name), Some(agent), Some(response)) => {
+                                                    Some(GatewayBinding::FileServer(FileServerBinding {
+                                                        component_name: ComponentName(component_name.clone()),
+                                                        worker_name: agent.clone(),
+                                                        response: response.clone(),
+                                                    }))
+                                                }
+                                                _ => None
+                                            }
                                         }
                                         app_raw::HttpApiDefinitionBindingType::HttpHandler => {
-                                            check_component_name_and_version(validation);
+                                            check_component_name(validation);
+                                            check_rib(validation, "agent", &route.binding.agent, true);
                                             check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
                                             check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
+
+                                            match (&route.binding.component_name, &route.binding.agent, &route.binding.response) {
+                                                (Some(component_name), Some(agent), Some(response)) =>
+                                                    Some(GatewayBinding::HttpHandler(HttpHandlerBinding {
+                                                        component_name: ComponentName(component_name.clone()),
+                                                        worker_name: agent.clone(),
+                                                        idempotency_key: route.binding.idempotency_key.clone(),
+                                                        invocation_context: route.binding.invocation_context.clone(),
+                                                        response: response.clone(),
+                                                    })),
+                                                _ => None
+                                            }
                                         }
                                         app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
+                                            check_not_allowed(validation, "agent", &route.binding.agent);
                                             check_not_allowed(validation, "componentName", &route.binding.component_name);
                                             check_not_allowed(validation, "idempotencyKey", &route.binding.idempotency_key);
                                             check_not_allowed(validation, "invocationContext", &route.binding.invocation_context);
                                             check_not_allowed(validation, "response", &route.binding.response);
+                                            Some(GatewayBinding::SwaggerUi(Empty {}))
                                         }
+                                    };
+
+                                    if let Some(binding) = binding {
+                                        converted_routes.push(
+                                            HttpApiRoute {
+                                                method: route.method.clone(),
+                                                path: route.path.clone(),
+                                                binding,
+                                                security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
+                                            }
+                                        )
                                     }
                                 },
                             );
                         }
                     },
+                );
+
+                self.http_api_definitions.insert(
+                    name.clone(),
+                    WithSource::new(
+                        api_definition.source.clone(),
+                        HttpApiDefinition {
+                            version: HttpApiDefinitionVersion(api_definition.value.version.clone()),
+                            routes: converted_routes,
+                        },
+                    ),
                 );
             }
         }

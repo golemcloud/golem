@@ -45,6 +45,8 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
@@ -666,10 +668,22 @@ impl AppCommandHandler {
         let deployable_manifest_components = self
             .ctx
             .component_handler()
-            .all_deployable_manifest_components()
+            .deployable_manifest_components()
             .await?;
 
-        let diffable_components = {
+        let deployable_manifest_http_api_definitions = self
+            .ctx
+            .api_definition_handler()
+            .deployable_manifest_http_api_definitions()
+            .await?;
+
+        let deployable_manifest_http_api_deployments = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_api_deployments(&environment.environment_name)
+            .await?;
+
+        let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
             for (component_name, component_deploy_properties) in &deployable_manifest_components {
                 let diffable_component = self
@@ -682,10 +696,42 @@ impl AppCommandHandler {
             diffable_components
         };
 
+        let diffable_local_http_api_definitions = {
+            let mut diffable_http_api_definitions =
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDefinition>>::new();
+            for (http_api_definition_name, http_api_definition) in
+                &deployable_manifest_http_api_definitions
+            {
+                diffable_http_api_definitions.insert(
+                    http_api_definition_name.0.clone(),
+                    http_api_definition.to_diffable().into(),
+                );
+            }
+            diffable_http_api_definitions
+        };
+
+        let diffable_local_http_api_deployments = {
+            let mut diffable_local_http_api_deployments =
+                BTreeMap::<String, diff::HashOf<diff::HttpApiDeployment>>::new();
+            for (domain, http_api_deployment) in &deployable_manifest_http_api_deployments {
+                diffable_local_http_api_deployments.insert(
+                    domain.0.clone(),
+                    diff::HttpApiDeployment {
+                        apis: http_api_deployment
+                            .iter()
+                            .map(|def| def.0.clone())
+                            .collect(),
+                    }
+                    .into(),
+                );
+            }
+            diffable_local_http_api_deployments
+        };
+
         let diffable_local_deployment = diff::Deployment {
-            components: diffable_components,
-            http_api_definitions: Default::default(), // TODO: atomic,
-            http_api_deployments: Default::default(), // TODO: atomic
+            components: diffable_local_components,
+            http_api_definitions: diffable_local_http_api_definitions,
+            http_api_deployments: diffable_local_http_api_deployments,
         };
 
         let local_deployment_hash = diffable_local_deployment.hash();
@@ -693,6 +739,8 @@ impl AppCommandHandler {
         Ok(DeployQuickDiff {
             environment,
             deployable_manifest_components,
+            deployable_manifest_http_api_definitions,
+            deployable_manifest_http_api_deployments,
             diffable_local_deployment,
             local_deployment_hash,
         })
@@ -748,6 +796,10 @@ impl AppCommandHandler {
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
             deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            deployable_http_api_definitions: deploy_quick_diff
+                .deployable_manifest_http_api_definitions,
+            deployable_http_api_deployments: deploy_quick_diff
+                .deployable_manifest_http_api_deployments,
             diffable_local_deployment: deploy_quick_diff.diffable_local_deployment,
             local_deployment_hash: deploy_quick_diff.local_deployment_hash,
             server_deployment,
@@ -771,6 +823,8 @@ impl AppCommandHandler {
         }
 
         let component_handler = self.ctx.component_handler();
+        let http_api_definition_handler = self.ctx.api_definition_handler();
+        let http_api_deployment_handler = self.ctx.api_deployment_handler();
 
         for (kind, diff) in [
             (DiffKind::Stage, deploy_diff.diff_stage.as_ref()),
@@ -781,13 +835,13 @@ impl AppCommandHandler {
             };
 
             for (component_name, component_diff) in &diff.components {
-                let component_name = ComponentName(component_name.clone());
-
                 match component_diff {
                     diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
                         // NOP
                     }
                     diff::BTreeMapDiffValue::Update(_) => {
+                        let component_name = ComponentName(component_name.clone());
+
                         let component_identity =
                             deploy_diff.staged_component_identity(&component_name);
 
@@ -798,7 +852,7 @@ impl AppCommandHandler {
                             )
                             .await?;
 
-                        match kind {
+                        match &kind {
                             DiffKind::Server => {
                                 deploy_diff.diffable_server_deployment.components.insert(
                                     component_name.0,
@@ -815,42 +869,86 @@ impl AppCommandHandler {
                     }
                 }
             }
-        }
 
-        // TODO: atomic
-        /*
-        for (_http_api_definition_name, http_api_definition_diff) in
-            &diff_stage.http_api_definitions
-        {
-            match http_api_definition_diff {
-                diff::BTreeMapDiffValue::Add => {
-                    // NOP
+            for (http_api_definition_name, http_api_definition_diff) in &diff.http_api_definitions {
+                match http_api_definition_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let http_api_definition_name =
+                            HttpApiDefinitionName(http_api_definition_name.clone());
+
+                        let definition_identity = deploy_diff
+                            .staged_http_api_definition_identity(&http_api_definition_name);
+
+                        let staged_definition = http_api_definition_handler
+                            .get_http_api_definition_revision_by_id(
+                                &definition_identity.id,
+                                definition_identity.revision,
+                            )
+                            .await?;
+
+                        match &kind {
+                            DiffKind::Server => {
+                                deploy_diff
+                                    .diffable_server_deployment
+                                    .http_api_definitions
+                                    .insert(
+                                        http_api_definition_name.0,
+                                        staged_definition.to_diffable().into(),
+                                    );
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff
+                                    .diffable_staged_deployment
+                                    .http_api_definitions
+                                    .insert(
+                                        http_api_definition_name.0,
+                                        staged_definition.to_diffable().into(),
+                                    );
+                            }
+                        }
+                    }
                 }
-                diff::BTreeMapDiffValue::Delete => {
-                    // NOP
-                }
-                diff::BTreeMapDiffValue::Update(_) => {
-                    // TODO: atomic: get detailed meta
+            }
+
+            for (domain, http_api_deployment_diff) in &diff.http_api_deployments {
+                match http_api_deployment_diff {
+                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                        // NOP
+                    }
+                    diff::BTreeMapDiffValue::Update(_) => {
+                        let domain = Domain(domain.clone());
+
+                        let deployment_identity =
+                            deploy_diff.staged_http_api_deployment_identity(&domain);
+
+                        let staged_deployment = http_api_deployment_handler
+                            .get_http_api_deployment_revision_by_id(
+                                &deployment_identity.id,
+                                deployment_identity.revision,
+                            )
+                            .await?;
+
+                        match &kind {
+                            DiffKind::Server => {
+                                deploy_diff
+                                    .diffable_server_deployment
+                                    .http_api_deployments
+                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                            }
+                            DiffKind::Stage => {
+                                deploy_diff
+                                    .diffable_staged_deployment
+                                    .http_api_deployments
+                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                            }
+                        }
+                    }
                 }
             }
         }
-
-        for (_http_api_deployment_name, http_api_deployment_diff) in
-            &diff_stage.http_api_deployments
-        {
-            match http_api_deployment_diff {
-                diff::BTreeMapDiffValue::Add => {
-                    // NOP
-                }
-                diff::BTreeMapDiffValue::Delete => {
-                    // NOP
-                }
-                diff::BTreeMapDiffValue::Update(_) => {
-                    // TODO: atomic: get detailed meta
-                }
-            }
-        }
-        */
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
@@ -886,6 +984,8 @@ impl AppCommandHandler {
         let _indent = LogIndent::new();
 
         let component_handler = self.ctx.component_handler();
+        let http_api_definition_handler = self.ctx.api_definition_handler();
+        let http_api_deployment_handler = self.ctx.api_deployment_handler();
         let interactive_handler = self.ctx.interactive_handler();
 
         let approve = || {
@@ -929,7 +1029,79 @@ impl AppCommandHandler {
             }
         }
 
-        // TODO: atomic: http api and deployments
+        for (http_api_definition_name, http_api_definition_diff) in &diff_stage.http_api_definitions
+        {
+            approve()?;
+
+            let http_api_definition_name =
+                HttpApiDefinitionName(http_api_definition_name.to_string());
+
+            match http_api_definition_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    http_api_definition_handler
+                        .create_staged_http_api_definition(
+                            &deploy_diff.environment,
+                            &http_api_definition_name,
+                            deploy_diff
+                                .deployable_manifest_http_api_definition(&http_api_definition_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    http_api_definition_handler
+                        .delete_staged_http_api_definition(
+                            deploy_diff
+                                .staged_http_api_definition_identity(&http_api_definition_name),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
+                    http_api_definition_handler
+                        .update_staged_http_api_definition(
+                            deploy_diff
+                                .staged_http_api_definition_identity(&http_api_definition_name),
+                            deploy_diff
+                                .deployable_manifest_http_api_definition(&http_api_definition_name),
+                            http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
+
+        for (domain, http_api_deployment_diff) in &diff_stage.http_api_deployments {
+            approve()?;
+
+            let domain = Domain(domain.to_string());
+
+            match http_api_deployment_diff {
+                diff::BTreeMapDiffValue::Create => {
+                    http_api_deployment_handler
+                        .create_staged_http_api_deployment(
+                            &deploy_diff.environment,
+                            &domain,
+                            deploy_diff.deployable_manifest_http_api_deployment(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Delete => {
+                    http_api_deployment_handler
+                        .delete_staged_http_api_deployment(
+                            deploy_diff.staged_http_api_deployment_identity(&domain),
+                        )
+                        .await?
+                }
+                diff::BTreeMapDiffValue::Update(http_api_definition_diff) => {
+                    http_api_deployment_handler
+                        .update_staged_http_api_deployment(
+                            deploy_diff.staged_http_api_deployment_identity(&domain),
+                            deploy_diff.deployable_manifest_http_api_deployment(&domain),
+                            http_api_definition_diff,
+                        )
+                        .await?
+                }
+            }
+        }
 
         Ok(())
     }

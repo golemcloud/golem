@@ -76,7 +76,7 @@ impl HttpApiDefinitionName {
 }
 
 declare_enums! {
-    #[derive(BinaryCodec)]
+    #[derive(BinaryCodec, Hash)]
     pub enum RouteMethod {
         Get,
         Connect,
@@ -227,6 +227,34 @@ declare_structs! {
     }
 }
 
+impl HttpApiDefinition {
+    pub fn to_diffable(&self) -> diff::HttpApiDefinition {
+        diff::HttpApiDefinition {
+            routes: self
+                .routes
+                .iter()
+                .map(|route| route.to_diffable())
+                .collect(),
+            version: self.version.0.clone(),
+        }
+    }
+}
+
+impl HttpApiRoute {
+    pub fn to_diffable(&self) -> (diff::HttpApiMethodAndPath, diff::HttpApiRoute) {
+        (
+            diff::HttpApiMethodAndPath {
+                method: self.method.to_string(),
+                path: self.path.clone(),
+            },
+            diff::HttpApiRoute {
+                binding: self.binding.to_diffable(),
+                security: self.security.as_ref().map(|sec| sec.0.clone()),
+            },
+        )
+    }
+}
+
 declare_unions! {
     #[derive(BinaryCodec)]
     pub enum GatewayBinding {
@@ -239,6 +267,16 @@ declare_unions! {
 }
 
 impl GatewayBinding {
+    pub fn binding_type(&self) -> GatewayBindingType {
+        match self {
+            GatewayBinding::Worker(_) => GatewayBindingType::Worker,
+            GatewayBinding::FileServer(_) => GatewayBindingType::FileServer,
+            GatewayBinding::HttpHandler(_) => GatewayBindingType::HttpHandler,
+            GatewayBinding::CorsPreflight(_) => GatewayBindingType::CorsPreflight,
+            GatewayBinding::SwaggerUi(_) => GatewayBindingType::SwaggerUi,
+        }
+    }
+
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             GatewayBinding::Worker(binding) => Some(&binding.component_name),
@@ -246,6 +284,68 @@ impl GatewayBinding {
             GatewayBinding::HttpHandler(binding) => Some(&binding.component_name),
             GatewayBinding::CorsPreflight(_) => None,
             GatewayBinding::SwaggerUi(_) => None,
+        }
+    }
+
+    pub fn to_diffable(&self) -> diff::HttpApiDefinitionBinding {
+        match self {
+            GatewayBinding::Worker(WorkerGatewayBinding {
+                component_name,
+                idempotency_key,
+                invocation_context,
+                response,
+            }) => diff::HttpApiDefinitionBinding {
+                binding_type: GatewayBindingType::Worker,
+                component_name: Some(component_name.0.clone()),
+                worker_name: None,
+                idempotency_key: idempotency_key.clone(),
+                invocation_context: invocation_context.clone(),
+                response: Some(response.clone()),
+            },
+            GatewayBinding::FileServer(FileServerBinding {
+                component_name,
+                worker_name,
+                response,
+            }) => diff::HttpApiDefinitionBinding {
+                binding_type: GatewayBindingType::FileServer,
+                component_name: Some(component_name.0.clone()),
+                worker_name: Some(worker_name.clone()),
+                idempotency_key: None,
+                invocation_context: None,
+                response: Some(response.clone()),
+            },
+            GatewayBinding::HttpHandler(HttpHandlerBinding {
+                component_name,
+                worker_name,
+                idempotency_key,
+                invocation_context,
+                response,
+            }) => diff::HttpApiDefinitionBinding {
+                binding_type: GatewayBindingType::HttpHandler,
+                component_name: Some(component_name.0.clone()),
+                worker_name: Some(worker_name.clone()),
+                idempotency_key: idempotency_key.clone(),
+                invocation_context: invocation_context.clone(),
+                response: Some(response.clone()),
+            },
+            GatewayBinding::CorsPreflight(CorsPreflightBinding { response }) => {
+                diff::HttpApiDefinitionBinding {
+                    binding_type: GatewayBindingType::CorsPreflight,
+                    component_name: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    invocation_context: None,
+                    response: response.clone(),
+                }
+            }
+            GatewayBinding::SwaggerUi(Empty {}) => diff::HttpApiDefinitionBinding {
+                binding_type: GatewayBindingType::SwaggerUi,
+                component_name: None,
+                worker_name: None,
+                idempotency_key: None,
+                invocation_context: None,
+                response: None,
+            },
         }
     }
 }

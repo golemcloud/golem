@@ -950,7 +950,7 @@ impl ComponentCommandHandler {
         }
     }
 
-    pub async fn all_deployable_manifest_components(
+    pub async fn deployable_manifest_components(
         &self,
     ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
         let component_names = {

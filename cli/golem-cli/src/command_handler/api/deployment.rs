@@ -16,12 +16,22 @@ use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
+use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use golem_client::api::ApiDeploymentClient;
+use golem_client::model::{HttpApiDeploymentCreation, HttpApiDeploymentUpdate};
+use golem_common::cache::SimpleCache;
+use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
+use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentRevision};
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub struct ApiDeploymentCommandHandler {
@@ -107,19 +117,134 @@ impl ApiDeploymentCommandHandler {
         todo!()
     }
 
-    // TODO: atomic:
-    /*
-    async fn manifest_api_deployments(
+    pub async fn deployable_manifest_api_deployments(
         &self,
-        environment: &ResolvedEnvironmentIdentity,
-    ) -> anyhow::Result<BTreeMap<Domain, Vec<WithSource<Vec<HttpApiDefinitionName>>>>> {
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<BTreeMap<Domain, Vec<HttpApiDefinitionName>>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx
             .application
-            .http_api_deployments(&environment.environment_name)
-            .cloned()
+            .http_api_deployments(&environment_name)
+            .map(|deployments| {
+                deployments
+                    .iter()
+                    .map(|(name, sources)| {
+                        (
+                            name.clone(),
+                            sources
+                                .iter()
+                                .flat_map(|source_and_value| source_and_value.value.iter())
+                                .map(|defs| defs.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
             .unwrap_or_default())
     }
-    */
+
+    pub async fn get_http_api_deployment_revision_by_id(
+        &self,
+        http_api_deployment_id: &HttpApiDeploymentId,
+        revision: HttpApiDeploymentRevision,
+    ) -> anyhow::Result<HttpApiDeployment> {
+        self.ctx
+            .caches()
+            .http_api_deployment_revision
+            .get_or_insert_simple(&(*http_api_deployment_id, revision), {
+                let _ctx = self.ctx.clone();
+                async move || {
+                    // TODO: atomic: missing client
+                    todo!()
+                }
+            })
+            .await
+            .map_err(|err| anyhow!(err))
+    }
+
+    pub async fn create_staged_http_api_deployment(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        domain: &Domain,
+        deployable_http_api_deployment: &[HttpApiDefinitionName],
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Creating",
+            format!("HTTP API deployment {}", domain.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .create_http_api_deployment(
+                &environment.environment_id.0,
+                &HttpApiDeploymentCreation {
+                    domain: domain.clone(),
+                    api_definitions: deployable_http_api_deployment.iter().cloned().collect(),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn delete_staged_http_api_deployment(
+        &self,
+        http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!(
+                "HTTP API deployment {}",
+                http_api_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .delete_http_api_deployment(&http_api_deployment.id.0, http_api_deployment.revision.0)
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn update_staged_http_api_deployment(
+        &self,
+        http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
+        deployable_http_api_deployment: &[HttpApiDefinitionName],
+        _diff: &diff::DiffForHashOf<diff::HttpApiDeployment>,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Updating",
+            format!(
+                "HTTP API deployment {}",
+                http_api_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .update_http_api_deployment(
+                &http_api_deployment.id.0,
+                &HttpApiDeploymentUpdate {
+                    current_revision: http_api_deployment.revision,
+                    api_definitions: Some(deployable_http_api_deployment.iter().cloned().collect()),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
 }

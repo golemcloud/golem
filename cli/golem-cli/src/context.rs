@@ -43,6 +43,12 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
+};
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+};
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
@@ -677,11 +683,7 @@ impl Context {
 }
 
 struct ApplicationContextConfig {
-    // TODO: atomic
-    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
-    // TODO: atomic
-    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
@@ -896,6 +898,18 @@ impl Default for RibReplState {
 pub struct Caches {
     pub component_revision:
         Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<anyhow::Error>>,
+    pub http_api_definition_revision: Cache<
+        (HttpApiDefinitionId, HttpApiDefinitionRevision),
+        (),
+        HttpApiDefinition,
+        Arc<anyhow::Error>,
+    >,
+    pub http_api_deployment_revision: Cache<
+        (HttpApiDeploymentId, HttpApiDeploymentRevision),
+        (),
+        HttpApiDeployment,
+        Arc<anyhow::Error>,
+    >,
 }
 
 impl Default for Caches {
@@ -912,6 +926,18 @@ impl Caches {
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
                 "component_revision",
+            ),
+            http_api_definition_revision: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "http_api_definition_revision",
+            ),
+            http_api_deployment_revision: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "http_api_deployment_revision",
             ),
         }
     }

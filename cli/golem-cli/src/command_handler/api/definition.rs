@@ -17,18 +17,23 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_action, logln, LogColorize};
+use crate::log::{log_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::fmt::log_error;
 use crate::model::text::http_api_definition::HttpApiDefinitionGetView;
-use crate::model::OpenApiDefinitionOutputFormat;
-use anyhow::bail;
+use crate::model::{app, OpenApiDefinitionOutputFormat};
+use anyhow::{anyhow, bail};
 use golem_client::api::HttpApiDefinitionClient;
-use golem_common::model::deployment::DeploymentRevision;
+use golem_client::model::{HttpApiDefinitionCreation, HttpApiDefinitionUpdate};
+use golem_common::cache::SimpleCache;
+use golem_common::model::deployment::{DeploymentPlanHttpApiDefintionEntry, DeploymentRevision};
+use golem_common::model::diff;
 use golem_common::model::http_api_definition::{
-    HttpApiDefinition, HttpApiDefinitionName, HttpApiDefinitionRevision,
+    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionRevision,
+    HttpApiDefinitionVersion,
 };
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use warp;
 use webbrowser;
@@ -369,6 +374,25 @@ impl ApiDefinitionCommandHandler {
         todo!()
     }
 
+    pub async fn get_http_api_definition_revision_by_id(
+        &self,
+        http_api_definition_id: &HttpApiDefinitionId,
+        revision: HttpApiDefinitionRevision,
+    ) -> anyhow::Result<HttpApiDefinition> {
+        self.ctx
+            .caches()
+            .http_api_definition_revision
+            .get_or_insert_simple(&(*http_api_definition_id, revision), {
+                let _ctx = self.ctx.clone();
+                async move || {
+                    // TODO: atomic: missing client
+                    todo!()
+                }
+            })
+            .await
+            .map_err(|err| anyhow!(err))
+    }
+
     async fn get_deployed_openapi_spec(
         &self,
         environment: &ResolvedEnvironmentIdentity,
@@ -398,6 +422,112 @@ impl ApiDefinitionCommandHandler {
             )
             .await?
             .0)
+    }
+
+    pub async fn deployable_manifest_http_api_definitions(
+        &self,
+    ) -> anyhow::Result<BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+
+        Ok(app_ctx
+            .application
+            .http_api_definitions()
+            .iter()
+            .map(|(name, source_and_value)| (name.clone(), source_and_value.value.clone()))
+            .collect())
+    }
+
+    pub async fn create_staged_http_api_definition(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        http_api_definition_name: &HttpApiDefinitionName,
+        deployable_http_api_definition: &app::HttpApiDefinition,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Creating",
+            format!(
+                "HTTP API definition {}",
+                http_api_definition_name.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_definition
+            .create_http_api_definition(
+                &environment.environment_id.0,
+                &HttpApiDefinitionCreation {
+                    name: http_api_definition_name.clone(),
+                    version: HttpApiDefinitionVersion(
+                        deployable_http_api_definition.version.0.clone(),
+                    ),
+                    routes: deployable_http_api_definition.routes.clone(),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn delete_staged_http_api_definition(
+        &self,
+        http_api_definition: &DeploymentPlanHttpApiDefintionEntry,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!(
+                "HTTP API definition {}",
+                http_api_definition.name.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_definition
+            .delete_http_api_definition(&http_api_definition.id.0, http_api_definition.revision.0)
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn update_staged_http_api_definition(
+        &self,
+        http_api_definition: &DeploymentPlanHttpApiDefintionEntry,
+        deployable_http_api_definition: &app::HttpApiDefinition,
+        _diff: &diff::DiffForHashOf<diff::HttpApiDefinition>,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Updating",
+            format!(
+                "HTTP API definition {}",
+                http_api_definition.name.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_definition
+            .update_http_api_definition(
+                &http_api_definition.id.0,
+                &HttpApiDefinitionUpdate {
+                    current_revision: http_api_definition.revision,
+                    version: Some(deployable_http_api_definition.version.clone()),
+                    routes: Some(deployable_http_api_definition.routes.clone()),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
     }
 }
 
