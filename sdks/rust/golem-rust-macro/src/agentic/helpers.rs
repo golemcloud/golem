@@ -65,6 +65,16 @@ pub fn is_static_method(sig: &syn::Signature) -> bool {
     sig.receiver().is_none()
 }
 
+pub fn trim_type_parameter(self_ty: &syn::Type) -> String {
+    match self_ty {
+        syn::Type::Path(type_path) => {
+            let ident = &type_path.path.segments.last().unwrap().ident;
+            ident.to_string()
+        }
+        _ => String::new(),
+    }
+}
+
 pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
     if sig.asyncness.is_some() {
         Asyncness::Future
