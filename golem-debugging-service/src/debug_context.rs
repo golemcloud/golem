@@ -68,6 +68,7 @@ use golem_worker_executor::workerctx::{
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
+use uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -548,6 +549,7 @@ impl WorkerCtx for DebugContext {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -576,6 +578,7 @@ impl WorkerCtx for DebugContext {
             agent_types_service,
             shard_service,
             pending_update,
+            original_phantom_id,
         )
         .await?;
         Ok(Self {

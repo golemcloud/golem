@@ -52,6 +52,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 wasi_config_vars,
+                original_phantom_id: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),

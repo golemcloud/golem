@@ -42,6 +42,7 @@ use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use uuid::Uuid;
 
 // Generates two primary types:
 // - OplogEntry
@@ -74,6 +75,7 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginInstallationId>,
             wasi_config_vars: BTreeMap<String, String>,
+            original_phantom_id: Option<Uuid>
         }
         public {
             worker_id: WorkerId,
@@ -86,7 +88,8 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: WasiConfigVars
+            wasi_config_vars: WasiConfigVars,
+            original_phantom_id: Option<Uuid>
         }
     },
     /// The worker invoked a host function

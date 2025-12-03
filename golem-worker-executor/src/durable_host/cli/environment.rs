@@ -12,33 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
+use crate::model::WorkerConfig;
+use crate::services::HasWorker;
+use crate::worker::merge_worker_env_with_component_env;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::host_functions::CliGetEnvironment;
-use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestNoInput, HostResponseGetEnvironment,
-};
+use golem_common::model::WorkerId;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
-        // NOTE: We need this to be persisted because the built-in environment variables may change by forking
-        let durability =
-            Durability::<CliGetEnvironment>::new(self, DurableFunctionType::ReadLocal).await?;
-        let result = if durability.is_live() {
-            let env_vars = Host::get_environment(&mut self.as_wasi_view()).await?; // This never fails
-            durability
-                .persist(
-                    self,
-                    HostRequestNoInput {},
-                    HostResponseGetEnvironment { env_vars },
-                )
-                .await?
+        let component_env = self.state.component_metadata.env.clone();
+
+        let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
+        let mut env = merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+
+        let current_worker_name = if let Some(agent_id) = self.agent_id() {
+            let updated_agent_id = agent_id.with_phantom_id(self.state.current_phantom_id);
+            updated_agent_id.to_string()
         } else {
-            durability.replay(self).await?
+            self.owned_worker_id.worker_name()
         };
 
-        Ok(result.env_vars)
+        WorkerConfig::enrich_env(
+            &mut env,
+            &WorkerId {
+                component_id: self.owned_worker_id.component_id(),
+                worker_name: current_worker_name,
+            },
+            &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
+            self.state.component_metadata.versioned_component_id.version,
+        );
+
+        Ok(env)
     }
 
     async fn get_arguments(&mut self) -> anyhow::Result<Vec<String>> {

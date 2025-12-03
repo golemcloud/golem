@@ -15,7 +15,7 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -60,7 +60,6 @@ impl ShardAssignmentCheck for ShardAssignment {
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_version_for_replay: u64,
@@ -71,7 +70,6 @@ pub struct WorkerConfig {
 impl WorkerConfig {
     pub fn new(
         worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: u64,
@@ -80,7 +78,6 @@ impl WorkerConfig {
     ) -> WorkerConfig {
         WorkerConfig {
             args: worker_args,
-            env: worker_env,
             deleted_regions,
             total_linear_memory_size,
             component_version_for_replay,
@@ -89,15 +86,7 @@ impl WorkerConfig {
         }
     }
 
-    pub(crate) fn enrich_env(
-        worker_env: &mut Vec<(String, String)>,
-        worker_id: &WorkerId,
-        agent_id: &Option<AgentId>,
-        target_component_version: u64,
-    ) {
-        let worker_name = worker_id.worker_name.clone();
-        let component_id = &worker_id.component_id;
-        let component_version = target_component_version.to_string();
+    pub(crate) fn remove_dynamic_vars(worker_env: &mut Vec<(String, String)>) {
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
                 && key != "GOLEM_AGENT_TYPE"
@@ -105,15 +94,25 @@ impl WorkerConfig {
                 && key != "GOLEM_COMPONENT_ID"
                 && key != "GOLEM_COMPONENT_VERSION"
         });
+    }
+
+    pub(crate) fn enrich_env(
+        worker_env: &mut Vec<(String, String)>,
+        worker_id: &WorkerId,
+        agent_type: &Option<String>,
+        target_component_version: u64,
+    ) {
+        let worker_name = worker_id.worker_name.clone();
+        let component_id = &worker_id.component_id;
+        let component_version = target_component_version.to_string();
+
+        Self::remove_dynamic_vars(worker_env);
         worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
         worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
-        if let Some(agent_id) = agent_id {
-            worker_env.push((
-                String::from("GOLEM_AGENT_TYPE"),
-                agent_id.agent_type.clone(),
-            ));
+        if let Some(agent_type) = agent_type {
+            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
         }
     }
 }

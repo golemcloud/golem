@@ -1529,14 +1529,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     timestamp: Timestamp::now_utc(),
                 };
 
-                let mut worker_env = merge_worker_env_with_component_env(worker_env, component.env);
-                WorkerConfig::enrich_env(
-                    &mut worker_env,
-                    &owned_worker_id.worker_id,
-                    &agent_id,
-                    component.versioned_component_id.version,
-                );
-
+                let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1568,6 +1561,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
+                    original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1590,6 +1584,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .active_plugins
                         .clone(),
                     initial_worker_metadata.wasi_config_vars.clone(),
+                    initial_worker_metadata.original_phantom_id,
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
@@ -1722,7 +1717,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
-fn merge_worker_env_with_component_env(
+pub fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
     component_env: HashMap<String, String>,
 ) -> Vec<(String, String)> {
@@ -1958,20 +1953,6 @@ impl RunningWorker {
             }?
         };
 
-        let component_env = component_metadata.env.clone();
-        let mut worker_env =
-            merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
-
-        // NOTE: calling enrich_env here again to apply changes compared to the initial one, such as the latest
-        // component version. This should not be done like this - changes to the environment should be derived
-        // from the oplog instead.
-        WorkerConfig::enrich_env(
-            &mut worker_env,
-            &parent.owned_worker_id.worker_id,
-            &parent.agent_id,
-            component_metadata.versioned_component_id.version,
-        );
-
         let component_version_for_replay = worker_metadata
             .last_known_status
             .pending_updates
@@ -2009,7 +1990,6 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.args.clone(),
-                worker_env,
                 worker_metadata.last_known_status.skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
@@ -2025,6 +2005,7 @@ impl RunningWorker {
             parent.agent_types(),
             parent.shard_service(),
             pending_update,
+            None,
         )
         .await?;
 
