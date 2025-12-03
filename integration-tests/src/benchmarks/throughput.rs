@@ -680,22 +680,7 @@ impl ThroughputBenchmark {
 
         info!("Deploying environment");
 
-        let plan = client
-            .get_environment_deployment_plan(&env.id.0)
-            .await
-            .expect("Failed to get deployment plan");
-
-        client
-            .deploy_environment(
-                &env.id.0,
-                &DeploymentCreation {
-                    current_deployment_revision: None,
-                    expected_deployment_hash: plan.deployment_hash,
-                    version: "0.0.1".to_string(),
-                },
-            )
-            .await
-            .expect("Failed to deploy environment");
+        user.deploy_environment(&env.id).await.expect("Failed to deploy environment");
 
         IterationContext {
             user,

@@ -17,17 +17,13 @@ use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_client::model::{
-    ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
-    GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
-};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDslUnsafe;
-use reqwest::header::HeaderValue;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use reqwest::header::{HeaderValue, USER_AGENT};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -36,6 +32,10 @@ use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::{info, Instrument};
 use uuid::Uuid;
+use golem_common::model::http_api_definition::{GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpApiRoute, RouteMethod, WorkerGatewayBinding};
+use golem_common::model::http_api_deployment::HttpApiDeploymentCreation;
+use golem_client::api::RegistryServiceClient;
+use golem_common::model::domain_registration::Domain;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -44,8 +44,11 @@ inherit_test_dep!(EnvBasedTestDependencies);
 #[tracing::instrument]
 #[timeout(120000)]
 #[allow(clippy::await_holding_lock)]
-async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
-    let admin = deps.admin().await;
+async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+
     let host_http_port = 8588;
 
     let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -87,11 +90,8 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .in_current_span(),
     );
 
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), host_http_port.to_string());
-
-    let (component_id, component_name) = admin
-        .component("golem_ictest")
+    let component = user
+        .component(&env.id, "golem_ictest")
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -104,85 +104,73 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
                 )]),
             }),
         )])
-        .store_and_get_name()
-        .await;
+        .store()
+        .await?;
 
-    let _worker_id = admin
-        .start_worker_with(&component_id, "w1", vec![], env.clone(), vec![])
-        .await;
+    let mut env_vars = HashMap::new();
+    env_vars.insert("PORT".to_string(), host_http_port.to_string());
 
-    let api_definition_id = Uuid::new_v4().to_string();
+    user
+        .start_worker_with(&component.id, "w1", vec![], env_vars, vec![])
+        .await?;
 
-    let request = HttpApiDefinitionRequest {
-        id: api_definition_id.clone(),
-        version: "1".to_string(),
-        draft: true,
-        security: None,
-        routes: vec![RouteRequestData {
-            method: MethodPattern::Post,
-            path: "/test-path-1/{name}".to_string(),
-            binding: GatewayBindingData {
-                component: Some(GatewayBindingComponent {
-                    name: component_name.0,
-                    version: Some(0),
+    let http_api_definition_creation = HttpApiDefinitionCreation {
+        name: HttpApiDefinitionName("test-api".to_string()),
+        version: HttpApiDefinitionVersion("1".to_string()),
+        routes: vec![
+            HttpApiRoute {
+                method: RouteMethod::Post,
+                path: "/test-path-1/{name}".to_string(),
+                binding: GatewayBinding::Worker(WorkerGatewayBinding {
+                    component_name: component.component_name,
+                    idempotency_key: None,
+                    invocation_context: Some(
+                        r#"
+                            {
+                                name: request.path.name,
+                                source: "rib"
+                            }
+                        "#
+                        .to_string(),
+                    ),
+                    response:
+                        r#"
+                            let user-id = request.path.user-id;
+                            let worker = "shopping-cart-${user-id}";
+                            let inst = instance(worker);
+                            inst.add-item({
+                                product-id: request.body.product-id,
+                                name: request.body.name,
+                                price: request.body.price,
+                                quantity: request.body.quantity
+                            });
+                            {
+                                status: 204
+                            }
+                        "#
+                        .to_string(),
                 }),
-                worker_name: None,
-                response: Some(
-                    r#"
-                        let worker = instance("w1");
-                        worker.test1();
-                        {
-                            body: "ok",
-                            status: 200,
-                            headers: { Content-Type: "application/json" }
-                        }
-                    "#
-                    .to_string(),
-                ),
-                idempotency_key: None,
-                binding_type: Some(GatewayBindingType::Default),
-                invocation_context: Some(
-                    r#"
-                        {
-                            name: request.path.name,
-                            source: "rib"
-                        }
-                    "#
-                    .to_string(),
-                ),
+                security: None,
             },
-            security: None,
-        }],
+        ],
     };
 
-    let project_id = admin.default_project().await;
+    client
+        .create_http_api_definition(&env.id.0, &http_api_definition_creation)
+        .await?;
 
-    let _ = deps
-        .worker_service()
-        .create_api_definition(&admin.token, &project_id, &request)
-        .await
-        .unwrap();
+    let domain = user.register_domain(&env.id).await?;
 
-    let request = ApiDeploymentRequest {
-        project_id: project_id.0,
-        api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition_id,
-            version: "1".to_string(),
-        }],
-        site: ApiSite {
-            host: format!(
-                "localhost:{}",
-                deps.worker_service().public_custom_request_port()
-            ),
-            subdomain: None,
-        },
+    let http_api_deployment_creation = HttpApiDeploymentCreation {
+        domain: domain.clone(),
+        api_definitions: vec![HttpApiDefinitionName("test-api".to_string())],
     };
 
-    let _ = deps
-        .worker_service()
-        .create_or_update_api_deployment(&admin.token, request.clone())
-        .await
-        .unwrap();
+    client
+        .create_http_api_deployment(&env.id.0, &http_api_deployment_creation)
+        .await?;
+
+    user.deploy_environment(&env.id).await?;
 
     let trace_id = TraceId::generate();
     let parent_span_id = SpanId::generate();
@@ -192,7 +180,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     let response = client
         .post(format!(
             "http://localhost:{}/test-path-1/vigoo",
-            deps.worker_service().public_custom_request_port()
+            deps.worker_service().custom_request_host()
         ))
         .header("traceparent", format!("00-{trace_id}-{parent_span_id}-01"))
         .header("tracestate", trace_state.clone())
@@ -310,4 +298,6 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
     check!(
         dump[2].as_object().unwrap().get("trace_id") == Some(&Value::String(format!("{trace_id}")))
     ); // coming from the custom invocation context rib
+
+    Ok(())
 }
