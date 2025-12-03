@@ -27,12 +27,39 @@ mod tests {
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
     use test_r::test;
 
+    struct AgentWithStaticMethodsImpl;
+
     #[agent_definition]
     trait AgentWithStaticMethods {
         fn new(init: UserId) -> Self;
+
+        #[allow(unused)]
         fn foo(param: String) -> String;
-        fn bar(param: String) -> String;
+
+        #[allow(unused)]
+        fn bar(param: String) -> String {
+            Self::foo(param)
+        }
         fn baz(&self, param: String) -> String;
+    }
+
+    #[agent_implementation]
+    impl AgentWithStaticMethods for AgentWithStaticMethodsImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithStaticMethodsImpl
+        }
+
+        fn foo(param: String) -> String {
+            param
+        }
+
+        fn bar(param: String) -> String {
+            Self::foo(param)
+        }
+
+        fn baz(&self, param: String) -> String {
+            param
+        }
     }
 
     #[agent_definition]
@@ -40,11 +67,63 @@ mod tests {
         fn new(init: UserId) -> Self;
     }
 
+    struct AgentWithOnlyConstructorImpl;
+    #[agent_implementation]
+    impl AgentWithOnlyConstructor for AgentWithOnlyConstructorImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithOnlyConstructorImpl
+        }
+    }
+
     #[agent_definition]
-    trait AgentWithOnlyStaticMethod {
+    trait AgentWithOnlyStaticMethods {
         fn new(init: UserId) -> Self;
-        fn foo(param: String) -> String;
+
+        #[allow(unused)]
+        fn foo() -> String;
+
+        #[allow(unused)]
         fn bar(param: String) -> String;
+    }
+
+    struct AgentWithOnlyStaticMethodsImpl;
+
+    #[agent_implementation]
+    impl AgentWithOnlyStaticMethods for AgentWithOnlyStaticMethodsImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithOnlyStaticMethodsImpl
+        }
+        fn foo() -> String {
+            Self::bar("foo".to_string())
+        }
+        fn bar(param: String) -> String {
+            param
+        }
+    }
+
+    #[agent_definition]
+    trait FooAgent {
+        fn new(init: UserId) -> Self;
+
+        #[allow(unused)]
+        fn foo() -> String;
+        fn bar(&self) -> String;
+    }
+
+    struct FooImpl;
+
+    #[agent_implementation]
+    impl FooAgent for FooImpl {
+        // Use `FooImpl` instead of `Self` should work
+        fn new(_init: UserId) -> FooImpl {
+            FooImpl
+        }
+        fn foo() -> String {
+            "foo".to_string()
+        }
+        fn bar(&self) -> String {
+            "bar".to_string()
+        }
     }
 
     #[agent_definition]

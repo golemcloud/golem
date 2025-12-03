@@ -43,10 +43,18 @@ pub enum Asyncness {
     Immediate,
 }
 
-pub fn is_constructor_method(sig: &syn::Signature) -> bool {
+pub fn is_constructor_method(sig: &syn::Signature, agent_impl_type: Option<&str>) -> bool {
     match &sig.output {
         ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
+            Type::Path(tp) => {
+                let return_ident = &tp.path.segments.last().unwrap().ident;
+
+                return_ident == "Self"
+                    || match agent_impl_type {
+                        Some(impl_name) => return_ident == impl_name,
+                        None => false,
+                    }
+            }
             _ => false,
         },
         _ => false,
@@ -54,7 +62,7 @@ pub fn is_constructor_method(sig: &syn::Signature) -> bool {
 }
 
 pub fn is_static_method(sig: &syn::Signature) -> bool {
-    !sig.receiver().is_some()
+    sig.receiver().is_none()
 }
 
 pub fn get_asyncness(sig: &syn::Signature) -> Asyncness {
