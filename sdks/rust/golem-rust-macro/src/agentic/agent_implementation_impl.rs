@@ -17,8 +17,8 @@ use quote::{format_ident, quote};
 use syn::ItemImpl;
 
 use crate::agentic::helpers::{
-    get_asyncness, has_async_trait_attribute, is_constructor_method, is_static_method, Asyncness,
-    FunctionOutputInfo,
+    get_asyncness, has_async_trait_attribute, is_constructor_method, is_static_method,
+    trim_type_parameter, Asyncness, FunctionOutputInfo,
 };
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
@@ -110,7 +110,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         generate_initiator_impl(&initiator_ident, &constructor_param_extraction);
 
     let register_initiator_fn =
-        generate_register_initiator_fn(&impl_block.self_ty, &trait_name_str_raw, &initiator_ident);
+        generate_register_initiator_fn(&impl_block.self_ty, &trait_name_ident, &initiator_ident);
 
     quote! {
         #impl_block
@@ -419,12 +419,16 @@ fn generate_initiator_impl(
 
 fn generate_register_initiator_fn(
     self_ty: &syn::Type,
-    trait_name_str_raw: &str,
+    agent_trait_ident: &syn::Ident,
     initiator_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
+    let agent_impl_type_trimmed = trim_type_parameter(self_ty);
+    let agent_impl_type_trimmed_ident = format_ident!("{}", agent_impl_type_trimmed);
+    let agent_trait_name = agent_trait_ident.to_string();
+
     let register_initiator_fn_name = format_ident!(
         "__register_agent_initiator_{}",
-        trait_name_str_raw.to_lowercase()
+        agent_trait_ident.to_string().to_lowercase()
     );
 
     // ctor_parse! instead of #[ctor] to avoid dependency on ctor crate at user side
@@ -433,10 +437,10 @@ fn generate_register_initiator_fn(
     quote! {
         ::golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_initiator_fn_name() {
-                #self_ty::__register_agent_type();
+                #agent_impl_type_trimmed_ident::__register_agent_type();
 
                 golem_rust::agentic::register_agent_initiator(
-                    #trait_name_str_raw.to_string().as_str(),
+                    &#agent_trait_name,
                     std::sync::Arc::new(#initiator_ident)
                 );
             }

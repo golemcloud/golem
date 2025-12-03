@@ -226,7 +226,12 @@ where
         .agent_initiators
         .get(agent_type_name)
         .cloned()
-        .unwrap();
+        .unwrap_or_else(|| {
+            panic!(
+                "Agent initiator not found for agent type name: {}",
+                agent_type_name.0
+            )
+        });
 
     block_on(async move { f(agent_initiator).await })
 }
