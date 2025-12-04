@@ -16,12 +16,13 @@ use crate::command::api::cloud::domain::ApiDomainSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::model::text::api_domain::{ApiDomainListView, ApiDomainNewView};
-use crate::model::ProjectReference;
-use golem_client::api::ApiDomainClient;
-use golem_client::model::DomainRequest;
+use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
 
 use crate::log::log_warn_action;
+use crate::model::environment::EnvironmentResolveMode;
+use golem_client::api::ApiDomainClient;
+use golem_client::model::DomainRegistrationCreation;
+use golem_common::model::domain_registration::Domain;
 use std::sync::Arc;
 
 pub struct ApiCloudDomainCommandHandler {
@@ -35,90 +36,76 @@ impl ApiCloudDomainCommandHandler {
 
     pub async fn handle_command(&self, command: ApiDomainSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiDomainSubcommand::Get { project } => self.cmd_get(project.project).await,
+            ApiDomainSubcommand::List => self.cmd_list().await,
             ApiDomainSubcommand::New {
-                project,
-                domain_name,
-            } => self.cmd_new(project.project, domain_name).await,
+                domain_name: domain,
+            } => self.cmd_new(domain).await,
             ApiDomainSubcommand::Delete {
-                project,
-                domain_name,
-            } => self.cmd_delete(project.project, domain_name).await,
+                domain_name: domain,
+            } => self.cmd_delete(domain).await,
         }
     }
 
-    async fn cmd_get(&self, project_reference: ProjectReference) -> anyhow::Result<()> {
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
         let domains = self
             .ctx
             .golem_clients()
             .await?
             .api_domain
-            .get_domains(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .select_project(&project_reference)
-                    .await?
-                    .project_id
-                    .0,
-            )
+            .list_environment_domain_registrations(&environment.environment_id.0)
             .await
-            .map_service_error()?;
+            .map_service_error()?
+            .values;
 
-        self.ctx.log_handler().log_view(&ApiDomainListView(domains));
+        self.ctx
+            .log_handler()
+            .log_view(&HttpApiDomainListView(domains));
 
         Ok(())
     }
 
-    async fn cmd_new(
-        &self,
-        project_reference: ProjectReference,
-        domain_name: String,
-    ) -> anyhow::Result<()> {
+    async fn cmd_new(&self, domain: String) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
         let domain = self
             .ctx
             .golem_clients()
             .await?
             .api_domain
-            .create_or_update_domain(&DomainRequest {
-                project_id: self
-                    .ctx
-                    .cloud_project_handler()
-                    .select_project(&project_reference)
-                    .await?
-                    .project_id
-                    .0,
-                domain_name,
-            })
+            .create_domain_registration(
+                &environment.environment_id.0,
+                &DomainRegistrationCreation {
+                    domain: Domain(domain),
+                },
+            )
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&ApiDomainNewView(domain));
+        self.ctx
+            .log_handler()
+            .log_view(&DomainRegistrationNewView(domain));
 
         Ok(())
     }
 
-    async fn cmd_delete(
-        &self,
-        project_reference: ProjectReference,
-        domain_name: String,
-    ) -> anyhow::Result<()> {
-        self.ctx
-            .golem_clients()
-            .await?
-            .api_domain
-            .delete_domain(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .select_project(&project_reference)
-                    .await?
-                    .project_id
-                    .0,
-                &domain_name,
-            )
-            .await
-            .map_service_error()?;
+    async fn cmd_delete(&self, _domain: String) -> anyhow::Result<()> {
+        let _environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        // TODO: atomic: missing client: get domain registration by domain?
 
         log_warn_action("Deleted", "domain");
 

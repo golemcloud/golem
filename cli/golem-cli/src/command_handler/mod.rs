@@ -19,6 +19,7 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
+use crate::command_handler::api::cloud::domain::ApiCloudDomainCommandHandler;
 use crate::command_handler::api::cloud::ApiCloudCommandHandler;
 use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
 use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
@@ -338,7 +339,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       if the need ever arises
 pub trait Handlers {
     // TODO: atomic: fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
-    // TODO: atomic: fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
+    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler;
     fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
@@ -369,10 +370,9 @@ impl Handlers for Arc<Context> {
     //     ApiCloudCertificateCommandHandler::new(self.clone())
     // }
 
-    // TODO: atomic
-    // fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
-    //     ApiCloudDomainCommandHandler::new(self.clone())
-    // }
+    fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
+        ApiCloudDomainCommandHandler::new(self.clone())
+    }
 
     fn api_cloud_handler(&self) -> ApiCloudCommandHandler {
         ApiCloudCommandHandler::new(self.clone())

@@ -758,7 +758,6 @@ impl ComponentCommandHandler {
                                 account_email: validated_account(segments[0])?,
                                 application_name: validated_application(segments[1])?,
                                 environment_name: validated_environment(segments[2])?,
-                                auto_create: false,
                             }),
                             Some(validated_component(segments[3])?),
                         ),

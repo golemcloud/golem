@@ -14,18 +14,18 @@
 
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_common::model::api_domain::ApiDomain;
+use golem_common::model::domain_registration::DomainRegistration;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ApiDomainNewView(pub ApiDomain);
+pub struct DomainRegistrationNewView(pub DomainRegistration);
 
-impl MessageWithFields for ApiDomainNewView {
+impl MessageWithFields for DomainRegistrationNewView {
     fn message(&self) -> String {
         format!(
-            "Created new API domain {}",
-            format_message_highlight(&self.0.domain_name.0)
+            "Created new API domain registration {}",
+            format_message_highlight(&self.0.domain.0)
         )
     }
 
@@ -33,45 +33,39 @@ impl MessageWithFields for ApiDomainNewView {
         let mut fields = FieldsBuilder::new();
 
         fields
-            .fmt_field("Domain name", &self.0.domain_name.0, format_main_id)
-            .fmt_field("Environment ID", &self.0.environment_id, format_id)
-            .fmt_field("Created at", &self.0.created_at, |d| d.to_string())
-            .fmt_field_optional(
-                "Name servers",
-                &self.0.name_servers,
-                !self.0.name_servers.is_empty(),
-                |ns| ns.join("\n"),
-            );
+            .fmt_field("Domain name", &self.0.domain.0, format_main_id)
+            .fmt_field("ID", &self.0.id, format_main_id)
+            .fmt_field("Environment ID", &self.0.environment_id, format_id);
 
         fields.build()
     }
 }
 
 #[derive(Table)]
-struct ApiDomainTableView {
+struct DomainRegistrationTableView {
     #[table(title = "Domain")]
-    pub domain_name: String,
+    pub domain: String,
+    #[table(title = "ID")]
+    pub id: Uuid,
     #[table(title = "Environment ID")]
     pub environment_id: Uuid,
-    #[table(title = "Servers")]
-    pub name_servers: String,
 }
 
-impl From<&ApiDomain> for ApiDomainTableView {
-    fn from(value: &ApiDomain) -> Self {
-        ApiDomainTableView {
-            domain_name: value.domain_name.0.clone(),
+impl From<&DomainRegistration> for DomainRegistrationTableView {
+    fn from(value: &DomainRegistration) -> Self {
+        DomainRegistrationTableView {
+            domain: value.domain.0.clone(),
+            id: value.id.0,
             environment_id: value.environment_id.0,
-            name_servers: value.name_servers.join("\n"),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ApiDomainListView(pub Vec<ApiDomain>);
+pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
 
-impl TextView for ApiDomainListView {
+impl TextView for HttpApiDomainListView {
     fn log(&self) {
-        log_table::<_, ApiDomainTableView>(&self.0);
+        log_table::<_, DomainRegistrationTableView>(&self.0);
     }
 }

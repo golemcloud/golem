@@ -20,10 +20,8 @@ use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::text::certificate::{CertificateListView, CertificateNewView};
 use crate::model::text::fmt::log_error;
-use crate::model::{PathBufOrStdin, ProjectReference};
+use crate::model::PathBufOrStdin;
 use anyhow::bail;
-use golem_client::api::ApiCertificateClient;
-use golem_client::model::CertificateRequest;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -38,10 +36,9 @@ impl ApiCloudCertificateCommandHandler {
 
     pub async fn handle_command(&self, command: ApiCertificateSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiCertificateSubcommand::Get {
-                project,
-                certificate_id,
-            } => self.cmd_get(project.project, certificate_id).await,
+            ApiCertificateSubcommand::Get { certificate_id } => {
+                self.cmd_get(project.project, certificate_id).await
+            }
             ApiCertificateSubcommand::New {
                 project,
                 domain_name,
@@ -63,11 +60,7 @@ impl ApiCloudCertificateCommandHandler {
         }
     }
 
-    async fn cmd_get(
-        &self,
-        project: ProjectReference,
-        certificate_id: Option<Uuid>,
-    ) -> anyhow::Result<()> {
+    async fn cmd_get(&self, certificate_id: Option<Uuid>) -> anyhow::Result<()> {
         let certificates = self
             .ctx
             .golem_clients()

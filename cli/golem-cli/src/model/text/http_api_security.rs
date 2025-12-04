@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: atomic
+/*
 use crate::log::logln;
-use crate::model::api::ApiSecurityScheme;
 use crate::model::text::fmt::*;
 use cli_table::Table;
-use golem_client::model::SecuritySchemeData;
 
-impl TextView for ApiSecurityScheme {
+impl TextView for SecurityScheme {
     fn log(&self) {
         logln(format!(
             "API Security Scheme: ID: {}, scopes: {}, client ID: {}, client secret: {}, redirect URL: {}",
@@ -32,7 +32,7 @@ impl TextView for ApiSecurityScheme {
 }
 
 #[derive(Table)]
-struct ApiSecuritySchemeTableView {
+struct HttpApiSecuritySchemeTableView {
     #[table(title = "ID")]
     pub id: String,
     #[table(title = "Provider")]
@@ -45,8 +45,8 @@ struct ApiSecuritySchemeTableView {
     pub redirect_url: String,
 }
 
-impl From<&SecuritySchemeData> for ApiSecuritySchemeTableView {
-    fn from(value: &SecuritySchemeData) -> Self {
+impl From<&SecurityScheme> for HttpApiSecuritySchemeTableView {
+    fn from(value: &SecurityScheme) -> Self {
         Self {
             id: value.scheme_identifier.clone(),
             provider: value.provider_type.to_string(),
@@ -56,3 +56,4 @@ impl From<&SecuritySchemeData> for ApiSecuritySchemeTableView {
         }
     }
 }
+*/

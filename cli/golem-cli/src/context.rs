@@ -683,7 +683,9 @@ impl Context {
 }
 
 struct ApplicationContextConfig {
+    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
+    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
@@ -713,21 +715,6 @@ impl ApplicationContextConfig {
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
             enable_wasmtime_fs_cache: global_flags.enable_wasmtime_fs_cache,
-        }
-    }
-
-    // TODO: atomic
-    #[allow(unused)]
-    pub fn app_source_mode(&self) -> ApplicationSourceMode {
-        if self.disable_app_manifest_discovery {
-            ApplicationSourceMode::None
-        } else {
-            match &self.app_manifest_path {
-                Some(root_manifest) if !self.disable_app_manifest_discovery => {
-                    ApplicationSourceMode::ByRootManifest(root_manifest.clone())
-                }
-                _ => ApplicationSourceMode::Automatic,
-            }
         }
     }
 

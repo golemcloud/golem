@@ -1409,9 +1409,9 @@ pub mod api {
 
             #[derive(Debug, Subcommand)]
             pub enum ApiDomainSubcommand {
-                /// Retrieves metadata about an existing domain
-                Get {},
-                /// Add new domain
+                /// List domains
+                List,
+                /// Add a new domain
                 New {
                     /// Domain name
                     domain_name: String,

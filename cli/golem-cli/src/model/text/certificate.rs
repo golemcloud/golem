@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: atomic
-/*
 fn certificate_fields(certificate: &Certificate) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
@@ -70,4 +68,3 @@ impl TextView for CertificateListView {
         log_table::<_, CertificateTableView>(&self.0);
     }
 }
-*/

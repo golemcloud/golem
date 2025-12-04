@@ -1853,7 +1853,6 @@ impl WorkerCommandHandler {
                             account_email: validated_account(segments[0])?,
                             application_name: validated_application(segments[1])?,
                             environment_name: validated_environment(segments[2])?,
-                            auto_create: false,
                         }),
                         validated_component(segments[3])?,
                         validated_worker(segments[4])?,

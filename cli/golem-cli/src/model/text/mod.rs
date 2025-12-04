@@ -14,17 +14,17 @@
 
 pub mod account;
 pub mod agent;
-pub mod http_api_definition;
-pub mod http_api_deployment;
-pub mod http_api_domain;
-// TODO: atomic: pub mod api_security;
-pub mod certificate;
+pub mod http_api_security;
+// TODO: atomic: pub mod certificate;
 pub mod component;
+pub mod diff;
 pub mod environment;
 pub mod fmt;
 pub mod help;
-// TODO: atomic: pub mod plugin;
-pub mod diff;
+pub mod http_api_definition;
+pub mod http_api_deployment;
+pub mod http_api_domain;
+// TODO: atomic pub mod plugin;
 pub mod profile;
 pub mod server;
 pub mod template;
