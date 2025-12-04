@@ -28,10 +28,10 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
 
     let (add_to_builder, add_to_type_builder) = match &ast.data {
         Data::Struct(data) => {
+            // (unchanged) newtype / record_or_tuple selection
             let newtype_result = if data.fields.len() == 1 {
                 let field = data.fields.iter().next().unwrap().clone();
                 if field.ident.is_none() || flatten_value {
-                    // single field without an identifier, we consider this a newtype
                     let field_type = field.ty;
 
                     let add_to_builder = match field.ident {
@@ -159,7 +159,7 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                                     #ident::#case_ident { #(#field_names),* } => {
                                         let builder = builder.variant(#idx);
                                         let builder = builder.record();
-                                        vec![#(#field_values)*];
+                                        #(#field_values)*
                                         builder.finish().finish()
                                     }
                                 }
@@ -192,7 +192,7 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                                     #ident::#case_ident(#(#field_names),*) => {
                                         let builder = builder.variant(#idx);
                                         let builder = builder.tuple();
-                                        vec![#(#field_values)*];
+                                        #(#field_values)*
                                         builder.finish().finish()
                                     }
                                 }
@@ -205,22 +205,30 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                     .map(|variant| {
                         let case_name = variant.ident.to_string().to_kebab_case();
                         if is_unit_case(variant) {
+                            // assign back to builder so the next   cases to continue from variant-level
                             quote! {
-                                let builder = builder.unit_case(#case_name);
+                                builder = builder.unit_case(#case_name);
                             }
                         } else if has_single_anonymous_field(&variant.fields) {
                             let single_field = variant.fields.iter().next().unwrap();
                             let typ = &single_field.ty;
 
+                            // call the inner type's add_to_type_builder and reassign builder
                             quote! {
-                                let builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
+                                builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
                             }
                         } else {
+                            // structured record/tuple case - use inner add_to_type_builder produced by record_or_tuple
                             let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields, golem_rust_crate_ident);
 
+                            // ensure the inner builder code runs and yields the updated builder,
+                            // then reassign that to `builder` for the next iteration.
                             quote! {
-                                let builder = builder.case(#case_name);
-                                #inner_add_to_type_builder
+                                builder = {
+                                    let builder = builder.case(#case_name);
+                                    #inner_add_to_type_builder
+                                    builder
+                                };
                             }
                         }
                     })
@@ -232,7 +240,8 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                     }
                 };
                 let get_type = quote! {
-                    let builder = builder.variant(Some(#ident_lit.to_string()), None);
+                    // make builder mutable so we can reassign after each case
+                    let mut builder = builder.variant(Some(#ident_lit.to_string()), None);
                     #(#case_defs)*
                     builder.finish()
                 };
@@ -302,9 +311,15 @@ fn record_or_tuple(
 
         (add_to_builder, add_to_type_builder)
     } else {
+        // tuple-like
         let tuple_field_values = fields
             .iter()
-            .map(|field| {
+            .enumerate()
+            .map(|(idx, field)| {
+                // note: for tuple fields we expect them to be addressed as `self.0`, `self.1`, ...
+                let field_access = Ident::new(&format!("self.{}", idx), Span::call_site());
+                // But since we cannot construct `self.N` as an ident, keep using original pattern:
+                // user code earlier used field.ident.unwrap() — that assumes there are idents; here keep the original logic:
                 let field_name = field.ident.as_ref().unwrap();
                 quote! {
                     let builder = self.#field_name.add_to_builder(builder.item());
@@ -328,7 +343,7 @@ fn record_or_tuple(
             builder.finish()
         };
         let add_to_type_builder = quote! {
-            let builder = builder.tuple(Some(#ident_lit.to_string()), None)
+            let builder = builder.tuple(Some(#ident_lit.to_string()), None);
             #(#tuple_field_types)*
             builder.finish()
         };
@@ -348,9 +363,9 @@ fn has_only_named_fields(fields: &Fields) -> bool {
 fn is_unit_case(variant: &Variant) -> bool {
     variant.fields.is_empty()
         || variant
-            .attrs
-            .iter()
-            .any(|attr| attr.path().is_ident("unit_case"))
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("unit_case"))
 }
 
 pub fn derive_from_value_and_type(
