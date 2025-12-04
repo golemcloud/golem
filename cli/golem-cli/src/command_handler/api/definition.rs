@@ -386,10 +386,15 @@ impl ApiDefinitionCommandHandler {
             .caches()
             .http_api_definition_revision
             .get_or_insert_simple(&(*http_api_definition_id, revision), {
-                let _ctx = self.ctx.clone();
+                let ctx = self.ctx.clone();
                 async move || {
-                    // TODO: atomic: missing client
-                    todo!()
+                    ctx.golem_clients()
+                        .await?
+                        .api_definition
+                        .get_http_api_definition_revision(&http_api_definition_id.0, revision.0)
+                        .await
+                        .map_service_error()
+                        .map_err(Arc::new)
                 }
             })
             .await

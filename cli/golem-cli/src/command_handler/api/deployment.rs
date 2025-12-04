@@ -156,10 +156,15 @@ impl ApiDeploymentCommandHandler {
             .caches()
             .http_api_deployment_revision
             .get_or_insert_simple(&(*http_api_deployment_id, revision), {
-                let _ctx = self.ctx.clone();
+                let ctx = self.ctx.clone();
                 async move || {
-                    // TODO: atomic: missing client
-                    todo!()
+                    ctx.golem_clients()
+                        .await?
+                        .api_deployment
+                        .get_http_api_deployment_revision(&http_api_deployment_id.0, revision.0)
+                        .await
+                        .map_service_error()
+                        .map_err(Arc::new)
                 }
             })
             .await
