@@ -12,20 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::FunctionOutputInfo;
+use crate::agentic::helpers::{is_static_method, FunctionOutputInfo};
+use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use heck::ToKebabCase;
 use quote::{format_ident, quote};
+use syn::spanned::Spanned;
 use syn::ItemTrait;
 
 pub fn get_remote_client(
     item_trait: &ItemTrait,
     constructor_param_defs: Vec<proc_macro2::TokenStream>,
     constructor_param_idents: Vec<proc_macro2::TokenStream>,
+    agent_type_parameter_names: &[String],
 ) -> proc_macro2::TokenStream {
     let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
 
     let type_name = item_trait.ident.to_string();
-    let method_impls = get_remote_method_impls(item_trait, type_name.to_string());
+    let method_impls = get_remote_method_impls(
+        item_trait,
+        type_name.to_string(),
+        agent_type_parameter_names,
+    );
 
     quote! {
         pub struct #remote_client_type_name {
@@ -171,10 +178,31 @@ pub fn get_remote_client(
     }
 }
 
-fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macro2::TokenStream {
+fn get_remote_method_impls(
+    tr: &ItemTrait,
+    agent_type_name: String,
+    type_parameter_names: &[String],
+) -> proc_macro2::TokenStream {
     let method_impls = tr.items.iter().filter_map(|item| {
+
         if let syn::TraitItem::Fn(method) = item {
+            if is_static_method(&method.sig) {
+                return None;
+            }
+
             if let syn::ReturnType::Type(_, ty) = &method.sig.output {
+
+                let type_name = match &**ty {
+                    syn::Type::Path(type_path) => {
+                        type_path.path.segments.last().unwrap().ident.to_string()
+                    },
+                    _ => "".to_string(),
+                };
+
+                if type_parameter_names.contains(&type_name) {
+                    return generic_type_in_agent_return_type_error(method.sig.ident.span(), &type_name).into();
+                }
+
                 if let syn::Type::Path(type_path) = &**ty {
                     if type_path.path.segments.last().unwrap().ident == "Self" {
                         return None;
@@ -194,8 +222,22 @@ fn get_remote_method_impls(tr: &ItemTrait, agent_type_name: String) -> proc_macr
                 }
             };
 
-
             let inputs: Vec<_> = method.sig.inputs.iter().collect();
+
+            for input in method.sig.inputs.iter() {
+                if let syn::FnArg::Typed(pat_type) = input {
+                    let pat_type_name = match &*pat_type.ty {
+                        syn::Type::Path(type_path) => {
+                            type_path.path.segments.last().unwrap().ident.to_string()
+                        },
+                        _ => "".to_string(),
+                    };
+
+                    if type_parameter_names.contains(&pat_type_name) {
+                        return generic_type_in_agent_method_error(pat_type.ty.span(), &pat_type_name).into();
+                    }
+                }
+            }
 
             let input_idents: Vec<_> = method.sig
                 .inputs

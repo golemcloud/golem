@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, OplogIndex};
+use golem_common::model::OplogIndex;
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
@@ -76,14 +76,14 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Interrupt,
+            interrupt_kind: InterruptKind::Interrupt(_),
             ..
         }) => {
             record_invocation(was_live_before, "interrupted");
             result
         }
         Ok(InvokeResult::Interrupted {
-            interrupt_kind: InterruptKind::Suspend,
+            interrupt_kind: InterruptKind::Suspend(_),
             ..
         }) => {
             record_invocation(was_live_before, "suspended");
@@ -482,12 +482,9 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
         }
     };
 
-    let consumed_fuel = finish_invocation_and_get_fuel_consumption(
-        &mut store.as_context_mut(),
-        raw_function_name,
-        idempotency_key,
-    )
-    .await?;
+    let consumed_fuel =
+        finish_invocation_and_get_fuel_consumption(&mut store.as_context_mut(), raw_function_name)
+            .await?;
 
     match res_or_error {
         Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, Some(resp))),
@@ -578,8 +575,7 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     };
 
     let consumed_fuel_for_call =
-        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name, idempotency_key)
-            .await?;
+        finish_invocation_and_get_fuel_consumption(&mut store, raw_function_name).await?;
 
     Ok((result.map(|_| results), consumed_fuel_for_call))
 }
@@ -587,7 +583,6 @@ async fn call_exported_function<Ctx: WorkerCtx>(
 async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
     store: &mut StoreContextMut<'_, Ctx>,
     raw_function_name: &str,
-    idempotency_key: Option<IdempotencyKey>,
 ) -> Result<i64, WorkerExecutorError> {
     let current_fuel_level = store.get_fuel().unwrap_or(0);
     let consumed_fuel_for_call = store
@@ -600,14 +595,6 @@ async fn finish_invocation_and_get_fuel_consumption<Ctx: WorkerCtx>(
             "Fuel consumed for call {raw_function_name}: {}",
             consumed_fuel_for_call
         );
-    }
-
-    if let Some(idempotency_key) = idempotency_key {
-        store
-            .data()
-            .get_public_state()
-            .event_service()
-            .emit_invocation_finished(raw_function_name, &idempotency_key, store.data().is_live());
     }
 
     record_invocation_consumption(consumed_fuel_for_call);

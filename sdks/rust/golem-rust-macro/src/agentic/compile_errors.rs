@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use proc_macro2::Span;
 use syn::ItemTrait;
 
 pub fn no_constructor_method_error(item_trait: &ItemTrait) -> proc_macro2::TokenStream {
@@ -24,6 +25,36 @@ pub fn multiple_constructor_methods_error(item_trait: &ItemTrait) -> proc_macro2
 
 pub fn async_trait_in_agent_definition_error(item_trait: &ItemTrait) -> proc_macro2::TokenStream {
     compile_error(item_trait, "The `#[async_trait]` attribute is not allowed on agent traits. Agent traits automatically support async methods without this attribute.")
+}
+
+pub fn generic_type_in_constructor_error(span: Span, type_name: &str) -> proc_macro2::TokenStream {
+    syn::Error::new(
+        span,
+        format!(
+            "Generic type `{}` cannot be used as an agent constructor parameter",
+            type_name
+        ),
+    )
+    .to_compile_error()
+}
+
+pub fn generic_type_in_agent_method_error(span: Span, type_name: &str) -> proc_macro2::TokenStream {
+    let msg = format!(
+        "Generic type `{}` cannot be used in agent method parameter",
+        type_name
+    );
+    syn::Error::new(span, msg).to_compile_error()
+}
+
+pub fn generic_type_in_agent_return_type_error(
+    span: Span,
+    type_name: &str,
+) -> proc_macro2::TokenStream {
+    let msg = format!(
+        "Generic type `{}` cannot be used in agent method return type",
+        type_name
+    );
+    syn::Error::new(span, msg).to_compile_error()
 }
 
 pub fn compile_error(item_trait: &ItemTrait, msg: &str) -> proc_macro2::TokenStream {

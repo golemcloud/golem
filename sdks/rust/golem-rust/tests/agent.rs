@@ -18,18 +18,148 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod tests {
     use golem_rust::agentic::{
-        Multimodal, MultimodalAdvanced, MultimodalCustom, UnstructuredBinary, UnstructuredText,
+        Multimodal, MultimodalAdvanced, MultimodalCustom, Schema, UnstructuredBinary,
+        UnstructuredText,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, AgentType};
     use golem_rust::golem_ai::golem::llm::llm::Config;
     use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
     use golem_rust::{agent_definition, agent_implementation, agentic::Agent, Schema};
     use golem_rust::{AllowedLanguages, AllowedMimeTypes, MultimodalSchema};
+    use std::fmt::Debug;
     use test_r::test;
+
+    struct AgentWithTypeParameterImpl<T> {
+        _request_id: T,
+    }
+
+    #[agent_definition]
+    trait AgentWithTypeParameter<T: Schema + Clone + Debug> {
+        fn new(init: String) -> Self;
+        fn num(&self, i: String) -> u32;
+
+        #[allow(unused)]
+        fn identity(i: T) -> T;
+    }
+
+    #[agent_implementation]
+    impl AgentWithTypeParameter<String> for AgentWithTypeParameterImpl<String> {
+        fn new(init: String) -> Self {
+            AgentWithTypeParameterImpl { _request_id: init }
+        }
+
+        fn num(&self, _i: String) -> u32 {
+            1
+        }
+
+        fn identity(i: String) -> String {
+            i
+        }
+    }
+
+    struct AgentWithStaticMethodsImpl;
+
+    #[agent_definition]
+    trait AgentWithStaticMethods {
+        fn new(init: UserId) -> Self;
+
+        #[allow(unused)]
+        fn foo(param: String) -> String;
+
+        #[allow(unused)]
+        fn bar(param: String) -> String {
+            Self::foo(param)
+        }
+        fn baz(&self, param: String) -> String;
+    }
+
+    #[agent_implementation]
+    impl AgentWithStaticMethods for AgentWithStaticMethodsImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithStaticMethodsImpl
+        }
+
+        fn foo(param: String) -> String {
+            param
+        }
+
+        fn bar(param: String) -> String {
+            Self::foo(param)
+        }
+
+        fn baz(&self, param: String) -> String {
+            param
+        }
+    }
+
+    #[agent_definition]
+    trait AgentWithOnlyConstructor {
+        fn new(init: UserId) -> Self;
+    }
+
+    struct AgentWithOnlyConstructorImpl;
+    #[agent_implementation]
+    impl AgentWithOnlyConstructor for AgentWithOnlyConstructorImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithOnlyConstructorImpl
+        }
+    }
+
+    #[agent_definition]
+    trait AgentWithOnlyStaticMethods {
+        fn new(init: UserId) -> Self;
+
+        #[allow(unused)]
+        fn foo() -> String;
+
+        #[allow(unused)]
+        fn bar(param: String) -> String;
+    }
+
+    struct AgentWithOnlyStaticMethodsImpl;
+
+    #[agent_implementation]
+    impl AgentWithOnlyStaticMethods for AgentWithOnlyStaticMethodsImpl {
+        fn new(_init: UserId) -> Self {
+            AgentWithOnlyStaticMethodsImpl
+        }
+        fn foo() -> String {
+            Self::bar("foo".to_string())
+        }
+        fn bar(param: String) -> String {
+            param
+        }
+    }
+
+    #[agent_definition]
+    trait FooAgent {
+        fn new(init: UserId) -> Self;
+
+        #[allow(unused)]
+        fn foo() -> String;
+        fn bar(&self) -> String;
+    }
+
+    struct FooImpl;
+
+    #[agent_implementation]
+    impl FooAgent for FooImpl {
+        // Use `FooImpl` instead of `Self` should work
+        fn new(_init: UserId) -> FooImpl {
+            FooImpl
+        }
+        fn foo() -> String {
+            "foo".to_string()
+        }
+        fn bar(&self) -> String {
+            "bar".to_string()
+        }
+    }
 
     #[agent_definition]
     trait Echo {
         fn new(init: UserId, llm_config: Config) -> Self;
+
         fn echo_mut(&mut self, message: String) -> String;
         fn echo(&self, message: String) -> String;
         fn get_id(&self) -> String;

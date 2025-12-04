@@ -14,6 +14,7 @@
 
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::get_oplog_entry;
+use crate::model::WorkerConfig;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
@@ -73,7 +74,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
 
         let remote_worker_id: WorkerId = worker_id.into();
@@ -88,7 +91,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
@@ -220,7 +225,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 
@@ -315,7 +322,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         let args = self.get_arguments().await?;
-        let env = self.get_environment().await?;
+        let mut env = self.get_environment().await?;
+        WorkerConfig::remove_dynamic_vars(&mut env);
+
         let wasi_config_vars = self.wasi_config_vars();
         let own_worker_id = self.owned_worker_id().clone();
 

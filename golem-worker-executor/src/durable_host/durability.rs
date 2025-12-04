@@ -423,7 +423,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             RetryDecision::Immediate
             | RetryDecision::Delayed(_)
             | RetryDecision::ReacquirePermits => Err(failure),
-            RetryDecision::None => Ok(()),
+            RetryDecision::None | RetryDecision::TryStop(_) => Ok(()),
         }
     }
 }

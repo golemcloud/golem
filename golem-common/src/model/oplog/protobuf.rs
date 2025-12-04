@@ -236,6 +236,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .map(|pr| pr.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
+                original_phantom_id: create.original_phantom_id.map(|id| id.into()),
             })),
             oplog_entry::Entry::ImportedFunctionInvoked(imported_function_invoked) => Ok(
                 PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
@@ -608,6 +609,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .into_iter()
                             .map(Into::into)
                             .collect(),
+                        original_phantom_id: create.original_phantom_id.map(|id| id.into()),
                     },
                 )),
             },

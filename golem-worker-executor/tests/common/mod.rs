@@ -507,8 +507,14 @@ impl InvocationHooks for TestWorkerCtx {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        self.durable_ctx.on_invocation_failure(trap_type).await
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision {
+        self.durable_ctx
+            .on_invocation_failure(full_function_name, trap_type)
+            .await
     }
 
     async fn on_invocation_success(
@@ -618,6 +624,7 @@ impl WorkerCtx for TestWorkerCtx {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let oplog = Arc::new(TestOplog::new(
             owned_worker_id.clone(),
@@ -652,6 +659,7 @@ impl WorkerCtx for TestWorkerCtx {
             agent_types_service,
             shard_service,
             pending_update,
+            original_phantom_id,
         )
         .await?;
         Ok(Self { durable_ctx })

@@ -116,6 +116,7 @@ use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
 use try_match::try_match;
+use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -169,6 +170,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -215,7 +217,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &worker_config.args,
-            &worker_config.env,
             temp_dir.path().to_path_buf(),
             stdin,
             stdout,
@@ -268,6 +269,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 wasi_config_vars,
                 shard_service,
                 pending_update,
+                original_phantom_id,
             )
             .await,
             temp_dir,
@@ -416,8 +418,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         trap_type: &TrapType,
     ) -> RetryDecision {
         match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => RetryDecision::None,
-            TrapType::Interrupt(InterruptKind::Suspend) => RetryDecision::None,
+            TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
+            TrapType::Interrupt(InterruptKind::Suspend(ts)) => RetryDecision::TryStop(*ts),
             TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
             TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
             TrapType::Exit => RetryDecision::None,
@@ -1134,6 +1136,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.update_state_to_new_component_version(new_version)
                         .await?;
                 }
+                ReplayEvent::ForkReplayed { new_phantom_id } => {
+                    debug!("Updating the replay's current phantom id to {new_phantom_id}");
+                    self.update_state_to_new_phantom_id(new_phantom_id).await?;
+                }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
 
@@ -1189,6 +1195,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn update_state_to_new_phantom_id(
+        &mut self,
+        new_phantom_id: Uuid,
+    ) -> Result<(), WorkerExecutorError> {
+        self.state.current_phantom_id = Some(new_phantom_id);
         Ok(())
     }
 
@@ -1380,11 +1394,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision {
         {
             let oplog_entry = match trap_type {
-                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
-                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
+                TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
+                TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
                 TrapType::Interrupt(InterruptKind::Jump) => None,
                 TrapType::Interrupt(InterruptKind::Restart) => None,
                 TrapType::Exit => Some(OplogEntry::exited()),
@@ -1431,6 +1449,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .worker()
                     .store_invocation_failure(&idempotency_key, trap_type)
                     .await;
+
+                self.public_state.event_service().emit_invocation_finished(
+                    full_function_name,
+                    &idempotency_key,
+                    self.is_live(),
+                );
             }
         }
 
@@ -1486,6 +1510,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         .worker()
                         .store_invocation_success(&idempotency_key, output.clone())
                         .await;
+
+                    self.public_state.event_service().emit_invocation_finished(
+                        full_function_name,
+                        &idempotency_key,
+                        is_live,
+                    );
                 }
             }
         } else {
@@ -1506,6 +1536,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
         debug!("Function {full_function_name} finished with {output:?}");
+
         Ok(())
     }
 
@@ -1952,7 +1983,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             let _ = store
                                                 .as_context_mut()
                                                 .data_mut()
-                                                .on_invocation_failure(&trap_type)
+                                                .on_invocation_failure(
+                                                    &full_function_name,
+                                                    &trap_type,
+                                                )
                                                 .await;
 
                                             break Err(WorkerExecutorError::invalid_request(
@@ -1971,7 +2005,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         let _ = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(&trap_type)
+                                            .on_invocation_failure(&full_function_name, &trap_type)
                                             .await;
 
                                         break Err(WorkerExecutorError::invalid_request(format!(
@@ -1995,7 +2029,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         let decision = store
                                             .as_context_mut()
                                             .data_mut()
-                                            .on_invocation_failure(&trap_type)
+                                            .on_invocation_failure(&full_function_name, &trap_type)
                                             .await;
 
                                         if decision == RetryDecision::None {
@@ -2681,6 +2715,9 @@ struct PrivateDurableWorkerState {
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
     pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
+
+    /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
+    current_phantom_id: Option<Uuid>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2716,6 +2753,7 @@ impl PrivateDurableWorkerState {
         wasi_config_vars: BTreeMap<String, String>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Self {
         let replay_state =
             ReplayState::new(owned_worker_id.clone(), oplog.clone(), deleted_regions).await;
@@ -2768,6 +2806,7 @@ impl PrivateDurableWorkerState {
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
+            current_phantom_id: original_phantom_id,
         }
     }
 
