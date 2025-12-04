@@ -15,7 +15,7 @@
 use heck::ToKebabCase;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
 
 pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> TokenStream {
@@ -158,7 +158,7 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
                                 quote! {
                                     #ident::#case_ident { #(#field_names),* } => {
                                         let builder = builder.variant(#idx);
-                                        let builder = builder.record();
+                                        let builder = builder.tuple();
                                         #(#field_values)*
                                         builder.finish().finish()
                                     }
@@ -491,24 +491,43 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             } else {
+                                let tuple_type = {
+                                    let tys = variant.fields.iter().map(|f| &f.ty);
+                                    quote! { ( #(#tys),* ) }
+                                };
+
+                                let tuple_bindings = {
+                                    let names = variant
+                                        .fields
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, _)| syn::Ident::new(&format!("field_{i}"), Span::call_site()));
+                                    quote! { ( #(#names),* ) }
+                                };
+
+                                let missing_err = format!("Missing tuple element #0");
+
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
                                     .map(|(idx, field)| {
                                         let field_name = field.ident.as_ref().unwrap();
-                                        let field_ty = &field.ty;
-                                        let missing_field_error = Lit::Str(LitStr::new(&format!("Missing {field_name} field"), Span::call_site()));
+                                        let field_element = format_ident!("field_{idx}");
                                         quote! {
-                                            #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.field(#idx).ok_or_else(|| #missing_field_error.to_string())?
-                                            )?
+                                            #field_name: #field_element
                                         }
                                     })
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    #idx => Ok(#ident::#case_ident {
-                                        #(#field_extractors),*
-                                    })
+                                    #idx => {
+                                        let #tuple_bindings = <#tuple_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
+                                            &inner.ok_or_else(|| #missing_err.to_string())?
+                                        )?;
+
+                                        Ok(#ident::#case_ident {
+                                            #(#field_extractors),*
+                                        })
+                                    }
                                 }
                             }
                         } else {
@@ -546,7 +565,7 @@ pub fn derive_from_value_and_type(
 
                                 quote! {
                                       #idx => {
-                                        let #tuple_bindings =<#tuple_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
+                                        let #tuple_bindings = <#tuple_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                             &inner.ok_or_else(|| #missing_err.to_string())?
                                         )?;
 

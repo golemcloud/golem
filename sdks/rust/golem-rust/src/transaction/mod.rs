@@ -46,7 +46,7 @@ pub trait Operation: Clone {
 pub fn operation<In: Clone, Out: Clone, Err: Clone>(
     execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
     compensate_fn: impl Fn(In, Out) -> Result<(), Err> + 'static,
-) -> impl Operation<In=In, Out=Out, Err=Err> {
+) -> impl Operation<In = In, Out = Out, Err = Err> {
     FnOperation {
         execute_fn: Rc::new(execute_fn),
         compensate_fn: Rc::new(compensate_fn),
@@ -192,7 +192,7 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
 
     pub fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
-        operation: impl Operation<In=OpIn, Out=OpOut, Err=Err> + 'static,
+        operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
         let result = operation.execute(input.clone());
@@ -248,7 +248,7 @@ impl InfallibleTransaction {
         OpErr: Debug + Clone + 'static,
     >(
         &mut self,
-        operation: impl Operation<In=OpIn, Out=OpOut, Err=OpErr> + 'static,
+        operation: impl Operation<In = OpIn, Out = OpOut, Err = OpErr> + 'static,
         input: OpIn,
     ) -> OpOut {
         match operation.execute(input.clone()) {
@@ -287,7 +287,7 @@ impl InfallibleTransaction {
 pub trait Transaction<Err> {
     fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
-        operation: impl Operation<In=OpIn, Out=OpOut, Err=Err> + 'static,
+        operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err>;
 
@@ -299,7 +299,7 @@ pub trait Transaction<Err> {
 impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
     fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
-        operation: impl Operation<In=OpIn, Out=OpOut, Err=Err> + 'static,
+        operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
         FallibleTransaction::execute(self, operation, input)
@@ -317,7 +317,7 @@ impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
 impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
     fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
-        operation: impl Operation<In=OpIn, Out=OpOut, Err=Err> + 'static,
+        operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
         Ok(InfallibleTransaction::execute(self, operation, input))
@@ -441,12 +441,11 @@ mod tests {
 mod macro_tests {
     use test_r::test;
 
-    use golem_rust_macro::{golem_operation, FromValueAndType, IntoValue};
-    use golem_wasm::{Value, WitValue};
-    use golem_wasm::analysis::AnalysedType;
-    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
     use crate::value_and_type::{FromValueAndType, IntoValue};
     use crate::{fallible_transaction, infallible_transaction};
+    use golem_rust_macro::{golem_operation, FromValueAndType, IntoValue};
+    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+    use golem_wasm::{Value, WitValue};
 
     mod golem_rust {
         pub use crate::*;
@@ -526,14 +525,13 @@ mod macro_tests {
         println!("{result:?}");
     }
 
-    #[derive(IntoValue, FromValueAndType, PartialEq, Debug)]
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
     enum MyEnum {
         Simple,
         Complex1(i32),
         Complex2(i32, String),
         Complex3 { x: String, y: bool },
     }
-
 
     #[test]
     fn test_into_value_derivation_enum() {
@@ -547,7 +545,7 @@ mod macro_tests {
             x: "world".to_string(),
             y: true,
         }
-            .into_value();
+        .into_value();
 
         let expected_simple = Value::Variant {
             case_idx: 0,
@@ -569,7 +567,7 @@ mod macro_tests {
 
         let expected_complex3 = Value::Variant {
             case_idx: 3,
-            case_value: Some(Box::new(Value::Record(vec![
+            case_value: Some(Box::new(Value::Tuple(vec![
                 Value::String("world".to_string()),
                 Value::Bool(true),
             ]))),
@@ -620,7 +618,7 @@ mod macro_tests {
 
         let complex3_value = WitValue::from(Value::Variant {
             case_idx: 3,
-            case_value: Some(Box::new(Value::Record(vec![
+            case_value: Some(Box::new(Value::Tuple(vec![
                 Value::String("world".to_string()),
                 Value::Bool(true),
             ]))),
@@ -642,9 +640,68 @@ mod macro_tests {
             y: true,
         };
 
-        assert_eq!(MyEnum::from_value_and_type(simple1_value_and_type).unwrap(), expected_simple);
-        assert_eq!(MyEnum::from_value_and_type(complex1_value_and_type).unwrap(), expected_complex1);
-        assert_eq!(MyEnum::from_value_and_type(complex2_value_and_type).unwrap(), expected_complex2);
-        // assert_eq!(MyEnum::from_value_and_type(complex3_value_and_type).unwrap(), expected_complex3);
+        assert_eq!(
+            MyEnum::from_value_and_type(simple1_value_and_type).unwrap(),
+            expected_simple
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex1_value_and_type).unwrap(),
+            expected_complex1
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex2_value_and_type).unwrap(),
+            expected_complex2
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex3_value_and_type).unwrap(),
+            expected_complex3
+        );
+    }
+
+    #[test]
+    fn test_round_trip_enum_derivation() {
+        let simple = MyEnum::Simple;
+        let complex1 = MyEnum::Complex1(42);
+        let complex2 = MyEnum::Complex2(7, "hello".to_string());
+        let complex3 = MyEnum::Complex3 {
+            x: "world".to_string(),
+            y: true,
+        };
+
+        let typ = MyEnum::get_type();
+
+        let simple_value = ValueAndType {
+            value: simple.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex1_value = ValueAndType {
+            value: complex1.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex2_value = ValueAndType {
+            value: complex2.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex3_value = ValueAndType {
+            value: complex3.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        assert_eq!(MyEnum::from_value_and_type(simple_value).unwrap(), simple);
+        assert_eq!(
+            MyEnum::from_value_and_type(complex1_value).unwrap(),
+            complex1
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex2_value).unwrap(),
+            complex2
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex3_value).unwrap(),
+            complex3
+        );
     }
 }
