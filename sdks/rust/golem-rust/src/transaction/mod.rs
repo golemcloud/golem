@@ -572,9 +572,7 @@ mod macro_tests {
                 Value::Bool(true),
             ]))),
         };
-
-        dbg!(Value::from(complex2_value.clone()));
-
+        
         assert_eq!(simple_value, WitValue::from(expected_simple));
         assert_eq!(complex1_value, WitValue::from(expected_complex1));
         assert_eq!(complex2_value, WitValue::from(expected_complex2));
