@@ -16,6 +16,7 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::app_raw;
+use crate::model::app_raw::Marker;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
@@ -651,7 +652,7 @@ impl PartitionedComponentPresets {
                     env_presets.insert(env_name.to_string(), properties.into());
                 }
                 None => {
-                    if default_custom_preset.is_none() {
+                    if properties.default == Some(Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
                     custom_presets.insert(preset_name, properties.into());
@@ -887,13 +888,18 @@ impl Layer for ComponentLayer {
                         Some(default_preset.clone()),
                     )
                 } else {
+                    let mut selected_presets = Vec::new();
+                    let mut selected_properties = Vec::new();
+                    for preset in &selector.presets {
+                        if let Some(properties) = presets.get(&preset.0) {
+                            selected_presets.push(preset);
+                            selected_properties.push(properties);
+                        }
+                    }
+
                     (
-                        selector
-                            .presets
-                            .iter()
-                            .filter_map(|preset| presets.get(&preset.0))
-                            .collect(),
-                        Some(selector.presets.iter().map(|p| &p.0).join(", ")),
+                        selected_properties,
+                        Some(selected_presets.iter().map(|p| &p.0).join(", ")),
                     )
                 }
             }
@@ -2454,7 +2460,7 @@ mod app_builder {
             component_name: ComponentName,
         ) {
             match self.component_layer_store.value(
-                &ComponentLayerId::ComponentEnvironmentPresets(component_name.clone()),
+                &ComponentLayerId::ComponentCustomPresets(component_name.clone()),
                 component_presets,
             ) {
                 Ok(component_layer_properties) => {
