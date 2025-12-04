@@ -3345,6 +3345,82 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_deployed_deployment_plan
+  /v1/envs/{environment_id}/deployments/{deployment_id}/agent-types:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: List all registered agent types in a deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_deployment_agent_types
   /v1/envs/{environment_id}/shares:
     post:
       tags:
@@ -8259,6 +8335,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginRegistrationDto'
+    Page_RegisteredAgentType:
+      type: object
+      title: Page_RegisteredAgentType
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredAgentType'
     Page_SecuritySchemeDto:
       type: object
       title: Page_SecuritySchemeDto
@@ -8569,6 +8655,18 @@ components:
       - facebook
       - microsoft
       - gitlab
+    RegisteredAgentType:
+      type: object
+      title: RegisteredAgentType
+      required:
+      - agentType
+      - implementedBy
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          type: string
+          format: uuid
     RouteMethod:
       type: string
       enum:

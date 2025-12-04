@@ -38,7 +38,7 @@ use golem_common::model::component::{
     PluginInstallation,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
-use golem_common::model::deployment::DeploymentCreation;
+use golem_common::model::deployment::{Deployment, DeploymentCreation};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
@@ -619,14 +619,14 @@ pub trait TestDslExtended: TestDsl {
         Ok(environment)
     }
 
-    async fn deploy_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<()> {
+    async fn deploy_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<Deployment> {
         let client = self.registry_service_client().await;
 
         let plan = client
             .get_environment_deployment_plan(&environment_id.0)
             .await?;
 
-        client
+        let deployment = client
             .deploy_environment(
                 &environment_id.0,
                 &DeploymentCreation {
@@ -637,7 +637,7 @@ pub trait TestDslExtended: TestDsl {
             )
             .await?;
 
-        Ok(())
+        Ok(deployment)
     }
 }
 

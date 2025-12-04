@@ -36,6 +36,8 @@ use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 use tracing::{debug, info};
+use golem_common::model::agent::{AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, RegisteredAgentType};
+use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -537,6 +539,99 @@ async fn component_recreation(deps: &EnvBasedTestDependencies) -> anyhow::Result
     client
         .delete_component(&component.id.0, recreated_component.revision.0)
         .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let agent_type = AgentType {
+            type_name: "CounterAgent".to_string(),
+            description: "".to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(
+                    NamedElementSchemas {
+                        elements: vec![
+                            NamedElementSchema {
+                                name: "name".to_string(),
+                                schema: ElementSchema::ComponentModel(
+                                    ComponentModelElementSchema {
+                                        element_type: AnalysedType::Str(TypeStr),
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                ),
+            },
+            methods: vec![
+                AgentMethod {
+                    name: "increment".to_string(),
+                    description: "".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(
+                        NamedElementSchemas {
+                            elements: vec![],
+                        },
+                    ),
+                    output_schema: DataSchema::Tuple(
+                        NamedElementSchemas {
+                            elements: vec![
+                                NamedElementSchema {
+                                    name: "return-value".to_string(),
+                                    schema: ElementSchema::ComponentModel(
+                                        ComponentModelElementSchema {
+                                            element_type: AnalysedType::U32(TypeU32),
+                                        },
+                                    ),
+                                },
+                            ],
+                        },
+                    ),
+                },
+            ],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+        };
+
+    let component = client
+        .create_component(
+            &env.id.0,
+            &ComponentCreation {
+                component_name: ComponentName("it:agent-counters".to_string()),
+                file_options: BTreeMap::new(),
+                dynamic_linking: HashMap::new(),
+                env: BTreeMap::new(),
+                agent_types: Vec::new(),
+                plugins: Vec::new(),
+            },
+            tokio::fs::File::open(
+                deps.component_directory()
+                    .join("it_agent_counters_release.wasm"),
+            )
+            .await?,
+            None::<Vec<u8>>
+        )
+        .await?;
+
+    assert!(*component.metadata.agent_types() == [agent_type.clone()]);
+
+    let deployment = user.deploy_environment(&env.id).await?;
+
+    let agent_types = client.list_deployment_agent_types(&env.id.0, deployment.revision.0).await?;
+
+    assert!(agent_types.values == vec![RegisteredAgentType {
+        agent_type,
+        implemented_by: component.id
+    }]);
 
     Ok(())
 }
