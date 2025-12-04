@@ -474,9 +474,11 @@ pub fn derive_from_value_and_type(
 
                                 quote! {
                                     #idx => {
-                                        let inner_val = inner.ok_or_else(|| #missing_body_error.to_string())?;
-                                        let inner_parsed = <#typ as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(&inner_val)?;
-                                        Ok(#ident::#case_ident(inner_parsed))
+                                        Ok(#ident::#case_ident(
+                                            <#typ as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
+                                                &inner.ok_or_else(|| #missing_body_error.to_string())?
+                                            )?
+                                        ))
                                     }
                                 }
                             }
@@ -491,24 +493,22 @@ pub fn derive_from_value_and_type(
                             } else {
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
-                                    .map(|(fidx, field)| {
+                                    .map(|(idx, field)| {
                                         let field_name = field.ident.as_ref().unwrap();
                                         let field_ty = &field.ty;
                                         let missing_field_error = Lit::Str(LitStr::new(&format!("Missing {field_name} field"), Span::call_site()));
                                         quote! {
                                             #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.field(#fidx).ok_or_else(|| #missing_field_error.to_string())?
+                                                &extractor.field(#idx).ok_or_else(|| #missing_field_error.to_string())?
                                             )?
                                         }
                                     })
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    #idx => {
-                                        Ok(#ident::#case_ident {
-                                            #(#field_extractors),*
-                                        })
-                                    }
+                                    Ok(#ident::#case_ident {
+                                        #(#field_extractors),*
+                                    })
                                 }
                             }
                         } else {
@@ -534,11 +534,9 @@ pub fn derive_from_value_and_type(
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    #idx => {
-                                        Ok(#ident::#case_ident (
-                                            #(#field_extractors),*
-                                        ))
-                                    }
+                                    Ok(#ident::#case_ident {
+                                        #(#field_extractors),*
+                                    })
                                 }
                             }
                         }
@@ -550,13 +548,18 @@ pub fn derive_from_value_and_type(
                     Span::call_site(),
                 ));
 
+                let invalid_case_format = Lit::Str(LitStr::new(
+                    &format!("Invalid {} variant: {{idx}}", ast.ident),
+                    Span::call_site(),
+                ));
+
                 quote! {
                     let (idx, inner) = extractor
                         .variant()
                         .ok_or_else(|| #should_be_variant_error.to_string())?;
                     match idx {
                         #(#cases),*,
-                        _ => Err(format!("Invalid {} variant: {}", stringify!(#ident), idx)),
+                        _ => Err(format!(#invalid_case_format)),
                     }
                 }
             }
@@ -620,7 +623,7 @@ fn record_or_tuple_extractor(
             .collect::<Vec<_>>();
 
         quote! {
-            Ok(Self(
+            Ok((
                 #(#field_extractors),*
             ))
         }
