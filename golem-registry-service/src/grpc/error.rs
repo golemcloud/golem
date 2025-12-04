@@ -199,6 +199,26 @@ impl From<ComponentResolverError> for GrpcApiError {
     }
 }
 
+impl From<DeploymentError> for GrpcApiError {
+    fn from(value: DeploymentError) -> Self {
+        let error: String = value.to_string();
+        match value {
+            DeploymentError::ParentEnvironmentNotFound(_)
+            | DeploymentError::DeploymentNotFound(_)
+            | DeploymentError::AgentTypeNotFound(_) => {
+                Self::NotFound(ErrorBody { error, cause: None })
+            }
+
+            DeploymentError::Unauthorized(inner) => inner.into(),
+
+            DeploymentError::InternalError(_) => Self::InternalError(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            }),
+        }
+    }
+}
+
 impl From<DeployedRoutesError> for GrpcApiError {
     fn from(value: DeployedRoutesError) -> Self {
         let error: String = value.to_string();
@@ -214,36 +234,6 @@ impl From<DeployedRoutesError> for GrpcApiError {
         }
     }
 }
-
-// impl From<DeploymentError> for GrpcApiError {
-//     fn from(value: DeploymentError) -> Self {
-//         let error: String = value.to_string();
-//         match value {
-//             DeploymentError::ParentEnvironmentNotFound(_)
-//             | DeploymentError::DeploymentNotFound(_)
-//             | DeploymentError::AgentTypeNotFound(_) => {
-//                 Self::NotFound(ErrorBody { error, cause: None })
-//             }
-
-//             DeploymentError::ConcurrentDeployment(_)
-//             | DeploymentError::DeploymentNotFound(_)
-//             | DeploymentError::AgentTypeNotFound() => {
-//                 Self::NotFound(ErrorBody { error, cause: None })
-//             }
-
-//             DeploymentError::ConcurrentDeployment
-//             | DeploymentError::NoOpDeployment => {
-//                 Self::Con
-//             }
-
-//             DeploymentError::Unauthorized(inner) => inner.into(),
-//             DeploymentError::InternalError(_) => Self::InternalError(ErrorBody {
-//                 error,
-//                 cause: Some(value.into_anyhow()),
-//             }),
-//         }
-//     }
-// }
 
 impl From<EnvironmentError> for GrpcApiError {
     fn from(value: EnvironmentError) -> Self {

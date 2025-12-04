@@ -14,7 +14,6 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::deployment::DeployedRoutesService;
 use crate::services::http_api_definition::HttpApiDefinitionService;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -34,6 +33,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
+use crate::services::deployment::DeployedRoutesService;
 
 pub struct HttpApiDefinitionsApi {
     http_api_definition_service: Arc<HttpApiDefinitionService>,

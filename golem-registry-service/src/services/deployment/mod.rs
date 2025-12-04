@@ -16,11 +16,11 @@ mod rib;
 mod routes;
 mod write;
 
+pub use self::write::{DeploymentWriteService, DeploymentWriteError};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
-pub use self::write::DeploymentWriteService;
 
 use super::component::ComponentError;
-use super::http_api_definition::HttpApiDefinitionError;
+use super::http_api_definition::{HttpApiDefinitionError, HttpApiDefinitionService};
 use super::http_api_deployment::HttpApiDeploymentError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
@@ -41,6 +41,11 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 use golem_common::model::agent::RegisteredAgentType;
+use crate::model::api_definition::{CompiledRouteWithSecuritySchemeDetails, CompiledRoutesForHttpApiDefinition, MaybeDisabledCompiledRoute};
+use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
+use anyhow::anyhow;
+use std::collections::HashMap;
+use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -70,12 +75,10 @@ impl SafeDisplay for DeploymentError {
 
 error_forwarding!(
     DeploymentError,
+    DeployRepoError,
     RepoError,
     EnvironmentError,
-    DeployRepoError,
-    ComponentError,
     HttpApiDefinitionError,
-    HttpApiDeploymentError,
 );
 
 pub struct DeploymentService {
@@ -90,28 +93,8 @@ impl DeploymentService {
     ) -> Self {
         Self {
             environment_service,
-            deployment_repo,
+            deployment_repo
         }
-    }
-
-    pub async fn get_latest_deployment_for_environment(
-        &self,
-        environment: &Environment,
-        auth: &AuthCtx,
-    ) -> Result<Option<Deployment>, DeploymentError> {
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
-
-        let deployment: Option<Deployment> = self
-            .deployment_repo
-            .get_latest_revision(&environment.id.0)
-            .await?
-            .map(|r| r.into());
-
-        Ok(deployment)
     }
 
     pub async fn list_deployments(

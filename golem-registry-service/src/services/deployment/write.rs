@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::rib::CorsPreflightExpr;
-use super::{DeploymentService};
+use super::{DeploymentError, DeploymentService};
 use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithoutSecurity};
 use crate::model::component::Component;
 use crate::repo::deployment::DeploymentRepo;
@@ -58,6 +58,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::{error_forwarding, SafeDisplay};
 use golem_service_base::repo::RepoError;
+use golem_common::model::environment::Environment;
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -75,8 +76,6 @@ macro_rules! ok_or_continue {
 pub enum DeploymentWriteError {
     #[error("Parent environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
-    #[error("Deployment {0} not found in the environment")]
-    DeploymentNotFound(DeploymentRevision),
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
     #[error("Requested deployment would not have any changes compared to current deployment")]
@@ -85,8 +84,6 @@ pub enum DeploymentWriteError {
     VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
     DeploymentValidationFailed(Vec<DeployValidationError>),
-    #[error("Agent type {0} not found")]
-    AgentTypeNotFound(String),
     #[error(
         "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
     )]
@@ -104,13 +101,11 @@ impl SafeDisplay for DeploymentWriteError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
-            Self::DeploymentNotFound(_) => self.to_string(),
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
-            Self::AgentTypeNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -124,7 +119,7 @@ error_forwarding!(
     DeployRepoError,
     ComponentError,
     HttpApiDefinitionError,
-    HttpApiDeploymentError,
+    HttpApiDeploymentError
 );
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
@@ -167,7 +162,6 @@ fn format_validation_errors(errors: &[DeployValidationError]) -> String {
 
 pub struct DeploymentWriteService {
     environment_service: Arc<EnvironmentService>,
-    deployment_service: Arc<DeploymentService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
     component_service: Arc<ComponentService>,
     http_api_definition_service: Arc<HttpApiDefinitionService>,
@@ -177,7 +171,6 @@ pub struct DeploymentWriteService {
 impl DeploymentWriteService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
-        deployment_service: Arc<DeploymentService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
         component_service: Arc<ComponentService>,
         http_api_definition_service: Arc<HttpApiDefinitionService>,
@@ -185,7 +178,6 @@ impl DeploymentWriteService {
     ) -> DeploymentWriteService {
         Self {
             environment_service,
-            deployment_service,
             deployment_repo,
             component_service,
             http_api_definition_service,
@@ -217,7 +209,6 @@ impl DeploymentWriteService {
         )?;
 
         let latest_deployment = self
-            .deployment_service
             .get_latest_deployment_for_environment(&environment, auth)
             .await?;
 
@@ -315,6 +306,26 @@ impl DeploymentWriteService {
                 other => other.into(),
             })?
             .into();
+
+        Ok(deployment)
+    }
+
+    async fn get_latest_deployment_for_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Option<Deployment>, DeploymentWriteError> {
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewDeployment,
+        )?;
+
+        let deployment: Option<Deployment> = self
+            .deployment_repo
+            .get_latest_revision(&environment.id.0)
+            .await?
+            .map(|r| r.into());
 
         Ok(deployment)
     }
