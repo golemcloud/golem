@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod agent_types;
 mod rib;
 mod routes;
 mod write;
@@ -41,6 +40,7 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
+use golem_common::model::agent::RegisteredAgentType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -316,5 +316,62 @@ impl DeploymentService {
             .into();
 
         Ok(summary)
+    }
+
+    pub async fn get_deployed_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        agent_type_name: String
+    ) -> Result<Option<RegisteredAgentType>, DeploymentError> {
+        let agent_type = self
+            .deployment_repo
+            .get_deployed_agent_type(&environment_id.0, &agent_type_name)
+            .await?
+            .map(|r| r.into());
+
+        Ok(agent_type)
+    }
+
+    pub async fn list_deployed_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let agent_types = self
+            .deployment_repo
+            .list_deployed_agent_types(&environment_id.0)
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(agent_types)
+    }
+
+    pub async fn list_deployment_agent_types(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewAgentTypes,
+        )?;
+
+        let agent_types = self
+            .deployment_repo
+            .list_deployment_agent_types(&environment_id.0, deployment_revision.into())
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(agent_types)
+
     }
 }
