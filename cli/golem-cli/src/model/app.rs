@@ -2670,7 +2670,7 @@ mod app_builder {
                                         (Some(method), Some(binding)) => {
                                             converted_routes.push(
                                                 HttpApiRoute {
-                                                    method: method,
+                                                    method,
                                                     path: route.path.clone(),
                                                     binding,
                                                     security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),

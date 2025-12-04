@@ -242,7 +242,7 @@ impl DeployDiff {
                 .components
                 .iter()
                 .filter(|(component_name, _)| {
-                    diff.map_or(false, |diff| diff.components.contains_key(*component_name))
+                    diff.is_some_and(|diff| diff.components.contains_key(*component_name))
                 })
                 .map(|(component_name, component)| {
                     (
@@ -272,7 +272,7 @@ impl DeployDiff {
                 .http_api_definitions
                 .iter()
                 .filter(|(http_api_definition_name, _)| {
-                    diff.map_or(false, |diff| {
+                    diff.is_some_and(|diff| {
                         diff.http_api_definitions
                             .contains_key(*http_api_definition_name)
                     })
@@ -283,9 +283,7 @@ impl DeployDiff {
                 .http_api_deployments
                 .iter()
                 .filter(|(domain, _)| {
-                    diff.map_or(false, |diff| {
-                        diff.http_api_deployments.contains_key(*domain)
-                    })
+                    diff.is_some_and(|diff| diff.http_api_deployments.contains_key(*domain))
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
