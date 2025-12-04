@@ -209,7 +209,7 @@ pub enum TestMode {
         worker_executor_base_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
-        #[arg(long, default_value = "9095")]
+        #[arg(long, default_value = "false")]
         mute_child: bool,
         #[arg(long, default_value = "test-components")]
         component_directory: String,

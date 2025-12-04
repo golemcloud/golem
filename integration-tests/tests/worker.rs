@@ -1565,7 +1565,7 @@ async fn agent_promise_await(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let user = deps.clone().into_user().await?;
+    let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
     let component = user
@@ -1680,7 +1680,7 @@ async fn worker_suspends_when_running_out_of_fuel(
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
 
-    let user = deps.clone().into_user().await?;
+    let user = deps.user().await?;
 
     // set user to plan with low fuel so workers will be suspended
     admin_client

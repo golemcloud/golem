@@ -141,6 +141,26 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_deployment = client
+            .get_http_api_deployment_revision(
+                &http_api_deployment.id.0,
+                http_api_deployment.revision.0,
+            )
+            .await?;
+        assert!(fetched_http_api_deployment == http_api_deployment);
+    }
+
+    {
+        let fetched_http_api_deployment = client
+            .get_http_api_deployment_revision(
+                &http_api_deployment.id.0,
+                updated_http_api_deployment.revision.0,
+            )
+            .await?;
+        assert!(fetched_http_api_deployment == updated_http_api_deployment);
+    }
+
+    {
+        let fetched_http_api_deployment = client
             .get_http_api_deployment(&http_api_deployment.id.0)
             .await?;
         assert!(fetched_http_api_deployment == updated_http_api_deployment);

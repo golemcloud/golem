@@ -221,6 +221,47 @@ impl HttpApiDefinitionsApi {
         Ok(NoContentResponse::NoContent)
     }
 
+    /// Get a specific http api definition revision
+    #[oai(
+        path = "/http-api-definitions/:http_api_definition_id/revisions/:revision",
+        method = "get",
+        operation_id = "get_http_api_definition_revision"
+    )]
+    async fn get_http_api_definition_revision(
+        &self,
+        http_api_definition_id: Path<HttpApiDefinitionId>,
+        revision: Path<HttpApiDefinitionRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<HttpApiDefinition>> {
+        let record = recorded_http_api_request!(
+            "get_http_api_definition_revision",
+            http_api_definition_id = http_api_definition_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_http_api_definition_revision_internal(http_api_definition_id.0, revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_http_api_definition_revision_internal(
+        &self,
+        http_api_definition_id: HttpApiDefinitionId,
+        revision: HttpApiDefinitionRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<HttpApiDefinition>> {
+        let result = self
+            .http_api_definition_service
+            .get_revision(&http_api_definition_id, revision, &auth)
+            .await?;
+
+        Ok(Json(result))
+    }
+
     /// Get http api definition by name in the environment
     #[oai(
         path = "/envs/:environment_id/http-api-definitions/:http_api_definition_name",
