@@ -351,6 +351,9 @@ CREATE TABLE current_deployment_revisions
         FOREIGN KEY (environment_id, deployment_revision_id) REFERENCES deployment_revisions (environment_id, revision_id)
 );
 
+CREATE INDEX current_deployment_revisions_environment_idx
+    ON current_deployment_revisions (environment_id);
+
 CREATE INDEX current_deployment_revisions_current_idx
     ON current_deployment_revisions (environment_id, deployment_revision_id);
 
@@ -367,7 +370,8 @@ CREATE TABLE current_deployments
         FOREIGN KEY (environment_id, current_revision_id) REFERENCES current_deployment_revisions (environment_id, revision_id)
 );
 
-CREATE INDEX current_deployments_revision_idx ON current_deployments (environment_id, current_revision_id);
+CREATE INDEX current_deployments_environment_current_revision_idx
+    ON current_deployments (environment_id, current_revision_id);
 
 CREATE TABLE deployment_component_revisions
 (
@@ -575,50 +579,6 @@ CREATE TABLE component_plugin_installations
 
 CREATE INDEX component_plugin_installations_plugin_idx ON component_plugin_installations (plugin_id);
 
-CREATE TABLE environment_plugin_installations
-(
-    environment_id      UUID      NOT NULL,
-    hash                BYTEA     NOT NULL,
-
-    created_at          TIMESTAMP NOT NULL,
-    updated_at          TIMESTAMP NOT NULL,
-    deleted_at          TIMESTAMP,
-    modified_by         UUID      NOT NULL,
-
-    current_revision_id INT       NOT NULL,
-
-    CONSTRAINT environment_plugin_installations_pk
-        PRIMARY KEY (environment_id),
-    CONSTRAINT environment_plugin_installations_environments_fk
-        FOREIGN KEY (environment_id) REFERENCES environments
-);
-
-CREATE INDEX environment_plugin_installations_latest_idx
-    ON environment_plugin_installations (environment_id, current_revision_id DESC);
-
-CREATE TABLE environment_plugin_installation_revisions
-(
-    environment_id UUID      NOT NULL,
-    revision_id    BIGINT    NOT NULL,
-    priority       INT       NOT NULL,
-
-    created_at     TIMESTAMP NOT NULL,
-    created_by     UUID      NOT NULL,
-
-    plugin_id      UUID      NOT NULL,
-    parameters     JSONB     NOT NULL,
-
-    CONSTRAINT environment_plugin_installation_revisions_pk
-        PRIMARY KEY (environment_id, revision_id, priority),
-    CONSTRAINT environment_plugin_installation_revisions_environment_fk
-        FOREIGN KEY (environment_id) REFERENCES environment_plugin_installations,
-    CONSTRAINT environment_plugin_installation_revisions_plugins_fk
-        FOREIGN KEY (plugin_id) REFERENCES plugins
-);
-
-CREATE INDEX environment_plugin_installation_revisions_plugin_idx
-    ON environment_plugin_installation_revisions (plugin_id);
-
 CREATE TABLE environment_shares
 (
     environment_share_id UUID      NOT NULL,
@@ -823,3 +783,31 @@ CREATE TABLE deployment_compiled_http_api_definition_routes
 
 CREATE INDEX deployment_routes_routes_def_idx
     ON deployment_compiled_http_api_definition_routes (environment_id, deployment_revision_id, http_api_definition_id);
+
+CREATE TABLE deployment_registered_agent_types
+(
+    environment_id         UUID   NOT NULL,
+    deployment_revision_id BIGINT NOT NULL,
+    agent_type_name        TEXT   NOT NULL,
+
+    component_id           UUID   NOT NULL, -- compoenent implementing agent type in this deployment
+    agent_type             BYTEA  NOT NULL, -- full agent type as blob
+
+    CONSTRAINT deployment_registered_agent_types_pk
+        PRIMARY KEY (environment_id, deployment_revision_id, agent_type_name),
+
+    CONSTRAINT deployment_registered_agent_types_environments_fk
+        FOREIGN KEY (environment_id)
+            REFERENCES environments (environment_id),
+
+    CONSTRAINT deployment_registered_agent_types_components_fk
+        FOREIGN KEY (component_id)
+            REFERENCES components (component_id),
+
+    CONSTRAINT deployment_registered_agent_types_deployment_revisions_fk
+        FOREIGN KEY (environment_id, deployment_revision_id)
+            REFERENCES deployment_revisions (environment_id, revision_id)
+);
+
+CREATE INDEX deployment_registered_agent_types_agent_type_idx
+    ON deployment_registered_agent_types (environment_id, deployment_revision_id, agent_type_name);

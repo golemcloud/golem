@@ -13,21 +13,23 @@
 // limitations under the License.
 
 use super::rib::CorsPreflightExpr;
-use super::{DeployValidationError, DeploymentError, DeploymentService};
 use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithoutSecurity};
 use crate::model::component::Component;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
-use crate::services::component::ComponentService;
+use crate::services::component::{ComponentError, ComponentService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use crate::services::http_api_definition::HttpApiDefinitionService;
-use crate::services::http_api_deployment::HttpApiDeploymentService;
+use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefinitionService};
+use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
+use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::Environment;
 use golem_common::model::http_api_definition::{
     CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
     HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpHandlerBinding,
@@ -38,6 +40,7 @@ use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
 };
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentInfo;
@@ -46,9 +49,10 @@ use golem_service_base::custom_api::{
     HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
     ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
-use rib::ComponentDependencyKey;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::repo::RepoError;
+use rib::{ComponentDependencyKey, RibCompilationError};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
@@ -64,9 +68,95 @@ macro_rules! ok_or_continue {
     }};
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum DeploymentWriteError {
+    #[error("Parent environment {0} not found")]
+    ParentEnvironmentNotFound(EnvironmentId),
+    #[error("Concurrent deployment attempt")]
+    ConcurrentDeployment,
+    #[error("Requested deployment would not have any changes compared to current deployment")]
+    NoOpDeployment,
+    #[error("Provided deployment version {version} already exists in this environment")]
+    VersionAlreadyExists { version: String },
+    #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
+    DeploymentValidationFailed(Vec<DeployValidationError>),
+    #[error(
+        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
+    )]
+    DeploymentHashMismatch {
+        requested_hash: diff::Hash,
+        actual_hash: diff::Hash,
+    },
+    #[error(transparent)]
+    Unauthorized(#[from] AuthorizationError),
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
+}
+
+impl SafeDisplay for DeploymentWriteError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::DeploymentHashMismatch { .. } => self.to_string(),
+            Self::DeploymentValidationFailed(_) => self.to_string(),
+            Self::ConcurrentDeployment => self.to_string(),
+            Self::VersionAlreadyExists { .. } => self.to_string(),
+            Self::NoOpDeployment => self.to_string(),
+            Self::Unauthorized(inner) => inner.to_safe_string(),
+            Self::InternalError(_) => "Internal error".to_string(),
+        }
+    }
+}
+
+error_forwarding!(
+    DeploymentWriteError,
+    RepoError,
+    EnvironmentError,
+    DeployRepoError,
+    ComponentError,
+    HttpApiDefinitionError,
+    HttpApiDeploymentError
+);
+
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
+pub enum DeployValidationError {
+    #[error(
+        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
+    )]
+    HttpApiDeploymentMissingHttpApiDefinition {
+        http_api_deployment_domain: Domain,
+        missing_http_api_definition: HttpApiDefinitionName,
+    },
+    #[error("Invalid path pattern: {0}")]
+    HttpApiDefinitionInvalidPathPattern(String),
+    #[error("Invalid rib expression: {0}")]
+    InvalidRibExpr(String),
+    #[error("Failed rib compilation: {0}")]
+    RibCompilationFailed(RibCompilationError),
+    #[error("Invalid http cors binding expression: {0}")]
+    InvalidHttpCorsBindingExpr(String),
+    #[error("Component {0} not found in deployment")]
+    ComponentNotFound(ComponentName),
+    #[error("Agent type name {0} is provided by multiple components")]
+    AmbiguousAgentTypeName(String),
+}
+
+impl SafeDisplay for DeployValidationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+fn format_validation_errors(errors: &[DeployValidationError]) -> String {
+    errors
+        .iter()
+        .map(|err| format!("{err}"))
+        .collect::<Vec<_>>()
+        .join(",\n")
+}
+
 pub struct DeploymentWriteService {
     environment_service: Arc<EnvironmentService>,
-    deployment_service: Arc<DeploymentService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
     component_service: Arc<ComponentService>,
     http_api_definition_service: Arc<HttpApiDefinitionService>,
@@ -76,7 +166,6 @@ pub struct DeploymentWriteService {
 impl DeploymentWriteService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
-        deployment_service: Arc<DeploymentService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
         component_service: Arc<ComponentService>,
         http_api_definition_service: Arc<HttpApiDefinitionService>,
@@ -84,7 +173,6 @@ impl DeploymentWriteService {
     ) -> DeploymentWriteService {
         Self {
             environment_service,
-            deployment_service,
             deployment_repo,
             component_service,
             http_api_definition_service,
@@ -97,14 +185,14 @@ impl DeploymentWriteService {
         environment_id: &EnvironmentId,
         data: DeploymentCreation,
         auth: &AuthCtx,
-    ) -> Result<Deployment, DeploymentError> {
+    ) -> Result<Deployment, DeploymentWriteError> {
         let environment = self
             .environment_service
             .get(environment_id, false, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentError::ParentEnvironmentNotFound(environment_id)
+                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
@@ -116,13 +204,12 @@ impl DeploymentWriteService {
         )?;
 
         let latest_deployment = self
-            .deployment_service
             .get_latest_deployment_for_environment(&environment, auth)
             .await?;
 
         let current_deployment_revision = latest_deployment.as_ref().map(|ld| ld.revision);
         if data.current_deployment_revision != current_deployment_revision {
-            return Err(DeploymentError::ConcurrentDeployment);
+            return Err(DeploymentWriteError::ConcurrentDeployment);
         };
         let next_deployment_revision = current_deployment_revision
             .as_ref()
@@ -134,7 +221,7 @@ impl DeploymentWriteService {
             latest_deployment.as_ref().map(|ld| ld.deployment_hash)
             && data.expected_deployment_hash == latest_deployment_hash
         {
-            return Err(DeploymentError::NoopDeployment);
+            return Err(DeploymentWriteError::NoOpDeployment);
         }
 
         tracing::info!("Creating deployment for environment: {environment_id}");
@@ -142,13 +229,13 @@ impl DeploymentWriteService {
         let (components, http_api_definitions, http_api_deployments) = tokio::try_join!(
             self.component_service
                 .list_staged_components_for_environment(&environment, auth)
-                .map_err(DeploymentError::from),
+                .map_err(DeploymentWriteError::from),
             self.http_api_definition_service
                 .list_staged_for_environment(&environment, auth)
-                .map_err(DeploymentError::from),
+                .map_err(DeploymentWriteError::from),
             self.http_api_deployment_service
                 .list_staged_for_environment(&environment, auth)
-                .map_err(DeploymentError::from),
+                .map_err(DeploymentWriteError::from),
         )?;
 
         let deployment_context =
@@ -157,7 +244,7 @@ impl DeploymentWriteService {
         {
             let actual_hash = deployment_context.hash();
             if data.expected_deployment_hash != deployment_context.hash() {
-                return Err(DeploymentError::DeploymentHashMismatch {
+                return Err(DeploymentWriteError::DeploymentHashMismatch {
                     requested_hash: data.expected_deployment_hash,
                     actual_hash,
                 });
@@ -165,6 +252,8 @@ impl DeploymentWriteService {
         }
 
         deployment_context.validate_http_api_deployments()?;
+
+        let registered_agent_types = deployment_context.extract_registered_agent_types()?;
 
         let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
             let deployment_context = Arc::new(deployment_context);
@@ -197,6 +286,7 @@ impl DeploymentWriteService {
                 .collect(),
             domain_http_api_definitions,
             compiled_http_api_routes,
+            registered_agent_types,
         );
 
         let deployment: Deployment = self
@@ -204,13 +294,35 @@ impl DeploymentWriteService {
             .deploy(&auth.account_id().0, record, environment.version_check)
             .await
             .map_err(|err| match err {
-                DeployRepoError::ConcurrentModification => DeploymentError::ConcurrentDeployment,
+                DeployRepoError::ConcurrentModification => {
+                    DeploymentWriteError::ConcurrentDeployment
+                }
                 DeployRepoError::VersionAlreadyExists { version } => {
-                    DeploymentError::VersionAlreadyExists { version }
+                    DeploymentWriteError::VersionAlreadyExists { version }
                 }
                 other => other.into(),
             })?
             .into();
+
+        Ok(deployment)
+    }
+
+    async fn get_latest_deployment_for_environment(
+        &self,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<Option<Deployment>, DeploymentWriteError> {
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewDeployment,
+        )?;
+
+        let deployment: Option<Deployment> = self
+            .deployment_repo
+            .get_latest_revision(&environment.id.0)
+            .await?
+            .map(|r| r.into());
 
         Ok(deployment)
     }
@@ -266,7 +378,29 @@ impl DeploymentContext {
         diffable.hash()
     }
 
-    fn validate_http_api_deployments(&self) -> Result<(), DeploymentError> {
+    fn extract_registered_agent_types(
+        &self,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentWriteError> {
+        let mut seen_wit_named_agent_types = HashSet::new();
+        let mut agent_types = Vec::new();
+
+        for component in self.components.values() {
+            for agent_type in component.metadata.agent_types() {
+                if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
+                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
+                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
+                    ]));
+                }
+                agent_types.push(RegisteredAgentType {
+                    agent_type: agent_type.clone(),
+                    implemented_by: component.id,
+                });
+            }
+        }
+        Ok(agent_types)
+    }
+
+    fn validate_http_api_deployments(&self) -> Result<(), DeploymentWriteError> {
         let mut errors = Vec::new();
 
         for deployment in self.http_api_deployments.values() {
@@ -283,7 +417,7 @@ impl DeploymentContext {
         }
 
         if !errors.is_empty() {
-            return Err(DeploymentError::DeploymentValidationFailed(errors));
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         };
 
         Ok(())
@@ -297,7 +431,7 @@ impl DeploymentContext {
             HashSet<(Domain, HttpApiDefinitionId)>,
             Vec<CompiledRouteWithContext>,
         ),
-        DeploymentError,
+        DeploymentWriteError,
     > {
         let mut domain_http_api_definitions = HashSet::new();
         let mut compiled_routes = Vec::new();
@@ -355,7 +489,7 @@ impl DeploymentContext {
         }
 
         if !errors.is_empty() {
-            return Err(DeploymentError::DeploymentValidationFailed(errors));
+            return Err(DeploymentWriteError::DeploymentValidationFailed(errors));
         };
 
         Ok((domain_http_api_definitions, compiled_routes))

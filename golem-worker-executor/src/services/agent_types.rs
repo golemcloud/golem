@@ -125,7 +125,7 @@ mod grpc {
     use golem_common::SafeDisplay;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_service_base::model::auth::AuthCtx;
+
     use std::sync::Arc;
 
     #[derive(Clone)]
@@ -146,7 +146,7 @@ mod grpc {
             owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             self.client
-                .get_all_agent_types(owner_environment, &AuthCtx::System)
+                .get_all_agent_types(owner_environment)
                 .await
                 .map_err(|e| {
                     WorkerExecutorError::runtime(format!("Failed to get agent types: {e}"))
@@ -158,10 +158,7 @@ mod grpc {
             owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-            let result = self
-                .client
-                .get_agent_type(owner_environment, name, &AuthCtx::System)
-                .await;
+            let result = self.client.get_agent_type(owner_environment, name).await;
 
             match result {
                 Ok(agent_type) => Ok(Some(agent_type)),

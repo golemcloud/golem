@@ -278,7 +278,6 @@ impl Services {
 
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
-            deployment_service.clone(),
             repos.deployment_repo.clone(),
             component_service.clone(),
             http_api_definition_service.clone(),

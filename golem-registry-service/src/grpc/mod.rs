@@ -26,6 +26,7 @@ use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
+use tonic_tracing_opentelemetry::middleware::server::OtelGrpcLayer;
 use tracing::Instrument;
 
 pub async fn start_grpc_server(
@@ -49,6 +50,10 @@ pub async fn start_grpc_server(
 
     join_set.spawn(
         Server::builder()
+            .layer(
+                OtelGrpcLayer::default()
+                    .filter(tonic_tracing_opentelemetry::middleware::filters::reject_healthcheck),
+            )
             .add_service(reflection_service)
             .add_service(health_service)
             .add_service(
@@ -59,6 +64,7 @@ pub async fn start_grpc_server(
                     services.plugin_registration_service.clone(),
                     services.component_service.clone(),
                     services.component_resolver_service.clone(),
+                    services.deployment_service.clone(),
                     services.deployed_routes_service.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)

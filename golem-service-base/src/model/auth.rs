@@ -211,6 +211,7 @@ pub enum EnvironmentAction {
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
+    ViewAgentTypes,
     ViewComponent,
     ViewDeployment,
     ViewDeploymentPlan,
@@ -595,6 +596,15 @@ impl AuthCtx {
                 &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
             ),
             EnvironmentAction::ViewHttpApiDeployment => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            // agent types
+            EnvironmentAction::ViewAgentTypes => has_any_role(
                 roles_from_shares,
                 &[
                     EnvironmentRole::Admin,

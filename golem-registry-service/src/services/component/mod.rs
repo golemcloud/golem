@@ -293,44 +293,6 @@ impl ComponentService {
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
-    pub async fn list_deployed_components(
-        &self,
-        environment_id: &EnvironmentId,
-        auth: &AuthCtx,
-    ) -> Result<Vec<Component>, ComponentError> {
-        info!(
-            environment_id = %environment_id,
-            "Get deployed components"
-        );
-
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    ComponentError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
-        )?;
-
-        let result = self
-            .component_repo
-            .list_deployed(&environment_id.0)
-            .await?
-            .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
-            .collect::<Result<_, _>>()?;
-
-        Ok(result)
-    }
-
     pub async fn get_deployed_component_by_name(
         &self,
         environment_id: &EnvironmentId,
@@ -373,49 +335,6 @@ impl ComponentService {
             record.try_into_model(environment.application_id, environment.owner_account_id)?;
 
         Ok(converted)
-    }
-
-    pub async fn get_deployed_agent_types(
-        &self,
-        environment_id: &EnvironmentId,
-        auth: &AuthCtx,
-    ) -> Result<Vec<RegisteredAgentType>, ComponentError> {
-        let deployed_components = self.list_deployed_components(environment_id, auth).await?;
-
-        let agent_types = deployed_components
-            .into_iter()
-            .flat_map(|c| {
-                let component_id = c.id;
-                c.metadata
-                    .agent_types()
-                    .iter()
-                    .map(|at| RegisteredAgentType {
-                        agent_type: at.clone(),
-                        implemented_by: component_id,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        Ok(agent_types)
-    }
-
-    pub async fn get_deployed_agent_type(
-        &self,
-        environment_id: &EnvironmentId,
-        agent_type_name: &str,
-        auth: &AuthCtx,
-    ) -> Result<RegisteredAgentType, ComponentError> {
-        let agent_types = self.get_deployed_agent_types(environment_id, auth).await?;
-
-        let agent_type = agent_types
-            .into_iter()
-            .find(|at| at.agent_type.type_name == agent_type_name)
-            .ok_or(ComponentError::AgentTypeForNameNotFound(
-                agent_type_name.to_string(),
-            ))?;
-
-        Ok(agent_type)
     }
 
     pub async fn list_deployment_components(

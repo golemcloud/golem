@@ -5008,6 +5008,84 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/agent-types:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: List all registered agent types in a deployment
+      operationId: list_deployment_agent_types
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/shares:
     get:
       tags:
@@ -12447,6 +12525,16 @@ components:
             $ref: '#/components/schemas/PluginRegistrationDto'
       required:
       - values
+    Page_RegisteredAgentType:
+      title: Page_RegisteredAgentType
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredAgentType'
+      required:
+      - values
     Page_SecuritySchemeDto:
       title: Page_SecuritySchemeDto
       type: object
@@ -12757,6 +12845,18 @@ components:
       - facebook
       - microsoft
       - gitlab
+    RegisteredAgentType:
+      title: RegisteredAgentType
+      type: object
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          type: string
+          format: uuid
+      required:
+      - agentType
+      - implementedBy
     RouteMethod:
       type: string
       enum:
