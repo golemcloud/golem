@@ -83,7 +83,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 
 #[test]
 #[tracing::instrument]
-async fn fail_with_400_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
@@ -104,7 +104,7 @@ async fn fail_with_400_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
 
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceDeployEnvironmentError::Error400(_)
+                RegistryServiceDeployEnvironmentError::Error409(_)
             )) = result
         );
     }

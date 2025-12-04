@@ -20,7 +20,7 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentCompiledHttpApiDefinitionRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentDomainHttpApiDefinitionRecord, DeploymentHttpApiDefinitionRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord,
+    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -101,6 +101,23 @@ pub trait DeploymentRepo: Send + Sync {
         deployment_revision_id: i64,
         http_api_definition_name: &str,
     ) -> RepoResult<Vec<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>>;
+
+    async fn list_deployment_agent_types(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn get_deployed_agent_type(
+        &self,
+        environment_id: &Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn list_deployed_agent_types(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -269,6 +286,49 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             ))
             .await
     }
+
+    async fn list_deployment_agent_types(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .list_deployment_agent_types(environment_id, deployment_revision_id)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                deployment_revision_id
+            ))
+            .await
+    }
+
+    async fn get_deployed_agent_type(
+        &self,
+        environment_id: &Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .get_deployed_agent_type(environment_id, agent_type_name)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                agent_type_name
+            ))
+            .await
+    }
+
+    async fn list_deployed_agent_types(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.repo
+            .list_deployed_agent_types(environment_id)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+            ))
+            .await
+    }
 }
 
 pub struct DbDeploymentRepo<DBP: Pool> {
@@ -357,8 +417,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             sqlx::query_as(indoc! { r#"
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM current_deployments cd
-                JOIN deployment_revisions dr
-                    ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                JOIN current_deployment_revisions cdr
+                    ON dr.environment_id = cd.environment_id AND cdr.current_revision_id = cd.current_revision_id
                 WHERE cd.environment_id = $1
             "#})
                 .bind(environment_id),
@@ -531,6 +591,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         .await?
                 }
 
+                for registered_agent_type in &deployment_creation.registered_agent_types {
+                    Self::create_deployment_registered_agent_type(tx, registered_agent_type)
+                        .await?;
+                }
+
                 let revision = Self::set_current_deployment(
                     tx,
                     &user_account_id,
@@ -680,6 +745,83 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             .await
     }
+
+    async fn list_deployment_agent_types(
+        &self,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("list_deployment_agent_types")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.component_id,
+                        r.agent_type
+                    FROM deployment_registered_agent_types r
+                    WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await
+    }
+
+    async fn get_deployed_agent_type(
+        &self,
+        environment_id: &Uuid,
+        agent_type_name: &str,
+    ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_deployed_agent_type")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.component_id,
+                        r.agent_type
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
+                    JOIN deployment_registered_agent_types r
+                        ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
+                    WHERE cd.environment_id = $1 AND r.agent_type_name = $2
+                "#})
+                .bind(environment_id)
+                .bind(agent_type_name)
+            )
+            .await
+    }
+
+    async fn list_deployed_agent_types(
+        &self,
+        environment_id: &Uuid,
+    ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
+        self.with_ro("get_deployed_agent_type")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        r.environment_id,
+                        r.deployment_revision_id,
+                        r.agent_type_name,
+                        r.component_id,
+                        r.agent_type
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
+                    JOIN deployment_registered_agent_types r
+                        ON r.environment_id = cdr.environment_id AND r.deployment_revision_id = cdr.deployment_revision_id
+                    WHERE cd.environment_id = $1
+                    ORDER BY r.agent_type_name
+                "#})
+                .bind(environment_id)
+            )
+            .await
+    }
 }
 
 #[async_trait]
@@ -747,6 +889,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn create_deployment_compiled_http_api_definition_route(
         tx: &mut Self::Tx,
         compiled_route: &DeploymentCompiledHttpApiDefinitionRouteRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_registered_agent_type(
+        tx: &mut Self::Tx,
+        registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
     ) -> RepoResult<()>;
 
     async fn set_current_deployment(
@@ -997,6 +1144,27 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(compiled_route.id)
                 .bind(&compiled_route.security_scheme)
                 .bind(&compiled_route.compiled_route)
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_registered_agent_type(
+        tx: &mut Self::Tx,
+        registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_registered_agent_types
+                    (environment_id, deployment_revision_id, agent_type_name, component_id, agent_type)
+                VALUES ($1, $2, $3, $4, $5)
+            "#})
+                .bind(registered_agent_type.environment_id)
+                .bind(registered_agent_type.deployment_revision_id)
+                .bind(&registered_agent_type.agent_type_name)
+                .bind(registered_agent_type.component_id)
+                .bind(&registered_agent_type.agent_type)
         )
             .await?;
 

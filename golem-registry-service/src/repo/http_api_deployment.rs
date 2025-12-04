@@ -63,36 +63,13 @@ pub trait HttpApiDeploymentRepo: Send + Sync {
         domain: &str,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
-    async fn get_deployed_by_id(
-        &self,
-        http_api_deployment_id: &Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
-
-    async fn get_deployed_by_name(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
-
     async fn get_by_id_and_revision(
         &self,
         http_api_deployment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
 
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>>;
-
     async fn list_staged(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
-
-    async fn list_deployed(
         &self,
         environment_id: &Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>>;
@@ -132,10 +109,6 @@ impl<Repo: HttpApiDeploymentRepo> LoggedHttpApiDeploymentRepo<Repo> {
 
     fn span_env_and_deployment(environment_id: &Uuid, deployment_revision_id: i64) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, deployment_revision_id)
-    }
-
-    fn span_name_and_revision(environment_id: &Uuid, domain: &str, revision: i64) -> Span {
-        info_span!(SPAN_NAME, environment_id = %environment_id, domain = domain, revision)
     }
 
     fn span_id(http_api_deployment_id: &Uuid) -> Span {
@@ -202,27 +175,6 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
             .await
     }
 
-    async fn get_deployed_by_id(
-        &self,
-        http_api_deployment_id: &Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.repo
-            .get_deployed_by_id(http_api_deployment_id)
-            .instrument(Self::span_id(http_api_deployment_id))
-            .await
-    }
-
-    async fn get_deployed_by_name(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.repo
-            .get_deployed_by_name(environment_id, domain)
-            .instrument(Self::span_name(environment_id, domain))
-            .await
-    }
-
     async fn get_by_id_and_revision(
         &self,
         http_api_deployment_id: &Uuid,
@@ -237,38 +189,12 @@ impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploym
             .await
     }
 
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.repo
-            .get_by_name_and_revision(environment_id, domain, revision_id)
-            .instrument(Self::span_name_and_revision(
-                environment_id,
-                domain,
-                revision_id,
-            ))
-            .await
-    }
-
     async fn list_staged(
         &self,
         environment_id: &Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
         self.repo
             .list_staged(environment_id)
-            .instrument(Self::span_env(environment_id))
-            .await
-    }
-
-    async fn list_deployed(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
-        self.repo
-            .list_deployed(environment_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -533,64 +459,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .await
     }
 
-    async fn get_deployed_by_id(
-        &self,
-        http_api_deployment_id: &Uuid,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.with_ro("get_deployed_by_id")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hadr.http_api_definitions,
-                        hadr.created_at, hadr.created_by, hadr.deleted,
-                        had.created_at as entity_created_at
-                    FROM http_api_deployments had
-                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
-                    JOIN current_deployments cd ON had.environment_id = cd.environment_id
-                    JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
-                        AND cd.current_revision_id = dr.revision_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.environment_id = dr.environment_id
-                            AND dhadr.deployment_revision_id = dr.revision_id
-                            AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.http_api_deployment_id = $1
-                "#})
-                    .bind(http_api_deployment_id),
-            )
-            .await
-    }
-
-    async fn get_deployed_by_name(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.with_ro("get_deployed_by_name")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hadr.http_api_definitions,
-                        hadr.created_at, hadr.created_by, hadr.deleted,
-                        had.created_at as entity_created_at
-                    FROM http_api_deployments had
-                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
-                    JOIN current_deployments cd ON had.environment_id = cd.environment_id
-                    JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
-                        AND cd.current_revision_id = dr.revision_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.environment_id = dr.environment_id
-                            AND dhadr.deployment_revision_id = dr.revision_id
-                            AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.environment_id = $1 AND had.domain = $2
-                "#})
-                    .bind(environment_id)
-                    .bind(domain)
-            )
-            .await
-    }
-
     async fn get_by_id_and_revision(
         &self,
         http_api_deployment_id: &Uuid,
@@ -614,32 +482,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        domain: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<HttpApiDeploymentExtRevisionRecord>> {
-        self.with_ro("get_by_name_and_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT d.environment_id, d.domain, dr.http_api_deployment_id,
-                        dr.revision_id, dr.hash, dr.http_api_deployments,
-                        dr.created_at, dr.created_by, dr.deleted,
-                        d.created_at as entity_created_at
-                    FROM http_api_deployments d
-                    JOIN http_api_deployment_revisions dr
-                        ON d.http_api_deployment_id = dr.http_api_deployment_id
-                    WHERE d.environment_id = $1 AND d.domain = $2
-                        AND dr.revision_id = $3 AND dr.deleted = FALSE
-                "#})
-                .bind(environment_id)
-                .bind(domain)
-                .bind(revision_id),
-            )
-            .await
-    }
-
     async fn list_staged(
         &self,
         environment_id: &Uuid,
@@ -656,35 +498,6 @@ impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
                         ON d.http_api_deployment_id = dr.http_api_deployment_id AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                     ORDER BY d.domain
-                "#})
-                    .bind(environment_id),
-            )
-            .await
-    }
-
-    async fn list_deployed(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Vec<HttpApiDeploymentExtRevisionRecord>> {
-        self.with_ro("list_deployed")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT had.environment_id, had.domain, hadr.http_api_deployment_id,
-                        hadr.revision_id, hadr.hash, hadr.http_api_definitions,
-                        hadr.created_at, hadr.created_by, hadr.deleted,
-                        had.created_at as entity_created_at
-                    FROM http_api_deployments had
-                    JOIN http_api_deployment_revisions hadr ON had.http_api_deployment_id = hadr.http_api_deployment_id
-                    JOIN current_deployments cd ON had.environment_id = cd.environment_id
-                    JOIN deployment_revisions dr ON cd.environment_id = dr.environment_id
-                        AND cd.current_revision_id = dr.revision_id
-                    JOIN deployment_http_api_definition_revisions dhadr
-                        ON dhadr.environment_id = dr.environment_id
-                            AND dhadr.deployment_revision_id = dr.revision_id
-                            AND dhadr.http_api_definition_id = hadr.http_api_deployment_id
-                            AND dhadr.http_api_definition_revision_id = hadr.revision_id
-                    WHERE had.environment_id = $1
-                    ORDER BY had.domain
                 "#})
                     .bind(environment_id),
             )

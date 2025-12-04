@@ -17,21 +17,15 @@ mod routes;
 mod write;
 
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
-pub use self::write::DeploymentWriteService;
+pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 
-use super::component::ComponentError;
 use super::http_api_definition::HttpApiDefinitionError;
-use super::http_api_deployment::HttpApiDeploymentError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use ::rib::RibCompilationError;
-use golem_common::model::component::ComponentName;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
-use golem_common::model::diff;
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -47,21 +41,8 @@ pub enum DeploymentError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Deployment {0} not found in the environment")]
     DeploymentNotFound(DeploymentRevision),
-    #[error("Concurrent deployment attempt")]
-    ConcurrentDeployment,
-    #[error("Requested deployment would not have any changes compared to current deployment")]
-    NoopDeployment,
-    #[error("Provided deployment version {version} already exists in this environment")]
-    VersionAlreadyExists { version: String },
-    #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
-    DeploymentValidationFailed(Vec<DeployValidationError>),
-    #[error(
-        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
-    )]
-    DeploymentHashMismatch {
-        requested_hash: diff::Hash,
-        actual_hash: diff::Hash,
-    },
+    #[error("Agent type {0} not found")]
+    AgentTypeNotFound(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -73,11 +54,7 @@ impl SafeDisplay for DeploymentError {
         match self {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentNotFound(_) => self.to_string(),
-            Self::DeploymentHashMismatch { .. } => self.to_string(),
-            Self::DeploymentValidationFailed(_) => self.to_string(),
-            Self::ConcurrentDeployment => self.to_string(),
-            Self::VersionAlreadyExists { .. } => self.to_string(),
-            Self::NoopDeployment => self.to_string(),
+            Self::AgentTypeNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -86,48 +63,11 @@ impl SafeDisplay for DeploymentError {
 
 error_forwarding!(
     DeploymentError,
+    DeployRepoError,
     RepoError,
     EnvironmentError,
-    DeployRepoError,
-    ComponentError,
     HttpApiDefinitionError,
-    HttpApiDeploymentError,
 );
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployValidationError {
-    #[error(
-        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
-    )]
-    HttpApiDeploymentMissingHttpApiDefinition {
-        http_api_deployment_domain: Domain,
-        missing_http_api_definition: HttpApiDefinitionName,
-    },
-    #[error("Invalid path pattern: {0}")]
-    HttpApiDefinitionInvalidPathPattern(String),
-    #[error("Invalid rib expression: {0}")]
-    InvalidRibExpr(String),
-    #[error("Failed rib compilation: {0}")]
-    RibCompilationFailed(RibCompilationError),
-    #[error("Invalid http cors binding expression: {0}")]
-    InvalidHttpCorsBindingExpr(String),
-    #[error("Component {0} not found in deployment")]
-    ComponentNotFound(ComponentName),
-}
-
-impl SafeDisplay for DeployValidationError {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
-fn format_validation_errors(errors: &[DeployValidationError]) -> String {
-    errors
-        .iter()
-        .map(|err| format!("{err}"))
-        .collect::<Vec<_>>()
-        .join(",\n")
-}
 
 pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
@@ -143,26 +83,6 @@ impl DeploymentService {
             environment_service,
             deployment_repo,
         }
-    }
-
-    pub async fn get_latest_deployment_for_environment(
-        &self,
-        environment: &Environment,
-        auth: &AuthCtx,
-    ) -> Result<Option<Deployment>, DeploymentError> {
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewDeployment,
-        )?;
-
-        let deployment: Option<Deployment> = self
-            .deployment_repo
-            .get_latest_revision(&environment.id.0)
-            .await?
-            .map(|r| r.into());
-
-        Ok(deployment)
     }
 
     pub async fn list_deployments(
@@ -313,5 +233,64 @@ impl DeploymentService {
             .into();
 
         Ok(summary)
+    }
+
+    pub async fn get_deployed_agent_type(
+        &self,
+        environment_id: &EnvironmentId,
+        agent_type_name: &str,
+    ) -> Result<RegisteredAgentType, DeploymentError> {
+        let agent_type = self
+            .deployment_repo
+            .get_deployed_agent_type(&environment_id.0, agent_type_name)
+            .await?
+            .ok_or(DeploymentError::AgentTypeNotFound(
+                agent_type_name.to_string(),
+            ))?
+            .into();
+
+        Ok(agent_type)
+    }
+
+    pub async fn list_deployed_agent_types(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let agent_types = self
+            .deployment_repo
+            .list_deployed_agent_types(&environment_id.0)
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(agent_types)
+    }
+
+    pub async fn list_deployment_agent_types(
+        &self,
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewAgentTypes,
+        )?;
+
+        let agent_types = self
+            .deployment_repo
+            .list_deployment_agent_types(&environment_id.0, deployment_revision.into())
+            .await?
+            .into_iter()
+            .map(|r| r.into())
+            .collect();
+
+        Ok(agent_types)
     }
 }

@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct Blob<T> {
-    pub value: T,
+    value: T,
 
     serialized: OnceLock<Vec<u8>>,
 }
@@ -31,6 +31,14 @@ impl<T> Blob<T> {
             value,
             serialized: OnceLock::new(),
         }
+    }
+
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn into_value(self) -> T {
+        self.value
     }
 
     pub fn serialize(&self) -> anyhow::Result<&Vec<u8>>

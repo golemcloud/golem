@@ -17,6 +17,7 @@ use crate::services::auth::AuthService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentSummary,
@@ -466,5 +467,48 @@ impl EnvironmentsApi {
             .get_deployed_deployment_summary(&environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
+    }
+
+    /// List all registered agent types in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/agent-types",
+        method = "get",
+        operation_id = "list_deployment_agent_types"
+    )]
+    async fn list_deployment_agent_types(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+        let record = recorded_http_api_request!(
+            "list_deployment_agent_types",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_deployment_agent_types_internal(environment_id.0, deployment_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_deployment_agent_types_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+        let agent_types = self
+            .deployment_service
+            .list_deployment_agent_types(&environment_id, deployment_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: agent_types,
+        }))
     }
 }

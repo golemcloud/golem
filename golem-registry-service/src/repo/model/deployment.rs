@@ -24,6 +24,8 @@ use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRe
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::{AgentType, RegisteredAgentType};
+use golem_common::model::component::ComponentId;
 use golem_common::model::deployment::{
     Deployment, DeploymentPlan, DeploymentRevision, DeploymentSummary,
 };
@@ -331,6 +333,41 @@ impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredAgentTypeRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+
+    pub component_id: Uuid,
+    pub agent_type: Blob<AgentType>,
+}
+
+impl DeploymentRegisteredAgentTypeRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        registered_agent_type: RegisteredAgentType,
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            agent_type_name: registered_agent_type.agent_type.type_name.clone(),
+            component_id: registered_agent_type.implemented_by.0,
+            agent_type: Blob::new(registered_agent_type.agent_type),
+        }
+    }
+}
+
+impl From<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
+    fn from(value: DeploymentRegisteredAgentTypeRecord) -> Self {
+        Self {
+            implemented_by: ComponentId(value.component_id),
+            agent_type: value.agent_type.into_value(),
+        }
+    }
+}
+
 pub struct DeploymentRevisionCreationRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -343,6 +380,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
     pub domain_http_api_definitions: Vec<DeploymentDomainHttpApiDefinitionRecord>,
     pub compiled_http_api_definition_routes: Vec<DeploymentCompiledHttpApiDefinitionRouteRecord>,
+    pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -356,6 +394,7 @@ impl DeploymentRevisionCreationRecord {
         http_api_deployments: Vec<HttpApiDeployment>,
         domain_definitions: HashSet<(Domain, HttpApiDefinitionId)>,
         compiled_routes: Vec<CompiledRouteWithContext>,
+        registered_agent_types: Vec<RegisteredAgentType>,
     ) -> Self {
         Self {
             environment_id: environment_id.0,
@@ -411,6 +450,16 @@ impl DeploymentRevisionCreationRecord {
                         environment_id,
                         deployment_revision,
                         i32::try_from(i).expect("too many routes for i32"),
+                        r,
+                    )
+                })
+                .collect(),
+            registered_agent_types: registered_agent_types
+                .into_iter()
+                .map(|r| {
+                    DeploymentRegisteredAgentTypeRecord::from_model(
+                        environment_id,
+                        deployment_revision,
                         r,
                     )
                 })
@@ -498,7 +547,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
             http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,
-            route: value.compiled_route.value,
+            route: value.compiled_route.into_value(),
         })
     }
 }

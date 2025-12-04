@@ -231,7 +231,7 @@ impl ComponentRevisionRecord {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 dynamic_linking_wasm_rpc: dynamic_linking_to_diffable(
-                    self.metadata.value.dynamic_linking(),
+                    self.metadata.value().dynamic_linking(),
                 ),
             }
             .into(),
@@ -344,7 +344,7 @@ impl ComponentExtRevisionRecord {
             account_id,
             component_name: ComponentName(self.name),
             component_size: self.revision.size as u64,
-            metadata: self.revision.metadata.value,
+            metadata: self.revision.metadata.into_value(),
             created_at: self.revision.audit.created_at.into(),
             files: self
                 .revision

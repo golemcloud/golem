@@ -53,6 +53,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AccountUpdate",
                 "golem_common::model::account::AccountUpdate",
             ),
+            // agent
+            (
+                "RegisteredAgentType",
+                "golem_common::model::agent::RegisteredAgentType",
+            ),
             // application
             (
                 "Application",

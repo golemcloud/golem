@@ -17,7 +17,7 @@ use crate::services::account_usage::error::LimitExceededError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
-use crate::services::deployment::{DeployedRoutesError, DeploymentError};
+use crate::services::deployment::{DeployedRoutesError, DeploymentError, DeploymentWriteError};
 use crate::services::domain_registration::DomainRegistrationError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
@@ -440,23 +440,15 @@ impl From<EnvironmentPluginGrantError> for ApiError {
     }
 }
 
-impl From<DeploymentError> for ApiError {
-    fn from(value: DeploymentError) -> Self {
+impl From<DeploymentWriteError> for ApiError {
+    fn from(value: DeploymentWriteError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            DeploymentError::ParentEnvironmentNotFound(_)
-            | DeploymentError::DeploymentNotFound(_) => {
+            DeploymentWriteError::ParentEnvironmentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            DeploymentError::VersionAlreadyExists { .. }
-            | DeploymentError::DeploymentHashMismatch { .. } => {
-                Self::BadRequest(Json(ErrorsBody {
-                    errors: vec![error],
-                    cause: None,
-                }))
-            }
-            DeploymentError::DeploymentValidationFailed(failed_validations) => {
+            DeploymentWriteError::DeploymentValidationFailed(failed_validations) => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: failed_validations
                         .into_iter()
@@ -466,12 +458,51 @@ impl From<DeploymentError> for ApiError {
                 }))
             }
 
-            DeploymentError::ConcurrentDeployment | DeploymentError::NoopDeployment => {
+            DeploymentWriteError::ConcurrentDeployment
+            | DeploymentWriteError::NoOpDeployment
+            | DeploymentWriteError::VersionAlreadyExists { .. }
+            | DeploymentWriteError::DeploymentHashMismatch { .. } => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DeploymentWriteError::Unauthorized(inner) => inner.into(),
+            DeploymentWriteError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<DeploymentError> for ApiError {
+    fn from(value: DeploymentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DeploymentError::ParentEnvironmentNotFound(_)
+            | DeploymentError::DeploymentNotFound(_)
+            | DeploymentError::AgentTypeNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
             DeploymentError::Unauthorized(inner) => inner.into(),
             DeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<DeployedRoutesError> for ApiError {
+    fn from(value: DeployedRoutesError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DeployedRoutesError::NoActiveRoutesForDomain(_)
+            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DeployedRoutesError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),
@@ -589,23 +620,6 @@ impl From<HttpApiDeploymentError> for ApiError {
 
             HttpApiDeploymentError::Unauthorized(inner) => inner.into(),
             HttpApiDeploymentError::InternalError(_) => Self::InternalError(Json(ErrorBody {
-                error,
-                cause: Some(value.into_anyhow()),
-            })),
-        }
-    }
-}
-
-impl From<DeployedRoutesError> for ApiError {
-    fn from(value: DeployedRoutesError) -> Self {
-        let error: String = value.to_safe_string();
-        match value {
-            DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::HttpApiDefinitionNotFound(_) => {
-                Self::Conflict(Json(ErrorBody { error, cause: None }))
-            }
-
-            DeployedRoutesError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),
             })),

@@ -243,7 +243,6 @@ message ResolveComponentSuccessResponse {
 
 message GetAllAgentTypesRequest {
   golem.common.EnvironmentId environment_id = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetAllAgentTypesResponse {
@@ -260,7 +259,6 @@ message GetAllAgentTypesSuccessResponse {
 message GetAgentTypeRequest {
   golem.common.EnvironmentId environment_id = 1;
   string agentType = 2;
-  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetAgentTypeResponse {
