@@ -52,7 +52,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &DeploymentCreation {
                 current_deployment_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
                 version: "0.0.1".to_string(),
             },
         )
@@ -129,7 +129,7 @@ async fn get_component_version_from_previous_deployment(
             &DeploymentCreation {
                 current_deployment_revision: None,
                 expected_deployment_hash:
-                    "310f327e261958c0556e4fd6bf18a48226f5b2c8e0cf4dbdedb82d75f4254983".parse()?,
+                    "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
                 version: "0.0.1".to_string(),
             },
         )
