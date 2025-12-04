@@ -491,6 +491,10 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             } else {
+                                let missing_case_error = Lit::Str(LitStr::new(
+                                    &format!("Missing {case_ident} fields"),
+                                    Span::call_site(),
+                                ));
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
                                     .map(|(idx, field)| {
@@ -508,7 +512,7 @@ pub fn derive_from_value_and_type(
 
                                 quote! {
                                    #idx => {
-                                        let inner = &inner.ok_or_else(|| "Missing field".to_string())?;
+                                        let inner = &inner.ok_or_else(|| #missing_case_error.to_string())?;
 
                                         Ok(#ident::#case_ident {
                                             #(#field_extractors),*
