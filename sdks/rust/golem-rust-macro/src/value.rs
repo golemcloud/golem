@@ -457,7 +457,7 @@ pub fn derive_from_value_and_type(
                                 }
                             }
                         } else if has_single_anonymous_field(&variant.fields) {
-                            // separate inner type
+                            // separate inner type (tuple-like single field)
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -474,16 +474,14 @@ pub fn derive_from_value_and_type(
 
                                 quote! {
                                     #idx => {
-                                        Ok(#ident::#case_ident(
-                                            <#typ as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &inner.ok_or_else(|| #missing_body_error.to_string())?
-                                            )?
-                                        ))
+                                        let inner_val = inner.ok_or_else(|| #missing_body_error.to_string())?;
+                                        let inner_parsed = <#typ as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(&inner_val)?;
+                                        Ok(#ident::#case_ident(inner_parsed))
                                     }
                                 }
                             }
                         } else if has_only_named_fields(&variant.fields) {
-                            // record case
+                            // record case (named fields)
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -491,28 +489,31 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             } else {
+                                // build struct fields (expressions are used inside body)
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
-                                    .map(|(idx, field)| {
+                                    .map(|(fidx, field)| {
                                         let field_name = field.ident.as_ref().unwrap();
                                         let field_ty = &field.ty;
                                         let missing_field_error = Lit::Str(LitStr::new(&format!("Missing {field_name} field"), Span::call_site()));
                                         quote! {
                                             #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.field(#idx).ok_or_else(|| #missing_field_error.to_string())?
+                                                &extractor.field(#fidx).ok_or_else(|| #missing_field_error.to_string())?
                                             )?
                                         }
                                     })
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    Ok(#ident::#case_ident {
-                                        #(#field_extractors),*
-                                    })
+                                    #idx => {
+                                        Ok(#ident::#case_ident {
+                                            #(#field_extractors),*
+                                        })
+                                    }
                                 }
                             }
                         } else {
-                            // tuple case
+                            // tuple case (multiple unnamed fields)
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -522,21 +523,23 @@ pub fn derive_from_value_and_type(
                             } else {
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
-                                    .map(|(idx, field)| {
+                                    .map(|(fidx, field)| {
                                         let elem_ty = &field.ty;
-                                        let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{idx}"), Span::call_site()));
+                                        let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{fidx}"), Span::call_site()));
                                         quote! {
                                             <#elem_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.tuple_element(#idx).ok_or_else(|| #missing_tuple_element_error.to_string())?
+                                                &extractor.tuple_element(#fidx).ok_or_else(|| #missing_tuple_element_error.to_string())?
                                             )?
                                         }
                                     })
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    Ok(#ident::#case_ident {
-                                        #(#field_extractors),*
-                                    })
+                                    #idx => {
+                                        Ok(#ident::#case_ident (
+                                            #(#field_extractors),*
+                                        ))
+                                    }
                                 }
                             }
                         }
@@ -548,18 +551,13 @@ pub fn derive_from_value_and_type(
                     Span::call_site(),
                 ));
 
-                let invalid_case_format = Lit::Str(LitStr::new(
-                    &format!("Invalid {} variant: {{idx}}", ast.ident),
-                    Span::call_site(),
-                ));
-
                 quote! {
                     let (idx, inner) = extractor
                         .variant()
                         .ok_or_else(|| #should_be_variant_error.to_string())?;
                     match idx {
                         #(#cases),*,
-                        _ => Err(format!(#invalid_case_format)),
+                        _ => Err(format!("Invalid {} variant: {}", stringify!(#ident), idx)),
                     }
                 }
             }
@@ -623,9 +621,10 @@ fn record_or_tuple_extractor(
             .collect::<Vec<_>>();
 
         quote! {
-            Ok((
+            Ok(Self(
                 #(#field_extractors),*
             ))
         }
     }
 }
+
