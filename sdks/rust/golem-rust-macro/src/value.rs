@@ -457,7 +457,7 @@ pub fn derive_from_value_and_type(
                                 }
                             }
                         } else if has_single_anonymous_field(&variant.fields) {
-                            // separate inner type (tuple-like single field)
+                            // separate inner type
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -481,7 +481,7 @@ pub fn derive_from_value_and_type(
                                 }
                             }
                         } else if has_only_named_fields(&variant.fields) {
-                            // record case (named fields)
+                            // record case
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -489,7 +489,6 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             } else {
-                                // build struct fields (expressions are used inside body)
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
                                     .map(|(fidx, field)| {
@@ -513,7 +512,7 @@ pub fn derive_from_value_and_type(
                                 }
                             }
                         } else {
-                            // tuple case (multiple unnamed fields)
+                            // tuple case
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -523,12 +522,12 @@ pub fn derive_from_value_and_type(
                             } else {
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
-                                    .map(|(fidx, field)| {
+                                    .map(|(idx, field)| {
                                         let elem_ty = &field.ty;
-                                        let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{fidx}"), Span::call_site()));
+                                        let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{idx}"), Span::call_site()));
                                         quote! {
                                             <#elem_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.tuple_element(#fidx).ok_or_else(|| #missing_tuple_element_error.to_string())?
+                                                &extractor.tuple_element(#idx).ok_or_else(|| #missing_tuple_element_error.to_string())?
                                             )?
                                         }
                                     })
@@ -627,4 +626,3 @@ fn record_or_tuple_extractor(
         }
     }
 }
-
