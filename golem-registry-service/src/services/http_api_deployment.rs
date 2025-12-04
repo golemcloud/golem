@@ -284,6 +284,42 @@ impl HttpApiDeploymentService {
         Ok(())
     }
 
+    pub async fn get_revision(
+        &self,
+        http_api_deployment_id: &HttpApiDeploymentId,
+        revision: HttpApiDeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<HttpApiDeployment, HttpApiDeploymentError> {
+        let http_api_deployment: HttpApiDeployment = self
+            .http_api_deployment_repo
+            .get_by_id_and_revision(&http_api_deployment_id.0, revision.into())
+            .await?
+            .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
+                *http_api_deployment_id,
+            ))?
+            .into();
+
+        let environment = self
+            .environment_service
+            .get(&http_api_deployment.environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewHttpApiDeployment,
+        )
+        .map_err(|_| HttpApiDeploymentError::HttpApiDeploymentNotFound(*http_api_deployment_id))?;
+
+        Ok(http_api_deployment)
+    }
+
     pub async fn list_staged(
         &self,
         environment_id: &EnvironmentId,

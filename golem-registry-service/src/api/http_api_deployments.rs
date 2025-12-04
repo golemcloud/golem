@@ -217,6 +217,47 @@ impl HttpApiDeploymentsApi {
         Ok(NoContentResponse::NoContent)
     }
 
+    /// Get a specific http api deployment revision
+    #[oai(
+        path = "/http-api-deployment/:http_api_deployment_id/revisions/:revision",
+        method = "get",
+        operation_id = "get_http_api_deployment_revision"
+    )]
+    async fn get_http_api_deployment_revision(
+        &self,
+        http_api_deployment_id: Path<HttpApiDeploymentId>,
+        revision: Path<HttpApiDeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<HttpApiDeployment>> {
+        let record = recorded_http_api_request!(
+            "get_http_api_deployment_revision",
+            http_api_deployment_id = http_api_deployment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_http_api_deployment_revision_internal(http_api_deployment_id.0, revision.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_http_api_deployment_revision_internal(
+        &self,
+        http_api_deployment_id: HttpApiDeploymentId,
+        revision: HttpApiDeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<HttpApiDeployment>> {
+        let result = self
+            .http_api_deployment_service
+            .get_revision(&http_api_deployment_id, revision, &auth)
+            .await?;
+
+        Ok(Json(result))
+    }
+
     /// Get http api deployment by domain in the environment
     #[oai(
         path = "/envs/:environment_id/http-api-deployments/:domain",
