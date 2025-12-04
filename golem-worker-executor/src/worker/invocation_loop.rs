@@ -495,7 +495,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            _ => self.exported_function_invocation_failed(result).await,
+            _ => {
+                self.exported_function_invocation_failed(&full_function_name, result)
+                    .await
+            }
         }
     }
 
@@ -586,7 +589,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 match self
                     .exported_function_invocation_finished_with_type(
-                        full_function_name,
+                        full_function_name.clone(),
                         function_input,
                         output,
                         consumed_fuel,
@@ -598,10 +601,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.store
                             .data_mut()
-                            .on_invocation_failure(&TrapType::Error {
-                                error: WorkerError::Unknown(error.to_string()),
-                                retry_from: OplogIndex::INITIAL,
-                            })
+                            .on_invocation_failure(
+                                &full_function_name,
+                                &TrapType::Error {
+                                    error: WorkerError::Unknown(error.to_string()),
+                                    retry_from: OplogIndex::INITIAL,
+                                },
+                            )
                             .await;
                         CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
@@ -611,10 +617,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(None) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error {
-                        error: WorkerError::InvalidRequest("Function not found".to_string()),
-                        retry_from: OplogIndex::INITIAL,
-                    })
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Error {
+                            error: WorkerError::InvalidRequest("Function not found".to_string()),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                    )
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -622,12 +631,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(err) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error {
-                        error: WorkerError::InvalidRequest(format!(
-                            "Failed analysing function: {err}"
-                        )),
-                        retry_from: OplogIndex::INITIAL,
-                    })
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Error {
+                            error: WorkerError::InvalidRequest(format!(
+                                "Failed analysing function: {err}"
+                            )),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                    )
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -680,7 +692,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&trap_type)
+                    .on_invocation_failure(&full_function_name, &trap_type)
                     .await;
                 Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
@@ -690,6 +702,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// The logic handling a worker invocation that did not succeed.
     async fn exported_function_invocation_failed(
         &mut self,
+        full_function_name: &str,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
         let trap_type = match result {
@@ -703,7 +716,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Some(trap_type) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&trap_type)
+                    .on_invocation_failure(full_function_name, &trap_type)
                     .await
             }
             None => RetryDecision::None,
