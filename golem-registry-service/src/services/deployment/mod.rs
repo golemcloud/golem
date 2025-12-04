@@ -16,22 +16,16 @@ mod rib;
 mod routes;
 mod write;
 
-pub use self::write::{DeploymentWriteService, DeploymentWriteError};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};
+pub use self::write::{DeploymentWriteError, DeploymentWriteService};
 
-use super::component::ComponentError;
-use super::http_api_definition::{HttpApiDefinitionError, HttpApiDefinitionService};
-use super::http_api_deployment::HttpApiDeploymentError;
+use super::http_api_definition::HttpApiDefinitionError;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
-use ::rib::RibCompilationError;
-use golem_common::model::component::ComponentName;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
-use golem_common::model::diff;
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
-use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -40,12 +34,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
-use golem_common::model::agent::RegisteredAgentType;
-use crate::model::api_definition::{CompiledRouteWithSecuritySchemeDetails, CompiledRoutesForHttpApiDefinition, MaybeDisabledCompiledRoute};
-use golem_service_base::custom_api::openapi::HttpApiDefinitionOpenApiSpec;
-use anyhow::anyhow;
-use std::collections::HashMap;
-use golem_service_base::custom_api::{CompiledRoute, CompiledRoutes};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -93,7 +81,7 @@ impl DeploymentService {
     ) -> Self {
         Self {
             environment_service,
-            deployment_repo
+            deployment_repo,
         }
     }
 
@@ -250,13 +238,15 @@ impl DeploymentService {
     pub async fn get_deployed_agent_type(
         &self,
         environment_id: &EnvironmentId,
-        agent_type_name: &str
+        agent_type_name: &str,
     ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
-            .get_deployed_agent_type(&environment_id.0, &agent_type_name)
+            .get_deployed_agent_type(&environment_id.0, agent_type_name)
             .await?
-            .ok_or(DeploymentError::AgentTypeNotFound(agent_type_name.to_string()))?
+            .ok_or(DeploymentError::AgentTypeNotFound(
+                agent_type_name.to_string(),
+            ))?
             .into();
 
         Ok(agent_type)
@@ -281,7 +271,7 @@ impl DeploymentService {
         &self,
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
-        auth: &AuthCtx
+        auth: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
         let (_, environment) = self
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
@@ -302,6 +292,5 @@ impl DeploymentService {
             .collect();
 
         Ok(agent_types)
-
     }
 }

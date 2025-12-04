@@ -461,8 +461,7 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::ConcurrentDeployment
             | DeploymentWriteError::NoOpDeployment
             | DeploymentWriteError::VersionAlreadyExists { .. }
-            | DeploymentWriteError::DeploymentHashMismatch { .. }
-            => {
+            | DeploymentWriteError::DeploymentHashMismatch { .. } => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 

@@ -25,7 +25,7 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
 use sqlx::Database;
 use std::fmt::Debug;

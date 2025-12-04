@@ -17,6 +17,7 @@ use crate::services::auth::AuthService;
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::EnvironmentService;
 use golem_common::model::Page;
+use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentSummary,
@@ -32,7 +33,6 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
-use golem_common::model::agent::RegisteredAgentType;
 
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
@@ -490,11 +490,7 @@ impl EnvironmentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_deployment_agent_types_internal(
-                environment_id.0,
-                deployment_id.0,
-                auth,
-            )
+            .list_deployment_agent_types_internal(environment_id.0, deployment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -511,6 +507,8 @@ impl EnvironmentsApi {
             .deployment_service
             .list_deployment_agent_types(&environment_id, deployment_id, &auth)
             .await?;
-        Ok(Json(Page { values: agent_types }))
+        Ok(Json(Page {
+            values: agent_types,
+        }))
     }
 }

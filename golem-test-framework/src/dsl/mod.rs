@@ -619,7 +619,10 @@ pub trait TestDslExtended: TestDsl {
         Ok(environment)
     }
 
-    async fn deploy_environment(&self, environment_id: &EnvironmentId) -> anyhow::Result<Deployment> {
+    async fn deploy_environment(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> anyhow::Result<Deployment> {
         let client = self.registry_service_client().await;
 
         let plan = client

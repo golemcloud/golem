@@ -1782,13 +1782,12 @@ async fn agent_await_parallel_rpc_calls(
         .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
         .await?;
 
-    user
-        .invoke_and_await(
-            &worker_id,
-            "golem-it:agent-rpc/test-agent.{run}",
-            vec![20f64.into_value_and_type()],
-        )
-        .await?;
+    user.invoke_and_await(
+        &worker_id,
+        "golem-it:agent-rpc/test-agent.{run}",
+        vec![20f64.into_value_and_type()],
+    )
+    .await?;
 
     Ok(())
 }

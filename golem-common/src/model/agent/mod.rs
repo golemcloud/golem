@@ -49,13 +49,13 @@ use golem_wasm::{
     parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
+use poem_openapi::NewType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
-use poem_openapi::NewType;
 
 #[derive(
     Debug,
@@ -214,15 +214,7 @@ pub struct AgentMethod {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Deserialize,
-    Serialize,
-    NewType,
-    BinaryCodec,
-    IntoValue,
-    FromValue,
+    Debug, Clone, PartialEq, Deserialize, Serialize, NewType, BinaryCodec, IntoValue, FromValue,
 )]
 #[repr(transparent)]
 #[desert(transparent)]

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::rib::CorsPreflightExpr;
-use super::{DeploymentError, DeploymentService};
 use crate::model::api_definition::{CompiledRouteWithContext, CompiledRouteWithoutSecurity};
 use crate::model::component::Component;
 use crate::repo::deployment::DeploymentRepo;
@@ -24,10 +23,13 @@ use crate::services::http_api_definition::{HttpApiDefinitionError, HttpApiDefini
 use crate::services::http_api_deployment::{HttpApiDeploymentError, HttpApiDeploymentService};
 use crate::services::run_cpu_bound_work;
 use futures::TryFutureExt;
+use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::Environment;
 use golem_common::model::http_api_definition::{
     CorsPreflightBinding, FileServerBinding, GatewayBinding, HttpApiDefinition,
     HttpApiDefinitionId, HttpApiDefinitionName, HttpApiDefinitionVersion, HttpHandlerBinding,
@@ -38,6 +40,7 @@ use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},
     environment::EnvironmentId,
 };
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::custom_api::HttpCors;
 use golem_service_base::custom_api::path_pattern::AllPathPatterns;
 use golem_service_base::custom_api::rib_compiler::ComponentDependencyWithAgentInfo;
@@ -46,19 +49,12 @@ use golem_service_base::custom_api::{
     HttpHandlerBindingCompiled, IdempotencyKeyCompiled, InvocationContextCompiled,
     ResponseMappingCompiled, SwaggerUiBindingCompiled, WorkerBindingCompiled, WorkerNameCompiled,
 };
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::repo::RepoError;
 use rib::{ComponentDependencyKey, RibCompilationError};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
-use golem_common::model::agent::RegisteredAgentType;
-use std::collections::HashMap;
-use golem_common::model::agent::AgentType;
-use golem_common::model::component::ComponentId;
-use golem_common::model::agent::wit_naming::ToWitNaming;
-use golem_common::{error_forwarding, SafeDisplay};
-use golem_service_base::repo::RepoError;
-use golem_common::model::environment::Environment;
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -158,7 +154,6 @@ fn format_validation_errors(errors: &[DeployValidationError]) -> String {
         .collect::<Vec<_>>()
         .join(",\n")
 }
-
 
 pub struct DeploymentWriteService {
     environment_service: Arc<EnvironmentService>,
@@ -291,7 +286,7 @@ impl DeploymentWriteService {
                 .collect(),
             domain_http_api_definitions,
             compiled_http_api_routes,
-            registered_agent_types
+            registered_agent_types,
         );
 
         let deployment: Deployment = self
@@ -299,7 +294,9 @@ impl DeploymentWriteService {
             .deploy(&auth.account_id().0, record, environment.version_check)
             .await
             .map_err(|err| match err {
-                DeployRepoError::ConcurrentModification => DeploymentWriteError::ConcurrentDeployment,
+                DeployRepoError::ConcurrentModification => {
+                    DeploymentWriteError::ConcurrentDeployment
+                }
                 DeployRepoError::VersionAlreadyExists { version } => {
                     DeploymentWriteError::VersionAlreadyExists { version }
                 }
@@ -381,16 +378,23 @@ impl DeploymentContext {
         diffable.hash()
     }
 
-    fn extract_registered_agent_types(&self) -> Result<Vec<RegisteredAgentType>, DeploymentWriteError> {
+    fn extract_registered_agent_types(
+        &self,
+    ) -> Result<Vec<RegisteredAgentType>, DeploymentWriteError> {
         let mut seen_wit_named_agent_types = HashSet::new();
         let mut agent_types = Vec::new();
 
-        for (_, component) in &self.components {
+        for component in self.components.values() {
             for agent_type in component.metadata.agent_types() {
                 if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
-                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone())]))
+                    return Err(DeploymentWriteError::DeploymentValidationFailed(vec![
+                        DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone()),
+                    ]));
                 }
-                agent_types.push(RegisteredAgentType { agent_type: agent_type.clone(), implemented_by: component.id });
+                agent_types.push(RegisteredAgentType {
+                    agent_type: agent_type.clone(),
+                    implemented_by: component.id,
+                });
             }
         }
         Ok(agent_types)

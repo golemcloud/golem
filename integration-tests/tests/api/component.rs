@@ -18,6 +18,10 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
 };
+use golem_common::model::agent::{
+    AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema,
+    ElementSchema, NamedElementSchema, NamedElementSchemas, RegisteredAgentType,
+};
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
@@ -31,13 +35,12 @@ use golem_common::model::plugin_registration::{
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 use tracing::{debug, info};
-use golem_common::model::agent::{AgentConstructor, AgentMethod, AgentMode, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, RegisteredAgentType};
-use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -551,56 +554,38 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let (_, env) = user.app_and_env().await?;
 
     let agent_type = AgentType {
-            type_name: "CounterAgent".to_string(),
+        type_name: "CounterAgent".to_string(),
+        description: "".to_string(),
+        constructor: AgentConstructor {
+            name: None,
             description: "".to_string(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "".to_string(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(
-                    NamedElementSchemas {
-                        elements: vec![
-                            NamedElementSchema {
-                                name: "name".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: AnalysedType::Str(TypeStr),
-                                    },
-                                ),
-                            },
-                        ],
-                    },
-                ),
-            },
-            methods: vec![
-                AgentMethod {
-                    name: "increment".to_string(),
-                    description: "".to_string(),
-                    prompt_hint: None,
-                    input_schema: DataSchema::Tuple(
-                        NamedElementSchemas {
-                            elements: vec![],
-                        },
-                    ),
-                    output_schema: DataSchema::Tuple(
-                        NamedElementSchemas {
-                            elements: vec![
-                                NamedElementSchema {
-                                    name: "return-value".to_string(),
-                                    schema: ElementSchema::ComponentModel(
-                                        ComponentModelElementSchema {
-                                            element_type: AnalysedType::U32(TypeU32),
-                                        },
-                                    ),
-                                },
-                            ],
-                        },
-                    ),
-                },
-            ],
-            dependencies: vec![],
-            mode: AgentMode::Durable,
-        };
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "name".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::Str(TypeStr),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "increment".to_string(),
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::U32(TypeU32),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+    };
 
     let component = client
         .create_component(
@@ -618,20 +603,25 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
                     .join("it_agent_counters_release.wasm"),
             )
             .await?,
-            None::<Vec<u8>>
+            None::<Vec<u8>>,
         )
         .await?;
 
-    assert!(*component.metadata.agent_types() == [agent_type.clone()]);
+    assert!(component.metadata.agent_types() == std::slice::from_ref(&agent_type));
 
     let deployment = user.deploy_environment(&env.id).await?;
 
-    let agent_types = client.list_deployment_agent_types(&env.id.0, deployment.revision.0).await?;
+    let agent_types = client
+        .list_deployment_agent_types(&env.id.0, deployment.revision.0)
+        .await?;
 
-    assert!(agent_types.values == vec![RegisteredAgentType {
-        agent_type,
-        implemented_by: component.id
-    }]);
+    assert!(
+        agent_types.values
+            == vec![RegisteredAgentType {
+                agent_type,
+                implemented_by: component.id
+            }]
+    );
 
     Ok(())
 }

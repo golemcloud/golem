@@ -125,7 +125,7 @@ mod grpc {
     use golem_common::SafeDisplay;
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_service_base::model::auth::AuthCtx;
+
     use std::sync::Arc;
 
     #[derive(Clone)]
@@ -158,10 +158,7 @@ mod grpc {
             owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
-            let result = self
-                .client
-                .get_agent_type(owner_environment, name)
-                .await;
+            let result = self.client.get_agent_type(owner_environment, name).await;
 
             match result {
                 Ok(agent_type) => Ok(Some(agent_type)),

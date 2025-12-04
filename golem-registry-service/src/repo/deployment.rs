@@ -20,7 +20,7 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentCompiledHttpApiDefinitionRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentDomainHttpApiDefinitionRecord, DeploymentHttpApiDefinitionRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord
+    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -111,12 +111,12 @@ pub trait DeploymentRepo: Send + Sync {
     async fn get_deployed_agent_type(
         &self,
         environment_id: &Uuid,
-        agent_type_name: &str
+        agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>>;
 
     async fn list_deployed_agent_types(
         &self,
-        environment_id: &Uuid
+        environment_id: &Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
 }
 
@@ -293,10 +293,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         deployment_revision_id: i64,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
-            .list_deployment_agent_types(
-                environment_id,
-                deployment_revision_id,
-            )
+            .list_deployment_agent_types(environment_id, deployment_revision_id)
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -308,13 +305,10 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn get_deployed_agent_type(
         &self,
         environment_id: &Uuid,
-        agent_type_name: &str
+        agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
-            .get_deployed_agent_type(
-                environment_id,
-                agent_type_name,
-            )
+            .get_deployed_agent_type(environment_id, agent_type_name)
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
@@ -325,7 +319,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
 
     async fn list_deployed_agent_types(
         &self,
-        environment_id: &Uuid
+        environment_id: &Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.repo
             .list_deployed_agent_types(environment_id)
@@ -598,7 +592,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 }
 
                 for registered_agent_type in &deployment_creation.registered_agent_types {
-                    Self::create_deployment_registered_agent_type(tx, registered_agent_type).await?;
+                    Self::create_deployment_registered_agent_type(tx, registered_agent_type)
+                        .await?;
                 }
 
                 let revision = Self::set_current_deployment(
@@ -770,7 +765,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     ORDER BY r.agent_type_name
                 "#})
                 .bind(environment_id)
-                .bind(deployment_revision_id)
+                .bind(deployment_revision_id),
             )
             .await
     }
@@ -778,7 +773,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn get_deployed_agent_type(
         &self,
         environment_id: &Uuid,
-        agent_type_name: &str
+        agent_type_name: &str,
     ) -> RepoResult<Option<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("get_deployed_agent_type")
             .fetch_optional_as(
@@ -804,7 +799,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 
     async fn list_deployed_agent_types(
         &self,
-        environment_id: &Uuid
+        environment_id: &Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>> {
         self.with_ro("get_deployed_agent_type")
             .fetch_all_as(
