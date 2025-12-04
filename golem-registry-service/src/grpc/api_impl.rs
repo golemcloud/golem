@@ -17,7 +17,7 @@ use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
 use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
-use crate::services::deployment::DeployedRoutesService;
+use crate::services::deployment::{DeployedRoutesService, DeploymentService};
 use crate::services::environment::EnvironmentService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use applying::Apply;
@@ -76,6 +76,7 @@ pub struct RegistryServiceGrpcApi {
     plugin_registration_service: Arc<PluginRegistrationService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
+    deployment_service: Arc<DeploymentService>,
     deployed_routes_service: Arc<DeployedRoutesService>,
 }
 
@@ -87,6 +88,7 @@ impl RegistryServiceGrpcApi {
         plugin_registration_service: Arc<PluginRegistrationService>,
         component_service: Arc<ComponentService>,
         component_resolver_service: Arc<ComponentResolverService>,
+        deployment_service: Arc<DeploymentService>,
         deployed_routes_service: Arc<DeployedRoutesService>,
     ) -> Self {
         Self {
@@ -96,6 +98,7 @@ impl RegistryServiceGrpcApi {
             plugin_registration_service,
             component_service,
             component_resolver_service,
+            deployment_service,
             deployed_routes_service,
         }
     }
@@ -409,19 +412,14 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetAllAgentTypesRequest,
     ) -> Result<GetAllAgentTypesSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let environment_id: EnvironmentId = request
             .environment_id
             .ok_or("missing environment_id field")?
             .try_into()?;
 
         let agent_types = self
-            .component_service
-            .get_deployed_agent_types(&environment_id, &auth_ctx)
+            .deployment_service
+            .list_deployed_agent_types(&environment_id)
             .await?;
 
         Ok(GetAllAgentTypesSuccessResponse {
@@ -433,26 +431,18 @@ impl RegistryServiceGrpcApi {
         &self,
         request: GetAgentTypeRequest,
     ) -> Result<GetAgentTypeSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
         let environment_id: EnvironmentId = request
             .environment_id
             .ok_or("missing environment_id field")?
             .try_into()?;
 
-        let agent_types = self
-            .component_service
-            .get_deployed_agent_types(&environment_id, &auth_ctx)
+        let agent_type = self
+            .deployment_service
+            .get_deployed_agent_type(&environment_id, &request.agent_type)
             .await?;
-        let agent_type = agent_types
-            .into_iter()
-            .find(|at| at.agent_type.type_name == request.agent_type);
 
         Ok(GetAgentTypeSuccessResponse {
-            agent_type: agent_type.map(|at| at.into()),
+            agent_type: Some(agent_type.into()),
         })
     }
 

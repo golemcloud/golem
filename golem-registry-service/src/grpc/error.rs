@@ -16,7 +16,7 @@ use crate::services::account_usage::error::{AccountUsageError, LimitExceededErro
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
-use crate::services::deployment::DeployedRoutesError;
+use crate::services::deployment::{DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::IntoAnyhow;
@@ -214,6 +214,36 @@ impl From<DeployedRoutesError> for GrpcApiError {
         }
     }
 }
+
+// impl From<DeploymentError> for GrpcApiError {
+//     fn from(value: DeploymentError) -> Self {
+//         let error: String = value.to_string();
+//         match value {
+//             DeploymentError::ParentEnvironmentNotFound(_)
+//             | DeploymentError::DeploymentNotFound(_)
+//             | DeploymentError::AgentTypeNotFound(_) => {
+//                 Self::NotFound(ErrorBody { error, cause: None })
+//             }
+
+//             DeploymentError::ConcurrentDeployment(_)
+//             | DeploymentError::DeploymentNotFound(_)
+//             | DeploymentError::AgentTypeNotFound() => {
+//                 Self::NotFound(ErrorBody { error, cause: None })
+//             }
+
+//             DeploymentError::ConcurrentDeployment
+//             | DeploymentError::NoOpDeployment => {
+//                 Self::Con
+//             }
+
+//             DeploymentError::Unauthorized(inner) => inner.into(),
+//             DeploymentError::InternalError(_) => Self::InternalError(ErrorBody {
+//                 error,
+//                 cause: Some(value.into_anyhow()),
+//             }),
+//         }
+//     }
+// }
 
 impl From<EnvironmentError> for GrpcApiError {
     fn from(value: EnvironmentError) -> Self {

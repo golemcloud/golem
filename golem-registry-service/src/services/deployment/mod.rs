@@ -48,21 +48,8 @@ pub enum DeploymentError {
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Deployment {0} not found in the environment")]
     DeploymentNotFound(DeploymentRevision),
-    #[error("Concurrent deployment attempt")]
-    ConcurrentDeployment,
-    #[error("Requested deployment would not have any changes compared to current deployment")]
-    NoOpDeployment,
-    #[error("Provided deployment version {version} already exists in this environment")]
-    VersionAlreadyExists { version: String },
-    #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
-    DeploymentValidationFailed(Vec<DeployValidationError>),
-    #[error(
-        "Deployment hash mismatch: requested hash: {requested_hash}, actual hash: {actual_hash}"
-    )]
-    DeploymentHashMismatch {
-        requested_hash: diff::Hash,
-        actual_hash: diff::Hash,
-    },
+    #[error("Agent type {0} not found")]
+    AgentTypeNotFound(String),
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -74,11 +61,7 @@ impl SafeDisplay for DeploymentError {
         match self {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentNotFound(_) => self.to_string(),
-            Self::DeploymentHashMismatch { .. } => self.to_string(),
-            Self::DeploymentValidationFailed(_) => self.to_string(),
-            Self::ConcurrentDeployment => self.to_string(),
-            Self::VersionAlreadyExists { .. } => self.to_string(),
-            Self::NoOpDeployment => self.to_string(),
+            Self::AgentTypeNotFound(_) => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }
@@ -94,43 +77,6 @@ error_forwarding!(
     HttpApiDefinitionError,
     HttpApiDeploymentError,
 );
-
-#[derive(Debug, Clone, thiserror::Error, PartialEq)]
-pub enum DeployValidationError {
-    #[error(
-        "Http api definition {missing_http_api_definition} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
-    )]
-    HttpApiDeploymentMissingHttpApiDefinition {
-        http_api_deployment_domain: Domain,
-        missing_http_api_definition: HttpApiDefinitionName,
-    },
-    #[error("Invalid path pattern: {0}")]
-    HttpApiDefinitionInvalidPathPattern(String),
-    #[error("Invalid rib expression: {0}")]
-    InvalidRibExpr(String),
-    #[error("Failed rib compilation: {0}")]
-    RibCompilationFailed(RibCompilationError),
-    #[error("Invalid http cors binding expression: {0}")]
-    InvalidHttpCorsBindingExpr(String),
-    #[error("Component {0} not found in deployment")]
-    ComponentNotFound(ComponentName),
-    #[error("Agent type name {0} is provided by multiple components")]
-    AmbiguousAgentTypeName(String),
-}
-
-impl SafeDisplay for DeployValidationError {
-    fn to_safe_string(&self) -> String {
-        self.to_string()
-    }
-}
-
-fn format_validation_errors(errors: &[DeployValidationError]) -> String {
-    errors
-        .iter()
-        .map(|err| format!("{err}"))
-        .collect::<Vec<_>>()
-        .join(",\n")
-}
 
 pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
@@ -321,18 +267,19 @@ impl DeploymentService {
     pub async fn get_deployed_agent_type(
         &self,
         environment_id: &EnvironmentId,
-        agent_type_name: String
-    ) -> Result<Option<RegisteredAgentType>, DeploymentError> {
+        agent_type_name: &str
+    ) -> Result<RegisteredAgentType, DeploymentError> {
         let agent_type = self
             .deployment_repo
             .get_deployed_agent_type(&environment_id.0, &agent_type_name)
             .await?
-            .map(|r| r.into());
+            .ok_or(DeploymentError::AgentTypeNotFound(agent_type_name.to_string()))?
+            .into();
 
         Ok(agent_type)
     }
 
-    pub async fn list_deployed_agent_type(
+    pub async fn list_deployed_agent_types(
         &self,
         environment_id: &EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
