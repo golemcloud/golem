@@ -98,6 +98,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                 };
+
                 final_decision = inner_loop.run().await;
             }
 
@@ -108,6 +109,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     debug!("Invocation queue loop notifying parent about being stopped");
                     self.parent.stop_internal(true, None).await;
                     break;
+                }
+                Some(RetryDecision::TryStop(ts)) => {
+                    if ts < *self.parent.last_resume_request.lock().await {
+                        debug!(
+                            "Suspend request ignored because there was a resume request since it"
+                        );
+                        continue;
+                    } else {
+                        debug!("Invocation queue loop notifying parent about being stopped");
+                        self.parent.stop_internal(true, None).await;
+                        break;
+                    }
                 }
                 Some(RetryDecision::Immediate) => {
                     debug!("Invocation queue loop triggering restart immediately");
@@ -309,7 +322,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs a queued invocation on the worker
     ///
-    /// The queued invocations are grouped into "external" invocations, that are observable by the users
+    /// The queued invocations are grouped into "external" invocations that are observable by the users
     /// in the worker's invocation queue, oplog, etc., and some internal invocations that we use for
     /// concurrency control.
     async fn invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
@@ -338,7 +351,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
 /// Context for performing one `QueuedWorkerInvocation`
 ///
-/// The most important part of is that unlike the `InnerInvocationLoop`, it holds a locked
+/// The most important part is that unlike the `InnerInvocationLoop`, it holds a locked
 /// mutable reference to the instance `Store`. The instance mutex is held for the whole duration
 /// of performing an invocation.
 struct Invocation<'a, Ctx: WorkerCtx> {
@@ -483,7 +496,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            _ => self.exported_function_invocation_failed(result).await,
+            _ => {
+                self.exported_function_invocation_failed(&full_function_name, result)
+                    .await
+            }
         }
     }
 
@@ -574,7 +590,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 match self
                     .exported_function_invocation_finished_with_type(
-                        full_function_name,
+                        full_function_name.clone(),
                         function_input,
                         output,
                         consumed_fuel,
@@ -586,10 +602,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.store
                             .data_mut()
-                            .on_invocation_failure(&TrapType::Error {
-                                error: WorkerError::Unknown(error.to_string()),
-                                retry_from: OplogIndex::INITIAL,
-                            })
+                            .on_invocation_failure(
+                                &full_function_name,
+                                &TrapType::Error {
+                                    error: WorkerError::Unknown(error.to_string()),
+                                    retry_from: OplogIndex::INITIAL,
+                                },
+                            )
                             .await;
                         CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
@@ -599,10 +618,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(None) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error {
-                        error: WorkerError::InvalidRequest("Function not found".to_string()),
-                        retry_from: OplogIndex::INITIAL,
-                    })
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Error {
+                            error: WorkerError::InvalidRequest("Function not found".to_string()),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                    )
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -610,12 +632,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(err) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error {
-                        error: WorkerError::InvalidRequest(format!(
-                            "Failed analysing function: {err}"
-                        )),
-                        retry_from: OplogIndex::INITIAL,
-                    })
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Error {
+                            error: WorkerError::InvalidRequest(format!(
+                                "Failed analysing function: {err}"
+                            )),
+                            retry_from: OplogIndex::INITIAL,
+                        },
+                    )
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -668,7 +693,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&trap_type)
+                    .on_invocation_failure(&full_function_name, &trap_type)
                     .await;
                 Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
             }
@@ -678,6 +703,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// The logic handling a worker invocation that did not succeed.
     async fn exported_function_invocation_failed(
         &mut self,
+        full_function_name: &str,
         result: Result<InvokeResult, WorkerExecutorError>,
     ) -> CommandOutcome {
         let trap_type = match result {
@@ -691,7 +717,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Some(trap_type) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&trap_type)
+                    .on_invocation_failure(full_function_name, &trap_type)
                     .await
             }
             None => RetryDecision::None,

@@ -250,20 +250,6 @@ async fn agent_env_inheritance(
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "22".to_string()),
             ("ENV3".to_string(), "33".to_string()),
-            (
-                "GOLEM_AGENT_ID".to_string(),
-                child_worker_id.worker_name.to_string()
-            ),
-            ("GOLEM_AGENT_TYPE".to_string(), "ChildAgent".to_string()),
-            (
-                "GOLEM_COMPONENT_ID".to_string(),
-                child_worker_id.component_id.to_string()
-            ),
-            ("GOLEM_COMPONENT_VERSION".to_string(), "0".to_string()),
-            (
-                "GOLEM_WORKER_NAME".to_string(),
-                child_worker_id.worker_name.to_string()
-            ),
         ])
     );
 

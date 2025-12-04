@@ -16,11 +16,14 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, SuspendF
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::{Duration, Utc};
+use futures::future::Either;
+use futures::pin_mut;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostRequestPollCount, HostResponsePollReady,
     HostResponsePollResult,
 };
+use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::InterruptKind;
 use tracing::debug;
 use wasmtime::component::Resource;
@@ -88,7 +91,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             if all_blocked {
                 debug!("Suspending worker until a promise gets completed");
-                return Err(InterruptKind::Suspend.into());
+                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
         };
 
@@ -96,8 +99,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<IoPollPoll>::new(self, DurableFunctionType::ReadLocal).await?;
 
         let result: Result<HostResponsePollResult, Duration> = if durability.is_live() {
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
             let count = in_.len();
-            let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
+
+            let result = {
+                let view = &mut self.as_wasi_view().0;
+                let poll = Host::poll(view, in_);
+                pin_mut!(poll);
+
+                let either_result = futures::future::select(poll, interrupt_signal).await;
+                match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for poll result");
+                        return Err(interrupt_kind.into());
+                    }
+                }
+            };
+
             match is_suspend_for_sleep(&result) {
                 Some(duration) => Err(duration),
                 None => Ok(durability
@@ -118,7 +142,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(result) => result.result.map_err(|err| anyhow!(err)),
             Err(duration) => {
                 self.state.sleep_until(Utc::now() + duration).await?;
-                Err(InterruptKind::Suspend.into())
+                Err(InterruptKind::Suspend(Timestamp::now_utc()).into())
             }
         }
     }

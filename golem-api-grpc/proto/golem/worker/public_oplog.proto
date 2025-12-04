@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
@@ -89,6 +90,7 @@ message CreateParameters {
   repeated PluginInstallationDescription initial_active_plugins = 10;
   golem.common.EnvironmentId environment_id = 11;
   WasiConfigVars wasi_config_vars = 12;
+  optional golem.common.UUID original_phantom_id = 13;
 }
 
 message ImportedFunctionInvokedParameters {

@@ -114,6 +114,47 @@ async fn interruption(
 
 #[test]
 #[tracing::instrument]
+#[timeout("1m")]
+async fn delete_interrupts_long_rpc_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
+
+    let component_id = executor
+        .component("golem_it_agent_rpc")
+        .name("golem-it:agent-rpc")
+        .store()
+        .await;
+    let unique_id = context.redis_prefix();
+    let worker_id = executor
+        .start_worker(&component_id, &format!("test-agent(\"{unique_id}\")"))
+        .await;
+
+    executor
+        .invoke(
+            &worker_id,
+            "golem-it:agent-rpc/test-agent.{long-rpc-call}",
+            vec![120000f64.into_value_and_type()], // 2 minutes
+        )
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    executor.delete_worker(&worker_id).await;
+
+    let metadata = executor.get_worker_metadata(&worker_id).await;
+    check!(metadata.is_none());
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(120_000)]
 async fn simulated_crash(
     last_unique_id: &LastUniqueId,

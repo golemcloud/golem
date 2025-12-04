@@ -946,6 +946,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         component_size: 0,
         initial_total_linear_memory_size: 0,
         initial_active_plugins: HashSet::new(),
+        original_phantom_id: None,
     }
     .rounded();
 
@@ -1624,6 +1625,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             100,
             HashSet::new(),
             BTreeMap::new(),
+            None,
         );
 
         let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);

@@ -20,9 +20,7 @@ pub async fn await_invoke_result(invoke_result: FutureInvokeResult) -> Result<Wi
 
     await_pollable(golem_wasm_pollable).await;
 
-    invoke_result
-        .get()
-        .expect("RPC invoke completed, but no result available")
+    invoke_result.get().expect("RPC invoke failed")
 }
 
 pub async fn await_pollable(pollable: Pollable) {

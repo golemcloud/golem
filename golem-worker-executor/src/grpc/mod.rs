@@ -62,7 +62,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, TimestampedWorkerInvocation, WorkerEvent,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,Timestamp, TimestampedWorkerInvocation, WorkerEvent,
     WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
@@ -357,6 +357,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
+            info!("Interrupting worker before deletion");
+            if let Some(mut rx) = worker
+                .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                .await
+            {
+                info!("Awaiting interruption");
+                let _ = rx.recv().await;
+                info!("Interrupted");
+            }
+            info!("Marking worker for deletion");
             worker.start_deleting().await?;
 
             self.worker_service().remove(&owned_worker_id).await;
@@ -590,7 +600,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )
                     .await?;
                     if let Some(mut await_interruption) =
-                        worker.set_interrupting(InterruptKind::Restart).await
+                        worker.set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc())).await
                     {
                         await_interruption.recv().await.unwrap();
                     };
@@ -614,7 +624,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )
                     .await?;
                     if let Some(mut await_interruption) =
-                        worker.set_interrupting(InterruptKind::Restart).await
+                        worker.set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc())).await
                     {
                         await_interruption.recv().await.unwrap();
                     };
@@ -640,7 +650,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .set_interrupting(if request.recover_immediately {
                             InterruptKind::Restart
                         } else {
-                            InterruptKind::Interrupt
+                            InterruptKind::Interrupt(Timestamp::now_utc())
                         })
                         .await
                     {
@@ -1219,7 +1229,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             // We don't want 'connect' to resume interrupted workers
             Err(WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Interrupt,
+                kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             }
             .into())
         }

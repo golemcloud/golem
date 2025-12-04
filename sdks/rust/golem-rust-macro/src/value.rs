@@ -18,7 +18,7 @@ use proc_macro2::{Ident, Span};
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Lit, LitStr, Variant};
 
-pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
+pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> TokenStream {
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -43,7 +43,7 @@ pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
                         },
                     };
                     let add_to_type_builder = quote! {
-                        <#field_type as golem_rust::value_and_type::IntoValue>::add_to_type_builder(builder)
+                        <#field_type as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder)
                     };
 
                     Some((add_to_builder, add_to_type_builder))
@@ -56,7 +56,7 @@ pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple(&ident_lit, &data.fields),
+                None => record_or_tuple(&ident_lit, &data.fields, golem_rust_crate_ident),
             }
         }
         Data::Enum(data) => {
@@ -213,10 +213,10 @@ pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
                             let typ = &single_field.ty;
 
                             quote! {
-                                let builder = <#typ as golem_rust::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
+                                let builder = <#typ as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.case(#case_name));
                             }
                         } else {
-                            let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields);
+                            let (_, inner_add_to_type_builder) = record_or_tuple(&ident_lit, &variant.fields, golem_rust_crate_ident);
 
                             quote! {
                                 let builder = builder.case(#case_name);
@@ -246,12 +246,12 @@ pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
     };
 
     let result = quote! {
-        impl golem_rust::value_and_type::IntoValue for #ident {
-            fn add_to_builder<B: golem_rust::value_and_type::NodeBuilder>(self, builder: B) -> B::Result {
+        impl #golem_rust_crate_ident::value_and_type::IntoValue for #ident {
+            fn add_to_builder<B: #golem_rust_crate_ident::value_and_type::NodeBuilder>(self, builder: B) -> B::Result {
                 #add_to_builder
             }
 
-            fn add_to_type_builder<B: golem_rust::value_and_type::TypeNodeBuilder>(builder: B) -> B::Result {
+            fn add_to_type_builder<B: #golem_rust_crate_ident::value_and_type::TypeNodeBuilder>(builder: B) -> B::Result {
                 #add_to_type_builder
             }
         }
@@ -263,6 +263,7 @@ pub fn derive_into_value(ast: &DeriveInput) -> TokenStream {
 fn record_or_tuple(
     ident_lit: &LitStr,
     fields: &Fields,
+    golem_rust_crate_ident: &Ident,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
@@ -283,7 +284,7 @@ fn record_or_tuple(
                 let field_name = field.ident.as_ref().unwrap().to_string().to_kebab_case();
                 let field_type = &field.ty;
                 quote! {
-                    let builder = <#field_type as golem_rust::value_and_type::IntoValue>::add_to_type_builder(builder.field(#field_name));
+                    let builder = <#field_type as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.field(#field_name));
                 }
             })
             .collect::<Vec<_>>();
@@ -316,7 +317,7 @@ fn record_or_tuple(
             .map(|field| {
                 let field_type = &field.ty;
                 quote! {
-                    let builder = <#field_type as golem_rust::value_and_type::IntoValue>::add_to_type_builder(builder.item());
+                    let builder = <#field_type as #golem_rust_crate_ident::value_and_type::IntoValue>::add_to_type_builder(builder.item());
                 }
             })
             .collect::<Vec<_>>();
@@ -352,7 +353,10 @@ fn is_unit_case(variant: &Variant) -> bool {
             .any(|attr| attr.path().is_ident("unit_case"))
 }
 
-pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
+pub fn derive_from_value_and_type(
+    ast: &DeriveInput,
+    golem_rust_crate_ident: &Ident,
+) -> TokenStream {
     let ident = &ast.ident;
     let flatten_value = ast
         .attrs
@@ -369,13 +373,13 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
 
                     let extractor = match field.ident {
                         None => quote! {
-                            let inner = <#field_type as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                            let inner = <#field_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                 extractor
                             )?;
                             Ok(Self(inner))
                         },
                         Some(field_name) => quote! {
-                            let #field_name = <#field_type as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                            let #field_name = <#field_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                 extractor
                             )?;
                             Ok(Self { #field_name })
@@ -392,7 +396,7 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple_extractor(&data.fields),
+                None => record_or_tuple_extractor(&data.fields, golem_rust_crate_ident),
             }
         }
         Data::Enum(data) => {
@@ -460,7 +464,7 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
                                 quote! {
                                     #idx => {
                                         Ok(#ident::#case_ident(
-                                            <#typ as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                                            <#typ as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                                 &inner.ok_or_else(|| #missing_body_error.to_string())?
                                             )?
                                         ))
@@ -483,7 +487,7 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
                                         let field_ty = &field.ty;
                                         let missing_field_error = Lit::Str(LitStr::new(&format!("Missing {field_name} field"), Span::call_site()));
                                         quote! {
-                                            #field_name: <#field_ty as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                                            #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                                 &extractor.field(#idx).ok_or_else(|| #missing_field_error.to_string())?
                                             )?
                                         }
@@ -511,7 +515,7 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
                                         let elem_ty = &field.ty;
                                         let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{idx}"), Span::call_site()));
                                         quote! {
-                                            <#elem_ty as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                                            <#elem_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                                                 &extractor.tuple_element(#idx).ok_or_else(|| #missing_tuple_element_error.to_string())?
                                             )?
                                         }
@@ -555,9 +559,9 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
     };
 
     let result = quote! {
-        impl golem_rust::value_and_type::FromValueAndType for #ident {
+        impl #golem_rust_crate_ident::value_and_type::FromValueAndType for #ident {
             fn from_extractor<'a, 'b>(
-                extractor: &'a impl golem_rust::value_and_type::WitValueExtractor<'a, 'b>,
+                extractor: &'a impl #golem_rust_crate_ident::value_and_type::WitValueExtractor<'a, 'b>,
             ) -> Result<Self, String> {
                 #extractor
             }
@@ -567,7 +571,10 @@ pub fn derive_from_value_and_type(ast: &DeriveInput) -> TokenStream {
     result.into()
 }
 
-fn record_or_tuple_extractor(fields: &Fields) -> proc_macro2::TokenStream {
+fn record_or_tuple_extractor(
+    fields: &Fields,
+    golem_rust_crate_ident: &Ident,
+) -> proc_macro2::TokenStream {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
     if all_fields_has_names {
@@ -578,7 +585,7 @@ fn record_or_tuple_extractor(fields: &Fields) -> proc_macro2::TokenStream {
                 let field_ty = &field.ty;
                 let missing_field_error = Lit::Str(LitStr::new(&format!("Missing {field_name} field"), Span::call_site()));
                 quote! {
-                    #field_name: <#field_ty as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                    #field_name: <#field_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                         &extractor.field(#idx).ok_or_else(|| #missing_field_error.to_string())?
                     )?
                 }
@@ -597,7 +604,7 @@ fn record_or_tuple_extractor(fields: &Fields) -> proc_macro2::TokenStream {
                 let elem_ty = &field.ty;
                 let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{idx}"), Span::call_site()));
                 quote! {
-                    <#elem_ty as golem_rust::value_and_type::FromValueAndType>::from_extractor(
+                    <#elem_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
                         &extractor.tuple_element(#idx).ok_or_else(|| #missing_tuple_element_error.to_string())?
                     )?
                 }

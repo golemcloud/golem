@@ -15,8 +15,10 @@
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    AtomicOplogIndex, HostResponse, HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex,
+    PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{IdempotencyKey, OwnedWorkerId};
@@ -29,11 +31,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed { new_revision: ComponentRevision },
+    ForkReplayed { new_phantom_id: Uuid },
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +333,32 @@ impl ReplayState {
                 new_revision: target_revision,
             })
             .await
+        }
+        if let OplogEntry::ImportedFunctionInvoked {
+            function_name,
+            response,
+            ..
+        } = &oplog_entry
+        {
+            if function_name == &HostFunctionName::GolemApiFork {
+                let response = self
+                    .oplog
+                    .download_payload(response.clone())
+                    .await
+                    .expect("Failed to download oplog entry payload");
+                let result: HostResponseGolemApiFork =
+                    if let HostResponse::GolemApiFork(result) = response {
+                        result
+                    } else {
+                        panic!("Expected GolemApiFork response, got {:?}", response);
+                    };
+                if result.result == Ok(ForkResult::Forked) {
+                    self.record_replay_event(ReplayEvent::ForkReplayed {
+                        new_phantom_id: result.forked_phantom_id,
+                    })
+                    .await;
+                }
+            }
         }
 
         if read_idx == self.replay_target.get() {

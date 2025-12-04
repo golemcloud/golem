@@ -55,6 +55,7 @@ use golem_wasm::wasmtime::ResourceStore;
 use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
+use uuid::Uuid;
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -142,6 +143,7 @@ pub trait WorkerCtx:
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -289,7 +291,11 @@ pub trait InvocationHooks {
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when a worker invocation fails
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision;
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision;
 
     /// Called when a worker invocation succeeds
     /// Arguments:

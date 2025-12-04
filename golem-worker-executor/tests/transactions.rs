@@ -161,7 +161,7 @@ async fn jump(
         .invoke_and_await(&worker_id, "golem:it/api.{jump}", vec![])
         .await??;
 
-    while (rx.len() as u64) < 19 {
+    while (rx.len() as u64) < 17 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 

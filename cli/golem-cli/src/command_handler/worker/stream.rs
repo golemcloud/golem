@@ -91,7 +91,7 @@ impl WorkerConnection {
         while !self.goal_reached.load(Ordering::Acquire) {
             let _ = self.run().await;
             self.output.flush().await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 

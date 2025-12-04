@@ -237,6 +237,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             component_size,
             initial_total_linear_memory_size,
             initial_active_plugins,
+            original_phantom_id,
         }) => Ok(OplogEntry::Create {
             timestamp,
             worker_id,
@@ -253,6 +254,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .into_iter()
                 .map(|x| x.plugin_priority)
                 .collect(),
+            original_phantom_id,
         }),
         PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParams {
             timestamp,

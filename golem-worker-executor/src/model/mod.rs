@@ -16,7 +16,7 @@ use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -31,6 +31,7 @@ use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
+use std::future::{pending, Future};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
@@ -61,7 +62,6 @@ impl ShardAssignmentCheck for ShardAssignment {
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
     pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_version_for_replay: ComponentRevision,
@@ -72,7 +72,6 @@ pub struct WorkerConfig {
 impl WorkerConfig {
     pub fn new(
         worker_args: Vec<String>,
-        worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: ComponentRevision,
@@ -81,7 +80,6 @@ impl WorkerConfig {
     ) -> WorkerConfig {
         WorkerConfig {
             args: worker_args,
-            env: worker_env,
             deleted_regions,
             total_linear_memory_size,
             component_version_for_replay,
@@ -90,15 +88,7 @@ impl WorkerConfig {
         }
     }
 
-    pub(crate) fn enrich_env(
-        worker_env: &mut Vec<(String, String)>,
-        worker_id: &WorkerId,
-        agent_id: &Option<AgentId>,
-        target_component_version: ComponentRevision,
-    ) {
-        let worker_name = worker_id.worker_name.clone();
-        let component_id = &worker_id.component_id;
-        let component_version = target_component_version.to_string();
+    pub(crate) fn remove_dynamic_vars(worker_env: &mut Vec<(String, String)>) {
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
                 && key != "GOLEM_AGENT_TYPE"
@@ -106,15 +96,25 @@ impl WorkerConfig {
                 && key != "GOLEM_COMPONENT_ID"
                 && key != "GOLEM_COMPONENT_VERSION"
         });
+    }
+
+    pub(crate) fn enrich_env(
+        worker_env: &mut Vec<(String, String)>,
+        worker_id: &WorkerId,
+        agent_type: &Option<String>,
+        target_component_version: ComponentRevision,
+    ) {
+        let worker_name = worker_id.worker_name.clone();
+        let component_id = &worker_id.component_id;
+        let component_version = target_component_version.to_string();
+
+        Self::remove_dynamic_vars(worker_env);
         worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
         worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
-        if let Some(agent_id) = agent_id {
-            worker_env.push((
-                String::from("GOLEM_AGENT_TYPE"),
-                agent_id.agent_type.clone(),
-            ));
+        if let Some(agent_type) = agent_type {
+            worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
         }
     }
 }
@@ -149,6 +149,7 @@ pub enum ExecutionStatus {
     Running {
         agent_mode: AgentMode,
         timestamp: Timestamp,
+        interrupt_signal: Arc<tokio::sync::broadcast::Sender<InterruptKind>>,
     },
     Suspended {
         agent_mode: AgentMode,
@@ -217,6 +218,26 @@ impl ExecutionStatus {
             } => *component_type = new_agent_mode,
         }
     }
+
+    pub fn create_await_interrupt_signal(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+        match self {
+            ExecutionStatus::Loading { .. } => Box::pin(pending()),
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => {
+                let mut rx = interrupt_signal.subscribe();
+                Box::pin(async move {
+                    rx.recv()
+                        .await
+                        .unwrap_or(InterruptKind::Interrupt(Timestamp::now_utc()))
+                })
+            }
+            ExecutionStatus::Suspended { .. } => Box::pin(pending()),
+            ExecutionStatus::Interrupting { .. } => Box::pin(pending()),
+        }
+    }
 }
 
 /// Describes the various reasons a worker can run into a trap
@@ -236,7 +257,7 @@ pub enum TrapType {
 impl TrapType {
     pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => TrapType::Interrupt(kind.clone()),
+            Some(kind) => TrapType::Interrupt(*kind),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
@@ -285,7 +306,7 @@ impl TrapType {
 
     pub fn as_golem_error(&self, error_logs: &str) -> Option<WorkerExecutorError> {
         match self {
-            TrapType::Interrupt(InterruptKind::Interrupt) => Some(WorkerExecutorError::runtime(
+            TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
             TrapType::Error { error, .. } => match error {

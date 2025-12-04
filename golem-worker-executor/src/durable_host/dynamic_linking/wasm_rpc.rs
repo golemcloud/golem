@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayload};
+use crate::model::WorkerConfig;
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
@@ -1003,7 +1004,9 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
     let self_worker_id = store.data().owned_worker_id().worker_id();
 
     let args = store.data_mut().get_arguments().await?;
-    let env = store.data_mut().get_environment().await?;
+    let mut env = store.data_mut().get_environment().await?;
+    WorkerConfig::remove_dynamic_vars(&mut env);
+
     let config = store.data().wasi_config_vars();
     let stack = store.data().clone_as_inherited_stack(span_id);
     let demand = store

@@ -43,6 +43,7 @@ use golem_wasm::wasmtime::ResourceTypeId;
 use golem_wasm::{Value, ValueAndType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use uuid::Uuid;
 
 // Generates two primary types:
 // - OplogEntry
@@ -75,6 +76,7 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<PluginPriority>,
             wasi_config_vars: BTreeMap<String, String>,
+            original_phantom_id: Option<Uuid>
         }
         public {
             worker_id: WorkerId,
@@ -87,7 +89,8 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config_vars: WasiConfigVars
+            wasi_config_vars: WasiConfigVars,
+            original_phantom_id: Option<Uuid>
         }
     },
     /// The worker invoked a host function
@@ -601,39 +604,6 @@ impl OplogEntry {
             OplogEntry::SuccessfulUpdate {
                 target_revision, ..
             } => Some(*target_revision),
-            _ => None,
-        }
-    }
-
-    pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
-        match self {
-            OplogEntry::Create {
-                timestamp,
-                component_revision,
-                args,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                wasi_config_vars,
-                worker_id: _,
-            } => Some(OplogEntry::Create {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_revision: *component_revision,
-                args: args.clone(),
-                env: env.clone(),
-                environment_id: *environment_id,
-                created_by: *created_by,
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins.clone(),
-                wasi_config_vars: wasi_config_vars.clone(),
-            }),
             _ => None,
         }
     }

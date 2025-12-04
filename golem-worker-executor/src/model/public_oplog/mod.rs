@@ -237,6 +237,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_total_linear_memory_size,
                 initial_active_plugins,
                 wasi_config_vars,
+                original_phantom_id,
             } => {
                 let mut initial_plugins = BTreeSet::new();
                 for installation_id in initial_active_plugins {
@@ -260,6 +261,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     wasi_config_vars: wasi_config_vars.into(),
+                    original_phantom_id,
                 }))
             }
             OplogEntry::ImportedFunctionInvoked {

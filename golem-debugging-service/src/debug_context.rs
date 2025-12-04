@@ -68,6 +68,7 @@ use golem_worker_executor::workerctx::{
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
+use uuid;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -180,7 +181,7 @@ impl InvocationManagement for DebugContext {
 impl StatusManagement for DebugContext {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         if self.is_live() {
-            Some(InterruptKind::Suspend)
+            Some(InterruptKind::Suspend(Timestamp::now_utc()))
         } else {
             self.durable_ctx.check_interrupt()
         }
@@ -207,8 +208,14 @@ impl InvocationHooks for DebugContext {
             .await
     }
 
-    async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        self.durable_ctx.on_invocation_failure(trap_type).await
+    async fn on_invocation_failure(
+        &mut self,
+        full_function_name: &str,
+        trap_type: &TrapType,
+    ) -> RetryDecision {
+        self.durable_ctx
+            .on_invocation_failure(full_function_name, trap_type)
+            .await
     }
 
     async fn on_invocation_success(
@@ -538,6 +545,7 @@ impl WorkerCtx for DebugContext {
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
+        original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -565,6 +573,7 @@ impl WorkerCtx for DebugContext {
             agent_types_service,
             shard_service,
             pending_update,
+            original_phantom_id,
         )
         .await?;
         Ok(Self {

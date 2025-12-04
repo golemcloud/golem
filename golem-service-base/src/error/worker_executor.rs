@@ -422,7 +422,7 @@ impl From<InterruptKind> for WorkerExecutorError {
 impl From<anyhow::Error> for WorkerExecutorError {
     fn from(error: anyhow::Error) -> Self {
         match error.root_cause().downcast_ref::<InterruptKind>() {
-            Some(kind) => Self::Interrupted { kind: kind.clone() },
+            Some(kind) => Self::Interrupted { kind: *kind },
             None => Self::runtime(format!("{error:#?}")),
         }
     }
@@ -804,7 +804,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     kind: if interrupted.recover_immediately {
                         InterruptKind::Restart
                     } else {
-                        InterruptKind::Interrupt
+                        InterruptKind::Interrupt(Timestamp::now_utc())
                     },
                 })
             }
@@ -913,6 +913,7 @@ impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
     Debug,
+    Copy,
     Clone,
     PartialOrd,
     PartialEq,
@@ -925,18 +926,18 @@ impl Error for GolemSpecificWasmTrap {}
     FromValue,
 )]
 pub enum InterruptKind {
-    Interrupt,
+    Interrupt(Timestamp),
     Restart,
-    Suspend,
+    Suspend(Timestamp),
     Jump,
 }
 
 impl Display for InterruptKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            InterruptKind::Interrupt => write!(f, "Interrupted via the Golem API"),
+            InterruptKind::Interrupt(_) => write!(f, "Interrupted via the Golem API"),
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
-            InterruptKind::Suspend => write!(f, "Suspended"),
+            InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
         }
     }

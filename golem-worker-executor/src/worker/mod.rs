@@ -107,6 +107,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
     instance: Arc<tokio::sync::Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
+
+    last_resume_request: Mutex<Timestamp>,
 }
 
 impl<Ctx: WorkerCtx> HasOplog for Worker<Ctx> {
@@ -288,8 +290,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
-            update_state_lock: tokio::sync::Mutex::new(()),
+            update_state_lock: Mutex::new(()),
             last_known_status_detached: AtomicBool::new(false),
+            last_resume_request: Mutex::new(Timestamp::now_utc()),
         };
 
         // just some sanity checking
@@ -334,6 +337,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: Arc<Worker<Ctx>>,
         oom_retry_count: u32,
     ) -> Result<bool, WorkerExecutorError> {
+        {
+            *this.last_resume_request.lock().await = Timestamp::now_utc();
+        }
+
         let mut instance_guard = this.lock_non_stopping_worker().await;
         match &*instance_guard {
             WorkerInstance::Unloaded => {
@@ -346,7 +353,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(true)
             }
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
-                debug!("Worker is already running or waiting for permit");
+                tracing::warn!("Worker is already running or waiting for permit");
                 Ok(false)
             }
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
@@ -491,13 +498,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         if let WorkerInstance::Running(running) = &*self.lock_non_stopping_worker().await {
-            running.interrupt(interrupt_kind.clone());
+            running.interrupt(interrupt_kind);
         }
 
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running { .. } => {
+            ExecutionStatus::Running {
+                interrupt_signal, ..
+            } => {
+                let _ = interrupt_signal.send(interrupt_kind);
                 let (sender, receiver) = tokio::sync::broadcast::channel(1);
                 *execution_status = ExecutionStatus::Interrupting {
                     interrupt_kind,
@@ -553,7 +563,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let output = self.lookup_invocation_result(&idempotency_key).await;
         match output {
             LookupResult::Complete(output) => Ok(ResultOrSubscription::Finished(output)),
-            LookupResult::Interrupted => Err(InterruptKind::Interrupt.into()),
+            LookupResult::Interrupted => Err(InterruptKind::Interrupt(Timestamp::now_utc()).into()),
             LookupResult::Pending => Ok(ResultOrSubscription::Pending(subscription)),
             LookupResult::New => {
                 self.enqueue_worker_invocation(WorkerInvocation::ExportedFunction {
@@ -600,7 +610,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 match result {
                     Ok(LookupResult::Complete(Ok(output))) => Ok(output),
                     Ok(LookupResult::Complete(Err(err))) => Err(err),
-                    Ok(LookupResult::Interrupted) => Err(InterruptKind::Interrupt.into()),
+                    Ok(LookupResult::Interrupted) => {
+                        Err(InterruptKind::Interrupt(Timestamp::now_utc()).into())
+                    }
                     Ok(LookupResult::Pending) => Err(WorkerExecutorError::unknown(
                         "Unexpected pending result after invoke",
                     )),
@@ -1156,7 +1168,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt),
+                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
                             ..
                         }),
                     ..
@@ -1521,14 +1533,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     timestamp: Timestamp::now_utc(),
                 };
 
-                let mut worker_env = merge_worker_env_with_component_env(worker_env, component.env);
-                WorkerConfig::enrich_env(
-                    &mut worker_env,
-                    &owned_worker_id.worker_id,
-                    &agent_id,
-                    component.revision,
-                );
-
+                let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1560,6 +1565,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
+                    original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1582,6 +1588,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .active_plugins
                         .clone(),
                     initial_worker_metadata.wasi_config_vars.clone(),
+                    initial_worker_metadata.original_phantom_id,
                 );
 
                 let initial_status = Arc::new(tokio::sync::RwLock::new(initial_status));
@@ -1714,7 +1721,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
-fn merge_worker_env_with_component_env(
+pub fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
     component_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
@@ -1950,20 +1957,6 @@ impl RunningWorker {
             }?
         };
 
-        let component_env = component_metadata.env.clone();
-        let mut worker_env =
-            merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
-
-        // NOTE: calling enrich_env here again to apply changes compared to the initial one, such as the latest
-        // component version. This should not be done like this - changes to the environment should be derived
-        // from the oplog instead.
-        WorkerConfig::enrich_env(
-            &mut worker_env,
-            &parent.owned_worker_id.worker_id,
-            &parent.agent_id,
-            component_metadata.revision,
-        );
-
         let component_version_for_replay = worker_metadata
             .last_known_status
             .pending_updates
@@ -2003,7 +1996,6 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.args.clone(),
-                worker_env,
                 worker_metadata.last_known_status.skipped_regions,
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
@@ -2018,6 +2010,7 @@ impl RunningWorker {
             parent.agent_types(),
             parent.shard_service(),
             pending_update,
+            None,
         )
         .await?;
 
@@ -2148,7 +2141,7 @@ impl InvocationResult {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
                     Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }
-                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string() }),
+                OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt(Timestamp::now_utc())), stderr: "".to_string() }),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),
                 _ => panic!("Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_worker_id:?}")
             };
@@ -2166,6 +2159,9 @@ pub enum RetryDecision {
     Delayed(Duration),
     /// No retry possible
     None,
+    /// Try to stop if the worker does not get any resume request after the given timestamp,
+    /// but allow resuming if needed (unlike with None)
+    TryStop(Timestamp),
     /// Retry immediately but drop and reacquire permits
     ReacquirePermits,
 }
