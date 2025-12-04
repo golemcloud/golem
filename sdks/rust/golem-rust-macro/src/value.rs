@@ -506,7 +506,7 @@ pub fn derive_from_value_and_type(
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    Ok(#ident::#case_ident {
+                                    #idx => Ok(#ident::#case_ident {
                                         #(#field_extractors),*
                                     })
                                 }
@@ -534,9 +534,9 @@ pub fn derive_from_value_and_type(
                                     .collect::<Vec<_>>();
 
                                 quote! {
-                                    Ok(#ident::#case_ident {
+                                    #idx => Ok(#ident::#case_ident(
                                         #(#field_extractors),*
-                                    })
+                                    ))
                                 }
                             }
                         }

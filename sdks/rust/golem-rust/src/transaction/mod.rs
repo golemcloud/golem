@@ -525,7 +525,7 @@ mod macro_tests {
         println!("{result:?}");
     }
 
-    #[derive(IntoValue, PartialEq, Debug)]
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug)]
     enum MyEnum {
         Simple,
         Complex1(i32),
@@ -533,7 +533,7 @@ mod macro_tests {
         Complex3 { x: String, y: bool },
     }
 
-    
+
     #[test]
     fn test_into_value_derivation_enum() {
         let simple_value = MyEnum::Simple.into_value();
@@ -644,6 +644,6 @@ mod macro_tests {
         assert_eq!(MyEnum::from_value_and_type(simple1_value_and_type).unwrap(), expected_simple);
         assert_eq!(MyEnum::from_value_and_type(complex1_value_and_type).unwrap(), expected_complex1);
         assert_eq!(MyEnum::from_value_and_type(complex2_value_and_type).unwrap(), expected_complex2);
-        //assert_eq!(MyEnum::from_value_and_type(complex3_value_and_type).unwrap(), expected_complex3);
+        assert_eq!(MyEnum::from_value_and_type(complex3_value_and_type).unwrap(), expected_complex3);
     }
 }
