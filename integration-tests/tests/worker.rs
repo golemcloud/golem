@@ -52,6 +52,7 @@ use std::time::{Duration, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::{info, warn, Instrument};
+use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -1757,6 +1758,37 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     invoker_task.abort();
     http_server_task.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_await_parallel_rpc_calls(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user
+        .component(&env.id, "golem_it_agent_rpc")
+        .name("golem-it:agent-rpc")
+        .store()
+        .await?;
+
+    let unique_id = Uuid::new_v4();
+    let worker_id = user
+        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .await?;
+
+    user
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:agent-rpc/test-agent.{run}",
+            vec![20f64.into_value_and_type()],
+        )
+        .await?;
 
     Ok(())
 }
