@@ -1209,7 +1209,7 @@ mod tests {
 
         let expected_complex3 = Value::Variant {
             case_idx: 3,
-            case_value: Some(Box::new(Value::Tuple(vec![
+            case_value: Some(Box::new(Value::Record(vec![
                 Value::String("world".to_string()),
                 Value::Bool(true),
             ]))),
@@ -1260,7 +1260,7 @@ mod tests {
 
         let complex3_value = WitValue::from(Value::Variant {
             case_idx: 3,
-            case_value: Some(Box::new(Value::Tuple(vec![
+            case_value: Some(Box::new(Value::Record(vec![
                 Value::String("world".to_string()),
                 Value::Bool(true),
             ]))),
