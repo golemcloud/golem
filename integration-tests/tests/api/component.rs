@@ -606,11 +606,11 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .create_component(
             &env.id.0,
             &ComponentCreation {
-                component_name: ComponentName("it:agent-counters".to_string()),
+                component_name: ComponentName("golem:it".to_string()),
                 file_options: BTreeMap::new(),
                 dynamic_linking: HashMap::new(),
                 env: BTreeMap::new(),
-                agent_types: Vec::new(),
+                agent_types: vec![agent_type.clone()],
                 plugins: Vec::new(),
             },
             tokio::fs::File::open(

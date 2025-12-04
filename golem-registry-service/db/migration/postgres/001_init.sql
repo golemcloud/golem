@@ -830,7 +830,7 @@ CREATE TABLE deployment_registered_agent_types (
     agent_type_name                 TEXT    NOT NULL,
 
     component_id UUID    NOT NULL, -- compoenent implementing agent type in this deployment
-    agent_type BYTEA NOT NULL -- full agent type as blob
+    agent_type BYTEA NOT NULL, -- full agent type as blob
 
     CONSTRAINT deployment_registered_agent_types_pk
         PRIMARY KEY (environment_id, deployment_revision_id, agent_type_name),
@@ -849,4 +849,4 @@ CREATE TABLE deployment_registered_agent_types (
 );
 
 CREATE INDEX deployment_registered_agent_types_agent_type_idx
-    ON deployment_agent_types(environment_id, deployment_revision_id, agent_type_name);
+    ON deployment_registered_agent_types(environment_id, deployment_revision_id, agent_type_name);

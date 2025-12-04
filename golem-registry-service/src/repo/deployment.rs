@@ -764,7 +764,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
-                        r.agent_type,
+                        r.agent_type
                     FROM deployment_registered_agent_types r
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.agent_type_name
@@ -788,7 +788,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
-                        r.agent_type,
+                        r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
@@ -814,7 +814,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.agent_type_name,
                         r.component_id,
-                        r.agent_type,
+                        r.agent_type
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
