@@ -78,22 +78,36 @@ impl DeployDiff {
     }
 
     pub fn unified_yaml_diffs(&self, show_sensitive: bool) -> UnifiedYamlDeployDiff {
-        let safe_diffable_local_deployment =
-            self.normalized_diff_deployment(show_sensitive, &self.diffable_local_deployment);
-        let safe_diffable_server_deployment =
-            self.normalized_diff_deployment(show_sensitive, &self.diffable_server_deployment);
-        let safe_diffable_server_staged_deployment =
-            self.normalized_diff_deployment(show_sensitive, &self.diffable_staged_deployment);
+        let local_for_stage = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_local_deployment,
+            self.diff_stage.as_ref(),
+        );
+        let local_for_server = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_local_deployment,
+            Some(&self.diff),
+        );
+        let server_deployment = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_server_deployment,
+            self.diff_stage.as_ref(),
+        );
+        let staged_deployment = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_staged_deployment,
+            Some(&self.diff),
+        );
 
         UnifiedYamlDeployDiff {
             diff_stage: self.diff_stage.is_some().then(|| {
-                safe_diffable_server_staged_deployment.unified_yaml_diff_with_local(
-                    &safe_diffable_local_deployment,
+                staged_deployment.unified_yaml_diff_with_local(
+                    &local_for_stage,
                     diff::SerializeMode::ValueIfAvailable,
                 )
             }),
-            diff: safe_diffable_server_deployment.unified_yaml_diff_with_local(
-                &safe_diffable_local_deployment,
+            diff: server_deployment.unified_yaml_diff_with_local(
+                &local_for_server,
                 diff::SerializeMode::ValueIfAvailable,
             ),
         }
@@ -202,6 +216,7 @@ impl DeployDiff {
         &self,
         show_sensitive: bool,
         deployment: &diff::Deployment,
+        diff: Option<&diff::DeploymentDiff>,
     ) -> diff::Deployment {
         if show_sensitive {
             return deployment.clone();
@@ -227,11 +242,7 @@ impl DeployDiff {
                 .components
                 .iter()
                 .filter(|(component_name, _)| {
-                    self.diff.components.contains_key(*component_name)
-                        || self
-                            .diff_stage
-                            .as_ref()
-                            .map_or(false, |diff| diff.components.contains_key(*component_name))
+                    diff.map_or(false, |diff| diff.components.contains_key(*component_name))
                 })
                 .map(|(component_name, component)| {
                     (
@@ -261,13 +272,10 @@ impl DeployDiff {
                 .http_api_definitions
                 .iter()
                 .filter(|(http_api_definition_name, _)| {
-                    self.diff
-                        .http_api_definitions
-                        .contains_key(*http_api_definition_name)
-                        || self.diff_stage.as_ref().map_or(false, |diff| {
-                            diff.http_api_definitions
-                                .contains_key(*http_api_definition_name)
-                        })
+                    diff.map_or(false, |diff| {
+                        diff.http_api_definitions
+                            .contains_key(*http_api_definition_name)
+                    })
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
@@ -275,10 +283,9 @@ impl DeployDiff {
                 .http_api_deployments
                 .iter()
                 .filter(|(domain, _)| {
-                    self.diff.http_api_deployments.contains_key(*domain)
-                        || self.diff_stage.as_ref().map_or(false, |diff| {
-                            diff.http_api_deployments.contains_key(*domain)
-                        })
+                    diff.map_or(false, |diff| {
+                        diff.http_api_deployments.contains_key(*domain)
+                    })
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
