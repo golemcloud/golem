@@ -109,12 +109,15 @@ impl ApiDeploymentCommandHandler {
             return Ok(None);
         };
 
-        let Some(_revision) = revision else {
+        let Some(revision) = revision else {
             return Ok(Some(deployment));
         };
 
-        // TODO: atomic: missing client method
-        todo!()
+        clients
+            .api_deployment
+            .get_http_api_deployment_revision(&deployment.id.0, revision.0)
+            .await
+            .map_service_error_not_found_as_opt()
     }
 
     pub async fn deployable_manifest_api_deployments(

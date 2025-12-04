@@ -366,12 +366,15 @@ impl ApiDefinitionCommandHandler {
             return Ok(None);
         };
 
-        let Some(_revision) = revision else {
+        let Some(revision) = revision else {
             return Ok(Some(definition));
         };
 
-        // TODO: atomic: missing client method
-        todo!()
+        clients
+            .api_definition
+            .get_http_api_definition_revision(&definition.id.0, revision.0)
+            .await
+            .map_service_error_not_found_as_opt()
     }
 
     pub async fn get_http_api_definition_revision_by_id(
