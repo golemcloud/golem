@@ -387,39 +387,6 @@ impl HttpApiDefinitionService {
         Ok(http_api_definitions)
     }
 
-    pub async fn list_deployed(
-        &self,
-        environment_id: &EnvironmentId,
-        auth: &AuthCtx,
-    ) -> Result<Vec<HttpApiDefinition>, HttpApiDefinitionError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    HttpApiDefinitionError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDefinition,
-        )?;
-
-        let http_api_definitions: Vec<HttpApiDefinition> = self
-            .http_api_definition_repo
-            .list_deployed(&environment_id.0)
-            .await?
-            .into_iter()
-            .map(|r| r.into())
-            .collect();
-
-        Ok(http_api_definitions)
-    }
-
     pub async fn list_in_deployment(
         &self,
         environment_id: &EnvironmentId,
@@ -492,41 +459,6 @@ impl HttpApiDefinitionService {
         Ok(http_api_definition)
     }
 
-    pub async fn get_deployed(
-        &self,
-        http_api_definition_id: &HttpApiDefinitionId,
-        auth: &AuthCtx,
-    ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
-        let http_api_definition: HttpApiDefinition = self
-            .http_api_definition_repo
-            .get_deployed_by_id(&http_api_definition_id.0)
-            .await?
-            .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
-                *http_api_definition_id,
-            ))?
-            .into();
-
-        let environment = self
-            .environment_service
-            .get(&http_api_definition.environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) => {
-                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
-                }
-                other => other.into(),
-            })?;
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDefinition,
-        )
-        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
-
-        Ok(http_api_definition)
-    }
-
     pub async fn get_staged_by_name(
         &self,
         environment_id: &EnvironmentId,
@@ -547,46 +479,6 @@ impl HttpApiDefinitionService {
         let http_api_definition: HttpApiDefinition = self
             .http_api_definition_repo
             .get_staged_by_name(&environment_id.0, &http_api_definition_name.0)
-            .await?
-            .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
-                http_api_definition_name.clone(),
-            ))?
-            .into();
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewHttpApiDefinition,
-        )
-        .map_err(|_| {
-            HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
-                http_api_definition_name.clone(),
-            )
-        })?;
-
-        Ok(http_api_definition)
-    }
-
-    pub async fn get_deployed_by_name(
-        &self,
-        environment_id: &EnvironmentId,
-        http_api_definition_name: &HttpApiDefinitionName,
-        auth: &AuthCtx,
-    ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    HttpApiDefinitionError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
-        let http_api_definition: HttpApiDefinition = self
-            .http_api_definition_repo
-            .get_deployed_by_name(&environment_id.0, &http_api_definition_name.0)
             .await?
             .ok_or(HttpApiDefinitionError::HttpApiDefinitionByNameNotFound(
                 http_api_definition_name.clone(),

@@ -146,19 +146,15 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<ComponentDto, RegistryServiceError>;
 
     // agent types api
-    // will only return agent types provided by non-deleted components
     async fn get_all_agent_types(
         &self,
         environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError>;
 
-    // will only return agent types provided by non-deleted components
     async fn get_agent_type(
         &self,
         environment_id: &EnvironmentId,
         name: &str,
-        auth_ctx: &AuthCtx,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
     async fn get_active_routes_for_domain(
@@ -580,14 +576,12 @@ impl RegistryService for GrpcRegistryService {
     async fn get_all_agent_types(
         &self,
         environment_id: &EnvironmentId,
-        auth_ctx: &AuthCtx,
     ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
         let response = self
             .client
             .call("get-all-agent-types", move |client| {
                 let request = GetAllAgentTypesRequest {
                     environment_id: Some((*environment_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
                 Box::pin(client.get_all_agent_types(request))
@@ -613,7 +607,6 @@ impl RegistryService for GrpcRegistryService {
         &self,
         environment_id: &EnvironmentId,
         name: &str,
-        auth_ctx: &AuthCtx,
     ) -> Result<RegisteredAgentType, RegistryServiceError> {
         let response = self
             .client
@@ -621,7 +614,6 @@ impl RegistryService for GrpcRegistryService {
                 let request = GetAgentTypeRequest {
                     environment_id: Some((*environment_id).into()),
                     agent_type: name.to_string(),
-                    auth_ctx: Some(auth_ctx.clone().into()),
                 };
                 Box::pin(client.get_agent_type(request))
             })

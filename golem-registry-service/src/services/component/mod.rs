@@ -293,44 +293,6 @@ impl ComponentService {
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
-    pub async fn list_deployed_components(
-        &self,
-        environment_id: &EnvironmentId,
-        auth: &AuthCtx,
-    ) -> Result<Vec<Component>, ComponentError> {
-        info!(
-            environment_id = %environment_id,
-            "Get deployed components"
-        );
-
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    ComponentError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
-
-        auth.authorize_environment_action(
-            &environment.owner_account_id,
-            &environment.roles_from_active_shares,
-            EnvironmentAction::ViewComponent,
-        )?;
-
-        let result = self
-            .component_repo
-            .list_deployed(&environment_id.0)
-            .await?
-            .into_iter()
-            .map(|r| r.try_into_model(environment.application_id, environment.owner_account_id))
-            .collect::<Result<_, _>>()?;
-
-        Ok(result)
-    }
-
     pub async fn get_deployed_component_by_name(
         &self,
         environment_id: &EnvironmentId,

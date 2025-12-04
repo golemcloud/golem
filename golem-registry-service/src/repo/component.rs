@@ -88,13 +88,6 @@ pub trait ComponentRepo: Send + Sync {
         include_deleted: bool,
     ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
 
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        name: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>>;
-
     async fn list_staged(
         &self,
         environment_id: &Uuid,
@@ -132,10 +125,6 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
 
     fn span_name(environment_id: &Uuid, name: &str) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id, name)
-    }
-
-    fn span_name_and_revision(environment_id: &Uuid, name: &str, revision_id: i64) -> Span {
-        info_span!(SPAN_NAME, environment_id = %environment_id, name, revision_id)
     }
 
     fn span_id(component_id: &Uuid) -> Span {
@@ -266,22 +255,6 @@ impl<Repo: ComponentRepo> ComponentRepo for LoggedComponentRepo<Repo> {
         self.repo
             .get_by_id_and_revision(component_id, revision_id, include_deleted)
             .instrument(Self::span_id_and_revision(component_id, revision_id))
-            .await
-    }
-
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        name: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
-        self.repo
-            .get_by_name_and_revision(environment_id, name, revision_id)
-            .instrument(Self::span_name_and_revision(
-                environment_id,
-                name,
-                revision_id,
-            ))
             .await
     }
 
@@ -576,18 +549,19 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT c.environment_id, c.name,
-                           cr.component_id, cr.revision_id, cr.version, cr.hash,
-                           cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
-                    FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id
-                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
-                    JOIN deployment_revisions dr
-                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                        cr.component_id, cr.revision_id, cr.version, cr.hash,
+                        cr.created_at, cr.created_by, cr.deleted,
+                        cr.size, cr.metadata, cr.original_env, cr.env,
+                        cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_component_revisions dcr
-                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
-                               AND dcr.component_revision_id = cr.revision_id
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = cdr.deployment_revision_id
+                    JOIN component_revisions cr
+                        ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
+                    JOIN components c
+                        ON c.component_id  = cr.component_id
                     WHERE c.component_id = $1
                 "#})
                     .bind(component_id),
@@ -644,9 +618,9 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 sqlx::query_as(indoc! { r#"
                     WITH distinct_revs AS (
                         SELECT DISTINCT cr.revision_id
-                        FROM deployment_revisions dr
+                        FROM current_deployment_revisions cdr
                         JOIN deployment_component_revisions dcr
-                            ON dcr.environment_id = dr.environment_id AND dcr.deployment_revision_id = dr.revision_id
+                            ON dcr.environment_id = cdr.environment_id AND dcr.deployment_revision_id = cdr.deployment_revision_id
                         JOIN component_revisions cr
                             ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
                         JOIN components c
@@ -696,36 +670,6 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 .bind(component_id)
                 .bind(revision_id)
                 .bind(include_deleted),
-            )
-            .await?;
-
-        match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn get_by_name_and_revision(
-        &self,
-        environment_id: &Uuid,
-        name: &str,
-        revision_id: i64,
-    ) -> RepoResult<Option<ComponentExtRevisionRecord>> {
-        let revision = self.with_ro("get_by_name_and_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT c.environment_id, c.name,
-                           cr.component_id, cr.revision_id, cr.version, cr.hash,
-                           cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.original_env, cr.env,
-                           cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
-                    FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id
-                    WHERE c.environment_id = $1 AND c.name = $2 AND cr.revision_id = $3 AND cr.deleted = FALSE
-                "#})
-                    .bind(environment_id)
-                    .bind(name)
-                    .bind(revision_id),
             )
             .await?;
 

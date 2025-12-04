@@ -72,22 +72,6 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
-
-    async fn get_current_plugin_installations(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
-
-    async fn create_plugin_installations(
-        &self,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
-
-    async fn update_plugin_installations(
-        &self,
-        current_revision_id: i64,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
 }
 
 pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
@@ -107,13 +91,6 @@ impl<Repo: EnvironmentRepo> LoggedEnvironmentRepo<Repo> {
 
     fn span_env(environment_id: &Uuid) -> Span {
         info_span!(SPAN_NAME, environment_id = %environment_id)
-    }
-
-    fn span_plugin_installation(
-        environment_id: &Uuid,
-        plugin_installation_revision_id: i64,
-    ) -> Span {
-        info_span!(SPAN_NAME, environment_id = %environment_id, plugin_installation_revision_id)
     }
 
     fn span_app_id(application_id: &Uuid) -> Span {
@@ -187,45 +164,6 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
         let span = Self::span_env(&revision.environment_id);
         self.repo.delete(revision).instrument(span).await
     }
-
-    async fn get_current_plugin_installations(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        self.repo
-            .get_current_plugin_installations(environment_id)
-            .instrument(Self::span_env(environment_id))
-            .await
-    }
-
-    async fn create_plugin_installations(
-        &self,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        let span = Self::span_plugin_installation(
-            &plugin_installation.environment_id,
-            plugin_installation.current_revision_id,
-        );
-        self.repo
-            .create_plugin_installations(plugin_installation)
-            .instrument(span)
-            .await
-    }
-
-    async fn update_plugin_installations(
-        &self,
-        current_revision_id: i64,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        let span = Self::span_plugin_installation(
-            &plugin_installation.environment_id,
-            plugin_installation.current_revision_id,
-        );
-        self.repo
-            .update_plugin_installations(current_revision_id, plugin_installation)
-            .instrument(span)
-            .await
-    }
 }
 
 pub struct DbEnvironmentRepo<DBP: Pool> {
@@ -248,17 +186,6 @@ impl<DBP: Pool> DbEnvironmentRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
-    }
-
-    async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
-    where
-        R: Send,
-        F: for<'f> FnOnce(
-                &'f mut <DBP::LabelledApi as LabelledPoolApi>::LabelledTransaction,
-            ) -> BoxFuture<'f, RepoResult<R>>
-            + Send,
-    {
-        self.db_pool.with_tx(METRICS_SVC_NAME, api_name, f).await
     }
 
     async fn with_tx_err<R, E, F>(&self, api_name: &'static str, f: F) -> Result<R, E>
@@ -740,144 +667,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         })
         .await
     }
-
-    async fn get_current_plugin_installations(
-        &self,
-        environment_id: &Uuid,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        let plugin_installation: Option<EnvironmentPluginInstallationRecord> =
-            self.with_ro("get_current_plugin_installations").fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                    FROM environment_plugin_installations
-                    WHERE
-                        environment_id = $1
-                        AND deleted_at IS NULL
-                "#})
-                .bind(environment_id)
-            ).await?;
-
-        match plugin_installation {
-            Some(plugin_installation) => Ok(Some(self.with_plugins(plugin_installation).await?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn create_plugin_installations(
-        &self,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        let plugin_installation = plugin_installation.with_updated_hash();
-
-        let plugin_installation: Option<EnvironmentPluginInstallationRecord> =
-            self.with_tx("create_plugin_installations", |tx| {
-                async move {
-                    let plugins = plugin_installation.plugins;
-
-                    let plugin_installation: EnvironmentPluginInstallationRecord = tx.fetch_one_as(
-                        sqlx::query_as(indoc! { r#"
-                            INSERT INTO environment_plugin_installations
-                            (environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                            VALUES ($1, $2, $3, $4, NULL, $5, 0)
-                            RETURNING environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(plugin_installation.environment_id)
-                            .bind(plugin_installation.hash)
-                            .bind(&plugin_installation.audit.created_at)
-                            .bind(&plugin_installation.audit.created_at)
-                            .bind(plugin_installation.audit.modified_by)
-                    ).await?;
-
-                    for plugin in plugins {
-                        Self::insert_plugin_installation_revision(
-                            tx,
-                            plugin.ensure_environment(
-                                plugin_installation.environment_id,
-                                plugin_installation.current_revision_id,
-                                plugin_installation.audit.modified_by,
-                            ),
-                        ).await?;
-                    }
-
-                    Ok(plugin_installation)
-                }.boxed()
-            })
-                .await
-                .none_on_unique_violation()?;
-
-        match plugin_installation {
-            Some(plugin_installation) => Ok(Some(self.with_plugins(plugin_installation).await?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn update_plugin_installations(
-        &self,
-        current_revision_id: i64,
-        plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        let Some(checked_current) = self
-            .check_current_plugin_installation_revision(
-                &plugin_installation.environment_id,
-                current_revision_id,
-            )
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let plugin_installation = {
-            let mut plugin_installation = plugin_installation;
-            plugin_installation.current_revision_id = checked_current.current_revision_id + 1;
-            plugin_installation.with_updated_hash()
-        };
-
-        let plugin_installation: Option<EnvironmentPluginInstallationRecord> =
-            self.with_tx("update_plugin_installations", |tx| {
-                async move {
-                    let plugins = plugin_installation.plugins;
-
-                    let plugin_installation: Option<EnvironmentPluginInstallationRecord> = tx.fetch_optional_as(
-                        sqlx::query_as(indoc! { r#"
-                            UPDATE environment_plugin_installations
-                            SET hash = $1, updated_at = $2, modified_by = $3, current_revision_id = $4
-                            WHERE environment_id = $5 AND current_revision_id = $6
-                            RETURNING environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                        "#})
-                            .bind(plugin_installation.hash)
-                            .bind(plugin_installation.audit.updated_at)
-                            .bind(plugin_installation.audit.modified_by)
-                            .bind(plugin_installation.current_revision_id)
-                            .bind(plugin_installation.environment_id)
-                            .bind(current_revision_id)
-                    ).await?;
-
-                    let Some(plugin_installation) = plugin_installation else {
-                        return Ok(None);
-                    };
-
-                    for plugin in plugins {
-                        Self::insert_plugin_installation_revision(
-                            tx,
-                            plugin.ensure_environment(
-                                plugin_installation.environment_id,
-                                plugin_installation.current_revision_id,
-                                plugin_installation.audit.modified_by,
-                            ),
-                        ).await?;
-                    }
-
-                    Ok(Some(plugin_installation))
-                }.boxed()
-            })
-                .await
-                .none_on_unique_violation()?.flatten();
-
-        match plugin_installation {
-            Some(plugin_installation) => Ok(Some(self.with_plugins(plugin_installation).await?)),
-            None => Ok(None),
-        }
-    }
 }
 
 #[async_trait]
@@ -889,36 +678,6 @@ trait EnvironmentRepoInternal: EnvironmentRepo {
         tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentRevisionRecord, EnvironmentRepoError>;
-
-    async fn check_current_plugin_installation_revision(
-        &self,
-        environment_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>>;
-
-    async fn get_plugins(
-        &self,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<EnvironmentPluginInstallationRevisionRecord>>;
-
-    async fn with_plugins(
-        &self,
-        mut plugin_installation: EnvironmentPluginInstallationRecord,
-    ) -> RepoResult<EnvironmentPluginInstallationRecord> {
-        plugin_installation.plugins = self
-            .get_plugins(
-                &plugin_installation.environment_id,
-                plugin_installation.current_revision_id,
-            )
-            .await?;
-        Ok(plugin_installation)
-    }
-
-    async fn insert_plugin_installation_revision(
-        tx: &mut Self::Tx,
-        revision: EnvironmentPluginInstallationRevisionRecord,
-    ) -> RepoResult<()>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -951,66 +710,5 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .to_error_on_unique_violation(EnvironmentRepoError::ConcurrentModification)?;
 
         Ok(revision)
-    }
-
-    async fn check_current_plugin_installation_revision(
-        &self,
-        environment_id: &Uuid,
-        current_revision_id: i64,
-    ) -> RepoResult<Option<EnvironmentPluginInstallationRecord>> {
-        self.with_ro("check_current_plugin_installation_revision").fetch_optional_as(
-            sqlx::query_as(indoc! { r#"
-                SELECT environment_id, hash, created_at, updated_at, deleted_at, modified_by, current_revision_id
-                FROM environment_plugin_installations
-                WHERE environment_id = $1 AND current_revision_id = $2 and deleted_at IS NULL
-            "#})
-                .bind(environment_id)
-                .bind(current_revision_id),
-        )
-            .await
-    }
-
-    async fn get_plugins(
-        &self,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<EnvironmentPluginInstallationRevisionRecord>> {
-        self.with_ro("get_plugins").fetch_all_as(
-            sqlx::query_as(indoc! { r#"
-                SELECT
-                    epir.environment_id, epir.revision_id, epir.priority, epir.created_at, epir.created_by,
-                    epir.plugin_id, p.name as plugin_name, p.version as plugin_version,
-                    epir.parameters
-                FROM environment_plugin_installation_revisions epir
-                JOIN plugins p ON p.plugin_id = epir.plugin_id
-                WHERE environment_id = $1 AND revision_id = $2
-                ORDER BY priority
-            "#})
-                .bind(environment_id)
-                .bind(revision_id),
-        )
-            .await
-    }
-
-    async fn insert_plugin_installation_revision(
-        tx: &mut Self::Tx,
-        revision: EnvironmentPluginInstallationRevisionRecord,
-    ) -> RepoResult<()> {
-        tx.execute(
-            sqlx::query(indoc! { r#"
-                INSERT INTO environment_plugin_installation_revisions
-                (environment_id, revision_id, priority, created_at, created_by, plugin_id, parameters)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            "#})
-                .bind(revision.environment_id)
-                .bind(revision.revision_id)
-                .bind(revision.priority)
-                .bind_revision_audit(revision.audit)
-                .bind(revision.plugin_id)
-                .bind(revision.parameters),
-        )
-            .await?;
-
-        Ok(())
     }
 }

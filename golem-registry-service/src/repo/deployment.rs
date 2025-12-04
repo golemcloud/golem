@@ -423,8 +423,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             sqlx::query_as(indoc! { r#"
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM current_deployments cd
-                JOIN deployment_revisions dr
-                    ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                JOIN current_deployment_revisions cdr
+                    ON dr.environment_id = cd.environment_id AND cdr.current_revision_id = cd.current_revision_id
                 WHERE cd.environment_id = $1
             "#})
                 .bind(environment_id),
