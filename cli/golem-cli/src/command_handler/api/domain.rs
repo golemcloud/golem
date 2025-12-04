@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::api::cloud::domain::ApiDomainSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
 
+use crate::command::api::domain::ApiDomainSubcommand;
 use crate::log::log_warn_action;
 use crate::model::environment::EnvironmentResolveMode;
 use golem_client::api::ApiDomainClient;
@@ -25,11 +25,11 @@ use golem_client::model::DomainRegistrationCreation;
 use golem_common::model::domain_registration::Domain;
 use std::sync::Arc;
 
-pub struct ApiCloudDomainCommandHandler {
+pub struct ApiDomainCommandHandler {
     ctx: Arc<Context>,
 }
 
-impl ApiCloudDomainCommandHandler {
+impl ApiDomainCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
@@ -37,12 +37,8 @@ impl ApiCloudDomainCommandHandler {
     pub async fn handle_command(&self, command: ApiDomainSubcommand) -> anyhow::Result<()> {
         match command {
             ApiDomainSubcommand::List => self.cmd_list().await,
-            ApiDomainSubcommand::New {
-                domain_name: domain,
-            } => self.cmd_new(domain).await,
-            ApiDomainSubcommand::Delete {
-                domain_name: domain,
-            } => self.cmd_delete(domain).await,
+            ApiDomainSubcommand::Register { domain } => self.cmd_register(domain).await,
+            ApiDomainSubcommand::Delete { domain } => self.cmd_delete(domain).await,
         }
     }
 
@@ -70,7 +66,7 @@ impl ApiCloudDomainCommandHandler {
         Ok(())
     }
 
-    async fn cmd_new(&self, domain: String) -> anyhow::Result<()> {
+    async fn cmd_register(&self, domain: String) -> anyhow::Result<()> {
         let environment = self
             .ctx
             .environment_handler()

@@ -1260,9 +1260,10 @@ pub mod worker {
 }
 
 pub mod api {
-    use crate::command::api::cloud::ApiCloudSubcommand;
+    use crate::command::api::certificate::ApiCertificateSubcommand;
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
+    use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
 
@@ -1283,10 +1284,15 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
-        /// Manage API Cloud Domains and Certificates
-        Cloud {
+        /// Manage API Domains
+        Domain {
             #[clap(subcommand)]
-            subcommand: ApiCloudSubcommand,
+            subcommand: ApiDomainSubcommand,
+        },
+        /// Manage API Certificates
+        Certificate {
+            #[clap(subcommand)]
+            subcommand: ApiCertificateSubcommand,
         },
     }
 
@@ -1385,76 +1391,56 @@ pub mod api {
         }
     }
 
-    pub mod cloud {
-        use crate::command::api::cloud::certificate::ApiCertificateSubcommand;
-        use crate::command::api::cloud::domain::ApiDomainSubcommand;
+    pub mod domain {
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum ApiCloudSubcommand {
-            /// Manage Cloud API Domains
-            Domain {
-                #[clap(subcommand)]
-                subcommand: ApiDomainSubcommand,
+        pub enum ApiDomainSubcommand {
+            /// List domains
+            List,
+            /// Register a new domain
+            Register {
+                /// Domain name
+                domain: String,
             },
-            /// Manage Cloud API Certificates
-            Certificate {
-                #[clap(subcommand)]
-                subcommand: ApiCertificateSubcommand,
+            /// Delete an existing domain
+            Delete {
+                /// Domain name
+                domain: String,
             },
         }
+    }
 
-        pub mod domain {
-            use clap::Subcommand;
+    pub mod certificate {
+        use crate::model::PathBufOrStdin;
+        use clap::Subcommand;
+        use uuid::Uuid;
 
-            #[derive(Debug, Subcommand)]
-            pub enum ApiDomainSubcommand {
-                /// List domains
-                List,
-                /// Add a new domain
-                New {
-                    /// Domain name
-                    domain_name: String,
-                },
-                /// Delete an existing domain
-                Delete {
-                    /// Domain name
-                    domain_name: String,
-                },
-            }
-        }
-
-        pub mod certificate {
-            use crate::model::PathBufOrStdin;
-            use clap::Subcommand;
-            use uuid::Uuid;
-
-            #[derive(Debug, Subcommand)]
-            pub enum ApiCertificateSubcommand {
-                /// Retrieves metadata about an existing certificate
-                Get {
-                    /// Certificate ID
-                    certificate_id: Option<Uuid>,
-                },
-                /// Create new certificate
-                New {
-                    /// Domain name
-                    #[arg(short, long)]
-                    domain_name: String,
-                    /// Certificate
-                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                    certificate_body: PathBufOrStdin,
-                    /// Certificate private key
-                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                    certificate_private_key: PathBufOrStdin,
-                },
-                /// Delete an existing certificate
-                #[command()]
-                Delete {
-                    /// Certificate ID
-                    certificate_id: Uuid,
-                },
-            }
+        #[derive(Debug, Subcommand)]
+        pub enum ApiCertificateSubcommand {
+            /// Retrieves metadata about an existing certificate
+            Get {
+                /// Certificate ID
+                certificate_id: Option<Uuid>,
+            },
+            /// Create a new certificate
+            New {
+                /// Domain name
+                #[arg(short, long)]
+                domain_name: String,
+                /// Certificate
+                #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                certificate_body: PathBufOrStdin,
+                /// Certificate private key
+                #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                certificate_private_key: PathBufOrStdin,
+            },
+            /// Delete an existing certificate
+            #[command()]
+            Delete {
+                /// Certificate ID
+                certificate_id: Uuid,
+            },
         }
     }
 }
@@ -1581,14 +1567,6 @@ pub mod cloud {
 
     #[derive(Debug, Subcommand)]
     pub enum CloudSubcommand {
-        // TODO: atomic
-        /*
-        /// Manage Cloud Projects
-        Project {
-            #[clap(subcommand)]
-            subcommand: ProjectSubcommand,
-        },
-        */
         /// Manage Cloud Account
         Account {
             #[clap(subcommand)]

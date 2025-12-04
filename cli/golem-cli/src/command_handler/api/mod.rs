@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use crate::command::api::ApiSubcommand;
+use crate::command_handler::Handlers;
 use crate::context::Context;
 use std::sync::Arc;
 
-pub mod cloud;
 pub mod definition;
 pub mod deployment;
+pub mod domain;
+// TODO: atomic: pub mod certificate;
 // TODO: atomic: pub mod security_scheme;
 
 pub struct ApiCommandHandler {
-    // TODO: atomic
-    #[allow(unused)]
     ctx: Arc<Context>,
 }
 
@@ -34,21 +34,17 @@ impl ApiCommandHandler {
 
     pub async fn handle_command(&self, command: ApiSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiSubcommand::Definition { subcommand: _ } => {
-                // TODO: atomic
-                // self.ctx
-                //     .api_definition_handler()
-                //     .handle_command(subcommand)
-                //     .await
-                todo!()
+            ApiSubcommand::Definition { subcommand } => {
+                self.ctx
+                    .api_definition_handler()
+                    .handle_command(subcommand)
+                    .await
             }
-            ApiSubcommand::Deployment { subcommand: _ } => {
-                // TODO: atomic
-                // self.ctx
-                //     .api_deployment_handler()
-                //     .handle_command(subcommand)
-                //     .await
-                todo!()
+            ApiSubcommand::Deployment { subcommand } => {
+                self.ctx
+                    .api_deployment_handler()
+                    .handle_command(subcommand)
+                    .await
             }
             ApiSubcommand::SecurityScheme { subcommand: _ } => {
                 // TODO: atomic
@@ -58,12 +54,14 @@ impl ApiCommandHandler {
                 //     .await
                 todo!()
             }
-            ApiSubcommand::Cloud { subcommand: _ } => {
-                // TODO: atomic
-                // self.ctx
-                //     .api_cloud_handler()
-                //     .handle_command(subcommand)
-                //     .await
+            ApiSubcommand::Domain { subcommand } => {
+                self.ctx
+                    .api_domain_handler()
+                    .handle_command(subcommand)
+                    .await
+            }
+            ApiSubcommand::Certificate { subcommand: _ } => {
+                // TODO: atomic:
                 todo!()
             }
         }
