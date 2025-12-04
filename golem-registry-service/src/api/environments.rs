@@ -32,6 +32,7 @@ use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
+use golem_common::model::agent::RegisteredAgentType;
 
 pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
@@ -466,5 +467,50 @@ impl EnvironmentsApi {
             .get_deployed_deployment_summary(&environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
+    }
+
+    /// List all registered agent types in a deployment
+    #[oai(
+        path = "/envs/:environment_id/deployments/:deployment_id/agent-types",
+        method = "get",
+        operation_id = "get_environment_deployment_agent_types"
+    )]
+    async fn get_environment_deployment_agent_types(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+        let record = recorded_http_api_request!(
+            "get_environment_deployment_agent_types",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_environment_deployment_agent_types_internal(
+                environment_id.0,
+                deployment_id.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_environment_deployment_agent_types_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<RegisteredAgentType>>> {
+        let agent_types = self
+            .deployment_service
+            .list_deployment_agent_types(&environment_id, deployment_id, &auth)
+            .await?;
+        Ok(Json(Page { values: agent_types }))
     }
 }
