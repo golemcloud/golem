@@ -512,7 +512,6 @@ pub fn derive_from_value_and_type(
                                 }
                             }
                         } else {
-                            // tuple case
                             if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
@@ -520,23 +519,41 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             } else {
-                                let field_extractors = variant.fields.iter()
-                                    .enumerate()
-                                    .map(|(idx, field)| {
-                                        let elem_ty = &field.ty;
-                                        let missing_tuple_element_error = Lit::Str(LitStr::new(&format!("Missing tuple element #{idx}"), Span::call_site()));
-                                        quote! {
-                                            <#elem_ty as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
-                                                &extractor.tuple_element(#idx).ok_or_else(|| #missing_tuple_element_error.to_string())?
-                                            )?
-                                        }
-                                    })
-                                    .collect::<Vec<_>>();
+                                let tuple_type = {
+                                    let tys = variant.fields.iter().map(|f| &f.ty);
+                                    quote! { ( #(#tys),* ) }
+                                };
+
+                                let tuple_bindings = {
+                                    let names = variant
+                                        .fields
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, _)| syn::Ident::new(&format!("field_{i}"), Span::call_site()));
+                                    quote! { ( #(#names),* ) }
+                                };
+
+                                let constructor_args = {
+                                    let names = variant
+                                        .fields
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, _)| syn::Ident::new(&format!("field_{i}"), Span::call_site()));
+                                    quote! { #(#names),* }
+                                };
+
+                                let missing_err = format!("Missing tuple element #0");
 
                                 quote! {
-                                    #idx => Ok(#ident::#case_ident(
-                                        #(#field_extractors),*
-                                    ))
+                                      #idx => {
+                                        let #tuple_bindings =<#tuple_type as #golem_rust_crate_ident::value_and_type::FromValueAndType>::from_extractor(
+                                            &inner.ok_or_else(|| #missing_err.to_string())?
+                                        )?;
+
+                                        Ok(#ident::#case_ident(
+                                            #constructor_args
+                                        ))
+                                    }
                                 }
                             }
                         }
