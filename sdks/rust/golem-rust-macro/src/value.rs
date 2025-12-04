@@ -505,7 +505,7 @@ pub fn derive_from_value_and_type(
                                     quote! { ( #(#names),* ) }
                                 };
 
-                                let missing_err = format!("Missing tuple element #0");
+                                let missing_err = "Missing tuple element #0".to_string();
 
                                 let field_extractors = variant.fields.iter()
                                     .enumerate()
@@ -530,8 +530,7 @@ pub fn derive_from_value_and_type(
                                     }
                                 }
                             }
-                        } else {
-                            if is_unit_case(variant) {
+                        } else if is_unit_case(variant) {
                                 quote! {
                                     #idx => {
                                         Ok(#ident::#case_ident)
@@ -561,7 +560,7 @@ pub fn derive_from_value_and_type(
                                     quote! { #(#names),* }
                                 };
 
-                                let missing_err = format!("Missing tuple element #0");
+                                let missing_err = "Missing tuple element #0".to_string();
 
                                 quote! {
                                       #idx => {
@@ -574,7 +573,6 @@ pub fn derive_from_value_and_type(
                                         ))
                                     }
                                 }
-                            }
                         }
                     })
                     .collect::<Vec<_>>();
