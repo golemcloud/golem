@@ -4406,8 +4406,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-openapi-client-generator.git?branch=atomic-deployment-fixes#64018ca64c798839b6018c6bf4923c0277301826"
+version = "0.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c785e553a020bed4efa518268635b34f8f75e7fe5905195e931e628164135e7e"
 dependencies = [
  "clap",
  "convert_case 0.6.0",

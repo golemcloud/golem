@@ -20,7 +20,7 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentCompiledHttpApiDefinitionRouteRecord, DeploymentComponentRevisionRecord,
     DeploymentDomainHttpApiDefinitionRecord, DeploymentHttpApiDefinitionRevisionRecord,
-    DeploymentHttpApiDeploymentRevisionRecord,
+    DeploymentHttpApiDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord
 };
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
@@ -749,6 +749,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         compiled_route: &DeploymentCompiledHttpApiDefinitionRouteRecord,
     ) -> RepoResult<()>;
 
+    async fn create_deployment_registered_agent_type(
+        tx: &mut Self::Tx,
+        registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
+    ) -> RepoResult<()>;
+
     async fn set_current_deployment(
         tx: &mut Self::Tx,
         user_account_id: &Uuid,
@@ -997,6 +1002,27 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(compiled_route.id)
                 .bind(&compiled_route.security_scheme)
                 .bind(&compiled_route.compiled_route)
+        )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn create_deployment_registered_agent_type(
+        tx: &mut Self::Tx,
+        registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
+    ) -> RepoResult<()> {
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_registered_agent_types
+                    (environment_id, deployment_revision_id, agent_type_name, component_id, agent_type)
+                VALUES ($1, $2, $3, $4, $5)
+            "#})
+                .bind(registered_agent_type.environment_id)
+                .bind(registered_agent_type.deployment_revision_id)
+                .bind(registered_agent_type.agent_type_name)
+                .bind(registered_agent_type.component_id)
+                .bind(registered_agent_type.agent_type)
         )
             .await?;
 

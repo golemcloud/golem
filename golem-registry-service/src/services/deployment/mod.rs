@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_types;
 mod rib;
 mod routes;
 mod write;
@@ -40,6 +41,7 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
+use golem_common::model::agent::AgentType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -113,6 +115,8 @@ pub enum DeployValidationError {
     InvalidHttpCorsBindingExpr(String),
     #[error("Component {0} not found in deployment")]
     ComponentNotFound(ComponentName),
+    #[error("Agent type name {0} is provided by multiple components")]
+    AmbiguousAgentTypeName(String),
 }
 
 impl SafeDisplay for DeployValidationError {

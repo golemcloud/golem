@@ -40,6 +40,8 @@ use sqlx::FromRow;
 use std::collections::HashSet;
 use std::str::FromStr;
 use uuid::Uuid;
+use golem_common::model::agent::{AgentType, RegisteredAgentType};
+use golem_wasm::ComponentId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
@@ -331,6 +333,32 @@ impl DeploymentCompiledHttpApiDefinitionRouteRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentRegisteredAgentTypeRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub agent_type_name: String,
+
+    pub component_id: Uuid,
+    pub agent_type: Blob<AgentType>,
+}
+
+impl DeploymentRegisteredAgentTypeRecord {
+    pub fn from_model(
+        environment_id: &EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        registered_agent_type: RegisteredAgentType
+    ) -> Self {
+        Self {
+            environment_id: environment_id.0,
+            deployment_revision_id: deployment_revision.into(),
+            agent_type_name: registered_agent_type.agent_type.type_name.clone(),
+            component_id: registered_agent_type.implemented_by.0,
+            agent_type: Blob::new(registered_agent_type.agent_type),
+        }
+    }
+}
+
 pub struct DeploymentRevisionCreationRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -343,6 +371,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub http_api_deployments: Vec<DeploymentHttpApiDeploymentRevisionRecord>,
     pub domain_http_api_definitions: Vec<DeploymentDomainHttpApiDefinitionRecord>,
     pub compiled_http_api_definition_routes: Vec<DeploymentCompiledHttpApiDefinitionRouteRecord>,
+    pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>
 }
 
 impl DeploymentRevisionCreationRecord {
@@ -356,6 +385,7 @@ impl DeploymentRevisionCreationRecord {
         http_api_deployments: Vec<HttpApiDeployment>,
         domain_definitions: HashSet<(Domain, HttpApiDefinitionId)>,
         compiled_routes: Vec<CompiledRouteWithContext>,
+        registered_agent_types: Vec<RegisteredAgentType>
     ) -> Self {
         Self {
             environment_id: environment_id.0,
@@ -415,6 +445,16 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
+            registered_agent_types: registered_agent_types
+                .into_iter()
+                .map(|r| {
+                    DeploymentRegisteredAgentTypeRecord::from_model(
+                        environment_id,
+                        deployment_revision,
+                        r
+                    )
+                })
+                .collect()
         }
     }
 }

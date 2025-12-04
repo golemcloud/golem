@@ -55,6 +55,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use uuid::Uuid;
+use poem_openapi::NewType;
 
 #[derive(
     Debug,
@@ -211,6 +212,22 @@ pub struct AgentMethod {
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
 }
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Deserialize,
+    Serialize,
+    NewType,
+    BinaryCodec,
+    IntoValue,
+    FromValue,
+)]
+#[repr(transparent)]
+#[desert(transparent)]
+#[desert(evolution())]
+pub struct AgentTypeName(pub String);
 
 #[derive(
     Debug,

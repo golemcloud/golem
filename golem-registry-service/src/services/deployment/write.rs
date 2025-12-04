@@ -51,6 +51,11 @@ use golem_service_base::model::auth::EnvironmentAction;
 use rib::ComponentDependencyKey;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use golem_common::model::agent::RegisteredAgentType;
+use std::collections::HashMap;
+use golem_common::model::agent::AgentType;
+use golem_common::model::component::ComponentId;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 
 macro_rules! ok_or_continue {
     ($expr:expr, $errors:ident) => {{
@@ -166,6 +171,8 @@ impl DeploymentWriteService {
 
         deployment_context.validate_http_api_deployments()?;
 
+        let registered_agent_types = deployment_context.extract_registered_agent_types()?;
+
         let (domain_http_api_definitions, compiled_http_api_routes, deployment_context) = {
             let deployment_context = Arc::new(deployment_context);
             let deployment_context_clone = deployment_context.clone();
@@ -197,6 +204,7 @@ impl DeploymentWriteService {
                 .collect(),
             domain_http_api_definitions,
             compiled_http_api_routes,
+            registered_agent_types
         );
 
         let deployment: Deployment = self
@@ -264,6 +272,21 @@ impl DeploymentContext {
                 .collect(),
         };
         diffable.hash()
+    }
+
+    fn extract_registered_agent_types(&self) -> Result<Vec<RegisteredAgentType>, DeploymentError> {
+        let mut seen_wit_named_agent_types = HashSet::new();
+        let mut agent_types = Vec::new();
+
+        for (_, component) in &self.components {
+            for agent_type in component.metadata.agent_types() {
+                if !seen_wit_named_agent_types.insert(agent_type.type_name.to_wit_naming()) {
+                    return Err(DeploymentError::DeploymentValidationFailed(vec![DeployValidationError::AmbiguousAgentTypeName(agent_type.type_name.clone())]))
+                }
+                agent_types.push(RegisteredAgentType { agent_type: agent_type.clone(), implemented_by: component.id });
+            }
+        }
+        Ok(agent_types)
     }
 
     fn validate_http_api_deployments(&self) -> Result<(), DeploymentError> {
