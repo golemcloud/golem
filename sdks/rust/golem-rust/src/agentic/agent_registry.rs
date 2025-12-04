@@ -146,7 +146,7 @@ pub fn get_agent_id() -> AgentId {
         .expect("Missing GOLEM_COMPONENT_ID environment variable");
     AgentId {
         component_id: ComponentId {
-            uuid: parse_uuid(&raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
+            uuid: parse_uuid(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
         },
         agent_id: raw_agent_id.clone(),
     }

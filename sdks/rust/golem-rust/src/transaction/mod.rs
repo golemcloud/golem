@@ -439,8 +439,12 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "macro")]
 mod macro_tests {
-    use golem_rust_macro::golem_operation;
+    use test_r::test;
 
+    use golem_rust_macro::{golem_operation, IntoValue};
+    use golem_wasm::{Value, WitValue};
+
+    use crate::value_and_type::IntoValue;
     use crate::{fallible_transaction, infallible_transaction};
 
     mod golem_rust {
@@ -519,5 +523,61 @@ mod macro_tests {
         });
 
         println!("{result:?}");
+    }
+
+    #[derive(IntoValue)]
+    enum MyEnum {
+        Simple,
+        Complex1(i32),
+        Complex2(i32, String),
+        Complex3 { x: String, y: bool },
+    }
+
+    #[test]
+    fn test_into_value_derivation_enum() {
+        let simple_value = MyEnum::Simple.into_value();
+
+        let complex1_value = MyEnum::Complex1(42).into_value();
+
+        let complex2_value = MyEnum::Complex2(7, "hello".to_string()).into_value();
+
+        let complex3_value = MyEnum::Complex3 {
+            x: "world".to_string(),
+            y: true,
+        }
+        .into_value();
+
+        let expected_simple = Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        };
+
+        let expected_complex1 = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::S32(42))),
+        };
+
+        let expected_complex2 = Value::Variant {
+            case_idx: 2,
+            case_value: Some(Box::new(Value::Tuple(vec![
+                Value::S32(7),
+                Value::String("hello".to_string()),
+            ]))),
+        };
+
+        let expected_complex3 = Value::Variant {
+            case_idx: 3,
+            case_value: Some(Box::new(Value::Record(vec![
+                Value::String("world".to_string()),
+                Value::Bool(true),
+            ]))),
+        };
+
+        dbg!(Value::from(complex2_value.clone()));
+
+        assert_eq!(simple_value, WitValue::from(expected_simple));
+        assert_eq!(complex1_value, WitValue::from(expected_complex1));
+        assert_eq!(complex2_value, WitValue::from(expected_complex2));
+        assert_eq!(complex3_value, WitValue::from(expected_complex3));
     }
 }
