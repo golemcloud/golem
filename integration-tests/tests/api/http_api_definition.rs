@@ -155,6 +155,26 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
 
     {
         let fetched_http_api_definition = client
+            .get_http_api_definition_revision(
+                &http_api_definition.id.0,
+                http_api_definition.revision.0,
+            )
+            .await?;
+        assert!(fetched_http_api_definition == http_api_definition);
+    }
+
+    {
+        let fetched_http_api_definition = client
+            .get_http_api_definition_revision(
+                &http_api_definition.id.0,
+                updated_http_api_definition.revision.0,
+            )
+            .await?;
+        assert!(fetched_http_api_definition == updated_http_api_definition);
+    }
+
+    {
+        let fetched_http_api_definition = client
             .get_http_api_definition(&http_api_definition.id.0)
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);

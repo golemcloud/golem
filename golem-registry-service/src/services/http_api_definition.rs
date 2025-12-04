@@ -310,6 +310,42 @@ impl HttpApiDefinitionService {
         Ok(())
     }
 
+    pub async fn get_revision(
+        &self,
+        http_api_definition_id: &HttpApiDefinitionId,
+        revision: HttpApiDefinitionRevision,
+        auth: &AuthCtx,
+    ) -> Result<HttpApiDefinition, HttpApiDefinitionError> {
+        let http_api_definition: HttpApiDefinition = self
+            .http_api_definition_repo
+            .get_by_id_and_revision(&http_api_definition_id.0, revision.into())
+            .await?
+            .ok_or(HttpApiDefinitionError::HttpApiDefinitionNotFound(
+                *http_api_definition_id,
+            ))?
+            .into();
+
+        let environment = self
+            .environment_service
+            .get(&http_api_definition.environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewHttpApiDefinition,
+        )
+        .map_err(|_| HttpApiDefinitionError::HttpApiDefinitionNotFound(*http_api_definition_id))?;
+
+        Ok(http_api_definition)
+    }
+
     pub async fn list_staged(
         &self,
         environment_id: &EnvironmentId,
