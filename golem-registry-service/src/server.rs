@@ -19,6 +19,7 @@ use golem_registry_service::config::{RegistryServiceConfig, make_config_loader};
 use golem_registry_service::{RegistryService, metrics};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
+use opentelemetry_sdk::trace::SdkTracer;
 use prometheus::Registry;
 use std::panic;
 use tokio::task::JoinSet;
@@ -30,7 +31,7 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        init_tracing_with_default_env_filter(&config.tracing);
+        let tracer = init_tracing_with_default_env_filter(&config.tracing);
 
         let prometheus = metrics::register_all();
 
@@ -57,7 +58,7 @@ fn main() -> anyhow::Result<()> {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(async_main(config, prometheus))
+            .block_on(async_main(config, prometheus, tracer))
     } else {
         Ok(())
     }
@@ -75,12 +76,13 @@ async fn dump_openapi_yaml() -> anyhow::Result<()> {
 async fn async_main(
     config: RegistryServiceConfig,
     prometheus_registry: Registry,
+    tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
     let bootstrap = RegistryService::new(config, prometheus_registry).await?;
 
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
 
-    bootstrap.start(&mut join_set).await?;
+    bootstrap.start(&mut join_set, tracer).await?;
 
     while let Some(res) = join_set.join_next().await {
         match res {
