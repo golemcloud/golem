@@ -1606,7 +1606,7 @@ mod app_builder {
         HttpApiDefinition(HttpApiDefinitionName),
         HttpApiDefinitionRoute {
             api: HttpApiDefinitionName,
-            method: RouteMethod,
+            method: String,
             path: String,
         },
         HttpApiDeployment {
@@ -1973,7 +1973,7 @@ mod app_builder {
                                     self.add_entity_source(
                                         UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
                                             api: api_definition_name.clone(),
-                                            method: route.method,
+                                            method: route.method.to_uppercase(),
                                             path: route.path.clone(),
                                         },
                                         &app.source,
@@ -1981,7 +1981,7 @@ mod app_builder {
                                 }
 
                                 self.raw_http_api_definitions.insert(
-                                    api_definition_name,
+                                    api_definition_name.clone(),
                                     WithSource::new(app.source.to_path_buf(), api_definition),
                                 );
                             }
@@ -2657,15 +2657,29 @@ mod app_builder {
                                         }
                                     };
 
-                                    if let Some(binding) = binding {
-                                        converted_routes.push(
-                                            HttpApiRoute {
-                                                method: route.method,
-                                                path: route.path.clone(),
-                                                binding,
-                                                security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
-                                            }
-                                        )
+                                    let method = match RouteMethod::from_str(&route.method) {
+                                        Ok(method) => Some(method),
+                                        Err(err) => {
+                                            validation.add_error(
+                                                format!("Invalid route method {} for path {}: {}", route.method.log_color_error_highlight(), route.path.log_color_highlight(), err));
+                                            None
+                                        }
+                                    };
+
+                                    match (method, binding) {
+                                        (Some(method), Some(binding)) => {
+                                            converted_routes.push(
+                                                HttpApiRoute {
+                                                    method: method,
+                                                    path: route.path.clone(),
+                                                    binding,
+                                                    security: route.security.as_ref().map(|sec| SecuritySchemeName(sec.clone())),
+                                                }
+                                            )
+                                        }
+                                        _ => {
+                                         // NOP
+                                        }
                                     }
                                 },
                             );

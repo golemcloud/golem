@@ -79,11 +79,11 @@ impl DeployDiff {
 
     pub fn unified_yaml_diffs(&self, show_sensitive: bool) -> UnifiedYamlDeployDiff {
         let safe_diffable_local_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_local_deployment);
+            self.normalized_diff_deployment(show_sensitive, &self.diffable_local_deployment);
         let safe_diffable_server_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_server_deployment);
+            self.normalized_diff_deployment(show_sensitive, &self.diffable_server_deployment);
         let safe_diffable_server_staged_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_staged_deployment);
+            self.normalized_diff_deployment(show_sensitive, &self.diffable_staged_deployment);
 
         UnifiedYamlDeployDiff {
             diff_stage: self.diff_stage.is_some().then(|| {
@@ -197,7 +197,9 @@ impl DeployDiff {
             .map(|deployment| deployment.revision)
     }
 
-    fn safe_diff_deployment(
+    // Removes entries that are not involved in the diff and optionally masks sensitive values.
+    fn normalized_diff_deployment(
+        &self,
         show_sensitive: bool,
         deployment: &diff::Deployment,
     ) -> diff::Deployment {
@@ -224,6 +226,13 @@ impl DeployDiff {
             components: deployment
                 .components
                 .iter()
+                .filter(|(component_name, _)| {
+                    self.diff.components.contains_key(*component_name)
+                        || self
+                            .diff_stage
+                            .as_ref()
+                            .map_or(false, |diff| diff.components.contains_key(*component_name))
+                })
                 .map(|(component_name, component)| {
                     (
                         component_name.clone(),
@@ -248,8 +257,31 @@ impl DeployDiff {
                     )
                 })
                 .collect(),
-            http_api_definitions: deployment.http_api_definitions.clone(),
-            http_api_deployments: deployment.http_api_deployments.clone(),
+            http_api_definitions: deployment
+                .http_api_definitions
+                .iter()
+                .filter(|(http_api_definition_name, _)| {
+                    self.diff
+                        .http_api_definitions
+                        .contains_key(*http_api_definition_name)
+                        || self.diff_stage.as_ref().map_or(false, |diff| {
+                            diff.http_api_definitions
+                                .contains_key(*http_api_definition_name)
+                        })
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            http_api_deployments: deployment
+                .http_api_deployments
+                .iter()
+                .filter(|(domain, _)| {
+                    self.diff.http_api_deployments.contains_key(*domain)
+                        || self.diff_stage.as_ref().map_or(false, |diff| {
+                            diff.http_api_deployments.contains_key(*domain)
+                        })
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }
     }
 }

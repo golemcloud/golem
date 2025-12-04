@@ -23,9 +23,7 @@ use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::http_api_definition::{
-    GatewayBindingType, HttpApiDefinitionName, RouteMethod,
-};
+use golem_common::model::http_api_definition::{GatewayBindingType, HttpApiDefinitionName};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -136,7 +134,7 @@ pub struct HttpApiDefinition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HttpApiDefinitionRoute {
-    pub method: RouteMethod,
+    pub method: String,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
