@@ -613,15 +613,16 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
-                    FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id
-                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
-                    JOIN deployment_revisions dr
-                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_component_revisions dcr
-                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = dr.revision_id
-                               AND dcr.component_revision_id = cr.revision_id
-                    WHERE c.environment_id = $1 AND c.name = $2
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = cdr.deployment_revision_id
+                    JOIN component_revisions cr
+                        ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
+                    JOIN components c
+                        ON c.component_id  = cr.component_id
+                    WHERE cd.environment_id = $1 AND c.name = $2
                 "#})
                     .bind(environment_id)
                     .bind(name),
@@ -773,17 +774,16 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                            cr.created_at, cr.created_by, cr.deleted,
                            cr.size, cr.metadata, cr.original_env, cr.env,
                            cr.object_store_key, cr.binary_hash, cr.transformed_object_store_key
-                    FROM components c
-                    JOIN component_revisions cr ON c.component_id = cr.component_id
-                    JOIN current_deployments cd ON cd.environment_id = c.environment_id
-                    JOIN deployment_revisions dr
-                        ON dr.environment_id = cd.environment_id AND dr.revision_id = cd.current_revision_id
+                    FROM current_deployments cd
+                    JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
                     JOIN deployment_component_revisions dcr
-                        ON dcr.environment_id = cd.environment_id
-                           AND dcr.deployment_revision_id = dr.revision_id
-                           AND dcr.component_id = c.component_id
-                           AND dcr.component_revision_id = cr.revision_id
-                    WHERE c.environment_id = $1
+                        ON dcr.environment_id = cd.environment_id AND dcr.deployment_revision_id = cdr.deployment_revision_id
+                    JOIN component_revisions cr
+                        ON cr.component_id = dcr.component_id AND cr.revision_id = dcr.component_revision_id
+                    JOIN components c
+                        ON c.component_id  = cr.component_id
+                    WHERE cd.environment_id = $1
                     ORDER BY c.name
                 "#})
                     .bind(environment_id),

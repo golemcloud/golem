@@ -368,6 +368,9 @@ CREATE TABLE current_deployments
         FOREIGN KEY (environment_id, current_revision_id) REFERENCES current_deployment_revisions (environment_id, revision_id)
 );
 
+CREATE INDEX current_deployment_environment_idx
+    ON current_deployments(environment_id);
+
 CREATE TABLE deployment_component_revisions
 (
     environment_id         UUID   NOT NULL,

@@ -41,7 +41,6 @@ use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
-use golem_common::model::agent::AgentType;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeploymentError {
@@ -52,7 +51,7 @@ pub enum DeploymentError {
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
     #[error("Requested deployment would not have any changes compared to current deployment")]
-    NoopDeployment,
+    NoOpDeployment,
     #[error("Provided deployment version {version} already exists in this environment")]
     VersionAlreadyExists { version: String },
     #[error("Deployment validation failed:\n{errors}", errors=format_validation_errors(.0.as_slice()))]
@@ -79,7 +78,7 @@ impl SafeDisplay for DeploymentError {
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
-            Self::NoopDeployment => self.to_string(),
+            Self::NoOpDeployment => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
         }

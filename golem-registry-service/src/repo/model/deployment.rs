@@ -41,7 +41,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use uuid::Uuid;
 use golem_common::model::agent::{AgentType, RegisteredAgentType};
-use golem_wasm::ComponentId;
+use golem_common::model::component::ComponentId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeployRepoError {
@@ -359,6 +359,15 @@ impl DeploymentRegisteredAgentTypeRecord {
     }
 }
 
+impl From<DeploymentRegisteredAgentTypeRecord> for RegisteredAgentType {
+    fn from(value: DeploymentRegisteredAgentTypeRecord) -> Self {
+        Self {
+            implemented_by: ComponentId(value.component_id),
+            agent_type: value.agent_type.into_value()
+        }
+    }
+}
+
 pub struct DeploymentRevisionCreationRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
@@ -538,7 +547,7 @@ impl TryFrom<DeploymentCompiledHttpApiRouteWithSecuritySchemeRecord>
             http_api_definition_id: HttpApiDefinitionId(value.http_api_definition_id),
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,
-            route: value.compiled_route.value,
+            route: value.compiled_route.into_value(),
         })
     }
 }

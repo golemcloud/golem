@@ -139,7 +139,7 @@ impl DeploymentWriteService {
             latest_deployment.as_ref().map(|ld| ld.deployment_hash)
             && data.expected_deployment_hash == latest_deployment_hash
         {
-            return Err(DeploymentError::NoopDeployment);
+            return Err(DeploymentError::NoOpDeployment);
         }
 
         tracing::info!("Creating deployment for environment: {environment_id}");

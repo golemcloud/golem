@@ -141,7 +141,7 @@ impl HttpApiDefinitionRevisionRecord {
 
     pub fn to_diffable(&self) -> diff::HttpApiDefinition {
         let mut converted_routes = BTreeMap::new();
-        for route in &self.definition.value.routes {
+        for route in &self.definition.value().routes {
             let http_api_method_and_path = diff::HttpApiMethodAndPath {
                 method: route.method.to_string(),
                 path: route.path.clone(),
@@ -244,7 +244,7 @@ impl From<HttpApiDefinitionExtRevisionRecord> for HttpApiDefinition {
             name: HttpApiDefinitionName(value.name),
             hash: value.revision.hash.into(),
             version: HttpApiDefinitionVersion(value.revision.version),
-            routes: value.revision.definition.value.routes,
+            routes: value.revision.definition.into_value().routes,
             created_at: value.entity_created_at.into(),
             updated_at: value.revision.audit.created_at.into(),
         }
@@ -336,7 +336,7 @@ mod tests {
 
         let mut file = mint.new_goldenfile_with_differ(
             "http_api_definition_repo_blob_v1.bin",
-            assert_old_decodes_as(blob.value),
+            assert_old_decodes_as(blob.into_value()),
         )?;
 
         file.write_all(&serialized)?;
