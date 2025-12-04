@@ -250,10 +250,14 @@ pub fn derive_into_value(ast: &DeriveInput, golem_rust_crate_ident: &Ident) -> T
     let result = quote! {
         impl #golem_rust_crate_ident::value_and_type::IntoValue for #ident {
             fn add_to_builder<B: #golem_rust_crate_ident::value_and_type::NodeBuilder>(self, builder: B) -> B::Result {
+                use #golem_rust_crate_ident::value_and_type::NodeBuilder;
+
                 #add_to_builder
             }
 
             fn add_to_type_builder<B: #golem_rust_crate_ident::value_and_type::TypeNodeBuilder>(builder: B) -> B::Result {
+                use #golem_rust_crate_ident::value_and_type::TypeNodeBuilder;
+
                 #add_to_type_builder
             }
         }
