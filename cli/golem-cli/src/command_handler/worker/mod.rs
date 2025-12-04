@@ -39,7 +39,7 @@ use crate::model::text::fmt::{
 };
 use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
-    AvailableFunctionNamesHelp, ComponentNameHelp, ParameterErrorTableView, WorkerNameHelp,
+    AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{
     format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
@@ -816,7 +816,7 @@ impl WorkerCommandHandler {
         &self,
         _worker_name: AgentIdArgs,
         _mode: AgentUpdateMode,
-        _target_revision: Option<u64>, // TODO: atomic ComponentRevision
+        _target_revision: Option<ComponentRevision>, // TODO: atomic ComponentRevision
         _await_update: bool,
     ) -> anyhow::Result<()> {
         // TODO: atomic
@@ -1644,7 +1644,7 @@ impl WorkerCommandHandler {
             .component_handler()
             .resolve_component(
                 &worker_name_match.environment,
-                (&worker_name_match.component_name).into(),
+                &worker_name_match.component_name,
                 Some((&worker_name_match.worker_name).into()),
             )
             .await?;
@@ -1776,7 +1776,7 @@ impl WorkerCommandHandler {
                             name = name.log_color_highlight()
                         ));
                         logln("");
-                        log_text_view(&ComponentNameHelp);
+                        log_text_view(&WorkerNameHelp);
                         bail!(NonSuccessfulExit);
                     }
                     Ok(value)
@@ -1797,7 +1797,7 @@ impl WorkerCommandHandler {
                                 err = err.log_color_error_highlight()
                             ));
                             logln("");
-                            log_text_view(&ComponentNameHelp);
+                            log_text_view(&WorkerNameHelp);
                             bail!(NonSuccessfulExit);
                         }
                     }
@@ -1816,7 +1816,7 @@ impl WorkerCommandHandler {
                 }
 
                 fn validated_component(value: &str) -> anyhow::Result<ComponentName> {
-                    validated("component", value)
+                    Ok(ComponentName(non_empty("component", value)?.to_string()))
                 }
 
                 fn validated_worker(value: &str) -> anyhow::Result<String> {
@@ -1853,7 +1853,6 @@ impl WorkerCommandHandler {
                             account_email: validated_account(segments[0])?,
                             application_name: validated_application(segments[1])?,
                             environment_name: validated_environment(segments[2])?,
-                            auto_create: false,
                         }),
                         validated_component(segments[3])?,
                         validated_worker(segments[4])?,
@@ -1861,23 +1860,14 @@ impl WorkerCommandHandler {
                     other => panic!("Unexpected segment count: {other}"),
                 };
 
-                let environment = match &environment_reference {
-                    Some(environment_reference) => {
-                        self.ctx
-                            .environment_handler()
-                            .resolve_environment_reference(
-                                EnvironmentResolveMode::Any,
-                                environment_reference,
-                            )
-                            .await?
-                    }
-                    None => {
-                        self.ctx
-                            .environment_handler()
-                            .resolve_environment(EnvironmentResolveMode::Any)
-                            .await?
-                    }
-                };
+                let environment = self
+                    .ctx
+                    .environment_handler()
+                    .resolve_opt_environment_reference(
+                        EnvironmentResolveMode::Any,
+                        environment_reference.as_ref(),
+                    )
+                    .await?;
 
                 self.ctx
                     .app_handler()

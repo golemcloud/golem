@@ -34,7 +34,6 @@ pub enum EnvironmentReference {
         account_email: String,
         application_name: ApplicationName,
         environment_name: EnvironmentName,
-        auto_create: bool, // TODO: atomic: do we need this?
     },
 }
 
@@ -81,7 +80,6 @@ impl FromStr for EnvironmentReference {
                 account_email: segments[0].into(),
                 application_name: segments[1].parse()?,
                 environment_name: segments[2].parse()?,
-                auto_create: false,
             }),
             _ => Err(formatdoc! {"
                 Unknown format for environment: {}. Expected one of:
@@ -107,7 +105,6 @@ impl Display for EnvironmentReference {
                 account_email,
                 environment_name,
                 application_name,
-                auto_create: _,
             } => write!(
                 f,
                 "{}/{}/{}",

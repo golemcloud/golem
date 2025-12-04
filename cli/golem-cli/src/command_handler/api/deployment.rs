@@ -16,14 +16,21 @@ use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
-use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
-use crate::model::api::{ApiDefinitionId, ApiDeployment};
-use crate::model::app::{HttpApiDefinitionName, HttpApiDeploymentSite, WithSource};
-use crate::model::app_raw::HttpApiDeployment;
-use crate::model::environment::ResolvedEnvironmentIdentity;
-use crate::model::text::fmt::{log_error, log_warn};
-use anyhow::bail;
+use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
+use anyhow::{anyhow, bail};
+use golem_client::api::ApiDeploymentClient;
+use golem_client::model::{HttpApiDeploymentCreation, HttpApiDeploymentUpdate};
+use golem_common::cache::SimpleCache;
+use golem_common::model::deployment::DeploymentPlanHttpApiDeploymentEntry;
+use golem_common::model::diff;
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -38,274 +45,214 @@ impl ApiDeploymentCommandHandler {
 
     pub async fn handle_command(&self, command: ApiDeploymentSubcommand) -> anyhow::Result<()> {
         match command {
-            ApiDeploymentSubcommand::Get { project, site } => self.cmd_get(project, site).await,
-            ApiDeploymentSubcommand::List {
-                project,
-                definition,
-            } => self.cmd_list(project, definition).await,
+            ApiDeploymentSubcommand::Get { domain } => self.cmd_get(Domain(domain)).await,
+            ApiDeploymentSubcommand::List => self.cmd_list().await,
         }
     }
 
-    async fn cmd_get(&self, project: ProjectOptionalFlagArg, site: String) -> anyhow::Result<()> {
-        let project = self
+    async fn cmd_get(&self, domain: Domain) -> anyhow::Result<()> {
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let Some(result) = self.api_deployment(project.as_ref(), &site).await? else {
+        let Some(result) = self
+            .resolve_http_api_deployment(&environment, &domain, None)
+            .await?
+        else {
             bail!("Not found!");
         };
 
-        self.ctx.log_handler().log_view(&result);
+        self.ctx
+            .log_handler()
+            .log_view(&HttpApiDeploymentGetView(result));
 
         Ok(())
     }
 
-    async fn cmd_list(
-        &self,
-        project: ProjectOptionalFlagArg,
-        definition: Option<ApiDefinitionId>,
-    ) -> anyhow::Result<()> {
-        let id = definition.as_ref().map(|id| id.0.as_str());
-
-        let project = self
+    async fn cmd_list(&self) -> anyhow::Result<()> {
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(project.project.as_ref())
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let clients = self.ctx.golem_clients().await?;
-
-        let result: Vec<ApiDeployment> = clients
-            .api_deployment
-            .list_deployments(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project.as_ref())
-                    .await?
-                    .0,
-                id,
-            )
-            .await
-            .map_service_error()?
-            .into_iter()
-            .map(ApiDeployment::from)
-            .collect::<Vec<_>>();
-
-        self.ctx.log_handler().log_view(&result);
-
-        Ok(())
-    }
-
-    async fn api_deployment(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        site: &str,
-    ) -> anyhow::Result<Option<ApiDeployment>> {
         let clients = self.ctx.golem_clients().await?;
 
         let result = clients
             .api_deployment
-            .get_deployment(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                site,
-            )
-            .await
-            .map_service_error_not_found_as_opt()?
-            .map(ApiDeployment::from);
-
-        Ok(result)
-    }
-
-    async fn create_or_update_api_deployment(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        site: &HttpApiDeploymentSite,
-        api_deployment: &DiffableHttpApiDeployment,
-    ) -> anyhow::Result<ApiDeployment> {
-        let clients = self.ctx.golem_clients().await?;
-
-        let result: ApiDeployment = clients
-            .api_deployment
-            .deploy(&ApiDeploymentRequestCloud {
-                project_id: self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                api_definitions: api_deployment
-                    .definitions()
-                    .map(|(name, version)| ApiDefinitionInfoCloud {
-                        id: name.to_string(),
-                        version: version.to_string(),
-                    })
-                    .collect::<Vec<_>>(),
-                site: ApiSiteCloud {
-                    host: site.host.clone(),
-                    subdomain: site.subdomain.clone(),
-                },
-            })
+            .list_http_api_deployments_in_environment(&environment.environment_id.0)
             .await
             .map_service_error()?
-            .into();
+            .values;
 
-        Ok(result)
-    }
-
-    async fn undeploy_api_definition(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        site: &HttpApiDeploymentSite,
-        id: &str,
-        version: &str,
-    ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
-
-        clients
-            .api_deployment
-            .undeploy_api(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                &site.to_string(),
-                id,
-                version,
-            )
-            .await
-            .map_service_error()
-            .map(|_| ())
-    }
-
-    pub async fn undeploy_api_from_all_sites_for_redeploy(
-        &self,
-        environment: Option<&ResolvedEnvironmentIdentity>,
-        api_definition_name: &HttpApiDefinitionName,
-    ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
-
-        let targets: Vec<(HttpApiDeploymentSite, String)> = clients
-            .api_deployment
-            .list_deployments(
-                &self
-                    .ctx
-                    .cloud_project_handler()
-                    .selected_project_id_or_default(project)
-                    .await?
-                    .0,
-                Some(api_definition_name.as_str()),
-            )
-            .await
-            .map_service_error()?
-            .into_iter()
-            .filter_map(|dep| {
-                dep.api_definitions
-                    .into_iter()
-                    .find_map(|def| (def.id == api_definition_name.as_str()).then_some(def.version))
-                    .map(|version| {
-                        (
-                            HttpApiDeploymentSite {
-                                host: dep.site.host,
-                                subdomain: dep.site.subdomain,
-                            },
-                            version,
-                        )
-                    })
-            })
-            .collect();
-
-        if targets.is_empty() {
-            log_warn(format!(
-                "No deployments found using HTTP API: {}",
-                api_definition_name.as_str().log_color_highlight()
-            ));
-            return Ok(());
-        }
-
-        if !self
-            .ctx
-            .interactive_handler()
-            .confirm_undeploy_api_from_sites_for_redeploy(
-                api_definition_name.as_str(),
-                targets.as_slice(),
-            )?
-        {
-            bail!(NonSuccessfulExit)
-        }
-
-        log_warn_action("Undeploying", "HTTP API {} for redeploy");
-        let _indent = LogIndent::new();
-        for (site, version) in targets {
-            log_warn_action(
-                "Undeploying",
-                format!(
-                    "HTTP API definition {}@{} from {} for redeploy",
-                    api_definition_name.as_str().log_color_highlight(),
-                    version.log_color_highlight(),
-                    site.to_string().log_color_highlight()
-                ),
-            );
-            self.undeploy_api_definition(project, &site, api_definition_name.as_str(), &version)
-                .await?;
-            log_action(
-                "Undeployed",
-                format!(
-                    "HTTP API definition {}@{} from {}",
-                    api_definition_name.as_str().log_color_highlight(),
-                    version.log_color_highlight(),
-                    site.to_string().log_color_highlight()
-                ),
-            );
-        }
+        self.ctx.log_handler().log_view(&result);
 
         Ok(())
     }
 
-    async fn manifest_api_deployments(
+    async fn resolve_http_api_deployment(
         &self,
-    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>>
-    {
-        let profile = self.ctx.profile_name().clone();
+        environment: &ResolvedEnvironmentIdentity,
+        domain: &Domain,
+        revision: Option<&HttpApiDeploymentRevision>,
+    ) -> anyhow::Result<Option<HttpApiDeployment>> {
+        let clients = self.ctx.golem_clients().await?;
 
+        let Some(deployment) = clients
+            .api_deployment
+            .get_http_api_deployment_in_environment(&environment.environment_id.0, &domain.0)
+            .await
+            .map_service_error_not_found_as_opt()?
+        else {
+            return Ok(None);
+        };
+
+        let Some(revision) = revision else {
+            return Ok(Some(deployment));
+        };
+
+        clients
+            .api_deployment
+            .get_http_api_deployment_revision(&deployment.id.0, revision.0)
+            .await
+            .map_service_error_not_found_as_opt()
+    }
+
+    pub async fn deployable_manifest_api_deployments(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<BTreeMap<Domain, Vec<HttpApiDefinitionName>>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
         Ok(app_ctx
             .application
-            .http_api_deployments(&profile)
-            .cloned()
+            .http_api_deployments(environment_name)
+            .map(|deployments| {
+                deployments
+                    .iter()
+                    .map(|(name, sources)| {
+                        (
+                            name.clone(),
+                            sources
+                                .iter()
+                                .flat_map(|source_and_value| source_and_value.value.iter())
+                                .cloned()
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>()
+            })
             .unwrap_or_default())
     }
 
-    async fn merge_manifest_api_deployments(
+    pub async fn get_http_api_deployment_revision_by_id(
         &self,
-    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, HttpApiDeployment>> {
-        Ok(self
-            .manifest_api_deployments()
-            .await?
-            .into_iter()
-            .map(|(site, definitions)| {
-                (
-                    site.clone(),
-                    HttpApiDeployment {
-                        host: site.host.clone(),
-                        subdomain: site.subdomain.clone(),
-                        definitions: definitions
-                            .into_iter()
-                            .flat_map(|d| d.value.into_iter().map(|d| d.into_string()))
-                            .collect(),
-                    },
-                )
+        http_api_deployment_id: &HttpApiDeploymentId,
+        revision: HttpApiDeploymentRevision,
+    ) -> anyhow::Result<HttpApiDeployment> {
+        self.ctx
+            .caches()
+            .http_api_deployment_revision
+            .get_or_insert_simple(&(*http_api_deployment_id, revision), {
+                let ctx = self.ctx.clone();
+                async move || {
+                    ctx.golem_clients()
+                        .await?
+                        .api_deployment
+                        .get_http_api_deployment_revision(&http_api_deployment_id.0, revision.0)
+                        .await
+                        .map_service_error()
+                        .map_err(Arc::new)
+                }
             })
-            .collect())
+            .await
+            .map_err(|err| anyhow!(err))
+    }
+
+    pub async fn create_staged_http_api_deployment(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        domain: &Domain,
+        deployable_http_api_deployment: &[HttpApiDefinitionName],
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Creating",
+            format!("HTTP API deployment {}", domain.0.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .create_http_api_deployment(
+                &environment.environment_id.0,
+                &HttpApiDeploymentCreation {
+                    domain: domain.clone(),
+                    api_definitions: deployable_http_api_deployment.to_vec(),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn delete_staged_http_api_deployment(
+        &self,
+        http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
+    ) -> anyhow::Result<()> {
+        log_warn_action(
+            "Deleting",
+            format!(
+                "HTTP API deployment {}",
+                http_api_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .delete_http_api_deployment(&http_api_deployment.id.0, http_api_deployment.revision.0)
+            .await
+            .map_service_error()?;
+
+        Ok(())
+    }
+
+    pub async fn update_staged_http_api_deployment(
+        &self,
+        http_api_deployment: &DeploymentPlanHttpApiDeploymentEntry,
+        deployable_http_api_deployment: &[HttpApiDefinitionName],
+        _diff: &diff::DiffForHashOf<diff::HttpApiDeployment>,
+    ) -> anyhow::Result<()> {
+        log_action(
+            "Updating",
+            format!(
+                "HTTP API deployment {}",
+                http_api_deployment.domain.0.log_color_highlight()
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_deployment
+            .update_http_api_deployment(
+                &http_api_deployment.id.0,
+                &HttpApiDeploymentUpdate {
+                    current_revision: http_api_deployment.revision,
+                    api_definitions: Some(deployable_http_api_deployment.to_vec()),
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        Ok(())
     }
 }

@@ -16,7 +16,7 @@ use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, Pr
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, logln, LogColorize};
-use crate::model::app::{BinaryComponentSource, DependencyType, HttpApiDeploymentSite};
+use crate::model::app::{BinaryComponentSource, DependencyType};
 use crate::model::component::AppComponentType;
 use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_warn};
@@ -98,6 +98,10 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_staging_next_step(&self) -> anyhow::Result<bool> {
+        self.confirm(true, "Continue with the next staging step?", None)
+    }
+
     pub fn confirm_auto_deploy_component(
         &self,
         component_name: &ComponentName,
@@ -113,20 +117,6 @@ impl InteractiveHandler {
     }
 
     pub fn confirm_reset_http_api_defs(&self, rendered_steps: &[String]) -> anyhow::Result<bool> {
-        self.confirm(
-            true,
-            format!(
-                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
-                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
-            ),
-            None,
-        )
-    }
-
-    pub fn confirm_reset_http_deployments(
-        &self,
-        rendered_steps: &[String],
-    ) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(
@@ -156,25 +146,6 @@ impl InteractiveHandler {
                 "{} {} agents(s), do you want to continue?",
                 "Deleting".log_color_warn(),
                 number_of_agents.to_string().log_color_highlight()
-            ),
-            None,
-        )
-    }
-
-    pub fn confirm_undeploy_api_from_sites_for_redeploy(
-        &self,
-        api: &str,
-        sites: &[(HttpApiDeploymentSite, String)],
-    ) -> anyhow::Result<bool> {
-        self.confirm(
-            true,
-            format!(
-                "Redeploying will temporarily undeploy HTTP API {} from the following site(s):\n{}\nDo you want to continue?",
-                api.log_color_highlight(),
-                sites
-                    .iter()
-                    .map(|target| format!("- {}, used API version: {}", target.0.to_string().log_color_highlight(), target.1.log_color_highlight()))
-                    .join("\n"),
             ),
             None,
         )

@@ -224,7 +224,7 @@ impl ComponentRevisionRecord {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some(self.version.clone()),
+                version: Some("TODO".to_string()), // TODO: atomic: Some(self.version.clone()),
                 env: self
                     .env
                     .iter()

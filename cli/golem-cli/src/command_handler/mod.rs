@@ -19,7 +19,9 @@ use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
 };
-use crate::command_handler::api::cloud::ApiCloudCommandHandler;
+use crate::command_handler::api::definition::ApiDefinitionCommandHandler;
+use crate::command_handler::api::deployment::ApiDeploymentCommandHandler;
+use crate::command_handler::api::domain::ApiDomainCommandHandler;
 use crate::command_handler::api::ApiCommandHandler;
 use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::cloud::account::CloudAccountCommandHandler;
@@ -335,11 +337,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       by moving these simple factory methods into the specific handlers on demand,
 //       if the need ever arises
 pub trait Handlers {
-    // TODO: atomic: fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler;
-    // TODO: atomic: fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler;
-    fn api_cloud_handler(&self) -> ApiCloudCommandHandler;
-    // TODO: atomic: fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
-    // TODO: atomic: fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
+    // TODO: atomic: fn api_certificate_handler(&self) -> ApiCertificateCommandHandler;
+    fn api_domain_handler(&self) -> ApiDomainCommandHandler;
+    fn api_definition_handler(&self) -> ApiDefinitionCommandHandler;
+    fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
     // TODO: atomic: fn api_security_scheme_handler(&self) -> ApiSecuritySchemeCommandHandler;
     fn app_handler(&self) -> AppCommandHandler;
@@ -363,28 +364,21 @@ pub trait Handlers {
 
 impl Handlers for Arc<Context> {
     // TODO: atomic
-    // fn api_cloud_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
+    // fn api_certificate_handler(&self) -> ApiCloudCertificateCommandHandler {
     //     ApiCloudCertificateCommandHandler::new(self.clone())
     // }
 
-    // TODO: atomic
-    // fn api_cloud_domain_handler(&self) -> ApiCloudDomainCommandHandler {
-    //     ApiCloudDomainCommandHandler::new(self.clone())
-    // }
-
-    fn api_cloud_handler(&self) -> ApiCloudCommandHandler {
-        ApiCloudCommandHandler::new(self.clone())
+    fn api_domain_handler(&self) -> ApiDomainCommandHandler {
+        ApiDomainCommandHandler::new(self.clone())
     }
 
-    // TODO: atomic
-    // fn api_definition_handler(&self) -> ApiDefinitionCommandHandler {
-    //     ApiDefinitionCommandHandler::new(self.clone())
-    // }
+    fn api_definition_handler(&self) -> ApiDefinitionCommandHandler {
+        ApiDefinitionCommandHandler::new(self.clone())
+    }
 
-    // TODO: atomic
-    // fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler {
-    //     ApiDeploymentCommandHandler::new(self.clone())
-    // }
+    fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler {
+        ApiDeploymentCommandHandler::new(self.clone())
+    }
 
     fn api_handler(&self) -> ApiCommandHandler {
         ApiCommandHandler::new(self.clone())

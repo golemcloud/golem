@@ -12,20 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app;
 use crate::model::component::ComponentDeployProperties;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::component::is_sensitive_env_var_name;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::{DeploymentPlanComponentEntry, DeploymentRevision};
+use golem_common::model::deployment::{
+    DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision,
+};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
+use golem_common::model::domain_registration::Domain;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub deployable_manifest_http_api_definitions:
+        BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
+    pub deployable_manifest_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
 }
@@ -48,35 +57,57 @@ impl DeployQuickDiff {
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
     pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub deployable_http_api_definitions: BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
+    pub deployable_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
     pub diffable_local_deployment: diff::Deployment,
     pub local_deployment_hash: diff::Hash,
-    #[allow(unused)] // For debug logs
+    #[allow(unused)] // NOTE: for debug logs
     pub server_deployment: Option<DeploymentSummary>,
     pub diffable_server_deployment: diff::Deployment,
+    pub server_deployment_hash: diff::Hash,
     pub server_staged_deployment: DeploymentPlan,
-    pub diffable_server_staged_deployment: diff::Deployment,
+    pub server_staged_deployment_hash: diff::Hash,
+    pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
 }
 
 impl DeployDiff {
+    pub fn is_stage_same_as_server(&self) -> bool {
+        self.server_staged_deployment_hash == self.server_deployment_hash
+    }
+
     pub fn unified_yaml_diffs(&self, show_sensitive: bool) -> UnifiedYamlDeployDiff {
-        let safe_diffable_local_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_local_deployment);
-        let safe_diffable_server_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_server_deployment);
-        let safe_diffable_server_staged_deployment =
-            Self::safe_diff_deployment(show_sensitive, &self.diffable_server_staged_deployment);
+        let local_for_stage = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_local_deployment,
+            self.diff_stage.as_ref(),
+        );
+        let local_for_server = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_local_deployment,
+            Some(&self.diff),
+        );
+        let server_deployment = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_server_deployment,
+            self.diff_stage.as_ref(),
+        );
+        let staged_deployment = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_staged_deployment,
+            Some(&self.diff),
+        );
 
         UnifiedYamlDeployDiff {
             diff_stage: self.diff_stage.is_some().then(|| {
-                safe_diffable_server_staged_deployment.unified_yaml_diff_with_local(
-                    &safe_diffable_local_deployment,
+                staged_deployment.unified_yaml_diff_with_local(
+                    &local_for_stage,
                     diff::SerializeMode::ValueIfAvailable,
                 )
             }),
-            diff: safe_diffable_server_deployment.unified_yaml_diff_with_local(
-                &safe_diffable_local_deployment,
+            diff: server_deployment.unified_yaml_diff_with_local(
+                &local_for_server,
                 diff::SerializeMode::ValueIfAvailable,
             ),
         }
@@ -92,6 +123,34 @@ impl DeployDiff {
                 panic!(
                     "Illegal state, missing component {} from component deploy properties",
                     component_name
+                )
+            })
+    }
+
+    pub fn deployable_manifest_http_api_definition(
+        &self,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &app::HttpApiDefinition {
+        self.deployable_http_api_definitions
+            .get(http_api_definition_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Illegal state, missing HTTP API definition {} from deployable manifest",
+                    http_api_definition_name
+                )
+            })
+    }
+
+    pub fn deployable_manifest_http_api_deployment(
+        &self,
+        domain: &Domain,
+    ) -> &Vec<HttpApiDefinitionName> {
+        self.deployable_http_api_deployments
+            .get(domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Illegal state, missing HTTP API deployment {} from deployable manifest",
+                    domain
                 )
             })
     }
@@ -112,6 +171,38 @@ impl DeployDiff {
             })
     }
 
+    pub fn staged_http_api_definition_identity(
+        &self,
+        http_api_definition_name: &HttpApiDefinitionName,
+    ) -> &DeploymentPlanHttpApiDefintionEntry {
+        self.server_staged_deployment
+            .http_api_definitions
+            .iter()
+            .find(|def| &def.name == http_api_definition_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API definition {} not found in deployment plan",
+                    http_api_definition_name
+                )
+            })
+    }
+
+    pub fn staged_http_api_deployment_identity(
+        &self,
+        domain: &Domain,
+    ) -> &DeploymentPlanHttpApiDeploymentEntry {
+        self.server_staged_deployment
+            .http_api_deployments
+            .iter()
+            .find(|dep| &dep.domain == domain)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Expected HTTP API deployment {} not found in deployment plan",
+                    domain
+                )
+            })
+    }
+
     pub fn current_deployment_revision(&self) -> Option<DeploymentRevision> {
         self.environment
             .remote_environment
@@ -120,9 +211,12 @@ impl DeployDiff {
             .map(|deployment| deployment.revision)
     }
 
-    fn safe_diff_deployment(
+    // Removes entries that are not involved in the diff and optionally masks sensitive values.
+    fn normalized_diff_deployment(
+        &self,
         show_sensitive: bool,
         deployment: &diff::Deployment,
+        diff: Option<&diff::DeploymentDiff>,
     ) -> diff::Deployment {
         if show_sensitive {
             return deployment.clone();
@@ -147,6 +241,9 @@ impl DeployDiff {
             components: deployment
                 .components
                 .iter()
+                .filter(|(component_name, _)| {
+                    diff.is_some_and(|diff| diff.components.contains_key(*component_name))
+                })
                 .map(|(component_name, component)| {
                     (
                         component_name.clone(),
@@ -171,8 +268,25 @@ impl DeployDiff {
                     )
                 })
                 .collect(),
-            http_api_definitions: deployment.http_api_definitions.clone(),
-            http_api_deployments: deployment.http_api_deployments.clone(),
+            http_api_definitions: deployment
+                .http_api_definitions
+                .iter()
+                .filter(|(http_api_definition_name, _)| {
+                    diff.is_some_and(|diff| {
+                        diff.http_api_definitions
+                            .contains_key(*http_api_definition_name)
+                    })
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            http_api_deployments: deployment
+                .http_api_deployments
+                .iter()
+                .filter(|(domain, _)| {
+                    diff.is_some_and(|diff| diff.http_api_deployments.contains_key(*domain))
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         }
     }
 }

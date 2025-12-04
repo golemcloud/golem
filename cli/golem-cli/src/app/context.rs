@@ -593,7 +593,7 @@ impl ApplicationContext {
                     logln(format!(
                         "  {}@{}",
                         name.as_str().log_color_highlight(),
-                        def.value.version.log_color_highlight(),
+                        def.value.version.0.log_color_highlight(),
                     ));
                 }
                 logln("");

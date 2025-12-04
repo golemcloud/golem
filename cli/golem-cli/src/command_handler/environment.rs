@@ -178,6 +178,27 @@ impl EnvironmentCommandHandler {
         }
     }
 
+    pub async fn resolve_opt_environment_reference(
+        &self,
+        mode: EnvironmentResolveMode,
+        environment_reference: Option<&EnvironmentReference>,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        match &environment_reference {
+            Some(environment_reference) => {
+                self.ctx
+                    .environment_handler()
+                    .resolve_environment_reference(mode, environment_reference)
+                    .await
+            }
+            None => {
+                self.ctx
+                    .environment_handler()
+                    .resolve_environment(mode)
+                    .await
+            }
+        }
+    }
+
     async fn get_remote_environment(
         &self,
         application_id: &ApplicationId,

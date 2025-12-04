@@ -72,7 +72,7 @@ impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: Add validations (non-empty, no "/", no " ", ...)
+        // TODO: atomic: Add validations (non-empty, no "/", no " ", ...)
         Ok(ComponentName(value.to_string()))
     }
 }
@@ -189,7 +189,7 @@ impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
         diff::Component {
             metadata: diff::ComponentMetadata {
-                version: None, // TODO: atomic
+                version: Some("TODO".to_string()), // TODO: atomic
                 env: self
                     .env
                     .iter()

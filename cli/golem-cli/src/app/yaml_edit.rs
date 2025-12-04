@@ -14,11 +14,10 @@
 
 use crate::fs::{read_to_string, write_str};
 use crate::log::{log_warn_action, LogColorize};
-use crate::model::app::{
-    Application, BinaryComponentSource, DependencyType, HttpApiDefinitionName,
-};
+use crate::model::app::{Application, BinaryComponentSource, DependencyType};
 use anyhow::{anyhow, Context};
 use golem_common::model::component::ComponentName;
+use golem_common::model::http_api_definition::HttpApiDefinitionName;
 use nondestructive::yaml::{Document, Id, MappingMut, Separator, SequenceMut, Value, ValueMut};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -37,7 +37,7 @@ impl TryFrom<String> for EnvironmentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: Add validations
+        // TODO: atomic: Add validations
         Ok(EnvironmentName(value))
     }
 }

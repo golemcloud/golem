@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::app::context::ApplicationContext;
-use crate::auth::{Auth, Authentication};
+use crate::client::{new_reqwest_client, GolemClients};
 use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
@@ -23,7 +23,6 @@ use crate::config::{
 };
 use crate::config::{ClientConfig, ProfileName};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
-use crate::http::new_reqwest_client;
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{
     AppBuildStep, ApplicationNameAndEnvironments, ApplicationSourceMode, ComponentPresetName,
@@ -37,19 +36,19 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
-use golem_client::api::{
-    AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
-    ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive, ApplicationClientLive,
-    ComponentClientLive, DeploymentClientLive, EnvironmentClientLive, GrantClientLive,
-    HealthCheckClientLive, HttpApiDefinitionClientLive, LimitsClientLive, LoginClientLive,
-    PluginClientLive, TokenClientLive, WorkerClientLive,
-};
-use golem_client::{Context as ClientContext, Security};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::http_api_definition::{
+    HttpApiDefinition, HttpApiDefinitionId, HttpApiDefinitionRevision,
+};
+use golem_common::model::http_api_deployment::{
+    HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentRevision,
+};
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
@@ -61,7 +60,7 @@ use url::Url;
 use uuid::Uuid;
 
 // Context is responsible for storing the CLI state,
-// but NOT responsible for producing CLI output, those should be part of the CommandHandler(s)
+// but NOT responsible for producing CLI output (except for context selection logging), those should be part of the CommandHandler(s)
 pub struct Context {
     // Readonly
     config_dir: PathBuf,
@@ -95,6 +94,7 @@ pub struct Context {
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
     rib_repl_state: tokio::sync::RwLock<RibReplState>,
+    caches: Caches,
 }
 
 impl Context {
@@ -331,6 +331,7 @@ impl Context {
                 app_source_mode,
             )),
             rib_repl_state: tokio::sync::RwLock::default(),
+            caches: Caches::new(),
         })
     }
 
@@ -392,6 +393,10 @@ impl Context {
     pub fn manifest_environment(&self) -> Option<&SelectedManifestEnvironment> {
         self.log_context_selection_once();
         self.manifest_environment.as_ref()
+    }
+
+    pub fn caches(&self) -> &Caches {
+        &self.caches
     }
 
     pub fn http_batch_size(&self) -> u64 {
@@ -677,166 +682,9 @@ impl Context {
     }
 }
 
-pub struct GolemClients {
-    authentication: Authentication,
-
-    pub account: AccountClientLive,
-    pub account_summary: AccountSummaryClientLive,
-    pub agent_types: AgentTypesClientLive,
-    pub api_certificate: ApiCertificateClientLive,
-    pub api_definition: HttpApiDefinitionClientLive,
-    pub api_deployment: ApiDeploymentClientLive,
-    pub api_domain: ApiDomainClientLive,
-    pub api_security: ApiSecurityClientLive,
-    pub application: ApplicationClientLive,
-    pub component: ComponentClientLive,
-    pub component_healthcheck: HealthCheckClientLive,
-    pub deployment: DeploymentClientLive,
-    pub environment: EnvironmentClientLive,
-    pub grant: GrantClientLive,
-    pub limits: LimitsClientLive,
-    pub login: LoginClientLive,
-    pub plugin: PluginClientLive,
-    pub token: TokenClientLive,
-    pub worker: WorkerClientLive,
-    pub worker_invoke: WorkerClientLive,
-}
-
-impl GolemClients {
-    pub async fn new(
-        config: &ClientConfig,
-        token_override: Option<Uuid>,
-        auth_config: &AuthenticationConfigWithSource,
-        config_dir: &Path,
-    ) -> anyhow::Result<Self> {
-        let healthcheck_http_client = new_reqwest_client(&config.health_check_http_client_config)?;
-
-        let service_http_client = new_reqwest_client(&config.service_http_client_config)?;
-        let invoke_http_client = new_reqwest_client(&config.invoke_http_client_config)?;
-
-        let auth = Auth::new(LoginClientLive {
-            context: ClientContext {
-                client: service_http_client.clone(),
-                base_url: config.registry_url.clone(),
-                security_token: Security::Empty,
-            },
-        });
-
-        let authentication = auth
-            .authenticate(token_override, auth_config, config_dir)
-            .await?;
-
-        let security_token = Security::Bearer(authentication.0.secret.0.to_string());
-
-        let registry_context = || ClientContext {
-            client: service_http_client.clone(),
-            base_url: config.registry_url.clone(),
-            security_token: security_token.clone(),
-        };
-
-        let registry_healthcheck_context = || ClientContext {
-            client: healthcheck_http_client,
-            base_url: config.registry_url.clone(),
-            security_token: Security::Empty,
-        };
-
-        let worker_context = || ClientContext {
-            client: service_http_client.clone(),
-            base_url: config.worker_url.clone(),
-            security_token: security_token.clone(),
-        };
-
-        let worker_invoke_context = || ClientContext {
-            client: invoke_http_client.clone(),
-            base_url: config.worker_url.clone(),
-            security_token: security_token.clone(),
-        };
-
-        let login_context = || ClientContext {
-            client: service_http_client.clone(),
-            base_url: config.registry_url.clone(),
-            security_token: security_token.clone(),
-        };
-
-        Ok(GolemClients {
-            authentication,
-            account: AccountClientLive {
-                context: registry_context(),
-            },
-            account_summary: AccountSummaryClientLive {
-                context: registry_context(),
-            },
-            agent_types: AgentTypesClientLive {
-                context: registry_context(),
-            },
-            api_certificate: ApiCertificateClientLive {
-                context: registry_context(),
-            },
-            api_definition: HttpApiDefinitionClientLive {
-                context: registry_context(),
-            },
-            api_deployment: ApiDeploymentClientLive {
-                context: registry_context(),
-            },
-            api_domain: ApiDomainClientLive {
-                context: registry_context(),
-            },
-            api_security: ApiSecurityClientLive {
-                context: registry_context(),
-            },
-            application: ApplicationClientLive {
-                context: registry_context(),
-            },
-            component: ComponentClientLive {
-                context: registry_context(),
-            },
-            component_healthcheck: HealthCheckClientLive {
-                context: registry_healthcheck_context(),
-            },
-            deployment: DeploymentClientLive {
-                context: registry_context(),
-            },
-            environment: EnvironmentClientLive {
-                context: registry_context(),
-            },
-            grant: GrantClientLive {
-                context: registry_context(),
-            },
-            limits: LimitsClientLive {
-                context: worker_context(),
-            },
-            login: LoginClientLive {
-                context: login_context(),
-            },
-            plugin: PluginClientLive {
-                context: registry_context(),
-            },
-            token: TokenClientLive {
-                context: registry_context(),
-            },
-            worker: WorkerClientLive {
-                context: worker_context(),
-            },
-            worker_invoke: WorkerClientLive {
-                context: worker_invoke_context(),
-            },
-        })
-    }
-
-    pub fn account_id(&self) -> &AccountId {
-        self.authentication.account_id()
-    }
-
-    pub fn auth_token(&self) -> &TokenSecret {
-        &self.authentication.0.secret
-    }
-}
-
 struct ApplicationContextConfig {
-    // TODO: atomic
     #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
-    // TODO: atomic
     #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
@@ -867,21 +715,6 @@ impl ApplicationContextConfig {
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
             enable_wasmtime_fs_cache: global_flags.enable_wasmtime_fs_cache,
-        }
-    }
-
-    // TODO: atomic
-    #[allow(unused)]
-    pub fn app_source_mode(&self) -> ApplicationSourceMode {
-        if self.disable_app_manifest_discovery {
-            ApplicationSourceMode::None
-        } else {
-            match &self.app_manifest_path {
-                Some(root_manifest) if !self.disable_app_manifest_discovery => {
-                    ApplicationSourceMode::ByRootManifest(root_manifest.clone())
-                }
-                _ => ApplicationSourceMode::Automatic,
-            }
         }
     }
 
@@ -1045,6 +878,54 @@ impl Default for RibReplState {
                 custom_instance_spec: vec![],
             },
             component_metadata: ComponentMetadata::default(),
+        }
+    }
+}
+
+pub struct Caches {
+    pub component_revision:
+        Cache<(ComponentId, ComponentRevision), (), ComponentDto, Arc<anyhow::Error>>,
+    pub http_api_definition_revision: Cache<
+        (HttpApiDefinitionId, HttpApiDefinitionRevision),
+        (),
+        HttpApiDefinition,
+        Arc<anyhow::Error>,
+    >,
+    pub http_api_deployment_revision: Cache<
+        (HttpApiDeploymentId, HttpApiDeploymentRevision),
+        (),
+        HttpApiDeployment,
+        Arc<anyhow::Error>,
+    >,
+}
+
+impl Default for Caches {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Caches {
+    pub fn new() -> Self {
+        Self {
+            component_revision: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "component_revision",
+            ),
+            http_api_definition_revision: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "http_api_definition_revision",
+            ),
+            http_api_deployment_revision: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "http_api_deployment_revision",
+            ),
         }
     }
 }

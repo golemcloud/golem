@@ -37,6 +37,7 @@ use clap::{self, Command, CommandFactory, Subcommand};
 use clap::{Args, Parser};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
 use golem_client::model::ScanCursor;
+use golem_common::model::component::ComponentRevision;
 use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -624,7 +625,7 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: ComponentOptionalComponentName,
         /// Optional component revision to use, defaults to latest deployed component revision
-        revision: Option<u64>,
+        revision: Option<ComponentRevision>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
         /// Optional script to run, when defined the repl will execute the script and exit
@@ -844,6 +845,7 @@ pub mod app {
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::component::ComponentRevision;
     use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
@@ -864,15 +866,21 @@ pub mod app {
         },
         /// Deploy application
         Deploy {
-            /// Only plan deployment, but apply no changes to the environment
-            #[arg(long, conflicts_with_all = ["version", "revision"])]
+            /// Only plan deployment, but apply no changes to the staging area or the environment
+            #[arg(long, conflicts_with_all = ["version", "revision", "stage"])]
             plan: bool,
+            /// Only plan and stage changes, but do not apply them to the environment; used for testing
+            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+            stage: bool,
+            /// Ask for approval for every staging step; used for testing
+            #[arg(long, hide=true, conflicts_with_all = ["version", "revision", "plan"])]
+            approve_staging_steps: bool,
             /// Revert to the specified version
-            #[arg(long, conflicts_with_all = ["force_build", "revision"])]
+            #[arg(long, conflicts_with_all = ["force_build", "revision", "stage"])]
             version: Option<String>,
             /// Revert to the specified revision
-            #[arg(long, conflicts_with_all = ["force_build", "version"])]
-            revision: Option<u64>,
+            #[arg(long, conflicts_with_all = ["force_build", "version", "stage"])]
+            revision: Option<ComponentRevision>,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
@@ -928,7 +936,7 @@ pub mod component {
     use crate::model::app::DependencyType;
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
-    use golem_common::model::component::ComponentName;
+    use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
@@ -978,16 +986,13 @@ pub mod component {
             dependency_type: Option<DependencyType>,
         },
         /// List deployed component versions' metadata
-        List {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentName,
-        },
+        List,
         /// Get the latest or selected revision of deployed component metadata
         Get {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
             /// Optional component revision to get
-            revision: Option<u64>,
+            revision: Option<ComponentRevision>,
         },
         /// Try to automatically update all existing agents of the selected component to the latest version
         UpdateAgents {
@@ -1091,6 +1096,7 @@ pub mod worker {
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
+    use golem_common::model::component::ComponentRevision;
     use golem_common::model::IdempotencyKey;
 
     #[derive(Debug, Subcommand)]
@@ -1181,7 +1187,7 @@ pub mod worker {
             /// Update mode - auto or manual (default is auto)
             mode: Option<AgentUpdateMode>,
             /// The new revision of the updated agent (default is the latest revision)
-            target_revision: Option<u64>,
+            target_revision: Option<ComponentRevision>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
@@ -1254,9 +1260,10 @@ pub mod worker {
 }
 
 pub mod api {
-    use crate::command::api::cloud::ApiCloudSubcommand;
+    use crate::command::api::certificate::ApiCertificateSubcommand;
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
+    use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
 
@@ -1277,45 +1284,43 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
-        /// Manage API Cloud Domains and Certificates
-        Cloud {
+        /// Manage API Domains
+        Domain {
             #[clap(subcommand)]
-            subcommand: ApiCloudSubcommand,
+            subcommand: ApiDomainSubcommand,
+        },
+        /// Manage API Certificates
+        Certificate {
+            #[clap(subcommand)]
+            subcommand: ApiCertificateSubcommand,
         },
     }
 
     pub mod definition {
-        use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
         use crate::model::OpenApiDefinitionOutputFormat;
         use clap::Subcommand;
+        use golem_common::model::deployment::DeploymentRevision;
+        use golem_common::model::http_api_definition::{
+            HttpApiDefinitionName, HttpApiDefinitionRevision,
+        };
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDefinitionSubcommand {
             /// Retrieves metadata about an existing API definition
             Get {
-                /// API definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+                /// HTTP API definition name to get
+                name: HttpApiDefinitionName,
+                /// Optional revision to get
+                revision: Option<HttpApiDefinitionRevision>,
             },
-            /// Lists all API definitions
-            List {
-                /// API definition id to get all versions. Optional.
-                #[arg(short, long)]
-                id: Option<ApiDefinitionId>,
-            },
-            /// Exports an api definition in OpenAPI format
-            Export {
-                // TODO: atomic: should be name based, with app context
-                /// Api definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                // TODO: atomic: why this version is needed?
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+            /// Lists all HTPP API definitions
+            List,
+            /// Gets an HTTP API definition in OpenAPI format
+            OpenApi {
+                /// HTTP API definition name to export
+                name: HttpApiDefinitionName,
+                /// Optional deployment revision to get
+                deployment_revision: Option<DeploymentRevision>,
                 /// Output format (json or yaml)
                 #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
                 format: OpenApiDefinitionOutputFormat,
@@ -1323,16 +1328,12 @@ pub mod api {
                 #[arg(short, long)]
                 output_name: Option<String>,
             },
-            /// Opens Swagger UI for an API definition
+            /// Opens Swagger UI for an HTTP API definition
             Swagger {
-                // TODO: atomic: should be name based, with app context
-                /// Api definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                // TODO: atomic: why this version is needed?
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
+                /// HTTP API definition name
+                name: HttpApiDefinitionName,
+                /// Optional deployment revision
+                revision: Option<DeploymentRevision>,
                 /// Port to open Swagger UI on (defaults to 9007)
                 #[arg(long, short, default_value_t = 9007)]
                 port: u16,
@@ -1341,28 +1342,23 @@ pub mod api {
     }
 
     pub mod deployment {
-        use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDeploymentSubcommand {
             /// Get API deployment
             Get {
-                /// Deployment site
-                #[arg(value_name = "subdomain.host")]
-                site: String,
+                /// Deployment domain
+                domain: String,
             },
             /// List API deployment for API definition
-            List {
-                /// API definition id
-                definition: Option<ApiDefinitionId>,
-            },
+            List,
         }
     }
 
     pub mod security_scheme {
-        use crate::model::api::IdentityProviderType;
         use clap::Subcommand;
+        use golem_common::model::security_scheme::Provider;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1372,7 +1368,7 @@ pub mod api {
                 security_scheme_id: String,
                 /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
                 #[arg(long)]
-                provider_type: IdentityProviderType,
+                provider_type: Provider,
                 /// Security Scheme client ID
                 #[arg(long)]
                 client_id: String,
@@ -1395,76 +1391,56 @@ pub mod api {
         }
     }
 
-    pub mod cloud {
-        use crate::command::api::cloud::certificate::ApiCertificateSubcommand;
-        use crate::command::api::cloud::domain::ApiDomainSubcommand;
+    pub mod domain {
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
-        pub enum ApiCloudSubcommand {
-            /// Manage Cloud API Domains
-            Domain {
-                #[clap(subcommand)]
-                subcommand: ApiDomainSubcommand,
+        pub enum ApiDomainSubcommand {
+            /// List domains
+            List,
+            /// Register a new domain
+            Register {
+                /// Domain name
+                domain: String,
             },
-            /// Manage Cloud API Certificates
-            Certificate {
-                #[clap(subcommand)]
-                subcommand: ApiCertificateSubcommand,
+            /// Delete an existing domain
+            Delete {
+                /// Domain name
+                domain: String,
             },
         }
+    }
 
-        pub mod domain {
-            use clap::Subcommand;
+    pub mod certificate {
+        use crate::model::PathBufOrStdin;
+        use clap::Subcommand;
+        use uuid::Uuid;
 
-            #[derive(Debug, Subcommand)]
-            pub enum ApiDomainSubcommand {
-                /// Retrieves metadata about an existing domain
-                Get {},
-                /// Add new domain
-                New {
-                    /// Domain name
-                    domain_name: String,
-                },
-                /// Delete an existing domain
-                Delete {
-                    /// Domain name
-                    domain_name: String,
-                },
-            }
-        }
-
-        pub mod certificate {
-            use crate::model::PathBufOrStdin;
-            use clap::Subcommand;
-            use uuid::Uuid;
-
-            #[derive(Debug, Subcommand)]
-            pub enum ApiCertificateSubcommand {
-                /// Retrieves metadata about an existing certificate
-                Get {
-                    /// Certificate ID
-                    certificate_id: Option<Uuid>,
-                },
-                /// Create new certificate
-                New {
-                    /// Domain name
-                    #[arg(short, long)]
-                    domain_name: String,
-                    /// Certificate
-                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                    certificate_body: PathBufOrStdin,
-                    /// Certificate private key
-                    #[arg(long, value_hint = clap::ValueHint::FilePath)]
-                    certificate_private_key: PathBufOrStdin,
-                },
-                /// Delete an existing certificate
-                #[command()]
-                Delete {
-                    /// Certificate ID
-                    certificate_id: Uuid,
-                },
-            }
+        #[derive(Debug, Subcommand)]
+        pub enum ApiCertificateSubcommand {
+            /// Retrieves metadata about an existing certificate
+            Get {
+                /// Certificate ID
+                certificate_id: Option<Uuid>,
+            },
+            /// Create a new certificate
+            New {
+                /// Domain name
+                #[arg(short, long)]
+                domain_name: String,
+                /// Certificate
+                #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                certificate_body: PathBufOrStdin,
+                /// Certificate private key
+                #[arg(long, value_hint = clap::ValueHint::FilePath)]
+                certificate_private_key: PathBufOrStdin,
+            },
+            /// Delete an existing certificate
+            #[command()]
+            Delete {
+                /// Certificate ID
+                certificate_id: Uuid,
+            },
         }
     }
 }
@@ -1591,14 +1567,6 @@ pub mod cloud {
 
     #[derive(Debug, Subcommand)]
     pub enum CloudSubcommand {
-        // TODO: atomic
-        /*
-        /// Manage Cloud Projects
-        Project {
-            #[clap(subcommand)]
-            subcommand: ProjectSubcommand,
-        },
-        */
         /// Manage Cloud Account
         Account {
             #[clap(subcommand)]

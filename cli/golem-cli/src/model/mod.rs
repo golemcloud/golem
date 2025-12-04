@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod agent;
-pub mod api;
 pub mod app;
 pub mod app_raw;
 pub mod cascade;
@@ -21,6 +20,7 @@ pub mod component;
 pub mod deploy;
 pub mod environment;
 pub mod format;
+pub mod http_api;
 pub mod invoke_result_view;
 // TODO: atomic: pub mod plugin_manifest;
 pub mod template;
