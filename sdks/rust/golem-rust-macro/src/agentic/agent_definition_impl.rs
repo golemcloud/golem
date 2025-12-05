@@ -20,7 +20,9 @@ use crate::agentic::{
     invalid_static_method_in_agent_error, multiple_constructor_methods_error,
     no_constructor_method_error,
 };
-
+use proc_macro::TokenStream;
+use proc_macro2::Ident;
+use quote::quote;
 use syn::spanned::Spanned;
 use syn::ItemTrait;
 
@@ -33,6 +35,7 @@ use crate::agentic::agent_definition_http_endpoint::{
 use proc_macro::TokenStream;
 use quote::quote;
 
+
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
 
@@ -44,6 +47,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
     };
+
 
     let type_parameters = agent_definition_trait
         .generics
@@ -106,6 +110,11 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             agent_definition_trait.items.push(save_snapshot_item);
             agent_definition_trait.items.push(registration_function);
 
+            if let Some(config_type_name) = extract_config_type_argument(&agent_definition_trait) {
+                let config_item = get_config_item(&config_type_name);
+                agent_definition_trait.items.push(config_item);
+            }
+
             let result = quote! {
                 #[allow(async_fn_in_trait)]
                 #agent_definition_trait
@@ -133,6 +142,34 @@ fn get_save_snapshot_item() -> syn::TraitItem {
             Err("save_snapshot not implemented".to_string())
         }
     }
+}
+
+fn get_config_item(config_type_name: &syn::Type) -> syn::TraitItem {
+    syn::parse_quote! {
+        fn get_config(&self) -> Result<golem_rust::agentic::AgentConfig<#config_type_name>, String> {
+            Err("get_config not implemented".to_string())
+        }
+    }
+}
+
+/// if they write `trait MyAgent: Agent<Abc>`, extract `Abc`
+fn extract_config_type_argument(trait_item: &ItemTrait) -> Option<syn::Type> {
+    for bound in &trait_item.supertraits {
+        if let syn::TypeParamBound::Trait(trait_bound) = bound {
+            if trait_bound.path.segments.len() == 1
+                && trait_bound.path.segments[0].ident == "Agent"
+            {
+                if let syn::PathArguments::AngleBracketed(args) =
+                    &trait_bound.path.segments[0].arguments
+                {
+                    if let Some(syn::GenericArgument::Type(ty)) = args.args.first() {
+                        return Some(ty.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 struct AgentTypeWithRemoteClient {
