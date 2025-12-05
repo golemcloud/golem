@@ -156,7 +156,7 @@ impl DeploymentService {
 
         let deployment: Deployment = self
             .deployment_repo
-            .get_deployed_revision(&environment_id.0, deployment_revision.into())
+            .get_deployment_revision(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
             .into();

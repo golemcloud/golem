@@ -358,7 +358,7 @@ impl DeploymentWriteService {
 
         let target_deployment: Deployment = self
             .deployment_repo
-            .get_deployed_revision(&environment_id.0, payload.deployment_revision.into())
+            .get_deployment_revision(&environment_id.0, payload.deployment_revision.into())
             .await?
             .ok_or(DeploymentWriteError::DeploymentNotFound(
                 payload.deployment_revision,

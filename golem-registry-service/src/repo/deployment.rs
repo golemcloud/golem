@@ -49,12 +49,6 @@ use uuid::Uuid;
 pub trait DeploymentRepo: Send + Sync {
     async fn get_next_revision_number(&self, environment_id: &Uuid) -> RepoResult<Option<i64>>;
 
-    async fn get_deployed_revision(
-        &self,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Option<DeploymentRevisionRecord>>;
-
     async fn get_currently_deployed_revision(
         &self,
         environment_id: &Uuid,
@@ -76,6 +70,12 @@ pub trait DeploymentRepo: Send + Sync {
     ) -> RepoResult<Vec<CurrentDeploymentRevisionRecord>>;
 
     async fn get_staged_identity(&self, environment_id: &Uuid) -> RepoResult<DeploymentIdentity>;
+
+    async fn get_deployment_revision(
+        &self,
+        environment_id: &Uuid,
+        revision_id: i64,
+    ) -> RepoResult<Option<DeploymentRevisionRecord>>;
 
     async fn get_deployment_identity(
         &self,
@@ -178,13 +178,13 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_deployed_revision(
+    async fn get_deployment_revision(
         &self,
         environment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
         self.repo
-            .get_deployed_revision(environment_id, revision_id)
+            .get_deployment_revision(environment_id, revision_id)
             .instrument(Self::span_env(environment_id))
             .await
     }
@@ -414,12 +414,12 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         Ok(current_staged_revision_id)
     }
 
-    async fn get_deployed_revision(
+    async fn get_deployment_revision(
         &self,
         environment_id: &Uuid,
         revision_id: i64,
     ) -> RepoResult<Option<DeploymentRevisionRecord>> {
-        self.with_ro("get_deployed_revision").fetch_optional_as(
+        self.with_ro("get_deployment_revision").fetch_optional_as(
             sqlx::query_as(indoc! { r#"
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM deployment_revisions dr
@@ -873,12 +873,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_deployment_revision(
-        &self,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Option<DeploymentRevisionRecord>>;
-
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
         user_account_id: Uuid,
@@ -973,24 +967,6 @@ trait DeploymentRepoInternal: DeploymentRepo {
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
-
-    async fn get_deployment_revision(
-        &self,
-        environment_id: &Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Option<DeploymentRevisionRecord>> {
-        self.with_ro("get_deployment_revision")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT environment_id, revision_id, version, hash, created_at, created_by
-                    FROM deployment_revisions
-                    WHERE environment_id = $1 AND revision_id = $2
-                "#})
-                .bind(environment_id)
-                .bind(revision_id),
-            )
-            .await
-    }
 
     async fn create_deployment_revision(
         tx: &mut Self::Tx,
