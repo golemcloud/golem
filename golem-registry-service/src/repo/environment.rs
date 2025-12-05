@@ -534,7 +534,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                             -- Current deployment info
                             (
-                                SELECT cd.revision_id
+                                SELECT cd.current_revision_id
                                 FROM current_deployments cd
                                 WHERE cd.environment_id = environments.environment_id
                             ) AS current_deployment_revision,
@@ -634,7 +634,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                             -- Current deployment info
                             (
-                                SELECT cd.revision_id
+                                SELECT cd.current_revision_id
                                 FROM current_deployments cd
                                 WHERE cd.environment_id = environments.environment_id
                             ) AS current_deployment_revision,
