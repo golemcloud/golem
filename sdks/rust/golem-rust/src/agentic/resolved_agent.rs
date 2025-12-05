@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use crate::agentic::Agent;
-use std::cell::RefCell;
+use std::sync::{Arc, RwLock};
 
 pub struct ResolvedAgent {
-    pub agent: RefCell<Box<dyn Agent>>,
+    pub agent: Arc<RwLock<Box<dyn Agent>>>,
 }
 
 impl ResolvedAgent {
     pub fn new(agent: Box<dyn Agent>) -> ResolvedAgent {
         ResolvedAgent {
-            agent: RefCell::new(agent),
+            agent: Arc::new(RwLock::new(agent)),
         }
     }
 }

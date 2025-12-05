@@ -53,13 +53,14 @@ impl Guest for Component {
         )
     }
 
-    #[allow(clippy::await_holding_refcell_ref)]
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
-            resolved_agent
+            let mut agent = resolved_agent
                 .agent
-                .borrow_mut()
-                .as_mut()
+                .write()
+                .unwrap();
+            
+            agent
                 .invoke(method_name, input)
                 .await
         })
@@ -67,7 +68,7 @@ impl Guest for Component {
 
     fn get_definition() -> AgentType {
         with_agent_instance(|resolved_agent| {
-            resolved_agent.agent.borrow().as_ref().get_definition()
+            resolved_agent.agent.read().unwrap().get_definition()
         })
     }
 
@@ -77,7 +78,6 @@ impl Guest for Component {
 }
 
 impl LoadSnapshotGuest for Component {
-    #[allow(clippy::await_holding_refcell_ref)]
     fn load(bytes: Vec<u8>) -> Result<(), String> {
         let agent_id = get_resolved_agent();
 
@@ -110,10 +110,11 @@ impl LoadSnapshotGuest for Component {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                get_resolved_agent()
-                    .unwrap()
-                    .agent
-                    .borrow()
+                let resolved_agent = get_resolved_agent().unwrap().clone();
+                
+                let agent = resolved_agent.agent.read().unwrap();
+
+                agent
                     .load_snapshot_base(agent_snapshot)
                     .await
             },
@@ -124,12 +125,11 @@ impl LoadSnapshotGuest for Component {
 }
 
 impl SaveSnapshotGuest for Component {
-    #[allow(clippy::await_holding_refcell_ref)]
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {
-            let agent_snapshot = resolved_agent
-                .agent
-                .borrow()
+            let agent = resolved_agent.agent.read().unwrap();
+            
+            let agent_snapshot = agent
                 .save_snapshot_base()
                 .await
                 .expect("Failed to save agent snapshot");
