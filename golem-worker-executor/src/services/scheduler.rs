@@ -569,7 +569,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -608,7 +608,7 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(
@@ -699,7 +699,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -739,7 +739,7 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(
@@ -814,7 +814,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -853,7 +853,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(
@@ -932,7 +932,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -971,7 +971,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(
@@ -1043,7 +1043,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1086,7 +1086,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(
@@ -1169,7 +1169,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1208,7 +1208,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId::new_v4();
+        let account_id = AccountId::new();
 
         let _s1 = svc
             .schedule(

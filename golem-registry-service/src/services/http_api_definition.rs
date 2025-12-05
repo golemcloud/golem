@@ -137,7 +137,7 @@ impl HttpApiDefinitionService {
         self.validate_http_api_definition_routes(&environment, &data.routes, auth)
             .await?;
 
-        let id = HttpApiDefinitionId::new_v4();
+        let id = HttpApiDefinitionId::new();
         let record = HttpApiDefinitionRevisionRecord::creation(
             id,
             data.version,

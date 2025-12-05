@@ -109,9 +109,7 @@ impl RegistryServiceGrpcApi {
     ) -> Result<AuthenticateTokenSuccessResponse, GrpcApiError> {
         let auth_ctx = self
             .auth_service
-            .authenticate_user(TokenSecret(
-                request.secret.ok_or("missing secret field")?.into(),
-            ))
+            .authenticate_user(TokenSecret::trusted(request.secret))
             .await?;
         Ok(AuthenticateTokenSuccessResponse {
             auth_ctx: Some(auth_ctx.into()),

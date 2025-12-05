@@ -120,7 +120,7 @@ impl EnvironmentPluginGrantService {
         )?;
 
         let grant = EnvironmentPluginGrant {
-            id: EnvironmentPluginGrantId::new_v4(),
+            id: EnvironmentPluginGrantId::new(),
             environment_id,
             plugin_registration_id: data.plugin_registration_id,
         };

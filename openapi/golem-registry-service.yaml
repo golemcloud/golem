@@ -8947,7 +8947,8 @@ components:
           format: uuid
         secret:
           type: string
-          format: uuid
+          minLength: 16
+          pattern: ^[A-Za-z0-9_-]+$
         accountId:
           type: string
           format: uuid

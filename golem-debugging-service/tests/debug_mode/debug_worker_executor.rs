@@ -127,7 +127,10 @@ impl DebugWorkerExecutorClient {
         {
             let headers = connection_request.headers_mut();
 
-            headers.insert("Authorization", format!("Bearer {}", token.0).parse()?);
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", token.secret()).parse()?,
+            );
         }
 
         // Connect to the WebSocket server

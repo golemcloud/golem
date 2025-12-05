@@ -74,8 +74,8 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -128,8 +128,8 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -189,8 +189,8 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         10,
     ));
 
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -257,10 +257,10 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
         10,
     ));
 
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
-        component_id: ComponentId::new_v4(),
+        component_id: ComponentId::new(),
         worker_name: "test".to_string(),
     };
     let owned_worker_id = OwnedWorkerId::new(&environment_id, &worker_id);
@@ -304,8 +304,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -451,8 +451,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100).await;
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -671,8 +671,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         10,
     ));
 
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -801,8 +801,8 @@ async fn read_from_archive_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -921,8 +921,8 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -1065,8 +1065,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         10,
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -1347,8 +1347,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         10,
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -1461,8 +1461,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         1000, // no transfer will occur by reaching limit in this test
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
     let worker_id = WorkerId {
         component_id: ComponentId(Uuid::new_v4()),
         worker_name: "test".to_string(),
@@ -1600,9 +1600,9 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         1000, // no transfer will occur by reaching limit in this test
         10,
     ));
-    let account_id = AccountId::new_v4();
-    let environment_id = EnvironmentId::new_v4();
-    let component_id = ComponentId::new_v4();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
 
     // Adding some workers
     let mut primary_workers = Vec::new();

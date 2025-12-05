@@ -110,7 +110,7 @@ impl SecuritySchemeService {
             EnvironmentAction::CreateSecurityScheme,
         )?;
 
-        let id = SecuritySchemeId::new_v4();
+        let id = SecuritySchemeId::new();
 
         let redirect_url: RedirectUrl = RedirectUrl::new(data.redirect_url)
             .map_err(|_| SecuritySchemeError::InvalidRedirectUrl)?;

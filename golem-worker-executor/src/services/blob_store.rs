@@ -433,7 +433,7 @@ mod tests {
     use test_r::test;
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
         assert!(!blob_store
             .container_exists(environment_id, "container1".to_string())
             .await
@@ -449,7 +449,7 @@ mod tests {
     }
 
     async fn test_container_delete(blob_store: &impl BlobStoreService) {
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
         blob_store
             .create_container(environment_id, "container1".to_string())
             .await
@@ -465,7 +465,7 @@ mod tests {
     }
 
     async fn test_container_has_write_read_has(blob_store: &impl BlobStoreService) {
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         blob_store
             .create_container(environment_id, "container1".to_string())
@@ -506,7 +506,7 @@ mod tests {
     }
 
     async fn test_container_list_copy_move_list(blob_store: &impl BlobStoreService) {
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
 
         blob_store
             .create_container(environment_id, "container1".to_string())

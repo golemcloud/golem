@@ -21,9 +21,15 @@ macro_rules! newtype_uuid {
         #[desert(transparent)]
         pub struct $name(pub uuid::Uuid);
 
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl $name {
-            pub fn new_v4() -> $name {
-                Self(uuid::Uuid::new_v4())
+            pub fn new() -> $name {
+                Self(uuid::Uuid::now_v7())
             }
         }
 

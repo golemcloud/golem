@@ -64,7 +64,8 @@ impl SpawnedRegistryService {
         let admin_plan_id = PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"));
         let admin_account_id = AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129"));
         let admin_account_email = "admin@golem.cloud".to_string();
-        let admin_account_token = TokenSecret(uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"));
+        let admin_account_token =
+            TokenSecret::trusted("lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string());
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));
         let low_fuel_plan_id = PlanId(uuid!("301fd75c-dcc5-48e3-967e-e7c33df52493"));
 
@@ -141,7 +142,7 @@ impl RegistryService for SpawnedRegistryService {
         self.admin_account_email.clone()
     }
     fn admin_account_token(&self) -> TokenSecret {
-        self.admin_account_token
+        self.admin_account_token.clone()
     }
 
     fn default_plan(&self) -> PlanId {

@@ -13135,7 +13135,8 @@ components:
           format: uuid
         secret:
           type: string
-          format: uuid
+          pattern: ^[A-Za-z0-9_-]+$
+          minLength: 16
         accountId:
           type: string
           format: uuid

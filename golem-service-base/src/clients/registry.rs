@@ -56,8 +56,10 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
 pub trait RegistryService: Send + Sync {
     // auth api
-    async fn authenticate_token(&self, token: TokenSecret)
-    -> Result<AuthCtx, RegistryServiceError>;
+    async fn authenticate_token(
+        &self,
+        token: &TokenSecret,
+    ) -> Result<AuthCtx, RegistryServiceError>;
     async fn get_auth_details_for_environment(
         &self,
         environment_id: &EnvironmentId,
@@ -193,13 +195,13 @@ impl GrpcRegistryService {
 impl RegistryService for GrpcRegistryService {
     async fn authenticate_token(
         &self,
-        token: TokenSecret,
+        token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
         let response = self
             .client
             .call("authenticate-token", move |client| {
                 let request = AuthenticateTokenRequest {
-                    secret: Some(token.0.into()),
+                    secret: token.secret().to_string(),
                 };
                 Box::pin(client.authenticate_token(request))
             })

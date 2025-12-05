@@ -52,7 +52,7 @@ pub trait WorkerService: Send + Sync {
             context: Context {
                 client: self.base_http_client().await,
                 base_url: Url::parse(&url).expect("Failed to parse url"),
-                security_token: Security::Bearer(token.to_string()),
+                security_token: Security::Bearer(token.secret().to_string()),
             },
         }
     }

@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::PlansConfig;
+use crate::config::PrecreatedPlan;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
-use anyhow::anyhow;
-use golem_common::model::plan::{Plan, PlanId, PlanName};
+use golem_common::model::plan::{Plan, PlanId};
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::PlanAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::model::auth::{GlobalAction, PlanAction};
 use golem_service_base::repo::RepoError;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -49,23 +49,19 @@ error_forwarding!(PlanError, RepoError);
 
 pub struct PlanService {
     plan_repo: Arc<dyn PlanRepo>,
-    config: PlansConfig,
 }
 
 impl PlanService {
-    pub fn new(plan_repo: Arc<dyn PlanRepo>, config: PlansConfig) -> Self {
-        assert!(
-            config.plans.contains_key("default"),
-            "No default plan in precreated plans"
-        );
-
-        Self { plan_repo, config }
+    pub fn new(plan_repo: Arc<dyn PlanRepo>) -> Self {
+        Self { plan_repo }
     }
 
-    pub async fn create_initial_plans(&self, auth: &AuthCtx) -> Result<(), PlanError> {
-        for (name, plan) in &self.config.plans {
-            let plan_id = PlanId(plan.plan_id);
-            let existing_plan = self.get(&plan_id, auth).await;
+    pub async fn create_initial_plans(
+        &self,
+        plans: &HashMap<String, PrecreatedPlan>,
+    ) -> Result<(), PlanError> {
+        for (name, plan) in plans {
+            let existing_plan = self.get(&plan.plan_id, &AuthCtx::System).await;
 
             let needs_update = match existing_plan {
                 Ok(existing_plan) => {
@@ -94,8 +90,8 @@ impl PlanService {
             if needs_update {
                 self.create_or_update_plan(
                     Plan {
-                        plan_id: PlanId(plan.plan_id),
-                        name: PlanName(name.to_string()),
+                        plan_id: plan.plan_id,
+                        name: plan.plan_name.clone(),
                         app_limit: plan.app_limit,
                         env_limit: plan.env_limit,
                         component_limit: plan.component_limit,
@@ -106,27 +102,13 @@ impl PlanService {
                         monthly_upload_limit: plan.monthly_upload_limit,
                         max_memory_per_worker: plan.max_memory_per_worker,
                     },
-                    auth,
+                    &AuthCtx::System,
                 )
                 .await?;
             }
         }
 
         Ok(())
-    }
-
-    pub async fn get_default_plan(&self, auth: &AuthCtx) -> Result<Plan, PlanError> {
-        auth.authorize_global_action(GlobalAction::GetDefaultPlan)?;
-        let plan_id = self.config.plans.get("default").unwrap().plan_id;
-
-        debug!("Getting default plan {}", plan_id);
-
-        let plan = self.plan_repo.get_by_id(&plan_id).await?;
-
-        match plan {
-            Some(plan) => Ok(plan.try_into()?),
-            None => Err(anyhow!("Could not find default plan with id {plan_id}"))?,
-        }
     }
 
     pub async fn get(&self, plan_id: &PlanId, auth: &AuthCtx) -> Result<Plan, PlanError> {

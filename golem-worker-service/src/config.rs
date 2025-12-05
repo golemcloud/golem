@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+use golem_common::config::DbSqliteConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
-use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
@@ -32,7 +32,6 @@ pub struct WorkerServiceConfig {
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: GatewaySessionStorageConfig,
-    pub db: DbConfig,
     pub port: u16,
     pub custom_request_port: u16,
     pub worker_grpc_port: u16,
@@ -65,8 +64,6 @@ impl SafeDisplay for WorkerServiceConfig {
             "{}",
             self.gateway_session_storage.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "db:");
-        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
         let _ = writeln!(
             &mut result,
@@ -131,11 +128,6 @@ impl Default for WorkerServiceConfig {
     fn default() -> Self {
         Self {
             environment: "local".to_string(),
-            db: DbConfig::Sqlite(DbSqliteConfig {
-                database: "../data/golem_worker.sqlite".to_string(),
-                max_connections: 10,
-                foreign_keys: false,
-            }),
             gateway_session_storage: GatewaySessionStorageConfig::default_redis(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
@@ -163,23 +155,7 @@ impl Default for WorkerServiceConfig {
 
 impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceConfig>> {
-        vec![
-            (
-                "with postgres",
-                Self {
-                    db: DbConfig::postgres_example(),
-                    ..Self::default()
-                },
-            ),
-            (
-                "with postgres and s3",
-                Self {
-                    db: DbConfig::postgres_example(),
-                    blob_storage: BlobStorageConfig::default_s3(),
-                    ..Self::default()
-                },
-            ),
-        ]
+        vec![]
     }
 }
 

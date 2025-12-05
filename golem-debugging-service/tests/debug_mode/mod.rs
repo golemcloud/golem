@@ -65,7 +65,7 @@ pub async fn start_debug_worker_executor(
     loop {
         let debug_worker_executor_result = DebugWorkerExecutorClient::connect(
             run_details.http_port,
-            test_worker_executor.context.account_token,
+            test_worker_executor.context.account_token.clone(),
         )
         .await;
 

@@ -55,7 +55,7 @@ pub trait RegistryService: Send + Sync {
             context: Context {
                 client: self.base_http_client().await,
                 base_url: Url::parse(&url).expect("Failed to parse url"),
-                security_token: Security::Bearer(token.0.to_string()),
+                security_token: Security::Bearer(token.secret().to_string()),
             },
         }
     }
@@ -106,100 +106,117 @@ async fn env_vars(
 
     builder
         // users
-        .with("GOLEM__ACCOUNTS__ROOT__ID", admin_account_id.to_string())
         .with(
-            "GOLEM__ACCOUNTS__ROOT__EMAIL",
+            "GOLEM__INITIAL_ACCOUNTS__ROOT__ID",
+            admin_account_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_ACCOUNTS__ROOT__EMAIL",
             admin_account_email.to_string(),
         )
-        .with("GOLEM__ACCOUNTS__ROOT__PLAN_ID", admin_plan_id.to_string())
-        .with("GOLEM__ACCOUNTS__ROOT__TOKEN", admin_token.to_string())
-        // plans
         .with(
-            "GOLEM__PLANS__PLANS__DEFAULT__PLAN_ID",
-            default_plan_id.to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__DEFAULT__WORKER_LIMIT",
-            "100000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__APP_LIMIT",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__COMPONENT_LIMIT",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__ENV_LIMIT",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
-            "10000000000000000".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__PLAN_ID",
+            "GOLEM__INITIAL_ACCOUNTS__ROOT__PLAN_ID",
             admin_plan_id.to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__STORAGE_LIMIT",
+            "GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN",
+            admin_token.secret().to_string(),
+        )
+        // plans
+        .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__PLAN_ID",
+            default_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__DEFAULT__WORKER_LIMIT",
+            "100000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_ID",
+            admin_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_NAME",
+            "unlimited".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__UNLIMITED__WORKER_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__APP_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_WORKER",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__COMPONENT_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_GAS_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__ENV_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__MAX_MEMORY_PER_WORKER",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
-            "1".to_string(),
-        )
-        .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__PLAN_ID",
+            "GOLEM__INITIAL_PLANS__UNLIMITED__WORKER_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__PLAN_ID",
             low_fuel_plan_id.to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__STORAGE_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__PLAN_NAME",
+            "low_fuel".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__PLANS__PLANS__LOW_FUEL__WORKER_LIMIT",
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_GAS_LIMIT",
+            "1".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         //
