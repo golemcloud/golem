@@ -364,14 +364,40 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::External {
-                invocation,
-                span,
-                canceled,
-            } => {
-                if !canceled {
+            QueuedWorkerInvocation::External { invocation } => {
+                let idempotency_key = invocation.invocation.idempotency_key();
+                
+                // Check if the invocation was canceled
+                let is_canceled = if let Some(key) = &idempotency_key {
+                    self.parent.external_invocation_canceled.read().await.contains(key)
+                } else {
+                    false
+                };
+                
+                if !is_canceled {
+                    // Get the span for this invocation, defaulting to current span if not found
+                    let span = if let Some(key) = &idempotency_key {
+                        self.parent.external_invocation_spans
+                            .read()
+                            .await
+                            .get(key)
+                            .cloned()
+                            .unwrap_or_else(|| Span::current())
+                    } else {
+                        Span::current()
+                    };
+                    
+                    // Clean up the span entry after processing
+                    if let Some(key) = idempotency_key {
+                        self.parent.external_invocation_spans.write().await.remove(&key);
+                    }
+                    
                     self.external_invocation(invocation, &span).await
                 } else {
+                    // Clean up canceled invocation tracking
+                    if let Some(key) = idempotency_key {
+                        self.parent.external_invocation_canceled.write().await.remove(&key);
+                    }
                     CommandOutcome::Continue
                 }
             }

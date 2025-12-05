@@ -92,6 +92,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     deps: All<Ctx>,
 
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
+    external_invocation_spans: Arc<RwLock<HashMap<IdempotencyKey, Span>>>,
+    external_invocation_canceled: Arc<RwLock<HashSet<IdempotencyKey>>>,
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: WorkerMetadata,
@@ -249,15 +251,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(current_status_guard);
 
         // bootstrap derived data to be consistent with the oplog. All further updates are done as part of commit
+        let mut spans_map = HashMap::new();
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_invocations
                 .iter()
-                .map(|inv| QueuedWorkerInvocation::External {
-                    invocation: inv.clone(),
-                    span: Span::current(),
-                    canceled: false,
+                .map(|inv| {
+                    if let Some(idempotency_key) = inv.invocation.idempotency_key() {
+                        spans_map.insert(idempotency_key.clone(), Span::current());
+                    }
+                    QueuedWorkerInvocation::External {
+                        invocation: inv.clone(),
+                    }
                 }),
         )));
+        let external_invocation_spans = Arc::new(RwLock::new(spans_map));
+        let external_invocation_canceled = Arc::new(RwLock::new(HashSet::new()));
+        
         let invocation_results = Arc::new(RwLock::new(HashMap::from_iter(
             initial_invocation_results.iter().map(|(key, oplog_idx)| {
                 (
@@ -281,6 +290,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )),
             deps: All::from_other(deps),
             queue,
+            external_invocation_spans,
+            external_invocation_canceled,
             invocation_results,
             instance,
             execution_status,
@@ -349,7 +360,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(true)
             }
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
-                tracing::warn!("Worker is already running or waiting for permit");
                 Ok(false)
             }
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
@@ -823,13 +833,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         self.add_and_commit_oplog(entry).await;
 
+        if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
+            self.external_invocation_spans
+                .write()
+                .await
+                .insert(idempotency_key.clone(), Span::current());
+        }
+        
         self.queue
             .write()
             .await
             .push_back(QueuedWorkerInvocation::External {
                 invocation: timestamped_invocation,
-                span: Span::current(),
-                canceled: false,
             });
 
         if let WorkerInstance::Running(running) = &*instance_guard {
@@ -1030,14 +1045,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        let mut queue = self.queue.write().await;
-        for item in queue.iter_mut() {
-            if item.matches_idempotency_key(&idempotency_key) {
-                if let QueuedWorkerInvocation::External { canceled, .. } = item {
-                    *canceled = true;
-                }
-            }
-        }
+        self.external_invocation_canceled
+            .write()
+            .await
+            .insert(idempotency_key.clone());
 
         self.add_and_commit_oplog(OplogEntry::cancel_pending_invocation(idempotency_key))
             .await;
@@ -1318,6 +1329,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn fail_pending_invocation(&self, error: WorkerExecutorError) {
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
+        let canceled_keys = self.external_invocation_canceled.read().await.clone();
+        let mut spans_map = self.external_invocation_spans.write().await;
 
         // Publishing the provided initialization error to all pending invocations.
         // We cannot persist these failures, so they remain pending in the oplog, and
@@ -1327,17 +1340,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             match item {
                 QueuedWorkerInvocation::External {
                     invocation: inner,
-                    canceled,
-                    ..
                 } => {
-                    if !canceled {
-                        if let Some(idempotency_key) = inner.invocation.idempotency_key() {
+                    if let Some(idempotency_key) = inner.invocation.idempotency_key() {
+                        if !canceled_keys.contains(&idempotency_key) {
                             self.events().publish(Event::InvocationCompleted {
                                 worker_id: self.owned_worker_id.worker_id(),
                                 idempotency_key: idempotency_key.clone(),
                                 result: Err(error.clone()),
                             })
                         }
+                        // Clean up the span entry
+                        spans_map.remove(&idempotency_key);
                     }
                 }
                 QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
@@ -2166,8 +2179,6 @@ pub enum QueuedWorkerInvocation {
     /// All other cases here are used for concurrency control and should not be exposed to the user.
     External {
         invocation: TimestampedWorkerInvocation,
-        span: Span,
-        canceled: bool,
     },
     GetFileSystemNode {
         path: ComponentFilePath,
@@ -2180,22 +2191,13 @@ pub enum QueuedWorkerInvocation {
     },
     // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
     // The sender will be called with Ok if the worker is in a running state.
-    // If the worker initialization fails and will not recover without manual intervention it will be called with Err.
+    // If the worker initialization fails and will not recover without manual intervention, it will be called with Err.
     AwaitReadyToProcessCommands {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
 }
 
-impl QueuedWorkerInvocation {
-    fn matches_idempotency_key(&self, idempotency_key: &IdempotencyKey) -> bool {
-        match self {
-            Self::External { invocation, .. } => {
-                invocation.invocation.idempotency_key() == Some(idempotency_key)
-            }
-            _ => false,
-        }
-    }
-}
+
 
 pub enum ResultOrSubscription {
     Finished(Result<Option<ValueAndType>, WorkerExecutorError>),
