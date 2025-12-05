@@ -24,7 +24,7 @@ httpApi:
 
   deployments:
     local:
-    - host: localhost:9006
+    - domain: localhost:9006
       definitions:
       - golem-it-agent-rpc-api
 
