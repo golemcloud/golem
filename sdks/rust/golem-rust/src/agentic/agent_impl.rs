@@ -78,7 +78,6 @@ impl Guest for Component {
 }
 
 impl LoadSnapshotGuest for Component {
-
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn load(bytes: Vec<u8>) -> Result<(), String> {
@@ -127,7 +126,6 @@ impl LoadSnapshotGuest for Component {
 }
 
 impl SaveSnapshotGuest for Component {
-
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn save() -> Vec<u8> {
