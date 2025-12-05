@@ -10,6 +10,7 @@ version = "0.0.0"
 [lib]
 crate-type = ["rlib"]
 path = "src/lib.rs"
+harness = false
 
 [[test]]
 name = "agent"
