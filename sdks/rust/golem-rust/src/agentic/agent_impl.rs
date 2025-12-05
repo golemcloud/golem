@@ -55,21 +55,14 @@ impl Guest for Component {
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
-            let mut agent = resolved_agent
-                .agent
-                .write()
-                .unwrap();
-            
-            agent
-                .invoke(method_name, input)
-                .await
+            let mut agent = resolved_agent.agent.write().unwrap();
+
+            agent.invoke(method_name, input).await
         })
     }
 
     fn get_definition() -> AgentType {
-        with_agent_instance(|resolved_agent| {
-            resolved_agent.agent.read().unwrap().get_definition()
-        })
+        with_agent_instance(|resolved_agent| resolved_agent.agent.read().unwrap().get_definition())
     }
 
     fn discover_agent_types() -> Result<Vec<AgentType>, AgentError> {
@@ -111,12 +104,10 @@ impl LoadSnapshotGuest for Component {
                     .map_err(|e| e.to_string())?;
 
                 let resolved_agent = get_resolved_agent().unwrap().clone();
-                
+
                 let agent = resolved_agent.agent.read().unwrap();
 
-                agent
-                    .load_snapshot_base(agent_snapshot)
-                    .await
+                agent.load_snapshot_base(agent_snapshot).await
             },
             &AgentTypeName(agent_type_name),
         )
@@ -128,7 +119,7 @@ impl SaveSnapshotGuest for Component {
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {
             let agent = resolved_agent.agent.read().unwrap();
-            
+
             let agent_snapshot = agent
                 .save_snapshot_base()
                 .await
