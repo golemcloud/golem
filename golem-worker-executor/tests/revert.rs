@@ -24,7 +24,7 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -32,6 +32,7 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[timeout("1m")]
 async fn revert_successful_invocations(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -156,6 +157,7 @@ async fn revert_successful_invocations(
 
 #[test]
 #[tracing::instrument]
+#[timeout("1m")]
 async fn revert_failed_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -218,7 +220,8 @@ async fn revert_failed_worker(
 
 #[test]
 #[tracing::instrument]
-async fn revert_failed_worker_to_invoke_of_failed_inocation(
+#[timeout("1m")]
+async fn revert_failed_worker_to_invoke_of_failed_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -286,6 +289,7 @@ async fn revert_failed_worker_to_invoke_of_failed_inocation(
 
 #[test]
 #[tracing::instrument]
+#[timeout("1m")]
 async fn revert_auto_update(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

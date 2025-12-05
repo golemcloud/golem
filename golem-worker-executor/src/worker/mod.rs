@@ -76,7 +76,7 @@ use wasmtime::{Store, UpdateDeadline};
 /// persisting them and also making sure that all the enqueued invocations eventually get
 /// processed, in the same order as they came in.
 ///
-/// Invocations have an associated idempotency key that is used to ensure that the same invocation
+/// Invocations have an associated idempotency key used to ensure that the same invocation
 /// is not processed multiple times.
 ///
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
@@ -93,7 +93,6 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
     external_invocation_spans: Arc<RwLock<HashMap<IdempotencyKey, Span>>>,
-    external_invocation_canceled: Arc<RwLock<HashSet<IdempotencyKey>>>,
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: WorkerMetadata,
@@ -105,7 +104,7 @@ pub struct Worker<Ctx: WorkerCtx> {
     worker_estimate_coefficient: f64,
 
     // IMPORTANT: Every external operation must acquire the instance lock, even briefly, to confirm the worker isn’t deleting.
-    instance: Arc<tokio::sync::Mutex<WorkerInstance>>,
+    instance: Arc<Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
 
     last_resume_request: Mutex<Timestamp>,
@@ -259,8 +258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let queue = Arc::new(RwLock::new(VecDeque::new()));
         let external_invocation_spans = Arc::new(RwLock::new(spans_map));
-        let external_invocation_canceled = Arc::new(RwLock::new(HashSet::new()));
-        
+
         let invocation_results = Arc::new(RwLock::new(HashMap::from_iter(
             initial_invocation_results.iter().map(|(key, oplog_idx)| {
                 (
@@ -285,7 +283,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps: All::from_other(deps),
             queue,
             external_invocation_spans,
-            external_invocation_canceled,
             invocation_results,
             instance,
             execution_status,
@@ -353,9 +350,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
                 Ok(true)
             }
-            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => {
-                Ok(false)
-            }
+            WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
             WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
                 "Worker is being deleted",
             )),
@@ -498,7 +493,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   supports recovering workers.
     pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
         if let WorkerInstance::Running(running) = &*self.lock_non_stopping_worker().await {
-            running.interrupt(interrupt_kind);
+            running.interrupt(interrupt_kind).await;
         }
 
         let mut execution_status = self.execution_status.write().unwrap();
@@ -825,7 +820,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             timestamp: entry.timestamp(),
             invocation,
         };
-        self.add_and_commit_oplog(entry).await;
+        self.add_and_commit_oplog_internal(&instance_guard, entry)
+            .await;
 
         if let Some(idempotency_key) = timestamped_invocation.invocation.idempotency_key() {
             self.external_invocation_spans
@@ -833,9 +829,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
                 .insert(idempotency_key.clone(), Span::current());
         }
-        
+
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Run).unwrap();
+            running.sender.send(WorkerCommand::Unblock).unwrap();
         };
 
         drop(instance_guard);
@@ -867,7 +863,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // - Worker is starting, it will process the request when it is started
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Run).unwrap();
+            running.sender.send(WorkerCommand::Unblock).unwrap();
         };
 
         drop(instance_guard);
@@ -895,7 +891,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Run).unwrap();
+            running.sender.send(WorkerCommand::Unblock).unwrap();
         };
 
         drop(instance_guard);
@@ -920,7 +916,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
 
         if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::Run).unwrap();
+            running.sender.send(WorkerCommand::Unblock).unwrap();
         };
 
         drop(instance_guard);
@@ -933,17 +929,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.oplog.add(entry).await
     }
 
-    // Should only be called from invocation loop
     pub async fn commit_oplog_and_update_state(&self, commit_level: CommitLevel) -> OplogIndex {
+        let (result, changed) = self
+            .commit_oplog_and_update_state_internal(commit_level)
+            .await;
+        if changed {
+            tracing::warn!("worker state changed, acquiring instance lock");
+            let instance_guard = self.instance.lock().await;
+            tracing::warn!("worker state changed, acquired instance lock");
+            if let WorkerInstance::Running(running) = &*instance_guard {
+                tracing::warn!("worker state changed, sending unblock");
+                running.sender.send(WorkerCommand::Unblock).unwrap();
+            };
+        }
+        result
+    }
+
+    // Should only be called from invocation loop
+    async fn commit_oplog_and_update_state_internal(
+        &self,
+        commit_level: CommitLevel,
+    ) -> (OplogIndex, bool) {
         let update_state_lock_guard = self.update_state_lock.lock().await;
 
-        self.commit_and_update_state_inner(&update_state_lock_guard, commit_level)
+        let changed = self
+            .commit_and_update_state_inner(&update_state_lock_guard, commit_level)
             .await;
         let new_index = self.oplog.current_oplog_index().await;
 
         // ensure we hold mutex for the full duration
         drop(update_state_lock_guard);
-        new_index
+        (new_index, changed)
     }
 
     // Should only be called from invocation loop
@@ -951,6 +967,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let result = self.add_to_oplog(entry).await;
         self.commit_oplog_and_update_state(CommitLevel::Always)
             .await;
+        result
+    }
+
+    async fn add_and_commit_oplog_internal(
+        &self,
+        instance_guard: &MutexGuard<'_, WorkerInstance>,
+        entry: OplogEntry,
+    ) -> OplogIndex {
+        let result = self.add_to_oplog(entry).await;
+        let (_, changed) = self
+            .commit_oplog_and_update_state_internal(CommitLevel::Always)
+            .await;
+
+        if changed {
+            if let WorkerInstance::Running(running) = &**instance_guard {
+                running.sender.send(WorkerCommand::Unblock).unwrap();
+            };
+        }
+
         result
     }
 
@@ -966,8 +1001,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_installation_id))
-            .await;
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            OplogEntry::activate_plugin(plugin_installation_id),
+        )
+        .await;
 
         drop(instance_guard);
         Ok(())
@@ -985,8 +1023,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_installation_id))
-            .await;
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            OplogEntry::deactivate_plugin(plugin_installation_id),
+        )
+        .await;
 
         drop(instance_guard);
         Ok(())
@@ -1032,13 +1073,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.external_invocation_canceled
-            .write()
-            .await
-            .insert(idempotency_key.clone());
-
-        self.add_and_commit_oplog(OplogEntry::cancel_pending_invocation(idempotency_key))
-            .await;
+        self.add_and_commit_oplog_internal(
+            &instance_guard,
+            OplogEntry::cancel_pending_invocation(idempotency_key),
+        )
+        .await;
 
         drop(instance_guard);
         Ok(())
@@ -1076,7 +1115,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        // TODO: all the invocations that are in a deleted region now need to be failed and dropped from the queue.
         let instance_guard = self.lock_stopped_worker(None).await;
         match &*instance_guard {
             WorkerInstance::Unloaded => {}
@@ -1106,9 +1144,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
             // this commit will detach the worker status, immediately reattach it so we see the up to date status.
-            self.add_and_commit_oplog(OplogEntry::revert(region)).await;
+            self.add_and_commit_oplog_internal(&instance_guard, OplogEntry::revert(region))
+                .await;
             self.reattach_worker_status().await;
 
+            if let WorkerInstance::Running(running) = &*instance_guard {
+                running.sender.send(WorkerCommand::Unblock).unwrap();
+            };
             drop(instance_guard);
             Ok(())
         }
@@ -1316,7 +1358,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
-        let canceled_keys = self.external_invocation_canceled.read().await.clone();
         let mut spans_map = self.external_invocation_spans.write().await;
 
         // Publishing the provided initialization error to all queued internal operations
@@ -1338,15 +1379,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.last_known_status.read().await.clone();
         for invocation in &status.pending_invocations {
             if let Some(idempotency_key) = invocation.invocation.idempotency_key() {
-                if !canceled_keys.contains(&idempotency_key) {
-                    self.events().publish(Event::InvocationCompleted {
-                        worker_id: self.owned_worker_id.worker_id(),
-                        idempotency_key: idempotency_key.clone(),
-                        result: Err(error.clone()),
-                    })
-                }
+                self.events().publish(Event::InvocationCompleted {
+                    worker_id: self.owned_worker_id.worker_id(),
+                    idempotency_key: idempotency_key.clone(),
+                    result: Err(error.clone()),
+                });
                 // Clean up the span entry
-                spans_map.remove(&idempotency_key);
+                spans_map.remove(idempotency_key);
             }
         }
     }
@@ -1641,10 +1680,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.worker_service()
                 .update_cached_status(&self.owned_worker_id, &worker_status, self.agent_mode())
                 .await;
-        };
 
-        // ensure we hold mutex for the full duration
-        drop(update_state_lock_guard);
+            // ensure we hold mutex for the full duration
+            drop(update_state_lock_guard);
+        };
     }
 
     // must be called within a held update_state_lock lock.
@@ -1652,7 +1691,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         _update_state_lock_guard: &MutexGuard<'_, ()>,
         commit_level: CommitLevel,
-    ) {
+    ) -> bool {
         let new_entries = self.oplog.commit(commit_level).await;
 
         if !self.last_known_status_detached.load(Ordering::Acquire) {
@@ -1675,15 +1714,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             self.agent_mode(),
                         )
                         .await;
-                };
+
+                    true
+                } else {
+                    false
+                }
             } else {
                 // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                 // This can happen during a revert or a snapshot update for example.
                 tracing::debug!("Detaching worker_status from oplog");
                 self.last_known_status_detached
-                    .store(true, Ordering::Release)
+                    .store(true, Ordering::Release);
+                true
             }
-        };
+        } else {
+            false
+        }
     }
 
     async fn start_waiting_worker(
@@ -1813,6 +1859,7 @@ struct RunningWorker {
     queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
+    interrupt_signal: Arc<async_mutex::Mutex<Option<InterruptKind>>>,
 }
 
 impl RunningWorker {
@@ -1824,12 +1871,14 @@ impl RunningWorker {
         oom_retry_count: u32,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        sender.send(WorkerCommand::Run).unwrap();
+        sender.send(WorkerCommand::Unblock).unwrap();
 
         let active_clone = queue.clone();
         let owned_worker_id_clone = owned_worker_id.clone();
         let waiting_for_command = Arc::new(AtomicBool::new(false));
         let waiting_for_command_clone = waiting_for_command.clone();
+        let interrupt_signal = Arc::new(async_mutex::Mutex::new(None));
+        let interrupt_signal_clone = interrupt_signal.clone();
 
         let span = span!(
             parent: None,
@@ -1850,6 +1899,7 @@ impl RunningWorker {
                     owned_worker_id_clone,
                     parent,
                     waiting_for_command_clone,
+                    interrupt_signal_clone,
                     oom_retry_count,
                 )
                 .instrument(span)
@@ -1864,6 +1914,7 @@ impl RunningWorker {
             queue,
             permit,
             waiting_for_command,
+            interrupt_signal,
         }
     }
 
@@ -1875,11 +1926,9 @@ impl RunningWorker {
         self.handle.take().unwrap()
     }
 
-    fn interrupt(&self, kind: InterruptKind) {
-        // In some cases it is possible that the invocation loop is already quitting and the receiver gets
-        // dropped when we get here. In this case the send fails, but we ignore it as the running worker got
-        // interrupted anyway.
-        let _ = self.sender.send(WorkerCommand::Interrupt(kind));
+    async fn interrupt(&self, kind: InterruptKind) {
+        *self.interrupt_signal.lock().await = Some(kind);
+        let _ = self.sender.send(WorkerCommand::Unblock);
     }
 
     async fn create_instance<Ctx: WorkerCtx>(
@@ -2062,6 +2111,7 @@ impl RunningWorker {
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
+        interrupt_signal: Arc<async_mutex::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
     ) {
         let mut invocation_loop = InvocationLoop {
@@ -2070,6 +2120,7 @@ impl RunningWorker {
             owned_worker_id,
             parent,
             waiting_for_command,
+            interrupt_signal,
             oom_retry_count,
         };
         invocation_loop.run().await;
@@ -2145,9 +2196,8 @@ pub enum RetryDecision {
 
 #[derive(Debug)]
 enum WorkerCommand {
-    Run,
+    Unblock,
     ResumeReplay,
-    Interrupt(InterruptKind),
 }
 
 async fn is_running_worker_idle(running: &RunningWorker) -> bool {
@@ -2172,8 +2222,6 @@ pub enum QueuedWorkerInvocation {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
 }
-
-
 
 pub enum ResultOrSubscription {
     Finished(Result<Option<ValueAndType>, WorkerExecutorError>),

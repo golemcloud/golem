@@ -58,6 +58,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
+    pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     pub oom_retry_count: u32,
 }
 
@@ -94,6 +95,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     owned_worker_id: self.owned_worker_id.clone(),
                     parent: self.parent.clone(),
                     waiting_for_command: self.waiting_for_command.clone(),
+                    interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
                 };
@@ -235,6 +237,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
+    interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
 }
@@ -263,21 +266,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.receiver.recv().await {
             self.waiting_for_command.store(false, Ordering::Release);
-            tracing::warn!("Received command {cmd:?} from channel");
             let outcome = match cmd {
-                WorkerCommand::Run => {
-                    // Drain the entire queue
+                WorkerCommand::Unblock => {
                     loop {
+                        if let Some(kind) = self.interrupt_signal.lock().await.take() {
+                            break self.interrupt(kind).await;
+                        }
+
                         let message = self.active.write().await.pop_front();
-                        tracing::warn!("Received message {message:?} from the queue");
 
                         let result = if let Some(message) = message {
-                            self.invocation(message).await
+                            self.internal_invocation(message).await
                         } else {
-                            // Queue is empty, check last_known_status for pending updates and invocations
+                            // Queue is empty, use last_known_status for pending updates and invocations
                             break self.drain_pending_from_status().await;
                         };
-                        tracing::warn!("result: {result:?}");
 
                         match result {
                             CommandOutcome::Continue => {
@@ -292,7 +295,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     }
                 }
                 WorkerCommand::ResumeReplay => self.resume_replay().await,
-                WorkerCommand::Interrupt(kind) => self.interrupt(kind).await,
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {
@@ -321,24 +323,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         loop {
             let status = self.parent.last_known_status.read().await.clone();
 
-            tracing::warn!(
-                "Processing pending invocations based on status @ {}",
-                status.oplog_idx
-            );
-            tracing::warn!("Pending update count: {}", status.pending_updates.len());
-            tracing::warn!(
-                "Pending invocation count: {}",
-                status.pending_invocations.len()
-            );
-
             // First, try to process a pending update
-            if !status.pending_updates.is_empty() {
-                let target_version = *status
-                    .pending_updates
-                    .front()
-                    .unwrap()
-                    .description
-                    .target_version();
+            if let Some(update) = status.pending_updates.front() {
+                let target_version = *update.description.target_version();
                 let mut store = self.store.lock().await;
                 let mut invocation = Invocation {
                     owned_worker_id: self.owned_worker_id.clone(),
@@ -353,7 +340,17 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
 
             // Then, try to process a pending invocation
-            if !status.pending_invocations.is_empty() {
+            if let Some(timestamped_invocation) = status.pending_invocations.first() {
+                let idempotency_key = timestamped_invocation.invocation.idempotency_key();
+                let invocation_span = if let Some(idempotency_key) = idempotency_key {
+                    let spans = self.parent.external_invocation_spans.read().await;
+                    spans.get(idempotency_key).cloned()
+                } else {
+                    None
+                };
+
+                let invocation_span = invocation_span.unwrap_or(Span::current());
+
                 let mut store = self.store.lock().await;
                 let mut invocation = Invocation {
                     owned_worker_id: self.owned_worker_id.clone(),
@@ -361,9 +358,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     instance: self.instance,
                     store: store.deref_mut(),
                 };
-                let timestamped_invocation = status.pending_invocations.first().unwrap().clone();
                 match invocation
-                    .external_invocation(timestamped_invocation, &Span::current())
+                    .external_invocation(timestamped_invocation.clone(), &invocation_span)
                     .await
                 {
                     CommandOutcome::Continue => continue,
@@ -399,10 +395,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs a queued invocation on the worker
     ///
-    /// The queued invocations are grouped into "external" invocations that are observable by the users
-    /// in the worker's invocation queue, oplog, etc., and some internal invocations that we use for
+    /// The queued invocations internal invocations that we use for
     /// concurrency control.
-    async fn invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
+    async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 

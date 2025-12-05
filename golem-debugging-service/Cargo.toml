@@ -16,17 +16,12 @@ path = "src/server.rs"
 golem-worker-executor = { workspace = true }
 golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
-golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-async-dropper = { workspace = true }
-async-dropper-simple = { workspace = true }
 axum-jrpc = { workspace = true }
-bytes = { workspace = true }
-desert_rust = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
 humansize = { workspace = true }

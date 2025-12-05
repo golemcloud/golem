@@ -107,8 +107,6 @@ anyhow = "1.0.97"
 applying = "1.0.1"
 arbitrary = "1.4.1"
 assert2 = "0.3.15"
-async-dropper = { version = "0.3.1", features = ["simple", "tokio"] }
-async-dropper-simple = { version = "0.2.6", features = ["no-default-bound", "tokio", ] }
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
