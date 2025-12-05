@@ -22,11 +22,12 @@ use std::rc::Rc;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
+use crate::agentic::Agent;
 
 #[derive(Default)]
 pub struct State {
     pub agent_types: RefCell<AgentTypes>,
-    pub agent_instance: RefCell<AgentInstance>,
+    pub agent_instance: RefCell<Option<AgentInstance>>,
     pub agent_initiators: RefCell<AgentInitiators>,
 }
 
@@ -49,7 +50,7 @@ pub fn get_state() -> &'static State {
 
 #[derive(Default)]
 pub struct AgentInstance {
-    pub resolved_agent: Option<Rc<ResolvedAgent>>,
+    pub agent: Box<dyn Agent>,
 }
 
 #[derive(Default)]
@@ -99,10 +100,10 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
         .insert(agent_type_name, initiator);
 }
 
-pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
+pub fn register_agent_instance(resolved_agent: Box<dyn Agent>) {
     let state = get_state();
 
-    state.agent_instance.borrow_mut().resolved_agent = Some(Rc::new(resolved_agent));
+    state.agent_instance.borrow_mut().agent = Some(Rc::new(resolved_agent));
 }
 
 // To be used only in agent implementation
@@ -114,7 +115,7 @@ where
     let agent_instance = get_state()
         .agent_instance
         .borrow()
-        .resolved_agent
+        .agent
         .clone()
         .unwrap();
 
@@ -128,7 +129,7 @@ where
     let agent_instance = get_state()
         .agent_instance
         .borrow()
-        .resolved_agent
+        .agent
         .clone()
         .unwrap();
 
@@ -153,7 +154,7 @@ pub fn get_agent_id() -> AgentId {
 }
 
 pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
-    get_state().agent_instance.borrow().resolved_agent.clone()
+    get_state().agent_instance.borrow().agent.clone()
 }
 
 pub fn get_constructor_parameter_type(
