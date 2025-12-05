@@ -263,14 +263,32 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.waiting_for_command.store(true, Ordering::Release);
         while let Some(cmd) = self.receiver.recv().await {
             self.waiting_for_command.store(false, Ordering::Release);
+            tracing::warn!("Received command {cmd:?} from channel");
             let outcome = match cmd {
-                WorkerCommand::Invocation => {
-                    let message = self.active.write().await.pop_front();
+                WorkerCommand::Run => {
+                    // Drain the entire queue
+                    loop {
+                        let message = self.active.write().await.pop_front();
+                        tracing::warn!("Received message {message:?} from the queue");
 
-                    if let Some(message) = message {
-                        self.invocation(message).await
-                    } else {
-                        CommandOutcome::Continue
+                        let result = if let Some(message) = message {
+                            self.invocation(message).await
+                        } else {
+                            // Queue is empty, check last_known_status for pending updates and invocations
+                            break self.drain_pending_from_status().await;
+                        };
+                        tracing::warn!("result: {result:?}");
+
+                        match result {
+                            CommandOutcome::Continue => {
+                                // Continue draining the queue
+                                continue;
+                            }
+                            other => {
+                                // Break out of the drain loop and handle the outcome
+                                break other;
+                            }
+                        }
                     }
                 }
                 WorkerCommand::ResumeReplay => self.resume_replay().await,
@@ -295,6 +313,66 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
+    }
+
+    /// When the main queue becomes empty, process items from last_known_status:
+    /// first pending_updates, then pending_invocations
+    async fn drain_pending_from_status(&mut self) -> CommandOutcome {
+        loop {
+            let status = self.parent.last_known_status.read().await.clone();
+
+            tracing::warn!(
+                "Processing pending invocations based on status @ {}",
+                status.oplog_idx
+            );
+            tracing::warn!("Pending update count: {}", status.pending_updates.len());
+            tracing::warn!(
+                "Pending invocation count: {}",
+                status.pending_invocations.len()
+            );
+
+            // First, try to process a pending update
+            if !status.pending_updates.is_empty() {
+                let target_version = *status
+                    .pending_updates
+                    .front()
+                    .unwrap()
+                    .description
+                    .target_version();
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                match invocation.manual_update(target_version).await {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            // Then, try to process a pending invocation
+            if !status.pending_invocations.is_empty() {
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                let timestamped_invocation = status.pending_invocations.first().unwrap().clone();
+                match invocation
+                    .external_invocation(timestamped_invocation, &Span::current())
+                    .await
+                {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            break CommandOutcome::Continue;
+        }
     }
 
     /// Resumes an interrupted replay process
@@ -364,43 +442,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::External { invocation } => {
-                let idempotency_key = invocation.invocation.idempotency_key();
-                
-                // Check if the invocation was canceled
-                let is_canceled = if let Some(key) = &idempotency_key {
-                    self.parent.external_invocation_canceled.read().await.contains(key)
-                } else {
-                    false
-                };
-                
-                if !is_canceled {
-                    // Get the span for this invocation, defaulting to current span if not found
-                    let span = if let Some(key) = &idempotency_key {
-                        self.parent.external_invocation_spans
-                            .read()
-                            .await
-                            .get(key)
-                            .cloned()
-                            .unwrap_or_else(|| Span::current())
-                    } else {
-                        Span::current()
-                    };
-                    
-                    // Clean up the span entry after processing
-                    if let Some(key) = idempotency_key {
-                        self.parent.external_invocation_spans.write().await.remove(&key);
-                    }
-                    
-                    self.external_invocation(invocation, &span).await
-                } else {
-                    // Clean up canceled invocation tracking
-                    if let Some(key) = idempotency_key {
-                        self.parent.external_invocation_canceled.write().await.remove(&key);
-                    }
-                    CommandOutcome::Continue
-                }
-            }
             QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
