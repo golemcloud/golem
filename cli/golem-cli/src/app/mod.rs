@@ -16,4 +16,4 @@ pub mod build;
 pub mod context;
 pub mod error;
 pub mod remote_components;
-pub mod yaml_edit;
+// TODO: atomic: pub mod yaml_edit;

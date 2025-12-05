@@ -408,6 +408,23 @@ pub enum TargetExistsResolveDecision {
     Merge(MergeContents),
 }
 
+pub struct DocDependencyGroup {
+    pub name: &'static str,
+    pub dependencies: Vec<DocDependency>,
+}
+
+pub struct DocDependency {
+    pub name: &'static str,
+    pub env_vars: Vec<DocDependencyEnvVar>,
+    pub url: String,
+}
+
+pub struct DocDependencyEnvVar {
+    pub name: &'static str,
+    pub value: &'static str,
+    pub comment: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct Template {
     pub name: TemplateName,

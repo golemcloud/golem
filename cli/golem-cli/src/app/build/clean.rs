@@ -78,22 +78,27 @@ pub fn clean_app(ctx: &ApplicationContext, mode: CleanMode) -> anyhow::Result<()
                 log_action("Cleaning", "component clients");
                 let _indent = LogIndent::new();
 
-                for dep in ctx.application.all_dependencies() {
-                    if dep.dep_type.is_wasm_rpc() {
-                        if let Some(dep) = dep.as_dependent_app_component() {
-                            log_action(
-                                "Cleaning",
-                                format!(
-                                    "component client {}",
-                                    dep.name.as_str().log_color_highlight()
-                                ),
-                            );
-                            let _indent = LogIndent::new();
+                for component_name in ctx.application.component_names() {
+                    for dep in ctx.application.component_dependencies(component_name) {
+                        if dep.dep_type.is_wasm_rpc() {
+                            if let Some(dep) = dep.as_dependent_app_component() {
+                                log_action(
+                                    "Cleaning",
+                                    format!(
+                                        "component client {}",
+                                        dep.name.as_str().log_color_highlight()
+                                    ),
+                                );
+                                let _indent = LogIndent::new();
 
-                            let dep_component = ctx.application.component(&dep.name);
-                            delete_path_logged("client wit", &dep_component.client_wit())?;
-                            if dep.dep_type == DependencyType::StaticWasmRpc {
-                                delete_path_logged("client wasm", &dep_component.client_wasm())?;
+                                let dep_component = ctx.application.component(&dep.name);
+                                delete_path_logged("client wit", &dep_component.client_wit())?;
+                                if dep.dep_type == DependencyType::StaticWasmRpc {
+                                    delete_path_logged(
+                                        "client wasm",
+                                        &dep_component.client_wasm(),
+                                    )?;
+                                }
                             }
                         }
                     }
