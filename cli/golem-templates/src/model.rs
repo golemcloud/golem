@@ -414,9 +414,9 @@ pub struct DocDependencyGroup {
 }
 
 pub struct DocDependency {
-    name: &'static str,
-    env_vars: Vec<DocDependencyEnvVar>,
-    url: &'static str,
+    pub name: &'static str,
+    pub env_vars: Vec<DocDependencyEnvVar>,
+    pub url: String,
 }
 
 pub struct DocDependencyEnvVar {
