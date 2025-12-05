@@ -1032,7 +1032,7 @@ async fn auto_update_on_idle_to_non_existing(
 /// Check that GOLEM_COMPONENT_REVISION environment variable is updated as part of a worker update
 #[test]
 #[tracing::instrument]
-async fn update_component_version_environment_variable(
+async fn update_component_revision_environment_variable(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1051,7 +1051,7 @@ async fn update_component_version_environment_variable(
         let result = executor
             .invoke_and_await(
                 &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
+                "golem:component/api.{get-revision-from-env-var}",
                 vec![],
             )
             .await??;
@@ -1071,7 +1071,7 @@ async fn update_component_version_environment_variable(
         let result = executor
             .invoke_and_await(
                 &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
+                "golem:component/api.{get-revision-from-env-var}",
                 vec![],
             )
             .await??;
@@ -1089,7 +1089,7 @@ async fn update_component_version_environment_variable(
         let result = executor
             .invoke_and_await(
                 &worker2,
-                "golem:component/api.{get-version-from-env-var}",
+                "golem:component/api.{get-revision-from-env-var}",
                 vec![],
             )
             .await??;
@@ -1109,7 +1109,7 @@ async fn update_component_version_environment_variable(
         let result = executor
             .invoke_and_await(
                 &worker_id,
-                "golem:component/api.{get-version-from-env-var}",
+                "golem:component/api.{get-revision-from-env-var}",
                 vec![],
             )
             .await??;

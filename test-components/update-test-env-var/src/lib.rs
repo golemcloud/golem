@@ -5,7 +5,7 @@ mod bindings;
 struct Component;
 
 impl crate::bindings::exports::golem::component::api::Guest for Component {
-    fn get_version_from_env_var() -> String {
+    fn get_revision_from_env_var() -> String {
         std::env::var("GOLEM_COMPONENT_REVISION").unwrap_or_default()
     }
 }

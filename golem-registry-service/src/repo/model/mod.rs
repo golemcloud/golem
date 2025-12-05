@@ -42,8 +42,6 @@ use sqlx::Database;
 use sqlx::query::{Query, QueryAs};
 use uuid::Uuid;
 
-// TODO: typed revision_id and entity UUIDs
-
 pub fn new_repo_uuid() -> Uuid {
     Uuid::now_v7()
 }
