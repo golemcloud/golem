@@ -3126,13 +3126,13 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_deployment_plan
-  /v1/envs/{environment_id}/deployments:
-    get:
+  /v1/envs/{environment_id}/current-deployment:
+    put:
       tags:
       - RegistryService
       - Environment
       - Deployment
-      summary: Get all deployments in this environment
+      summary: Rollback an environment to a previous deployment
       parameters:
       - name: environment_id
         schema:
@@ -3140,6 +3140,88 @@ paths:
           format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeploymentRollback'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CurrentDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: rollback_environment
+  /v1/envs/{environment_id}/deployments:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: List all deployments in this environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -3194,7 +3276,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_deployments
+      operationId: list_deployments
     post:
       tags:
       - RegistryService
@@ -3222,7 +3304,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Deployment'
+                $ref: '#/components/schemas/CurrentDeployment'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -3269,12 +3351,12 @@ paths:
       - Cookie: []
       - Token: []
       operationId: deploy_environment
-  /v1/envs/{environment_id}/deployments/{deployment_id}/plan:
+  /v1/envs/{environment_id}/deployments/{deployment_id}/summary:
     get:
       tags:
       - RegistryService
       - Environment
-      summary: Get the deployment plan of a deployed deployment
+      summary: Get the deployment summary of a deployed deployment
       parameters:
       - name: environment_id
         schema:
@@ -3344,7 +3426,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_deployed_deployment_plan
+      operationId: get_deployment_summary
   /v1/envs/{environment_id}/deployments/{deployment_id}/agent-types:
     get:
       tags:
@@ -7356,6 +7438,30 @@ components:
       properties:
         response:
           type: string
+    CurrentDeployment:
+      type: object
+      title: CurrentDeployment
+      required:
+      - environmentId
+      - revision
+      - version
+      - deploymentHash
+      - currentRevision
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        version:
+          type: string
+        deploymentHash:
+          type: string
+          format: hash
+        currentRevision:
+          type: integer
+          format: uint64
     DataSchema:
       type: object
       oneOf:
@@ -7405,7 +7511,7 @@ components:
       - expectedDeploymentHash
       - version
       properties:
-        currentDeploymentRevision:
+        currentRevision:
           type: integer
           format: uint64
         expectedDeploymentHash:
@@ -7423,7 +7529,7 @@ components:
       - httpApiDefinitions
       - httpApiDeployments
       properties:
-        currentDeploymentRevision:
+        currentRevision:
           type: integer
           format: uint64
         deploymentHash:
@@ -7501,16 +7607,33 @@ components:
         hash:
           type: string
           format: hash
+    DeploymentRollback:
+      type: object
+      title: DeploymentRollback
+      required:
+      - currentRevision
+      - deploymentRevision
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        deploymentRevision:
+          type: integer
+          format: uint64
     DeploymentSummary:
       type: object
       title: DeploymentSummary
       description: Summary of all entities tracked by the deployment
       required:
+      - deploymentRevision
       - deploymentHash
       - components
       - httpApiDefinitions
       - httpApiDeployments
       properties:
+        deploymentRevision:
+          type: integer
+          format: uint64
         deploymentHash:
           type: string
           format: hash
@@ -7697,12 +7820,16 @@ components:
       title: EnvironmentCurrentDeploymentView
       required:
       - revision
-      - hash
+      - deploymentRevision
+      - deploymentHash
       properties:
         revision:
           type: integer
           format: uint64
-        hash:
+        deploymentRevision:
+          type: integer
+          format: uint64
+        deploymentHash:
           type: string
           format: hash
     EnvironmentPluginGrant:
