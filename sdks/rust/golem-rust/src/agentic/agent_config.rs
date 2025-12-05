@@ -12,29 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use agent::*;
-pub use agent_config::*;
-pub use agent_initiator::*;
-pub use agent_registry::*;
-pub use async_utils::*;
-pub use errors::*;
-pub use multimodal::*;
-pub use resolved_agent::*;
-pub use schema::*;
-pub use unstructured_binary::*;
-pub use unstructured_text::*;
-pub use wit_utils::*;
+use crate::agentic::Agent;
 
-mod agent;
-mod agent_impl;
-mod agent_initiator;
-mod agent_registry;
-mod async_utils;
-mod errors;
-mod multimodal;
-mod resolved_agent;
-mod schema;
-mod unstructured_binary;
-mod unstructured_text;
-mod wit_utils;
-mod agent_config;
+pub struct AgentConfig<T> {
+    t: T
+}
+
+impl<T> AgentConfig<T> {
+    pub fn get(&self) -> T {
+        // get config from somewhere
+        todo!()
+    }
+}

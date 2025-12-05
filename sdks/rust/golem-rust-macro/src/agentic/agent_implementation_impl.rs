@@ -323,7 +323,7 @@ fn generate_base_agent_impl(
     let self_ty = &impl_block.self_ty;
     quote! {
         #[golem_rust::async_trait::async_trait(?Send)]
-        impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
+        impl<T> #impl_generics golem_rust::agentic::Agent<T> for #self_ty #ty_generics #where_clause {
             fn get_agent_id(&self) -> String {
                 golem_rust::agentic::get_agent_id().agent_id
             }
@@ -335,7 +335,7 @@ fn generate_base_agent_impl(
                     _ => Err(golem_rust::agentic::invalid_method_error(method_name)),
                 }
             }
-
+            
             fn get_definition(&self)
                 -> golem_rust::golem_agentic::golem::agent::common::AgentType {
                 golem_rust::agentic::get_agent_type_by_name(&golem_rust::agentic::AgentTypeName(#trait_name_str.to_string()))

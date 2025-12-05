@@ -16,16 +16,13 @@ use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, 
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 
 #[async_trait::async_trait(?Send)]
-pub trait Agent<T = ()>: 'static {
+pub trait Agent<T = ()> {
     /// Gets the agent ID string of this agent.
     ///
     /// The agent ID consists of the agent type name, constructor parameter values and optional
     /// phantom ID.
     fn get_agent_id(&self) -> String;
-    
-    // Get config of the current agent
-    fn get_config() -> T where Self: Sized;
-    
+
     /// Dynamically performs a method invocation on this agent
     async fn invoke(
         &mut self,
