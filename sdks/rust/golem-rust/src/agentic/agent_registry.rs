@@ -25,7 +25,7 @@ use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
 
 #[derive(Default)]
-pub struct State {
+pub struct ApplicationState {
     pub agent_types: RefCell<AgentTypes>,
     pub agent_instance: RefCell<Option<AgentInstance>>,
     pub agent_initiators: RefCell<AgentInitiators>,
@@ -36,18 +36,25 @@ pub struct AgentTypes {
     pub agent_types: HashMap<AgentTypeName, AgentType>,
 }
 
-static mut STATE: Option<State> = None;
+static mut APPLICATION_STATE: Option<ApplicationState> = None;
 
 #[allow(static_mut_refs)]
-pub fn get_state() -> &'static State {
+pub fn get_state() -> &'static ApplicationState {
     unsafe {
-        if STATE.is_none() {
-            STATE = Some(State::default());
+        if APPLICATION_STATE.is_none() {
+            APPLICATION_STATE = Some(ApplicationState::default());
         }
-        STATE.as_ref().unwrap()
+        APPLICATION_STATE.as_ref().unwrap()
     }
 }
 
+// While the app is in-fact single threaded,
+// we use `Arc<RwLock>` just to allow async code to have mutable access to the agent instance without borrow checker constraints.
+//
+// Internal details:
+// Mutation: Mutation of an agent instance may occur when invoking agent methods.
+// Example: `fn count(&mut self)` requires mutable access to the agent instance.
+// Dynamic invoke` are in async context, because its implementation is delegation to agent methods which can be async functions.
 pub type AgentInstance = Arc<RwLock<Box<dyn Agent>>>;
 
 #[derive(Default)]
@@ -97,12 +104,12 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
         .insert(agent_type_name, initiator);
 }
 
-pub fn register_agent_instance(resolved_agent: Box<dyn Agent>) {
+pub fn register_agent_instance(agent: Box<dyn Agent>) {
     let state = get_state();
 
-    let agent_instance = Arc::new(RwLock::new(resolved_agent));
+    let agent_instance = RwLock::new(agent);
 
-    *state.agent_instance.borrow_mut() = Some(agent_instance);
+    *state.agent_instance.borrow_mut() = Some(Arc::new(agent_instance));
 }
 
 // To be used only in agent implementation
@@ -133,16 +140,13 @@ pub fn is_agent_instance_active() -> bool {
 
 pub fn with_agent_instance<F, R>(f: F) -> R
 where
-    F: FnOnce(AgentInstance) -> R,
+    F: FnOnce(&AgentInstance) -> R,
 {
     let state = get_state();
 
     let agent = state.agent_instance.borrow();
 
-    let agent = agent
-        .as_ref()
-        .expect("Agent instance not registered")
-        .clone();
+    let agent = agent.as_ref().expect("Agent instance not registered");
 
     f(agent)
 }
