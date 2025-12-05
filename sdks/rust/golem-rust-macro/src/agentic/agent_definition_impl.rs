@@ -146,7 +146,7 @@ fn get_save_snapshot_item() -> syn::TraitItem {
 
 fn get_config_item(config_type_name: &syn::Type) -> syn::TraitItem {
     syn::parse_quote! {
-        fn get_config(&self) -> Result<golem_rust::agentic::AgentConfig<#config_type_name>, String> {
+        fn get_config() -> Result<golem_rust::agentic::AgentConfig<#config_type_name>, String> {
             Err("get_config not implemented".to_string())
         }
     }
