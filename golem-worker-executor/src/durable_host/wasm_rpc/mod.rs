@@ -24,9 +24,9 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
+use futures::future::Either;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
-use futures::future::Either;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
 use golem_common::model::oplog::host_functions::{

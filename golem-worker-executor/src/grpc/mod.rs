@@ -62,8 +62,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,Timestamp, TimestampedWorkerInvocation, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, Timestamp, TimestampedWorkerInvocation,
+    WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
@@ -599,8 +599,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    if let Some(mut await_interruption) =
-                        worker.set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc())).await
+                    if let Some(mut await_interruption) = worker
+                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                        .await
                     {
                         await_interruption.recv().await.unwrap();
                     };
@@ -623,8 +624,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
-                    if let Some(mut await_interruption) =
-                        worker.set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc())).await
+                    if let Some(mut await_interruption) = worker
+                        .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+                        .await
                     {
                         await_interruption.recv().await.unwrap();
                     };
