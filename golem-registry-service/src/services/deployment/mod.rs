@@ -24,7 +24,9 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::agent::RegisteredAgentType;
-use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
+use golem_common::model::deployment::{
+    DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
+};
 use golem_common::model::environment::Environment;
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -88,6 +90,7 @@ impl DeploymentService {
     pub async fn list_deployments(
         &self,
         environment_id: &EnvironmentId,
+        version: Option<DeploymentVersion>,
         auth: &AuthCtx,
     ) -> Result<Vec<Deployment>, DeploymentError> {
         let environment = self
@@ -109,7 +112,7 @@ impl DeploymentService {
 
         let deployments = self
             .deployment_repo
-            .list_deployment_revisions(&environment_id.0)
+            .list_deployment_revisions(&environment_id.0, version.as_ref().map(|v| v.0.as_str()))
             .await?
             .into_iter()
             .map(Deployment::from)
@@ -156,7 +159,7 @@ impl DeploymentService {
 
         let deployment: Deployment = self
             .deployment_repo
-            .get_deployed_revision(&environment_id.0, deployment_revision.into())
+            .get_deployment_revision(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
             .into();
@@ -186,22 +189,16 @@ impl DeploymentService {
             EnvironmentAction::ViewDeploymentPlan,
         )?;
 
-        let staged_revision = self
-            .deployment_repo
-            .get_next_revision_number(&environment_id.0)
-            .await?
-            .map(|r| DeploymentRevision(r as u64));
-
         let summary: DeploymentPlan = self
             .deployment_repo
             .get_staged_identity(&environment_id.0)
             .await?
-            .into_plan(staged_revision);
+            .into_plan(environment.current_deployment.as_ref().map(|e| e.revision));
 
         Ok(summary)
     }
 
-    pub async fn get_deployed_deployment_summary(
+    pub async fn get_deployment_summary(
         &self,
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -226,10 +223,9 @@ impl DeploymentService {
 
         let summary: DeploymentSummary = self
             .deployment_repo
-            .get_deployment_identity(&environment_id.0, Some(deployment_revision.into()))
+            .get_deployment_identity(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
-            .identity
             .into();
 
         Ok(summary)

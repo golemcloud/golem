@@ -54,8 +54,10 @@ pub struct EnvironmentExtRecord {
 
     pub owner_account_id: Uuid,
     pub environment_roles_from_shares: i32,
+
     pub current_deployment_revision: Option<i64>,
-    pub current_deployment_hash: Option<SqlBlake3Hash>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -127,7 +129,8 @@ pub struct EnvironmentExtRevisionRecord {
     pub environment_roles_from_shares: i32,
 
     pub current_deployment_revision: Option<i64>,
-    pub current_deployment_hash: Option<SqlBlake3Hash>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl From<EnvironmentExtRevisionRecord> for Environment {
@@ -146,14 +149,20 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
                 value.environment_roles_from_shares,
             )),
 
-            current_deployment: Option::zip(
+            current_deployment: match (
                 value.current_deployment_revision,
-                value.current_deployment_hash,
-            )
-            .map(|(revision, hash)| EnvironmentCurrentDeploymentView {
-                revision: revision.into(),
-                hash: hash.into_blake3_hash().into(),
-            }),
+                value.current_deployment_deployment_revision,
+                value.current_deployment_deployment_hash,
+            ) {
+                (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
+                    Some(EnvironmentCurrentDeploymentView {
+                        revision: revision.into(),
+                        deployment_revision: deployment_revision.into(),
+                        deployment_hash: deployment_hash.into_blake3_hash().into(),
+                    })
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -178,7 +187,8 @@ pub struct OptionalEnvironmentExtRevisionRecord {
     pub environment_roles_from_shares: i32,
 
     pub current_deployment_revision: Option<i64>,
-    pub current_deployment_hash: Option<SqlBlake3Hash>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl OptionalEnvironmentExtRevisionRecord {
@@ -225,7 +235,8 @@ impl OptionalEnvironmentExtRevisionRecord {
             environment_roles_from_shares: self.environment_roles_from_shares,
 
             current_deployment_revision: self.current_deployment_revision,
-            current_deployment_hash: self.current_deployment_hash,
+            current_deployment_deployment_revision: self.current_deployment_deployment_revision,
+            current_deployment_deployment_hash: self.current_deployment_deployment_hash,
         })
     }
 }

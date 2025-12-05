@@ -444,7 +444,8 @@ impl From<DeploymentWriteError> for ApiError {
     fn from(value: DeploymentWriteError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            DeploymentWriteError::ParentEnvironmentNotFound(_) => {
+            DeploymentWriteError::ParentEnvironmentNotFound(_)
+            | DeploymentWriteError::DeploymentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -461,7 +462,8 @@ impl From<DeploymentWriteError> for ApiError {
             DeploymentWriteError::ConcurrentDeployment
             | DeploymentWriteError::NoOpDeployment
             | DeploymentWriteError::VersionAlreadyExists { .. }
-            | DeploymentWriteError::DeploymentHashMismatch { .. } => {
+            | DeploymentWriteError::DeploymentHashMismatch { .. }
+            | DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 

@@ -13,15 +13,19 @@
 // limitations under the License.
 
 use assert2::{assert, let_assert};
-use golem_client::api::{RegistryServiceClient, RegistryServiceDeployEnvironmentError};
+use golem_client::api::{
+    RegistryServiceClient, RegistryServiceDeployEnvironmentError,
+    RegistryServiceRollbackEnvironmentError,
+};
 use golem_client::model::DeploymentCreation;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{
     DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRollback, DeploymentVersion,
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
+use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_definition::{
     GatewayBinding, HttpApiDefinitionCreation, HttpApiDefinitionName, HttpApiDefinitionVersion,
     HttpApiRoute, RouteMethod, WorkerGatewayBinding,
@@ -50,10 +54,10 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_deployment_revision: None,
+                current_revision: None,
                 expected_deployment_hash:
                     "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
@@ -65,14 +69,14 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     {
         let fetched_environment = client.get_environment(&env.id.0).await?;
         let_assert!(Some(current_deployment) = fetched_environment.current_deployment);
-        assert!(current_deployment.revision == deployment.revision);
-        assert!(current_deployment.hash == deployment.deployment_hash);
+        assert!(current_deployment.deployment_revision == deployment.revision);
+        assert!(current_deployment.deployment_hash == deployment.deployment_hash);
     }
 
-    // Plan of the deployed deployment is the same as the original plan
+    // Summary of the deployed deployment is the same as the original plan
     {
         let fetched_deployment = client
-            .get_environment_deployed_deployment_plan(&env.id.0, deployment.revision.0)
+            .get_deployment_summary(&env.id.0, deployment.revision.0)
             .await?;
         assert!(fetched_deployment.deployment_hash == plan.deployment_hash);
         assert!(fetched_deployment.components == plan.components);
@@ -95,9 +99,9 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
             .deploy_environment(
                 &env.id.0,
                 &DeploymentCreation {
-                    current_deployment_revision: None,
+                    current_revision: None,
                     expected_deployment_hash: Hash::empty(),
-                    version: "0.0.1".to_string(),
+                    version: DeploymentVersion("0.0.1".to_string()),
                 },
             )
             .await;
@@ -127,10 +131,10 @@ async fn get_component_version_from_previous_deployment(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_deployment_revision: None,
+                current_revision: None,
                 expected_deployment_hash:
                     "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
@@ -159,10 +163,10 @@ async fn get_component_version_from_previous_deployment(
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_deployment_revision: Some(deployment_1.revision),
+                current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
                     "cbb574e689f0dddb384a5a412c51e0bd6a2d3012c0b49fe44fee03417aaeaf31".parse()?,
-                version: "0.0.2".to_string(),
+                version: DeploymentVersion("0.0.2".to_string()),
             },
         )
         .await?;
@@ -259,7 +263,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
 
     {
         let expected_plan = DeploymentPlan {
-            current_deployment_revision: None,
+            current_revision: None,
             deployment_hash: expected_hash,
             components: vec![DeploymentPlanComponentEntry {
                 id: component.id,
@@ -293,14 +297,148 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_deployment_revision: None,
+                current_revision: None,
                 expected_deployment_hash: expected_hash,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
 
     assert!(deployment.deployment_hash == expected_hash);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "shopping-cart").store().await?;
+
+    let deployment_1 = user.deploy_environment(&env.id).await?;
+
+    user.component(&env.id, "it_agent_counters_release")
+        .store()
+        .await?;
+
+    let deployment_2 = user.deploy_environment(&env.id).await?;
+
+    assert!(deployment_2.revision != deployment_1.revision);
+    assert!(deployment_2.deployment_hash != deployment_1.deployment_hash);
+
+    // noop rollback
+    {
+        let result = client
+            .rollback_environment(
+                &env.id.0,
+                &DeploymentRollback {
+                    current_revision: deployment_2.current_revision,
+                    deployment_revision: deployment_2.revision,
+                },
+            )
+            .await;
+
+        assert!(
+            let Err(golem_client::Error::Item(
+                RegistryServiceRollbackEnvironmentError::Error409(_)
+            )) = result
+        );
+    }
+
+    {
+        let env = client.get_environment(&env.id.0).await?;
+        assert!(
+            env.current_deployment
+                == Some(EnvironmentCurrentDeploymentView {
+                    revision: deployment_2.current_revision,
+                    deployment_revision: deployment_2.revision,
+                    deployment_hash: deployment_2.deployment_hash
+                })
+        )
+    };
+
+    // actual rollback
+    let rollback_result = client
+        .rollback_environment(
+            &env.id.0,
+            &DeploymentRollback {
+                current_revision: deployment_2.current_revision,
+                deployment_revision: deployment_1.revision,
+            },
+        )
+        .await?;
+
+    let expected_revision = deployment_2.current_revision.next()?;
+
+    assert!(rollback_result.current_revision == expected_revision);
+    assert!(rollback_result.revision == deployment_1.revision);
+    assert!(rollback_result.deployment_hash == deployment_1.deployment_hash);
+    assert!(rollback_result.version == deployment_1.version);
+
+    {
+        let env = client.get_environment(&env.id.0).await?;
+        assert!(
+            env.current_deployment
+                == Some(EnvironmentCurrentDeploymentView {
+                    revision: expected_revision,
+                    deployment_revision: deployment_1.revision,
+                    deployment_hash: deployment_1.deployment_hash
+                })
+        )
+    };
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "shopping-cart").store().await?;
+
+    let deployment_1 = user.deploy_environment(&env.id).await?;
+
+    client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                new_file_options: BTreeMap::new(),
+                removed_files: Vec::new(),
+                dynamic_linking: None,
+                env: Some(BTreeMap::from_iter(vec![(
+                    "ENV_VAR".to_string(),
+                    "ENV_VAR_VALUE".to_string(),
+                )])),
+                agent_types: None,
+                plugin_updates: Vec::new(),
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    let deployment_2 = user.deploy_environment(&env.id).await?;
+
+    {
+        let deployments = client.list_deployments(&env.id.0, None).await?;
+        assert!(
+            deployments.values == vec![deployment_1.clone().into(), deployment_2.clone().into()]
+        )
+    }
+
+    {
+        let deployments = client
+            .list_deployments(&env.id.0, Some(&deployment_2.version.0))
+            .await?;
+        assert!(deployments.values == vec![deployment_2.clone().into()])
+    }
 
     Ok(())
 }
