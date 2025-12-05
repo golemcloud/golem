@@ -44,11 +44,25 @@ pub async fn gen_rpc(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
             create_generated_base_wit(ctx, &component_name).await?;
         }
 
-        for dep in &ctx.application.all_dependencies() {
+        let deps = ctx
+            .application
+            .component_names()
+            .flat_map(|component_name| {
+                ctx.application
+                    .component_dependencies(component_name)
+                    .iter()
+                    .filter_map(|dep| {
+                        dep.dep_type
+                            .is_wasm_rpc()
+                            .then(|| dep.as_dependent_app_component())
+                            .flatten()
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        for dep in &deps {
             if dep.dep_type.is_wasm_rpc() {
-                if let Some(dep) = dep.as_dependent_app_component() {
-                    build_client(ctx, &dep).await?;
-                }
+                build_client(ctx, dep).await?;
             }
         }
     }

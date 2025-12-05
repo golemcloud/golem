@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::{
-    ApplicationName, ComposableAppGroupName, GuestLanguage, PackageName, SdkOverrides,
-    TargetExistsResolveDecision, TargetExistsResolveMode, Template, TemplateKind, TemplateMetadata,
-    TemplateName, TemplateParameters, Transform,
+    ApplicationName, ComposableAppGroupName, DocDependency, DocDependencyGroup, GuestLanguage,
+    PackageName, SdkOverrides, TargetExistsResolveDecision, TargetExistsResolveMode, Template,
+    TemplateKind, TemplateMetadata, TemplateName, TemplateParameters, Transform,
 };
 use anyhow::Context;
 use include_dir::{include_dir, Dir, DirEntry};
@@ -675,4 +675,8 @@ fn parse_template(
             .map(|dirs| dirs.iter().map(PathBuf::from).collect()),
         dev_only: metadata.dev_only.unwrap_or(false),
     }
+}
+
+fn doc_dependencies(template: &Template) -> Vec<DocDependencyGroup> {
+    todo!()
 }

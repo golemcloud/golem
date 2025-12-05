@@ -1,7 +1,5 @@
 # golem-app-manifest-header
 
-# golem-app-manifest-header
-
 #httpApi:
 #  definitions:
 #    component-name-api:
@@ -181,7 +179,6 @@ components:
 # For each area (such as LLM, Search, etc) only one of the providers can be commented out.
 # If no provider dependency is commented out, then using that AI API will be a runtime failure.
 dependencies:
-  componentname:
   # LLM providers
   # ------------------------------------------------------------------------------------------------------------
   ## Anthropic
