@@ -329,7 +329,6 @@ async fn cannot_create_two_http_api_definitions_with_same_name(
 }
 
 #[test]
-#[ignore]
 #[tracing::instrument]
 async fn cannot_create_two_revisions_with_same_version(
     deps: &EnvBasedTestDependencies,
@@ -356,7 +355,7 @@ async fn cannot_create_two_revisions_with_same_version(
         )
         .await?;
 
-    // TODO: deploy revision here as only deployed revisions are considered for version checks
+    user.deploy_environment(&env.id).await?;
 
     let result = client
         .update_http_api_definition(
