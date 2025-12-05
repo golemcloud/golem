@@ -554,7 +554,7 @@ async fn context_inheritance(
                 "GOLEM_COMPONENT_ID".to_string(),
                 counters_component.id.to_string()
             ),
-            ("GOLEM_COMPONENT_VERSION".to_string(), "0".to_string()),
+            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
             (
                 "GOLEM_WORKER_NAME".to_string(),
                 "counters_test4".to_string()

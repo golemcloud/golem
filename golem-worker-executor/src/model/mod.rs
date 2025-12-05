@@ -94,7 +94,7 @@ impl WorkerConfig {
                 && key != "GOLEM_AGENT_TYPE"
                 && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
-                && key != "GOLEM_COMPONENT_VERSION"
+                && key != "GOLEM_COMPONENT_REVISION"
         });
     }
 
@@ -102,17 +102,17 @@ impl WorkerConfig {
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
         agent_type: &Option<String>,
-        target_component_version: ComponentRevision,
+        target_component_revision: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
         let component_id = &worker_id.component_id;
-        let component_version = target_component_version.to_string();
+        let component_revision = target_component_revision.to_string();
 
         Self::remove_dynamic_vars(worker_env);
         worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
+        worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
         if let Some(agent_type) = agent_type {
             worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
         }

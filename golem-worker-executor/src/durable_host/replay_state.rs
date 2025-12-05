@@ -21,7 +21,7 @@ use golem_common::model::oplog::{
     PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{ForkResult, IdempotencyKey, OwnedWorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;

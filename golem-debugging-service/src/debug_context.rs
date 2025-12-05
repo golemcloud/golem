@@ -24,7 +24,7 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::TimestampedUpdateDescription;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, Timestamp, WorkerId, WorkerStatusRecord};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::golem_rpc_0_2_x::types::{

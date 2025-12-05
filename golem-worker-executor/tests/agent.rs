@@ -207,7 +207,7 @@ async fn agent_env_inheritance(
                 Value::String(worker_id.component_id.to_string())
             ),
             (
-                "GOLEM_COMPONENT_VERSION".to_string(),
+                "GOLEM_COMPONENT_REVISION".to_string(),
                 Value::String("0".to_string())
             ),
             (
@@ -235,7 +235,7 @@ async fn agent_env_inheritance(
                 Value::String(child_worker_id.component_id.to_string())
             ),
             (
-                "GOLEM_COMPONENT_VERSION".to_string(),
+                "GOLEM_COMPONENT_REVISION".to_string(),
                 Value::String("0".to_string())
             ),
             (

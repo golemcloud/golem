@@ -504,10 +504,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
-                component_version,
+                component_revision,
                 args,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
@@ -519,10 +519,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 worker_id: worker_id.clone(),
-                component_version,
+                component_revision,
                 args,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,

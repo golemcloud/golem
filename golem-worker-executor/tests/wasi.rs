@@ -1052,7 +1052,7 @@ async fn environment_service(
                     Value::String(component.id.to_string())
                 ]),
                 Value::Tuple(vec![
-                    Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                    Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                     Value::String("0".to_string())
                 ]),
             ])))))]

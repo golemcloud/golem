@@ -632,7 +632,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
             Value::String(format!("{}", component.id)),
         ]),
         Value::Tuple(vec![
-            Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+            Value::String("GOLEM_COMPONENT_REVISION".to_string()),
             Value::String("0".to_string()),
         ]),
     ])))));
@@ -801,39 +801,46 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn fork_and_sync_with_promise(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let admin = deps.admin().await;
-    let component_id = admin.component("golem_it_agent_promise").store().await;
+async fn fork_and_sync_with_promise(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_promise")
+        .store()
+        .await?;
 
     let uuid = Uuid::new_v4();
     let worker_name = format!("promise-agent(\"{uuid}\")");
-    let worker = admin.start_worker(&component_id, &worker_name).await;
+    let worker = user.start_worker(&component.id, &worker_name).await?;
 
-    let result1 = admin
+    let result1 = user
         .invoke_and_await(
             &worker,
             "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(
         result1,
         vec![Value::String("Hello from forked agent!".to_string())]
     );
 
-    let result2 = admin
+    let result2 = user
         .invoke_and_await(
             &worker,
             "golem-it:agent-promise/promise-agent.{fork-and-sync-with-promise}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(
         result2,
         vec![Value::String("Hello from forked agent!".to_string())]
     );
+
+    Ok(())
 }

@@ -2033,7 +2033,7 @@ impl RunningWorker {
                 // of the worker and the resource limits are updated in the cloud service (end of month, plan change)
                 // the current resource limits logic will not pick that up. It will still be picked up after a few attempts
                 // at resuming the worker (after the first usage update is sent) or an instance restart, but we should have better ux here.
-                return Err(InterruptKind::Suspend.into());
+                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
 
             match store.data_mut().check_interrupt() {

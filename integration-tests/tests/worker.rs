@@ -99,7 +99,7 @@ async fn dynamic_worker_creation(
                 Value::String(format!("{}", component.id))
             ]),
             Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
         ])))))]

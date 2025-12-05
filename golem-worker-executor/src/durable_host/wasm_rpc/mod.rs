@@ -153,7 +153,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .unwrap()
                 .create_await_interrupt_signal();
             let rpc = self.rpc();
-            let created_by = self.created_by().clone();
+            let created_by = *self.created_by();
             let worker_id = self.worker_id().clone();
 
             let either_result = futures::future::select(

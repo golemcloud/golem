@@ -851,7 +851,10 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto> {
+    async fn get_worker_metadata_opt(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<Option<WorkerMetadataDto>> {
         let latest_version = self
             .get_latest_component_version(&worker_id.component_id)
             .await?;
@@ -872,12 +875,17 @@ impl TestDsl for TestWorkerExecutor {
                 "No response from golem-worker-executor invoke call"
             )),
             Some(workerexecutor::v1::get_worker_metadata_response::Result::Success(result)) => {
-                Ok(result
+                Ok(Some(result
                     .try_into()
-                    .map_err(|e| anyhow!("Failed converting worker metadata: {e}"))?)
+                    .map_err(|e| anyhow!("Failed converting worker metadata: {e}"))?))
             }
             Some(workerexecutor::v1::get_worker_metadata_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed getting worker metadata: {error:?}"))
+                match error {
+                    golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
+                        error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::WorkerNotFound(_)),
+                    } => Ok(None),
+                    _ => Err(anyhow!("Failed getting worker metadata: {error:?}")),
+                }
             }
         }
     }

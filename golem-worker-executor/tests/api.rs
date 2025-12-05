@@ -119,23 +119,19 @@ async fn delete_interrupts_long_rpc_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("golem_it_agent_rpc")
+    let component = executor
+        .component(&context.default_environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .store()
-        .await;
+        .await?;
     let unique_id = context.redis_prefix();
     let worker_id = executor
-        .start_worker(&component_id, &format!("test-agent(\"{unique_id}\")"))
-        .await;
+        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .await?;
 
     executor
         .invoke(
@@ -143,14 +139,15 @@ async fn delete_interrupts_long_rpc_call(
             "golem-it:agent-rpc/test-agent.{long-rpc-call}",
             vec![120000f64.into_value_and_type()], // 2 minutes
         )
-        .await
-        .unwrap();
+        .await??;
 
     tokio::time::sleep(Duration::from_secs(10)).await;
-    executor.delete_worker(&worker_id).await;
+    executor.delete_worker(&worker_id).await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await;
-    check!(metadata.is_none());
+    check!(metadata.is_err());
+
+    Ok(())
 }
 
 #[test]
@@ -361,7 +358,7 @@ async fn dynamic_worker_creation(
                 Value::String(format!("{}", component.id))
             ]),
             Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
         ])))))]
@@ -914,7 +911,7 @@ async fn component_env_variables(
                 Value::String(format!("{}", component.id))
             ]),
             Value::Tuple(vec![
-                Value::String("GOLEM_COMPONENT_VERSION".to_string()),
+                Value::String("GOLEM_COMPONENT_REVISION".to_string()),
                 Value::String("0".to_string())
             ]),
         ])))))]

@@ -18,7 +18,7 @@ use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{PromiseId, ShardId, WorkerId};
+use golem_common::model::{PromiseId, ShardId, Timestamp, WorkerId};
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Serialize};

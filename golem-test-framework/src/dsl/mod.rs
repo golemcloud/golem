@@ -426,7 +426,17 @@ pub trait TestDsl {
 
     async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto>;
+    async fn get_worker_metadata_opt(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<Option<WorkerMetadataDto>>;
+
+    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto> {
+        match self.get_worker_metadata_opt(worker_id).await? {
+            Some(worker_metadata) => Ok(worker_metadata),
+            None => Err(anyhow!("Worker not found: {}", worker_id)),
+        }
+    }
 
     async fn get_workers_metadata(
         &self,

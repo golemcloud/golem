@@ -1029,7 +1029,7 @@ async fn auto_update_on_idle_to_non_existing(
     Ok(())
 }
 
-/// Check that GOLEM_COMPONENT_VERSION environment variable is updated as part of a worker update
+/// Check that GOLEM_COMPONENT_REVISION environment variable is updated as part of a worker update
 #[test]
 #[tracing::instrument]
 async fn update_component_version_environment_variable(

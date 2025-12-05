@@ -26,7 +26,7 @@ use futures::stream::SplitStream;
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{
-    RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
+    RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive, WorkerError,
 };
 use golem_client::model::{
     CompleteParameters, InvokeParameters, UpdateWorkerRequest, WorkersMetadataRequest,
@@ -600,16 +600,23 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
-    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto> {
+    async fn get_worker_metadata_opt(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<Option<WorkerMetadataDto>> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let result = client
+        match client
             .get_worker_metadata(&worker_id.component_id.0, &worker_id.worker_name)
-            .await?;
-        Ok(result)
+            .await
+        {
+            Ok(worker_metadata) => Ok(Some(worker_metadata)),
+            Err(golem_client::Error::Item(WorkerError::Error404(_))) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     async fn get_workers_metadata(
