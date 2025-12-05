@@ -58,7 +58,7 @@ pub trait AccountRepo: Send + Sync {
 
     async fn get_by_secret(
         &self,
-        secret: &Uuid,
+        secret: &str,
     ) -> Result<Option<AccountBySecretRecord>, AccountRepoError>;
 }
 
@@ -128,7 +128,7 @@ impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
 
     async fn get_by_secret(
         &self,
-        secret: &Uuid,
+        secret: &str,
     ) -> Result<Option<AccountBySecretRecord>, AccountRepoError> {
         self.repo.get_by_secret(secret).await
     }
@@ -334,7 +334,7 @@ impl AccountRepo for DbAccountRepo<PostgresPool> {
 
     async fn get_by_secret(
         &self,
-        secret: &Uuid,
+        secret: &str,
     ) -> Result<Option<AccountBySecretRecord>, AccountRepoError> {
         let result: Option<AccountBySecretRecord> = self.with_ro("get_account_by_secret")
             .fetch_optional_as(

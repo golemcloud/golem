@@ -54,7 +54,7 @@ impl AuthService {
     pub async fn authenticate_user(&self, token: TokenSecret) -> Result<UserAuthCtx, AuthError> {
         let record: AccountBySecretRecord = self
             .account_repo
-            .get_by_secret(&token.0)
+            .get_by_secret(token.secret())
             .await?
             .ok_or(AuthError::CouldNotAuthenticate)?;
 

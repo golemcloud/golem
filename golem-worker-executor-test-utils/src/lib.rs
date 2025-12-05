@@ -297,12 +297,12 @@ impl TestContext {
         let base_prefix = Uuid::new_v4().to_string();
         let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
 
-        let account_id = AccountId::new_v4();
-        let account_plan_id = PlanId::new_v4();
+        let account_id = AccountId::new();
+        let account_plan_id = PlanId::new();
         let account_roles = BTreeSet::new();
-        let application_id = ApplicationId::new_v4();
-        let default_environment_id = EnvironmentId::new_v4();
-        let account_token = TokenSecret::new_v4();
+        let application_id = ApplicationId::new();
+        let default_environment_id = EnvironmentId::new();
+        let account_token = TokenSecret::new();
 
         Self {
             base_prefix,

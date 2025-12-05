@@ -86,10 +86,10 @@ pub struct ComponentTransformerPluginCallerDefault {
 }
 
 impl ComponentTransformerPluginCallerDefault {
-    pub fn new(config: ComponentTransformerPluginCallerConfig) -> Self {
+    pub fn new(config: &ComponentTransformerPluginCallerConfig) -> Self {
         Self {
             client: reqwest::Client::new(),
-            config,
+            config: config.clone(),
         }
     }
 }

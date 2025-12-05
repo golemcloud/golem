@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
-use chrono::Duration;
 use golem_common::SafeDisplay;
 use golem_common::config::ConfigLoader;
 use golem_common::config::DbConfig;
-use golem_common::model::auth::AccountRole;
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
@@ -26,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
-use uuid::Uuid;
 use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,13 +38,13 @@ pub struct RegistryServiceConfig {
     pub grpc_port: u16,
     pub db: DbConfig,
     pub login: LoginConfig,
-    pub cors_origin_regex: String,
-    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig,
-    pub component_compilation: ComponentCompilationConfig,
     pub blob_storage: BlobStorageConfig,
-    pub plans: PlansConfig,
-    pub accounts: AccountsConfig,
+    pub component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig,
+    pub cors_origin_regex: String,
     pub domain_provisioner: DomainProvisionerConfig,
+    pub component_compilation: ComponentCompilationConfig,
+    pub initial_accounts: HashMap<String, PrecreatedAccount>,
+    pub initial_plans: HashMap<String, PrecreatedPlan>,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -73,13 +73,21 @@ impl SafeDisplay for RegistryServiceConfig {
             self.component_transformer_plugin_caller
                 .to_safe_string_indented()
         );
+
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
 
-        let _ = writeln!(&mut result, "domain provision:");
+        let _ = writeln!(&mut result, "domain provisioner:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.domain_provisioner.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "component compilation:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_compilation.to_safe_string_indented()
         );
 
         result
@@ -88,6 +96,52 @@ impl SafeDisplay for RegistryServiceConfig {
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
+        let mut initial_accounts = HashMap::with_capacity(2);
+        initial_accounts.insert(
+            "root".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129")),
+                name: "Initial User".to_string(),
+                email: "initial@user".to_string(),
+                token: TokenSecret::trusted(
+                    "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string(),
+                ),
+                role: AccountRole::Admin,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
+        initial_accounts.insert(
+            "marketing".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7")),
+                name: "Marketing User".to_string(),
+                email: "marketing@user".to_string(),
+                token: TokenSecret::trusted(
+                    "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I".to_string(),
+                ),
+                role: AccountRole::MarketingAdmin,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
+
+        let mut initial_plans = HashMap::with_capacity(1);
+        initial_plans.insert(
+            "default".to_string(),
+            PrecreatedPlan {
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+                plan_name: PlanName("default".to_string()),
+                app_limit: 10,
+                env_limit: 40,
+                component_limit: 100,
+                worker_limit: 10000,
+                worker_connection_limit: 100,
+                storage_limit: 500000000,
+                monthly_gas_limit: 1000000000000,
+                monthly_upload_limit: 1000000000,
+                max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
+            },
+        );
+
         Self {
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
@@ -100,9 +154,9 @@ impl Default for RegistryServiceConfig {
             component_transformer_plugin_caller: ComponentTransformerPluginCallerConfig::default(),
             component_compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
-            plans: PlansConfig::default(),
-            accounts: AccountsConfig::default(),
             domain_provisioner: DomainProvisionerConfig::default(),
+            initial_accounts,
+            initial_plans,
         }
     }
 }
@@ -155,7 +209,8 @@ impl SafeDisplay for OAuth2LoginSystemConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OAuth2Config {
-    pub webflow_state_expiry: Duration,
+    #[serde(with = "humantime_serde")]
+    pub webflow_state_expiry: std::time::Duration,
     pub private_key: String,
     pub public_key: String,
 }
@@ -165,7 +220,7 @@ impl SafeDisplay for OAuth2Config {
         let mut result = String::new();
         let _ = writeln!(
             &mut result,
-            "webflow state expiry: {}",
+            "webflow state expiry: {:?}",
             self.webflow_state_expiry
         );
         let _ = writeln!(&mut result, "private key: ****");
@@ -177,7 +232,7 @@ impl SafeDisplay for OAuth2Config {
 impl Default for OAuth2Config {
     fn default() -> Self {
         Self {
-            webflow_state_expiry: Duration::minutes(5),
+            webflow_state_expiry: std::time::Duration::from_mins(5),
             private_key: "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
                 .to_string(),
             public_key: "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg=".to_string(),
@@ -213,51 +268,6 @@ impl Default for GitHubOAuth2Config {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct AccountsConfig {
-    pub accounts: HashMap<String, PrecreatedAccount>,
-}
-
-impl Default for AccountsConfig {
-    fn default() -> Self {
-        let mut accounts = HashMap::with_capacity(2);
-        accounts.insert(
-            "root".to_string(),
-            PrecreatedAccount {
-                id: uuid!("e71a6160-4144-4720-9e34-e5943458d129"),
-                name: "Initial User".to_string(),
-                email: "initial@user".to_string(),
-                token: uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1"),
-                role: AccountRole::Admin,
-                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
-            },
-        );
-        accounts.insert(
-            "marketing".to_string(),
-            PrecreatedAccount {
-                id: uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7"),
-                name: "Marketing User".to_string(),
-                email: "marketing@user".to_string(),
-                token: uuid!("39c8e462-1a4c-464c-91d5-5265e1e1b0e5"),
-                role: AccountRole::MarketingAdmin,
-                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
-            },
-        );
-        AccountsConfig { accounts }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PrecreatedAccount {
-    pub id: Uuid,
-    pub name: String,
-    pub email: String,
-    pub token: Uuid,
-    pub plan_id: Uuid,
-    pub role: AccountRole,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ComponentTransformerPluginCallerConfig {
     pub retries: RetryConfig,
@@ -270,48 +280,6 @@ impl SafeDisplay for ComponentTransformerPluginCallerConfig {
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PlansConfig {
-    pub plans: HashMap<String, PrecreatedPlan>,
-}
-
-impl Default for PlansConfig {
-    fn default() -> Self {
-        let mut plans = HashMap::with_capacity(1);
-        plans.insert(
-            "default".to_string(),
-            PrecreatedPlan {
-                plan_id: uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"),
-                app_limit: 10,
-                env_limit: 40,
-                component_limit: 100,
-                worker_limit: 10000,
-                worker_connection_limit: 100,
-                storage_limit: 500000000,
-                monthly_gas_limit: 1000000000000,
-                monthly_upload_limit: 1000000000,
-                max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
-            },
-        );
-
-        PlansConfig { plans }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PrecreatedPlan {
-    pub plan_id: Uuid,
-    pub app_limit: i64,
-    pub env_limit: i64,
-    pub component_limit: i64,
-    pub worker_limit: i64,
-    pub worker_connection_limit: i64,
-    pub storage_limit: i64,
-    pub monthly_gas_limit: i64,
-    pub monthly_upload_limit: i64,
-    pub max_memory_per_worker: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -378,6 +346,31 @@ impl ComponentCompilationEnabledConfig {
             .build()
             .expect("Failed to build ComponentCompilationService URI")
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrecreatedAccount {
+    pub id: AccountId,
+    pub name: String,
+    pub email: String,
+    pub token: TokenSecret,
+    pub plan_id: PlanId,
+    pub role: AccountRole,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrecreatedPlan {
+    pub plan_id: PlanId,
+    pub plan_name: PlanName,
+    pub app_limit: i64,
+    pub env_limit: i64,
+    pub component_limit: i64,
+    pub worker_limit: i64,
+    pub worker_connection_limit: i64,
+    pub storage_limit: i64,
+    pub monthly_gas_limit: i64,
+    pub monthly_upload_limit: i64,
+    pub max_memory_per_worker: u64,
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

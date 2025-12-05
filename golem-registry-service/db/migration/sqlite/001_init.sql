@@ -77,7 +77,7 @@ CREATE TABLE account_revisions
 CREATE TABLE tokens
 (
     token_id   UUID      NOT NULL,
-    secret     UUID      NOT NULL,
+    secret     TEXT      NOT NULL,
     account_id UUID      NOT NULL,
     created_at TIMESTAMP NOT NULL,
     expires_at TIMESTAMP NOT NULL,

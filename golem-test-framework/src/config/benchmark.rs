@@ -151,7 +151,7 @@ pub enum TestMode {
         #[arg(long)]
         registry_service_admin_account_email: String,
         #[arg(long)]
-        registry_service_admin_account_token: Uuid,
+        registry_service_admin_account_token: String,
         #[arg(long)]
         registry_service_default_plan_id: Uuid,
         #[arg(long)]
@@ -469,7 +469,7 @@ impl BenchmarkTestDependencies {
                         *registry_service_grpc_port,
                         AccountId(*registry_service_admin_account_id),
                         registry_service_admin_account_email.clone(),
-                        TokenSecret(*registry_service_admin_account_token),
+                        TokenSecret::trusted(registry_service_admin_account_token.clone()),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
                     )

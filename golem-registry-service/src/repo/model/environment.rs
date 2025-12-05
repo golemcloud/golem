@@ -76,7 +76,7 @@ pub struct EnvironmentRevisionRecord {
 impl EnvironmentRevisionRecord {
     pub fn creation(environment: EnvironmentCreation, actor: AccountId) -> Self {
         Self {
-            environment_id: EnvironmentId::new_v4().0,
+            environment_id: EnvironmentId::new().0,
             revision_id: EnvironmentRevision::INITIAL.into(),
             name: environment.name.0,
             hash: SqlBlake3Hash::empty(),

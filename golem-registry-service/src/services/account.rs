@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::plan::{PlanError, PlanService};
-use crate::config::AccountsConfig;
+use crate::config::PrecreatedAccount;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -22,11 +22,12 @@ use golem_common::model::account::AccountSetRoles;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountUpdate,
 };
-use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::auth::AccountRole;
 use golem_common::model::plan::PlanId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -68,51 +69,45 @@ error_forwarding!(AccountError, PlanError, AccountRepoError);
 pub struct AccountService {
     account_repo: Arc<dyn AccountRepo>,
     plan_service: Arc<PlanService>,
-    config: AccountsConfig,
+    default_plan_id: PlanId,
 }
 
 impl AccountService {
     pub fn new(
         account_repo: Arc<dyn AccountRepo>,
         plan_service: Arc<PlanService>,
-        config: AccountsConfig,
+        default_plan_id: PlanId,
     ) -> Self {
         Self {
             account_repo,
             plan_service,
-            config,
+            default_plan_id,
         }
     }
 
-    pub async fn create_initial_accounts(&self, auth: &AuthCtx) -> Result<(), AccountError> {
-        for (name, account) in &self.config.accounts {
-            let account_id = AccountId(account.id);
-            let existing_account = self.get_optional(&account_id, auth).await?;
+    pub async fn create_initial_accounts(
+        &self,
+        accounts: &HashMap<String, PrecreatedAccount>,
+    ) -> Result<(), AccountError> {
+        for (name, account) in accounts {
+            let existing_account = self.get_optional(&account.id, &AuthCtx::System).await?;
 
             if existing_account.is_none() {
                 info!("Creating initial account {} with id {}", name, account.id);
                 self.create_internal(
-                    account_id,
+                    account.id,
                     AccountCreation {
                         name: account.name.clone(),
                         email: account.email.clone(),
                     },
                     vec![account.role],
-                    PlanId(account.plan_id),
-                    auth,
+                    account.plan_id,
+                    &AuthCtx::System,
                 )
                 .await?;
             }
         }
         Ok(())
-    }
-
-    pub(super) fn initial_tokens(&self) -> Vec<(AccountId, TokenSecret)> {
-        let mut result = Vec::with_capacity(self.config.accounts.len());
-        for account in self.config.accounts.values() {
-            result.push((AccountId(account.id), TokenSecret(account.token)));
-        }
-        result
     }
 
     pub async fn create(
@@ -122,10 +117,9 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         auth.authorize_global_action(GlobalAction::CreateAccount)?;
 
-        let id = AccountId::new_v4();
-        let plan_id = self.get_default_plan_id(auth).await?;
+        let id = AccountId::new();
         info!("Creating account: {}", id);
-        self.create_internal(id, account, Vec::new(), plan_id, auth)
+        self.create_internal(id, account, Vec::new(), self.default_plan_id, auth)
             .await
     }
 
@@ -340,15 +334,5 @@ impl AccountService {
             Err(AccountRepoError::ConcurrentModification) => Err(AccountError::ConcurrentUpdate)?,
             Err(other) => Err(other)?,
         }
-    }
-
-    async fn get_default_plan_id(&self, auth: &AuthCtx) -> Result<PlanId, AccountError> {
-        let plan_id = self
-            .plan_service
-            .get_default_plan(auth)
-            .await
-            .map(|plan| plan.plan_id)?;
-
-        Ok(plan_id)
     }
 }

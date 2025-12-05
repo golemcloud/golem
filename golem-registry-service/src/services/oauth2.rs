@@ -87,15 +87,13 @@ impl OAuth2Service {
         oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
         oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
         config: &OAuth2Config,
-    ) -> Result<Self, OAuth2Error> {
+    ) -> anyhow::Result<Self> {
         let private_key = format_key(config.private_key.as_str(), "PRIVATE");
         let public_key = format_key(config.public_key.as_str(), "PUBLIC");
 
-        let encoding_key =
-            EncodingKey::from_ed_pem(private_key.as_bytes()).map_err(anyhow::Error::from)?;
+        let encoding_key = EncodingKey::from_ed_pem(private_key.as_bytes())?;
 
-        let decoding_key =
-            DecodingKey::from_ed_pem(public_key.as_bytes()).map_err(anyhow::Error::from)?;
+        let decoding_key = DecodingKey::from_ed_pem(public_key.as_bytes())?;
 
         Ok(Self {
             client,
@@ -105,7 +103,7 @@ impl OAuth2Service {
             decoding_key,
             oauth2_token_repo,
             oauth2_web_flow_state_repo,
-            webflow_state_expiry: config.webflow_state_expiry,
+            webflow_state_expiry: Duration::from_std(config.webflow_state_expiry)?,
         })
     }
 

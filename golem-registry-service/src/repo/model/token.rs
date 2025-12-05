@@ -22,7 +22,7 @@ use uuid::Uuid;
 #[derive(FromRow, Clone, PartialEq)]
 pub struct TokenRecord {
     pub token_id: Uuid,
-    pub secret: Uuid,
+    pub secret: String,
     pub account_id: Uuid,
     pub created_at: SqlDateTime,
     pub expires_at: SqlDateTime,
@@ -43,7 +43,7 @@ impl From<TokenRecord> for TokenWithSecret {
     fn from(value: TokenRecord) -> Self {
         TokenWithSecret {
             id: TokenId(value.token_id),
-            secret: TokenSecret(value.secret),
+            secret: TokenSecret::trusted(value.secret),
             account_id: AccountId(value.account_id),
             created_at: value.created_at.into(),
             expires_at: value.expires_at.into(),

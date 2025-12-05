@@ -125,7 +125,7 @@ impl DomainRegistrationService {
         }
 
         let domain_registration = DomainRegistration {
-            id: DomainRegistrationId::new_v4(),
+            id: DomainRegistrationId::new(),
             environment_id,
             domain: data.domain.clone(),
         };

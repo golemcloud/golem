@@ -3109,7 +3109,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 
 fn new_worker_id() -> WorkerId {
     WorkerId {
-        component_id: ComponentId::new_v4(),
+        component_id: ComponentId::new(),
         worker_name: "test".to_string(),
     }
 }

@@ -155,9 +155,9 @@ impl AuthService for RemoteAuthService {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
         let result = self
             .auth_ctx_cache
-            .get_or_insert_simple(&token, async move || {
+            .get_or_insert_simple(&token.clone(), async move || {
                 self.client
-                    .authenticate_token(token)
+                    .authenticate_token(&token)
                     .await
                     .map_err(|e| match e {
                         RegistryServiceError::CouldNotAuthenticate(_) => {

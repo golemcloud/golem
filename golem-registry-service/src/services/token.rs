@@ -95,7 +95,7 @@ impl TokenService {
     ) -> Result<TokenWithSecret, TokenError> {
         let token: TokenWithSecret = self
             .token_repo
-            .get_by_secret(&secret.0)
+            .get_by_secret(secret.secret())
             .await?
             .ok_or(TokenError::TokenBySecretNotFound)?
             .into();
@@ -166,36 +166,23 @@ impl TokenService {
 
         auth.authorize_account_action(&account_id, AccountAction::CreateToken)?;
 
-        let secret = TokenSecret::new_v4();
-        self.create_known_secret(account_id, secret, expires_at, auth)
+        let secret = TokenSecret::new();
+        self.create_known_secret(account_id, secret, expires_at)
             .await
     }
 
-    pub async fn create_known_secret(
+    async fn create_known_secret(
         &self,
         account_id: AccountId,
         secret: TokenSecret,
         expires_at: DateTime<Utc>,
-        auth: &AuthCtx,
     ) -> Result<TokenWithSecret, TokenError> {
-        self.account_service
-            .get(&account_id, auth)
-            .await
-            .map_err(|err| match err {
-                AccountError::AccountNotFound(_) | AccountError::Unauthorized(_) => {
-                    TokenError::ParentAccountNotFound(account_id)
-                }
-                other => other.into(),
-            })?;
-
-        auth.authorize_account_action(&account_id, AccountAction::CreateKnownSecret)?;
-
         let created_at = Utc::now();
-        let token_id = TokenId::new_v4();
+        let token_id = TokenId::new();
 
         let record = TokenRecord {
             token_id: token_id.0,
-            secret: secret.0,
+            secret: secret.into_secret(),
             account_id: account_id.0,
             created_at: created_at.into(),
             expires_at: expires_at.into(),
@@ -210,11 +197,16 @@ impl TokenService {
         Ok(record.into())
     }
 
-    pub async fn create_initial_tokens(&self, auth: &AuthCtx) -> Result<(), TokenError> {
-        for (account_id, secret) in self.account_service.initial_tokens() {
-            let existing = self.get_optional_by_secret(&secret, auth).await?;
+    pub async fn create_initial_tokens(
+        &self,
+        entries: impl IntoIterator<Item = &(AccountId, TokenSecret)>,
+    ) -> Result<(), TokenError> {
+        for (account_id, secret) in entries {
+            let existing = self
+                .get_optional_by_secret(secret, &AuthCtx::System)
+                .await?;
             if existing.is_none() {
-                self.create_known_secret(account_id, secret, DateTime::<Utc>::MAX_UTC, auth)
+                self.create_known_secret(*account_id, secret.clone(), DateTime::<Utc>::MAX_UTC)
                     .await?;
             }
         }

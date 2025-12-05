@@ -134,7 +134,7 @@ impl HttpApiDeploymentService {
                 other => other.into(),
             })?;
 
-        let id = HttpApiDeploymentId::new_v4();
+        let id = HttpApiDeploymentId::new();
         let record =
             HttpApiDeploymentRevisionRecord::creation(id, data.api_definitions, *auth.account_id());
 

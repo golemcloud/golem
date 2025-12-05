@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     pub fn roundtrip_component_id() {
-        let example = Some(ComponentId::new_v4());
+        let example = Some(ComponentId::new());
         info!("example: {example:?}");
         let serialized = super::serialize(&example).unwrap();
         let deserialized = super::deserialize(&serialized).unwrap();

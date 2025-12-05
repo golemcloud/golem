@@ -118,7 +118,7 @@ impl ApplicationService {
             .await?;
 
         let application = Application {
-            id: ApplicationId::new_v4(),
+            id: ApplicationId::new(),
             revision: ApplicationRevision::INITIAL,
             account_id,
             name: data.name,
