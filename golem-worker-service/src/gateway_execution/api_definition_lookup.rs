@@ -12,71 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
+use golem_common::model::domain_registration::Domain;
+use golem_common::{error_forwarding, SafeDisplay};
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::custom_api::CompiledRoutes;
 use std::sync::Arc;
 
-use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
-use crate::gateway_api_deployment::ApiSiteString;
-use crate::service::gateway::api_deployment::{ApiDeploymentError, ApiDeploymentService};
-use async_trait::async_trait;
-use golem_common::SafeDisplay;
-use tracing::error;
-
-// To lookup the set of API Definitions based on an incoming input.
-// The input can be HttpRequest or GrpcRequest and so forth, and ApiDefinition
-// depends on what is the input. There cannot be multiple types of ApiDefinition
-// for a given input type.
 #[async_trait]
 pub trait HttpApiDefinitionsLookup: Send + Sync {
-    async fn get(
-        &self,
-        host: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError>;
+    async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError>;
 }
 
+#[derive(Debug, thiserror::Error)]
 pub enum ApiDefinitionLookupError {
-    ApiDeploymentError(ApiDeploymentError),
-    UnknownSite(ApiSiteString),
+    #[error("No routes found for site {0}")]
+    UnknownSite(Domain),
+    #[error(transparent)]
+    InternalError(#[from] anyhow::Error),
 }
+
+error_forwarding!(ApiDefinitionLookupError, RegistryServiceError);
 
 impl SafeDisplay for ApiDefinitionLookupError {
     fn to_safe_string(&self) -> String {
         match self {
-            ApiDefinitionLookupError::ApiDeploymentError(err) => err.to_string(),
+            ApiDefinitionLookupError::InternalError(_) => "Internal error".to_string(),
             ApiDefinitionLookupError::UnknownSite(_) => "Unknown authority".to_string(),
         }
     }
 }
 
-pub struct DefaultHttpApiDefinitionLookup {
-    deployment_service: Arc<dyn ApiDeploymentService>,
+// Note: No caching here, the final routers are cached in the RouteResolver
+pub struct RegistryServiceApiDefinitionsLookup {
+    registry_service_client: Arc<dyn RegistryService>,
 }
 
-impl DefaultHttpApiDefinitionLookup {
-    pub fn new(deployment_service: Arc<dyn ApiDeploymentService>) -> Self {
-        Self { deployment_service }
+impl RegistryServiceApiDefinitionsLookup {
+    pub fn new(registry_service_client: Arc<dyn RegistryService>) -> Self {
+        Self {
+            registry_service_client,
+        }
     }
 }
 
 #[async_trait]
-impl HttpApiDefinitionsLookup for DefaultHttpApiDefinitionLookup {
-    async fn get(
-        &self,
-        host: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError> {
-        let http_api_defs = self
-            .deployment_service
-            .get_all_definitions_by_site(host)
+impl HttpApiDefinitionsLookup for RegistryServiceApiDefinitionsLookup {
+    async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
+        self.registry_service_client
+            .get_active_routes_for_domain(domain)
             .await
-            .map_err(|err| {
-                error!("Failed to lookup API definitions: {}", err);
-                ApiDefinitionLookupError::ApiDeploymentError(err)
-            })?;
-
-        if http_api_defs.is_empty() {
-            error!("No API definitions found for site: {}", host);
-            return Err(ApiDefinitionLookupError::UnknownSite(host.clone()));
-        }
-
-        Ok(http_api_defs)
+            .map_err(|e| match e {
+                RegistryServiceError::NotFound(_) => {
+                    ApiDefinitionLookupError::UnknownSite(domain.clone())
+                }
+                other => other.into(),
+            })
     }
 }

@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::gateway_session::{DataKey, GatewaySessionStore, SessionId};
-use crate::gateway_api_definition::http::QueryInfo;
-use crate::gateway_binding::{GatewayBindingCompiled, ResolvedRouteEntry};
-use crate::gateway_middleware::HttpMiddlewares;
-use crate::gateway_request::http_request::router::PathParamExtractor;
+use super::gateway_session_store::{DataKey, GatewaySessionStore, SessionId};
+use super::route_resolver::ResolvedRouteEntry;
+use crate::gateway_router::PathParamExtractor;
+use crate::model::{HttpMiddleware, RichGatewayBindingCompiled};
 use bytes::Bytes;
-use golem_common::model::auth::Namespace;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::SafeDisplay;
+use golem_service_base::custom_api::path_pattern::QueryInfo;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
@@ -72,7 +74,7 @@ impl RichRequest {
     pub async fn add_auth_details(
         &mut self,
         session_id: &SessionId,
-        gateway_session_store: &GatewaySessionStore,
+        gateway_session_store: &Arc<dyn GatewaySessionStore>,
     ) -> Result<(), String> {
         let claims = gateway_session_store
             .get(session_id, &DataKey::claims())
@@ -93,16 +95,14 @@ impl RichRequest {
     }
 
     pub fn path_params(&self) -> HashMap<String, String> {
-        use crate::gateway_request::http_request::router;
-
         self.path_param_extractors
             .iter()
             .map(|param| match param {
-                router::PathParamExtractor::Single { var_info, index } => (
+                PathParamExtractor::Single { var_info, index } => (
                     var_info.key_name.clone(),
                     self.path_segments[*index].clone(),
                 ),
-                router::PathParamExtractor::AllFollowing { var_info, index } => {
+                PathParamExtractor::AllFollowing { var_info, index } => {
                     let value = self.path_segments[*index..].join("/");
                     (var_info.key_name.clone(), value)
                 }
@@ -207,10 +207,11 @@ impl RichRequest {
 }
 
 pub struct SplitResolvedRouteEntryResult {
-    pub namespace: Namespace,
-    pub binding: GatewayBindingCompiled,
-    pub middlewares: Option<HttpMiddlewares>,
+    pub binding: RichGatewayBindingCompiled,
+    pub middlewares: Vec<HttpMiddleware>,
     pub rich_request: RichRequest,
+    pub account_id: AccountId,
+    pub environment_id: EnvironmentId,
 }
 
 pub fn split_resolved_route_entry(
@@ -219,9 +220,10 @@ pub fn split_resolved_route_entry(
 ) -> SplitResolvedRouteEntryResult {
     // helper function to save a few clones
 
-    let namespace = entry.route_entry.namespace;
     let binding = entry.route_entry.binding;
     let middlewares = entry.route_entry.middlewares;
+    let account_id = entry.route_entry.account_id;
+    let environment_id = entry.route_entry.environment_id;
 
     let rich_request = RichRequest {
         underlying: request,
@@ -233,10 +235,11 @@ pub fn split_resolved_route_entry(
     };
 
     SplitResolvedRouteEntryResult {
-        namespace,
         binding,
         middlewares,
         rich_request,
+        account_id,
+        environment_id,
     }
 }
 

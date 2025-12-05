@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ComponentName, WorkerName};
+use crate::model::worker::WorkerName;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TryUpdateAllWorkersResult {
     pub triggered: Vec<WorkerUpdateAttempt>,
@@ -29,11 +30,11 @@ impl TryUpdateAllWorkersResult {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerUpdateAttempt {
     pub component_name: ComponentName,
-    pub target_version: u64,
+    pub target_revision: ComponentRevision,
     pub worker_name: WorkerName,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

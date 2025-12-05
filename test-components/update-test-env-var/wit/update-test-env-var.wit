@@ -1,7 +1,7 @@
 package golem:component;
 
 interface api {
-  get-version-from-env-var: func() -> string;
+  get-revision-from-env-var: func() -> string;
 }
 
 world update-test-env-var {

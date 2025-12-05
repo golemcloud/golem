@@ -12,45 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::errors::DebuggingApiError;
 use crate::jrpc::run_jrpc_debug_websocket_session;
+use crate::services::auth::AuthService;
 use crate::services::debug_service::DebugService;
-use golem_common::model::auth::AuthCtx;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::WrappedGolemSecuritySchema;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
-use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::sync::Arc;
 
-#[derive(ApiResponse, Debug, Clone)]
-pub enum DebuggingApiError {
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    #[oai(status = 403)]
-    Forbidden(Json<ErrorBody>),
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    #[oai(status = 409)]
-    AlreadyExists(Json<ErrorBody>),
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-type Result<T> = std::result::Result<T, DebuggingApiError>;
-
 pub struct DebuggingApi {
     debug_service: Arc<dyn DebugService>,
+    auth_service: Arc<dyn AuthService>,
 }
 
 #[OpenApi(prefix_path = "/v1/debugger", tag = ApiTags::Debugging)]
 impl DebuggingApi {
-    pub fn new(debug_service: Arc<dyn DebugService>) -> Self {
-        Self { debug_service }
+    pub fn new(debug_service: Arc<dyn DebugService>, auth_service: Arc<dyn AuthService>) -> Self {
+        Self {
+            debug_service,
+            auth_service,
+        }
     }
 
     /// Start a new debugging sessions
@@ -59,9 +42,12 @@ impl DebuggingApi {
         &self,
         websocket: WebSocket,
         token: WrappedGolemSecuritySchema,
-    ) -> Result<BoxWebSocketUpgraded> {
+    ) -> Result<BoxWebSocketUpgraded, DebuggingApiError> {
         let debug_service = self.debug_service.clone();
-        let auth_ctx = AuthCtx::new(token.0.secret());
+        let auth_ctx = self
+            .auth_service
+            .authenticate_token(token.0.secret())
+            .await?;
         let upgraded: BoxWebSocketUpgraded = websocket.on_upgrade(Box::new(|socket_stream| {
             Box::pin(run_jrpc_debug_websocket_session(
                 socket_stream,

@@ -15,51 +15,16 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::gateway_execution::api_definition_lookup::HttpApiDefinitionsLookup;
-use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
-use crate::gateway_execution::gateway_http_input_executor::{
-    DefaultGatewayInputExecutor, GatewayHttpInputExecutor,
-};
-use crate::gateway_execution::gateway_session::GatewaySession;
-use crate::gateway_execution::http_handler_binding_handler::HttpHandlerBindingHandler;
-use crate::gateway_execution::swagger_binding_handler::DefaultSwaggerBindingHandler;
-use crate::gateway_execution::GatewayWorkerRequestExecutor;
-use crate::gateway_rib_interpreter::DefaultRibInterpreter;
-use crate::gateway_security::DefaultIdentityProvider;
+use crate::gateway_execution::gateway_http_input_executor::GatewayHttpInputExecutor;
 use futures::FutureExt;
 use poem::{Endpoint, Request, Response};
 
 pub struct CustomHttpRequestApi {
-    pub gateway_http_input_executor: Arc<dyn GatewayHttpInputExecutor>,
+    pub gateway_http_input_executor: Arc<GatewayHttpInputExecutor>,
 }
 
 impl CustomHttpRequestApi {
-    pub fn new(
-        worker_request_executor_service: Arc<dyn GatewayWorkerRequestExecutor>,
-        api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup>,
-        file_server_binding_handler: Arc<dyn FileServerBindingHandler>,
-        http_handler_binding_handler: Arc<dyn HttpHandlerBindingHandler>,
-        gateway_session_store: Arc<dyn GatewaySession>,
-    ) -> Self {
-        let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
-            worker_request_executor_service.clone(),
-        ));
-
-        let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
-        let swagger_binding_handler = Arc::new(DefaultSwaggerBindingHandler::new());
-
-        let gateway_http_input_executor = Arc::new(DefaultGatewayInputExecutor {
-            evaluator,
-            file_server_binding_handler,
-            auth_call_back_binding_handler,
-            http_handler_binding_handler,
-            swagger_binding_handler,
-            api_definition_lookup_service,
-            gateway_session_store,
-            identity_provider: Arc::new(DefaultIdentityProvider),
-        });
-
+    pub fn new(gateway_http_input_executor: Arc<GatewayHttpInputExecutor>) -> Self {
         Self {
             gateway_http_input_executor,
         }

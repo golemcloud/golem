@@ -16,8 +16,8 @@ pub mod api;
 pub mod api_tags;
 pub mod clients;
 pub mod config;
+pub mod custom_api;
 pub mod db;
-pub mod dto;
 pub mod error;
 pub mod grpc;
 pub mod headers;
@@ -31,7 +31,6 @@ pub mod repo;
 pub mod service;
 pub mod storage;
 pub mod stream;
-pub mod testing;
 
 #[cfg(test)]
 test_r::enable!();

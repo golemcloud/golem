@@ -18,8 +18,9 @@ use futures_concurrency::future::Join;
 use golem_common::base_model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::IntoValueAndType;
 use indoc::indoc;
 use tracing::{info, Level};
@@ -33,6 +34,7 @@ pub struct DurabilityOverheadBenchmarkContext {
 }
 
 pub struct DurabilityOverheadIterationContext {
+    user: TestUserContext<BenchmarkTestDependencies>,
     durable_persistent_worker_ids: Vec<WorkerId>,
     durable_nonpersistent_worker_ids: Vec<WorkerId>,
     ephemeral_worker_ids: Vec<WorkerId>,
@@ -92,48 +94,50 @@ impl Benchmark for DurabilityOverhead {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
+        let user = benchmark_context.deps.user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
+
         let mut durable_persistent_worker_ids = vec![];
         let mut durable_nonpersistent_worker_ids = vec![];
         let mut ephemeral_worker_ids = vec![];
         let mut durable_persistent_commit_worker_ids = vec![];
 
         info!("Registering component");
-        let durable_component_id = benchmark_context
-            .deps
-            .admin()
-            .await
-            .component("benchmark_agent_rust_release")
+        let durable_component = user
+            .component(&env.id, "benchmark_agent_rust_release")
             .name("benchmark:agent-rust")
             .store()
-            .await;
+            .await
+            .unwrap();
 
         for n in 0..self.config.size {
             let worker_id = WorkerId {
-                component_id: durable_component_id.clone(),
+                component_id: durable_component.id,
                 worker_name: format!("rust-benchmark-agent(\"test-{n}-persistent\")"),
             };
             durable_persistent_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
-                component_id: durable_component_id.clone(),
+                component_id: durable_component.id,
                 worker_name: format!("rust-benchmark-agent(\"test-{n}-nonpersistent\")"),
             };
             durable_nonpersistent_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
-                component_id: durable_component_id.clone(),
+                component_id: durable_component.id,
                 worker_name: format!("rust-ephemeral-benchmark-agent(\"test-{n}-ephemeral\")"),
             };
             ephemeral_worker_ids.push(worker_id);
 
             let worker_id = WorkerId {
-                component_id: durable_component_id.clone(),
+                component_id: durable_component.id,
                 worker_name: format!("rust-benchmark-agent(\"test-{n}-persistent-commit\")"),
             };
             durable_persistent_commit_worker_ids.push(worker_id);
         }
 
         DurabilityOverheadIterationContext {
+            user,
             durable_nonpersistent_worker_ids,
             durable_persistent_worker_ids,
             ephemeral_worker_ids,
@@ -143,7 +147,7 @@ impl Benchmark for DurabilityOverhead {
 
     async fn warmup(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
         info!(
@@ -152,13 +156,13 @@ impl Benchmark for DurabilityOverhead {
                 + context.durable_nonpersistent_worker_ids.len()
         );
 
-        async fn warmup(deps: &BenchmarkTestDependencies, ids: &[WorkerId]) {
+        async fn warmup(user: &TestUserContext<BenchmarkTestDependencies>, ids: &[WorkerId]) {
             let result_futures = ids
                 .iter()
                 .map(move |worker_id| async move {
-                    let deps_clone = deps.clone();
+                    let user_clone = user.clone();
                     invoke_and_await(
-                        &deps_clone,
+                        &user_clone,
                         worker_id,
                         "benchmark:agent-rust/rust-benchmark-agent.{echo}",
                         vec!["test".into_value_and_type()],
@@ -169,16 +173,8 @@ impl Benchmark for DurabilityOverhead {
             let _ = result_futures.join().await;
         }
 
-        warmup(
-            &benchmark_context.deps,
-            &context.durable_persistent_worker_ids,
-        )
-        .await;
-        warmup(
-            &benchmark_context.deps,
-            &context.durable_nonpersistent_worker_ids,
-        )
-        .await;
+        warmup(&context.user, &context.durable_persistent_worker_ids).await;
+        warmup(&context.user, &context.durable_nonpersistent_worker_ids).await;
 
         info!(
             "Warmed up {} workers",
@@ -189,7 +185,7 @@ impl Benchmark for DurabilityOverhead {
 
     async fn run(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
@@ -198,10 +194,9 @@ impl Benchmark for DurabilityOverhead {
             .durable_persistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
-
+                let user_clone = context.user.clone();
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
@@ -222,10 +217,10 @@ impl Benchmark for DurabilityOverhead {
             .durable_nonpersistent_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
+                let user_clone = context.user.clone();
 
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
@@ -250,10 +245,10 @@ impl Benchmark for DurabilityOverhead {
             .ephemeral_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
+                let user_clone = context.user.clone();
 
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
@@ -274,10 +269,10 @@ impl Benchmark for DurabilityOverhead {
             .durable_persistent_commit_worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
+                let user_clone = context.user.clone();
 
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:agent-rust/rust-benchmark-agent.{oplog-heavy}",
                     vec![
@@ -301,24 +296,12 @@ impl Benchmark for DurabilityOverhead {
 
     async fn cleanup_iteration(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        delete_workers(
-            &benchmark_context.deps,
-            &context.durable_persistent_worker_ids,
-        )
-        .await;
-        delete_workers(
-            &benchmark_context.deps,
-            &context.durable_nonpersistent_worker_ids,
-        )
-        .await;
-        delete_workers(&benchmark_context.deps, &context.ephemeral_worker_ids).await;
-        delete_workers(
-            &benchmark_context.deps,
-            &context.durable_persistent_commit_worker_ids,
-        )
-        .await;
+        delete_workers(&context.user, &context.durable_persistent_worker_ids).await;
+        delete_workers(&context.user, &context.durable_nonpersistent_worker_ids).await;
+        delete_workers(&context.user, &context.ephemeral_worker_ids).await;
+        delete_workers(&context.user, &context.durable_persistent_commit_worker_ids).await;
     }
 }

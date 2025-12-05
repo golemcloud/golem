@@ -14,14 +14,14 @@
 
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
+use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error::Error;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use golem_api_grpc::proto::golem::shardmanager::v1::ShardManagerError;
+use golem_common::SafeDisplay;
 use golem_common::cache::*;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
-use golem_common::SafeDisplay;
 use http::Uri;
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,9 +31,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
+use tonic::Status;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use tonic::Status;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 #[derive(Debug, Clone)]

@@ -13,18 +13,10 @@
 // limitations under the License.
 
 pub mod api;
-pub mod aws_config;
-pub mod aws_load_balancer;
 pub mod config;
-pub mod gateway_api_definition;
-pub mod gateway_api_definition_transformer;
-pub mod gateway_api_deployment;
-pub mod gateway_binding;
 pub mod gateway_execution;
 pub mod gateway_middleware;
-pub mod gateway_request;
-pub mod gateway_rib_compiler;
-pub mod gateway_rib_interpreter;
+pub mod gateway_router;
 pub mod gateway_security;
 pub mod getter;
 pub mod grpcapi;
@@ -33,17 +25,13 @@ pub mod http_invocation_context;
 pub mod metrics;
 pub mod model;
 pub mod path;
-pub mod repo;
 pub mod service;
+pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;
-use anyhow::{anyhow, Context};
-use golem_common::config::DbConfig;
+use anyhow::anyhow;
 use golem_common::poem::LazyEndpointExt;
-use golem_service_base::db;
-use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use include_dir::{include_dir, Dir};
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
@@ -57,8 +45,6 @@ use tracing::{info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
-
-static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -84,21 +70,6 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
-        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-
-        match &config.db {
-            DbConfig::Postgres(c) => {
-                db::postgres::migrate(c, migrations.postgres_migrations())
-                    .await
-                    .context("Postgres DB migration")?;
-            }
-            DbConfig::Sqlite(c) => {
-                db::sqlite::migrate(c, migrations.sqlite_migrations())
-                    .await
-                    .context("Sqlite DB migration")?;
-            }
-        };
-
         let services: Services = Services::new(&config)
             .await
             .map_err(|err| anyhow!(err).context("Service initialization"))?;

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::{ComponentVersion, OplogIndex, PluginInstallationId};
+use crate::base_model::OplogIndex;
+use crate::model::component::{ComponentRevision, PluginPriority};
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::model::oplog::DurableFunctionType;
-use crate::model::plugin::{PluginDefinition, PluginInstallation};
 use crate::model::{Empty, IdempotencyKey, RetryConfig, Timestamp};
 use desert_rust::BinaryCodec;
 use golem_wasm::ValueAndType;
@@ -74,7 +74,7 @@ pub struct ExportedFunctionParameters {
 #[serde(rename_all = "camelCase")]
 #[wit_transparent]
 pub struct ManualUpdateParameters {
-    pub target_version: ComponentVersion,
+    pub target_revision: ComponentRevision,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, poem_openapi::Union)]
@@ -327,26 +327,11 @@ impl PublicSpanData {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationDescription {
-    pub installation_id: PluginInstallationId,
+    pub plugin_priority: PluginPriority,
     pub plugin_name: String,
     pub plugin_version: String,
     pub registered: bool,
     pub parameters: BTreeMap<String, String>,
-}
-
-impl PluginInstallationDescription {
-    pub fn from_definition_and_installation(
-        definition: PluginDefinition,
-        installation: PluginInstallation,
-    ) -> Self {
-        Self {
-            installation_id: installation.id,
-            plugin_name: definition.name,
-            plugin_version: definition.version,
-            parameters: installation.parameters.into_iter().collect(),
-            registered: !definition.deleted,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]

@@ -14,10 +14,12 @@
 
 use crate::rib_source_span::SourceSpan;
 use bigdecimal::BigDecimal;
+use desert_rust::BinaryCodec;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Eq, PartialOrd, Ord)]
+#[derive(Clone, Eq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum TypeOrigin {
     OriginatedAt(SourceSpan),
     Default(DefaultType),
@@ -32,7 +34,8 @@ impl Debug for TypeOrigin {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialOrd, Ord, BinaryCodec)]
+#[desert(evolution())]
 pub enum DefaultType {
     String,
     F64,

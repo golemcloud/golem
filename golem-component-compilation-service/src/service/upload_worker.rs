@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::*;
+use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
-
-use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use tokio::sync::mpsc;
 use tracing::Instrument;
-
-use crate::model::*;
 
 // Worker that uploads compiled components to the cloud.
 #[derive(Clone)]
@@ -52,13 +50,13 @@ impl UploadWorker {
         let CompiledComponent {
             component_and_version,
             component,
-            project_id,
+            environment_id,
         } = compiled_component;
 
         let upload_result = self
             .compiled_component_service
             .put(
-                &project_id,
+                &environment_id,
                 &component_and_version.id,
                 component_and_version.version,
                 &component,

@@ -18,8 +18,9 @@ use futures_concurrency::future::Join;
 use golem_common::model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::{IntoValueAndType, ValueAndType};
 use indoc::indoc;
 use std::time::Duration;
@@ -276,6 +277,7 @@ impl Benchmark for ColdStartUnknownLarge {
 }
 
 pub struct IterationContext {
+    user: TestUserContext<BenchmarkTestDependencies>,
     worker_ids: Vec<WorkerId>,
 }
 
@@ -317,26 +319,27 @@ impl ColdStartUnknownBenchmark {
     }
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
+        let user = self.deps.user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
+
         let mut worker_ids = vec![];
 
         for _ in 0..config.size {
-            let component_id = self
-                .deps
-                .admin()
-                .await
-                .component(&self.component_name)
+            let component = user
+                .component(&env.id, &self.component_name)
                 .unique()
                 .store()
-                .await;
+                .await
+                .unwrap();
 
             let worker_id = WorkerId {
-                component_id,
+                component_id: component.id,
                 worker_name: "benchmark-agent(\"test\")".to_string(),
             };
             worker_ids.push(worker_id);
         }
 
-        IterationContext { worker_ids }
+        IterationContext { user, worker_ids }
     }
 
     pub async fn warmup(&self, config: &RunConfig) {
@@ -354,9 +357,9 @@ impl ColdStartUnknownBenchmark {
             .worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = self.deps.clone();
+                let user_clone = iteration.user.clone();
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     &self.function_name,
                     self.function_params.clone(),
@@ -372,6 +375,6 @@ impl ColdStartUnknownBenchmark {
     }
 
     pub async fn cleanup_iteration(&self, iteration: IterationContext) {
-        delete_workers(&self.deps, &iteration.worker_ids).await
+        delete_workers(&iteration.user, &iteration.worker_ids).await
     }
 }

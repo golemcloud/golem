@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::plugin::PluginSubcommand;
-use crate::command::shared_args::PluginScopeArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -373,8 +371,7 @@ impl PluginCommandHandler {
 }
 
 fn plugin_scope(
-    scope_project: Option<&ProjectRefAndId>,
-    scope_component_id: Option<&ComponentId>,
+    scope_environment: Option<&ResolvedEnvironmentIdentity>,    scope_component_id: Option<&ComponentId>,
 ) -> PluginScope {
     if let Some(component_id) = scope_component_id {
         PluginScope::Component(ComponentPluginScope {

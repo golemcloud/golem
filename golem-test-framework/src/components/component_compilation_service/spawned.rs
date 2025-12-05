@@ -12,24 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::CloudService;
 use crate::components::component_compilation_service::{
     wait_for_startup, ComponentCompilationService,
 };
 use crate::components::ChildProcessLogger;
 use async_trait::async_trait;
-
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use crate::components::component_service::ComponentService;
 use tracing::info;
 use tracing::Level;
 
 pub struct SpawnedComponentCompilationService {
-    http_port: u16,
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
@@ -41,11 +36,9 @@ impl SpawnedComponentCompilationService {
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
-        component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
-        cloud_service: Arc<dyn CloudService>,
         enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
@@ -57,18 +50,7 @@ impl SpawnedComponentCompilationService {
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(
-                super::env_vars(
-                    http_port,
-                    grpc_port,
-                    component_service,
-                    &cloud_service,
-                    verbosity,
-                    enable_fs_cache,
-                    otlp,
-                )
-                .await,
-            )
+            .envs(super::env_vars(http_port, grpc_port, verbosity, enable_fs_cache, otlp).await)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -85,7 +67,6 @@ impl SpawnedComponentCompilationService {
         wait_for_startup("localhost", grpc_port, Duration::from_secs(90)).await;
 
         Self {
-            http_port,
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
@@ -95,15 +76,11 @@ impl SpawnedComponentCompilationService {
 
 #[async_trait]
 impl ComponentCompilationService for SpawnedComponentCompilationService {
-    fn private_host(&self) -> String {
+    fn grpc_host(&self) -> String {
         "localhost".to_string()
     }
 
-    fn private_http_port(&self) -> u16 {
-        self.http_port
-    }
-
-    fn private_grpc_port(&self) -> u16 {
+    fn grpc_port(&self) -> u16 {
         self.grpc_port
     }
 

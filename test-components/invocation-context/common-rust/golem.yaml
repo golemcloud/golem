@@ -3,9 +3,9 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
         build:
         - command: cargo component build
@@ -42,7 +42,6 @@ templates:
         customCommands:
           copy:
             - command: cp ../../target/wasm32-wasip1/release/{{ component_name | to_snake_case }}.wasm ../../..
-    defaultProfile: debug
 customCommands:
   cargo-clean:
   - command: cargo clean

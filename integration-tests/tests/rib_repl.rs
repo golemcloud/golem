@@ -17,12 +17,15 @@ use test_r::test;
 use crate::Tracing;
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::WorkerId;
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
@@ -37,33 +40,45 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl(deps: &EnvBasedTestDependencies) {
-    test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await;
+async fn test_rib_repl(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    test_repl_invoking_functions(deps, Some("worker-repl-simple-test")).await?;
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_without_worker_param(deps: &EnvBasedTestDependencies) {
-    test_repl_invoking_functions(deps, None).await;
+async fn test_rib_repl_without_worker_param(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    test_repl_invoking_functions(deps, None).await?;
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) {
-    test_repl_invoking_resource_methods(deps, Some("worker-repl-resource-test")).await;
+async fn test_rib_repl_with_resource(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    test_repl_invoking_resource_methods(deps, Some("worker-repl-resource-test")).await?;
+    Ok(())
 }
 
 #[test]
 #[tracing::instrument]
-async fn test_rib_repl_with_resource_without_param(deps: &EnvBasedTestDependencies) {
-    test_repl_invoking_resource_methods(deps, None).await;
+async fn test_rib_repl_with_resource_without_param(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    test_repl_invoking_resource_methods(deps, None).await?;
+    Ok(())
 }
 
-async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_name: Option<&str>) {
+async fn test_repl_invoking_functions(
+    deps: &EnvBasedTestDependencies,
+    worker_name: Option<&str>,
+) -> anyhow::Result<()> {
+    let dsl = deps.user().await?;
+    let (_, env) = dsl.app_and_env().await?;
+
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
-        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(dsl.clone(), env.id)),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(dsl)),
         printer: None,
         component_source: Some(ComponentSource {
             component_name: "shopping-cart".to_string(),
@@ -112,11 +127,7 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
 
     assert!(result.unwrap_err().contains("function 'add' not found"));
 
-    let result = rib_repl
-        .execute(rib3)
-        .await
-        .map_err(|err| err.to_string())
-        .expect("Failed to process rib");
+    let result = rib_repl.execute(rib3).await?;
 
     assert_eq!(
         result,
@@ -135,19 +146,11 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
         )))
     );
 
-    let result = rib_repl
-        .execute(rib4)
-        .await
-        .map_err(|err| err.to_string())
-        .expect("Failed to process rib");
+    let result = rib_repl.execute(rib4).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib5)
-        .await
-        .map_err(|err| err.to_string())
-        .expect("Failed to process rib");
+    let result = rib_repl.execute(rib5).await?;
 
     assert_eq!(
         result,
@@ -170,16 +173,21 @@ async fn test_repl_invoking_functions(deps: &EnvBasedTestDependencies, worker_na
             ),
         )))
     );
+
+    Ok(())
 }
 
 async fn test_repl_invoking_resource_methods(
     deps: &EnvBasedTestDependencies,
     worker_name: Option<&str>,
-) {
+) -> anyhow::Result<()> {
+    let dsl = deps.user().await?;
+    let (_, env) = dsl.app_and_env().await?;
+
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
-        dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
-        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(deps.clone())),
+        dependency_manager: Arc::new(TestRibReplDependencyManager::new(dsl.clone(), env.id)),
+        worker_function_invoke: Arc::new(TestRibReplWorkerFunctionInvoke::new(dsl)),
         printer: None,
         component_source: Some(ComponentSource {
             component_name: "shopping-cart-resource".to_string(),
@@ -190,8 +198,7 @@ async fn test_repl_invoking_resource_methods(
         prompt: None,
         command_registry: None,
     })
-    .await
-    .expect("Failed to bootstrap REPL");
+    .await?;
 
     let rib1 = match worker_name {
         Some(name) => format!(r#"let worker = instance("{name}")"#),
@@ -219,17 +226,11 @@ async fn test_repl_invoking_resource_methods(
       resource.get-cart-contents()
      "#;
 
-    let result = rib_repl
-        .execute(&rib1)
-        .await
-        .expect("Failed to process command");
+    let result = rib_repl.execute(&rib1).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib2)
-        .await
-        .expect("Failed to process command");
+    let result = rib_repl.execute(rib2).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
@@ -256,19 +257,11 @@ async fn test_repl_invoking_resource_methods(
         )))
     );
 
-    let result = rib_repl
-        .execute(rib4)
-        .await
-        .map_err(|err| err.to_string())
-        .expect("Failed to process rib");
+    let result = rib_repl.execute(rib4).await?;
 
     assert_eq!(result, Some(RibResult::Unit));
 
-    let result = rib_repl
-        .execute(rib5)
-        .await
-        .map_err(|err| err.to_string())
-        .expect("Failed to process rib");
+    let result = rib_repl.execute(rib5).await?;
 
     assert_eq!(
         result,
@@ -290,16 +283,25 @@ async fn test_repl_invoking_resource_methods(
                 .owned("golem:it/api")
             ),
         )))
-    )
+    );
+
+    Ok(())
 }
 
 struct TestRibReplDependencyManager {
-    dependencies: EnvBasedTestDependencies,
+    test_dsl: TestUserContext<EnvBasedTestDependencies>,
+    environment_id: EnvironmentId,
 }
 
 impl TestRibReplDependencyManager {
-    fn new(dependencies: EnvBasedTestDependencies) -> Self {
-        Self { dependencies }
+    fn new(
+        test_dsl: TestUserContext<EnvBasedTestDependencies>,
+        environment_id: EnvironmentId,
+    ) -> Self {
+        Self {
+            test_dsl,
+            environment_id,
+        }
     }
 }
 
@@ -316,46 +318,34 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         _source_path: &Path,
         component_name: String,
     ) -> anyhow::Result<ComponentDependency> {
-        let component_id = self
-            .dependencies
-            .admin()
-            .await
-            .component(component_name.as_str())
+        let component = self
+            .test_dsl
+            .component(&self.environment_id, component_name.as_str())
             .store()
-            .await;
-
-        let metadata = self
-            .dependencies
-            .admin()
-            .await
-            .get_latest_component_metadata(&component_id)
-            .await;
+            .await?;
 
         let component_dependency_key = ComponentDependencyKey {
             component_name,
-            component_id: component_id.0,
-            component_version: 0,
-            root_package_name: metadata.root_package_name().clone(),
-            root_package_version: metadata.root_package_version().clone(),
+            component_id: component.id.0,
+            component_revision: 0,
+            root_package_name: component.metadata.root_package_name().clone(),
+            root_package_version: component.metadata.root_package_version().clone(),
         };
 
         Ok(ComponentDependency::new(
             component_dependency_key,
-            metadata.exports().to_vec(),
+            component.metadata.exports().to_vec(),
         ))
     }
 }
 
-// Embedded RibFunctionInvoke implementation
 pub struct TestRibReplWorkerFunctionInvoke {
-    embedded_worker_executor: EnvBasedTestDependencies,
+    test_dsl: TestUserContext<EnvBasedTestDependencies>,
 }
 
 impl TestRibReplWorkerFunctionInvoke {
-    pub fn new(embedded_worker_executor: EnvBasedTestDependencies) -> Self {
-        Self {
-            embedded_worker_executor,
-        }
+    pub fn new(test_dsl: TestUserContext<EnvBasedTestDependencies>) -> Self {
+        Self { test_dsl }
     }
 }
 
@@ -376,9 +366,7 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         };
 
         let result = self
-            .embedded_worker_executor
-            .admin()
-            .await
+            .test_dsl
             .invoke_and_await_typed(&worker_id, function_name, args)
             .await;
 

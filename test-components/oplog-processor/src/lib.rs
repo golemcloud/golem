@@ -55,14 +55,19 @@ impl oplog_processor::Guest for Component {
                     if let Some(invocation) =
                         state.current_invocations.get(&format!("{worker_id:?}"))
                     {
+                        let account_id = Uuid::from_u64_pair(
+                            account_info.account_id.uuid.high_bits,
+                            account_info.account_id.uuid.low_bits,
+                        );
+
                         let component_id = Uuid::from_u64_pair(
                             component_id.uuid.high_bits,
                             component_id.uuid.low_bits,
                         );
 
                         state.invocations.push(format!(
-                            "{}/{:?}/{}/{}",
-                            account_info.account_id.value,
+                            "{}/{}/{}/{}",
+                            account_id,
                             component_id,
                             worker_id.agent_id,
                             invocation.function_name

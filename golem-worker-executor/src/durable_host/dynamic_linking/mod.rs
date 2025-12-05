@@ -17,6 +17,7 @@ use crate::durable_host::dynamic_linking::wasm_rpc::dynamic_wasm_rpc_link;
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::{DynamicLinking, WorkerCtx};
 use async_trait::async_trait;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_wasm::golem_rpc_0_2_x::types::HostFutureInvokeResult;
 use golem_wasm::HostWasmRpc;
@@ -40,7 +41,7 @@ impl<
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         let mut root = linker.root();
 

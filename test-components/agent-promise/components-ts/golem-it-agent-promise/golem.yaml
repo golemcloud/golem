@@ -8,7 +8,7 @@
 
 components:
   golem-it:agent-promise:
-    template: ts
+    templates: ts
 
     #  Component environment variables can reference system environment variables with minijinja syntax:
     #

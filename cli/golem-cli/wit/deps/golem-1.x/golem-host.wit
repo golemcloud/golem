@@ -18,15 +18,15 @@ interface host {
     }
 
     /// Represents a Golem component's version
-    type component-version = u64;
+    type component-revision = u64;
 
     /// Represents a Golem Cloud account
     record account-id {
-        value: string
+        uuid: uuid
     }
 
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 
@@ -171,7 +171,7 @@ interface host {
         /// The current agent status
         status: agent-status,
         /// The component version the agent is running with
-        component-version: u64,
+        component-revision: u64,
         /// The agent's current retry count
         retry-count: u64
     }
@@ -279,7 +279,7 @@ interface host {
 
     /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
     /// not waiting for the agent to get updated.
-    update-agent:  func(agent-id: agent-id, target-version: component-version, mode: update-mode);
+    update-agent:  func(agent-id: agent-id, target-revision: component-revision, mode: update-mode);
 
     /// Get the current agent's metadata
     get-self-metadata: func() -> agent-metadata;

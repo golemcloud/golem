@@ -1,0 +1,281 @@
+package golem:rdbms@0.0.1;
+
+interface postgres {
+  use types.{date, time, timetz, timestamp, timestamptz, uuid, ip-address, mac-address};
+
+  variant error {
+    connection-failure(string),
+    query-parameter-failure(string),
+    query-execution-failure(string),
+    query-response-failure(string),
+    other(string)
+  }
+
+  record interval {
+    months: s32,
+    days: s32,
+    microseconds: s64
+  }
+
+  variant int4bound {
+    included(s32),
+    excluded(s32),
+    unbounded
+  }
+
+  variant int8bound {
+    included(s64),
+    excluded(s64),
+    unbounded
+  }
+
+  variant numbound {
+    included(string),
+    excluded(string),
+    unbounded
+  }
+
+  variant tsbound {
+    included(timestamp),
+    excluded(timestamp),
+    unbounded
+  }
+
+  variant tstzbound {
+    included(timestamptz),
+    excluded(timestamptz),
+    unbounded
+  }
+
+  variant datebound {
+    included(date),
+    excluded(date),
+    unbounded
+  }
+
+  record int4range {
+    start: int4bound,
+    end: int4bound
+  }
+
+  record int8range {
+    start: int8bound,
+    end: int8bound
+  }
+
+  record numrange {
+    start: numbound,
+    end: numbound
+  }
+
+  record tsrange {
+    start: tsbound,
+    end: tsbound
+  }
+
+  record tstzrange {
+    start: tstzbound,
+    end: tstzbound
+  }
+
+  record daterange {
+    start: datebound,
+    end: datebound
+  }
+
+  record enumeration-type {
+    name: string
+  }
+
+  record enumeration {
+    name: string,
+    value: string
+  }
+
+  record composite-type {
+    name: string,
+    attributes: list<tuple<string, lazy-db-column-type>>
+  }
+
+  record composite {
+    name: string,
+    values: list<lazy-db-value>
+  }
+
+  record domain-type {
+    name: string,
+    base-type: lazy-db-column-type
+  }
+
+  record domain {
+    name: string,
+    value: lazy-db-value
+  }
+
+  record range-type {
+    name: string,
+    base-type: lazy-db-column-type
+  }
+
+  variant value-bound {
+    included(lazy-db-value),
+    excluded(lazy-db-value),
+    unbounded
+  }
+
+  record values-range {
+    start: value-bound,
+    end: value-bound
+  }
+
+  record range {
+    name: string,
+    value: values-range
+  }
+
+  variant db-column-type {
+    character,
+    int2,
+    int4,
+    int8,
+    float4,
+    float8,
+    numeric,
+    boolean,
+    text,
+    varchar,
+    bpchar,
+    timestamp,
+    timestamptz,
+    date,
+    time,
+    timetz,
+    interval,
+    bytea,
+    uuid,
+    xml,
+    json,
+    jsonb,
+    jsonpath,
+    inet,
+    cidr,
+    macaddr,
+    bit,
+    varbit,
+    int4range,
+    int8range,
+    numrange,
+    tsrange,
+    tstzrange,
+    daterange,
+    money,
+    oid,
+    enumeration(enumeration-type),
+    composite(composite-type),
+    domain(domain-type),
+    array(lazy-db-column-type),
+    range(range-type)
+  }
+
+  variant db-value {
+    character(s8),
+    int2(s16),
+    int4(s32),
+    int8(s64),
+    float4(f32),
+    float8(f64),
+    numeric(string),
+    boolean(bool),
+    text(string),
+    varchar(string),
+    bpchar(string),
+    timestamp(timestamp),
+    timestamptz(timestamptz),
+    date(date),
+    time(time),
+    timetz(timetz),
+    interval(interval),
+    bytea(list<u8>),
+    json(string),
+    jsonb(string),
+    jsonpath(string),
+    xml(string),
+    uuid(uuid),
+    inet(ip-address),
+    cidr(ip-address),
+    macaddr(mac-address),
+    bit(list<bool>),
+    varbit(list<bool>),
+    int4range(int4range),
+    int8range(int8range),
+    numrange(numrange),
+    tsrange(tsrange),
+    tstzrange(tstzrange),
+    daterange(daterange),
+    money(s64),
+    oid(u32),
+    enumeration(enumeration),
+    composite(composite),
+    domain(domain),
+    array(list<lazy-db-value>),
+    range(range),
+    null
+  }
+
+  resource lazy-db-value {
+    constructor(value: db-value);
+    get: func() -> db-value;
+  }
+
+  resource lazy-db-column-type {
+    constructor(value: db-column-type);
+    get: func() -> db-column-type;
+  }
+
+  record db-column {
+    ordinal:     u64,
+    name:        string,
+    db-type:     db-column-type,
+    db-type-name: string
+  }
+
+  /// A single row of values
+  record db-row {
+    values: list<db-value>
+  }
+
+  record db-result {
+    columns: list<db-column>,
+    rows: list<db-row>
+  }
+
+  /// A potentially very large and lazy stream of rows:
+  resource db-result-stream {
+    get-columns: func() -> list<db-column>;
+    get-next: func() -> option<list<db-row>>;
+  }
+
+  resource db-connection {
+    open: static func(address: string) -> result<db-connection, error>;
+
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    begin-transaction: func() -> result<db-transaction, error>;
+  }
+
+  resource db-transaction {
+    query: func(statement: string, params: list<db-value>) -> result<db-result, error>;
+
+    query-stream: func(statement: string, params: list<db-value>) -> result<db-result-stream, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+
+    commit: func() -> result<_, error>;
+
+    rollback: func() -> result<_, error>;
+  }
+}

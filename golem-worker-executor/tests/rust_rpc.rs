@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::check;
 use golem_common::model::WorkerId;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use golem_worker_executor_test_utils::{
+    start, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
-use tracing::info;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -35,41 +35,42 @@ async fn auction_example_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let registry_component_id = executor
-        .component("auction_registry_composed")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry_composed")
         .store()
-        .await;
-    let auction_component_id = executor.component("auction").store().await;
+        .await?;
+
+    let auction_component = executor
+        .component(&context.default_environment_id, "auction")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "AUCTION_COMPONENT_ID".to_string(),
-        auction_component_id.to_string(),
+        auction_component.id.to_string(),
     );
     let registry_worker_id = executor
         .start_worker_with(
-            &registry_component_id,
+            &registry_component.id,
             "auction-registry-1",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    let _ = executor.log_output(&registry_worker_id).await;
+    executor.log_output(&registry_worker_id).await?;
 
     let expiration = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
@@ -81,7 +82,7 @@ async fn auction_example_1(
                 (expiration + 600).into_value_and_type(),
             ],
         )
-        .await;
+        .await?;
 
     let get_auctions_result = executor
         .invoke_and_await(
@@ -89,14 +90,12 @@ async fn auction_example_1(
             "auction:registry-exports/api.{get-auctions}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await;
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
-    drop(executor);
-
-    info!("result: {:?}", create_auction_result);
-    info!("result: {:?}", get_auctions_result);
     check!(create_auction_result.is_ok());
 
     let auction_id = &create_auction_result.unwrap()[0];
@@ -111,6 +110,8 @@ async fn auction_example_1(
                 Value::U64(expiration + 600)
             ]),])])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -119,41 +120,42 @@ async fn auction_example_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let registry_component_id = executor
-        .component("auction_registry_composed")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry_composed")
         .store()
-        .await;
-    let auction_component_id = executor.component("auction").store().await;
+        .await?;
+
+    let auction_component = executor
+        .component(&context.default_environment_id, "auction")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "AUCTION_COMPONENT_ID".to_string(),
-        auction_component_id.to_string(),
+        auction_component.id.to_string(),
     );
     let registry_worker_id = executor
         .start_worker_with(
-            &registry_component_id,
+            &registry_component.id,
             "auction-registry-2",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    let _ = executor.log_output(&registry_worker_id).await;
+    executor.log_output(&registry_worker_id).await?;
 
     let expiration = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
@@ -165,7 +167,7 @@ async fn auction_example_2(
                 (expiration + 600).into_value_and_type(),
             ],
         )
-        .await;
+        .await?;
 
     let get_auctions_result = executor
         .invoke_and_await(
@@ -173,28 +175,28 @@ async fn auction_example_2(
             "auction:registry-exports/api.{get-auctions}",
             vec![],
         )
-        .await;
+        .await??;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await;
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
-    drop(executor);
-
-    info!("result: {:?}", create_auction_result);
-    info!("result: {:?}", get_auctions_result);
     check!(create_auction_result.is_ok());
 
     let auction_id = &create_auction_result.unwrap()[0];
 
     check!(
         get_auctions_result
-            == Ok(vec![Value::List(vec![Value::Record(vec![
+            == vec![Value::List(vec![Value::Record(vec![
                 auction_id.clone(),
                 Value::String("test-auction".to_string()),
                 Value::String("this is a test".to_string()),
                 Value::F32(100.0),
                 Value::U64(expiration + 600)
-            ]),])])
+            ]),])]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -203,25 +205,27 @@ async fn counter_resource_test_1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-1", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-1", vec![], env, vec![])
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -229,20 +233,20 @@ async fn counter_resource_test_1(
             "rpc:caller-exports/caller-inline-functions.{test1}",
             vec![],
         )
-        .await;
+        .await??;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(
         result
-            == Ok(vec![Value::List(vec![
+            == vec![Value::List(vec![
                 Value::Tuple(vec![Value::String("counter3".to_string()), Value::U64(3)]),
                 Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)]),
                 Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(3)])
-            ])])
+            ])]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -251,25 +255,27 @@ async fn counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-2", vec![], env, vec![])
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -277,21 +283,22 @@ async fn counter_resource_test_2(
             "rpc:caller-exports/caller-inline-functions.{test2}",
             vec![],
         )
-        .await;
+        .await?;
+
     let result2 = executor
         .invoke_and_await(
             &caller_worker_id,
             "rpc:caller-exports/caller-inline-functions.{test2}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(result1 == Ok(vec![Value::U64(1)]));
     check!(result2 == Ok(vec![Value::U64(2)]));
+
+    Ok(())
 }
 
 #[test]
@@ -300,25 +307,28 @@ async fn counter_resource_test_2_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
+
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-2r", vec![], env, vec![])
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -326,14 +336,10 @@ async fn counter_resource_test_2_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test2}",
             vec![],
         )
-        .await;
+        .await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result2 = executor
         .invoke_and_await(
@@ -341,14 +347,14 @@ async fn counter_resource_test_2_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test2}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(result1 == Ok(vec![Value::U64(1)]));
     check!(result2 == Ok(vec![Value::U64(2)]));
+
+    Ok(())
 }
 
 #[test]
@@ -357,25 +363,28 @@ async fn counter_resource_test_3(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
+
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-3", vec![], env, vec![])
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -383,21 +392,22 @@ async fn counter_resource_test_3(
             "rpc:caller-exports/caller-inline-functions.{test3}",
             vec![],
         )
-        .await;
+        .await?;
+
     let result2 = executor
         .invoke_and_await(
             &caller_worker_id,
             "rpc:caller-exports/caller-inline-functions.{test3}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(result1 == Ok(vec![Value::U64(1)]));
     check!(result2 == Ok(vec![Value::U64(2)]));
+
+    Ok(())
 }
 
 #[test]
@@ -406,25 +416,27 @@ async fn counter_resource_test_3_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-3r", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-3r", vec![], env, vec![])
+        .await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -432,14 +444,10 @@ async fn counter_resource_test_3_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test3}",
             vec![],
         )
-        .await;
+        .await?;
 
     drop(executor);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result2 = executor
         .invoke_and_await(
@@ -447,14 +455,14 @@ async fn counter_resource_test_3_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test3}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(result1 == Ok(vec![Value::U64(1)]));
     check!(result2 == Ok(vec![Value::U64(2)]));
+
+    Ok(())
 }
 
 #[test]
@@ -463,32 +471,35 @@ async fn context_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     env.insert("TEST_CONFIG".to_string(), "123".to_string());
+
     let caller_worker_id = executor
         .start_worker_with(
-            &caller_component_id,
+            &caller_component.id,
             "rpc-counters-4",
             vec!["a".to_string(), "b".to_string(), "c".to_string()],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -496,11 +507,9 @@ async fn context_inheritance(
             "rpc:caller-exports/caller-inline-functions.{test4}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     let result = result.unwrap();
     let result_tuple = match &result[0] {
@@ -538,14 +547,14 @@ async fn context_inheritance(
         env == vec![
             (
                 "COUNTERS_COMPONENT_ID".to_string(),
-                counters_component_id.to_string()
+                counters_component.id.to_string()
             ),
             ("GOLEM_AGENT_ID".to_string(), "counters_test4".to_string()),
             (
                 "GOLEM_COMPONENT_ID".to_string(),
-                counters_component_id.to_string()
+                counters_component.id.to_string()
             ),
-            ("GOLEM_COMPONENT_VERSION".to_string(), "0".to_string()),
+            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
             (
                 "GOLEM_WORKER_NAME".to_string(),
                 "counters_test4".to_string()
@@ -553,6 +562,8 @@ async fn context_inheritance(
             ("TEST_CONFIG".to_string(), "123".to_string())
         ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -561,27 +572,29 @@ async fn counter_resource_test_5(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-5", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-5", vec![], env, vec![])
+        .await?;
 
-    executor.log_output(&caller_worker_id).await;
+    executor.log_output(&caller_worker_id).await?;
 
     let result = executor
         .invoke_and_await(
@@ -589,11 +602,9 @@ async fn counter_resource_test_5(
             "rpc:caller-exports/caller-inline-functions.{test5}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(
         result
@@ -603,6 +614,8 @@ async fn counter_resource_test_5(
                 Value::U64(3),
             ]),])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -611,28 +624,32 @@ async fn counter_resource_test_5_with_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     // using store_unique_component to avoid collision with counter_resource_test_5
-    let counters_component_id = executor.component("counters").unique().store().await;
-    let caller_component_id = executor.component("caller_composed").unique().store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .unique()
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .unique()
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-5r", vec![], env, vec![])
-        .await;
+        .start_worker_with(&caller_component.id, "rpc-counters-5r", vec![], env, vec![])
+        .await?;
 
-    executor.log_output(&caller_worker_id).await;
+    executor.log_output(&caller_worker_id).await?;
 
     let result1 = executor
         .invoke_and_await(
@@ -640,15 +657,10 @@ async fn counter_resource_test_5_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test5}",
             vec![],
         )
-        .await;
+        .await?;
 
     drop(executor);
-
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let result2 = executor
         .invoke_and_await(
@@ -656,11 +668,9 @@ async fn counter_resource_test_5_with_restart(
             "rpc:caller-exports/caller-inline-functions.{test5}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(
         result1
@@ -679,6 +689,8 @@ async fn counter_resource_test_5_with_restart(
                 Value::U64(3),
             ]),]),
     );
+
+    Ok(())
 }
 
 #[test]
@@ -687,31 +699,33 @@ async fn wasm_rpc_bug_32_test(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let counters_component_id = executor.component("counters").store().await;
-    let caller_component_id = executor.component("caller_composed").store().await;
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller_composed")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
         "COUNTERS_COMPONENT_ID".to_string(),
-        counters_component_id.to_string(),
+        counters_component.id.to_string(),
     );
     let caller_worker_id = executor
         .start_worker_with(
-            &caller_component_id,
+            &caller_component.id,
             "rpc-counters-bug32",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -725,11 +739,9 @@ async fn wasm_rpc_bug_32_test(
                 typ: analysed_type::variant(vec![analysed_type::unit_case("leaf")]),
             }],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&caller_worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&caller_worker_id).await?;
 
     check!(
         result
@@ -738,6 +750,8 @@ async fn wasm_rpc_bug_32_test(
                 case_value: None,
             }])
     );
+
+    Ok(())
 }
 
 #[test]
@@ -746,18 +760,14 @@ async fn error_message_non_existing_target_component(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let registry_component_id = executor
-        .component("auction_registry_composed")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry_composed")
         .store()
-        .await;
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
@@ -766,20 +776,20 @@ async fn error_message_non_existing_target_component(
     );
     let registry_worker_id = executor
         .start_worker_with(
-            &registry_component_id,
+            &registry_component.id,
             "auction-registry-non-existing-target",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    let _ = executor.log_output(&registry_worker_id).await;
+    executor.log_output(&registry_worker_id).await?;
 
     let expiration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
+
     let create_auction_result = executor
         .invoke_and_await(
             &registry_worker_id,
@@ -791,14 +801,16 @@ async fn error_message_non_existing_target_component(
                 (expiration + 600).into_value_and_type(),
             ],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await;
-
-    drop(executor);
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
     assert!(format!("{:?}", create_auction_result.err().unwrap())
         .contains("Could not find any component with the given id"));
+
+    Ok(())
 }
 
 #[test]
@@ -807,21 +819,17 @@ async fn ephemeral_worker_invocation_via_rpc1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("it_agent_counters_release")
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
         .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
     let worker_id = WorkerId {
-        component_id,
+        component_id: component.id,
         worker_name: "counter(\"ephemeral_worker_invocation_via_rpc1\")".to_string(),
     };
 
@@ -831,19 +839,21 @@ async fn ephemeral_worker_invocation_via_rpc1(
             "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
             vec![],
         )
-        .await;
+        .await?;
     let result = executor
         .invoke_and_await(
             &worker_id,
             "it:agent-counters/counter.{increment-through-rpc-to-ephemeral}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
     assert_eq!(result, Ok(vec![Value::U32(1)]));
+
+    Ok(())
 }
 
 #[test]
@@ -852,21 +862,17 @@ async fn ephemeral_worker_invocation_via_rpc2(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("it_agent_counters_release")
+    let component = executor
+        .component(&context.default_environment_id, "it_agent_counters_release")
         .name("it:agent-counters")
         .store()
-        .await;
+        .await?;
     let worker_id = WorkerId {
-        component_id,
+        component_id: component.id,
         worker_name: "counter(\"ephemeral_worker_invocation_via_rpc2\")".to_string(),
     };
 
@@ -883,10 +889,12 @@ async fn ephemeral_worker_invocation_via_rpc2(
             "it:agent-counters/counter.{increment-through-rpc-to-ephemeral-phantom}",
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
 
     assert_eq!(result, Ok(vec![Value::U32(1)]));
+
+    Ok(())
 }

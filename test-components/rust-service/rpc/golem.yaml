@@ -3,10 +3,14 @@
 # Schema for vscode-yaml
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json
 
+app: rust-service
+
+witDeps:
+- wit/deps
 tempDir: target/golem-temp
-templates:
+componentTemplates:
   rust:
-    profiles:
+    presets:
       debug:
         build:
         - command: cargo component build
@@ -41,4 +45,11 @@ templates:
           - command: cp ../target/golem-components/release/{{ component_name | to_snake_case }}.wasm ../../..
         clean:
         - src/bindings.rs
-    defaultProfile: debug
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

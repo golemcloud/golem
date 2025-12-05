@@ -13,14 +13,16 @@
 // limitations under the License.
 
 use crate::base_model::TransactionId;
+use crate::model::component::ComponentRevision;
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextStack, TraceId};
 use crate::model::oplog::public_oplog_entry::BinaryCodec;
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, RdbmsPoolKey,
-    ScheduleId, ScheduledAction, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, IdempotencyKey, OwnedWorkerId, RdbmsPoolKey, ScheduleId, ScheduledAction, WorkerId,
+    WorkerMetadata, WorkerStatus,
 };
 use anyhow::anyhow;
 use bigdecimal::BigDecimal;
@@ -1101,7 +1103,7 @@ pub struct AgentMetadataForGuests {
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
     pub status: WorkerStatus,
-    pub component_version: ComponentVersion,
+    pub component_revision: ComponentRevision,
     pub retry_count: u64,
 }
 
@@ -1113,7 +1115,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
             env: value.env,
             config_vars: value.wasi_config_vars,
             status: value.last_known_status.status,
-            component_version: value.last_known_status.component_version,
+            component_revision: value.last_known_status.component_revision,
             retry_count: value
                 .last_known_status
                 .current_retry_count
@@ -1282,7 +1284,7 @@ pub enum SerializableRpcError {
 pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
     pub account_id: AccountId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
@@ -1305,7 +1307,7 @@ impl SerializableScheduledInvocation {
             } => Ok(Self {
                 timestamp: schedule_id.timestamp,
                 account_id,
-                project_id: owned_worker_id.project_id,
+                environment_id: owned_worker_id.environment_id,
                 worker_id: owned_worker_id.worker_id,
                 idempotency_key,
                 full_function_name,
@@ -1324,7 +1326,7 @@ impl SerializableScheduledInvocation {
             action: ScheduledAction::Invoke {
                 account_id: self.account_id,
                 owned_worker_id: OwnedWorkerId {
-                    project_id: self.project_id,
+                    environment_id: self.environment_id,
                     worker_id: self.worker_id,
                 },
                 idempotency_key: self.idempotency_key,
