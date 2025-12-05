@@ -1157,3 +1157,193 @@ impl FromValueAndType for ResourceMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use crate::value_and_type::{FromValueAndType, IntoValue};
+    use golem_rust_macro::{FromValueAndType, IntoValue};
+    use golem_wasm::golem_rpc_0_2_x::types::ValueAndType;
+    use golem_wasm::{Value, WitValue};
+
+    #[derive(IntoValue, FromValueAndType, PartialEq, Debug, Clone)]
+    enum MyEnum {
+        Simple,
+        Complex1(i32),
+        Complex2(i32, String),
+        Complex3 { x: String, y: bool },
+    }
+
+    #[test]
+    fn test_into_value_derivation_enum() {
+        let simple_value = MyEnum::Simple.into_value();
+
+        let complex1_value = MyEnum::Complex1(42).into_value();
+
+        let complex2_value = MyEnum::Complex2(7, "hello".to_string()).into_value();
+
+        let complex3_value = MyEnum::Complex3 {
+            x: "world".to_string(),
+            y: true,
+        }
+        .into_value();
+
+        let expected_simple = Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        };
+
+        let expected_complex1 = Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::S32(42))),
+        };
+
+        let expected_complex2 = Value::Variant {
+            case_idx: 2,
+            case_value: Some(Box::new(Value::Tuple(vec![
+                Value::S32(7),
+                Value::String("hello".to_string()),
+            ]))),
+        };
+
+        let expected_complex3 = Value::Variant {
+            case_idx: 3,
+            case_value: Some(Box::new(Value::Record(vec![
+                Value::String("world".to_string()),
+                Value::Bool(true),
+            ]))),
+        };
+
+        assert_eq!(simple_value, WitValue::from(expected_simple));
+        assert_eq!(complex1_value, WitValue::from(expected_complex1));
+        assert_eq!(complex2_value, WitValue::from(expected_complex2));
+        assert_eq!(complex3_value, WitValue::from(expected_complex3));
+    }
+
+    #[test]
+    fn test_from_value_derivation_enum() {
+        let enum_type = MyEnum::get_type();
+
+        let simple1_value = WitValue::from(Value::Variant {
+            case_idx: 0,
+            case_value: None,
+        });
+
+        let simple1_value_and_type = ValueAndType {
+            value: simple1_value,
+            typ: enum_type.clone(),
+        };
+
+        let complex1_value = WitValue::from(Value::Variant {
+            case_idx: 1,
+            case_value: Some(Box::new(Value::S32(42))),
+        });
+
+        let complex1_value_and_type = ValueAndType {
+            value: complex1_value,
+            typ: enum_type.clone(),
+        };
+
+        let complex2_value = WitValue::from(Value::Variant {
+            case_idx: 2,
+            case_value: Some(Box::new(Value::Tuple(vec![
+                Value::S32(7),
+                Value::String("hello".to_string()),
+            ]))),
+        });
+
+        let complex2_value_and_type = ValueAndType {
+            value: complex2_value,
+            typ: enum_type.clone(),
+        };
+
+        let complex3_value = WitValue::from(Value::Variant {
+            case_idx: 3,
+            case_value: Some(Box::new(Value::Record(vec![
+                Value::String("world".to_string()),
+                Value::Bool(true),
+            ]))),
+        });
+
+        let complex3_value_and_type = ValueAndType {
+            value: complex3_value,
+            typ: enum_type.clone(),
+        };
+
+        let expected_simple = MyEnum::Simple;
+
+        let expected_complex1 = MyEnum::Complex1(42);
+
+        let expected_complex2 = MyEnum::Complex2(7, "hello".to_string());
+
+        let expected_complex3 = MyEnum::Complex3 {
+            x: "world".to_string(),
+            y: true,
+        };
+
+        assert_eq!(
+            MyEnum::from_value_and_type(simple1_value_and_type).unwrap(),
+            expected_simple
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex1_value_and_type).unwrap(),
+            expected_complex1
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex2_value_and_type).unwrap(),
+            expected_complex2
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex3_value_and_type).unwrap(),
+            expected_complex3
+        );
+    }
+
+    #[test]
+    fn test_round_trip_enum_derivation() {
+        let simple = MyEnum::Simple;
+        let complex1 = MyEnum::Complex1(42);
+        let complex2 = MyEnum::Complex2(7, "hello".to_string());
+        let complex3 = MyEnum::Complex3 {
+            x: "world".to_string(),
+            y: true,
+        };
+
+        let typ = MyEnum::get_type();
+
+        let simple_value = ValueAndType {
+            value: simple.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex1_value = ValueAndType {
+            value: complex1.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex2_value = ValueAndType {
+            value: complex2.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        let complex3_value = ValueAndType {
+            value: complex3.clone().into_value(),
+            typ: typ.clone(),
+        };
+
+        assert_eq!(MyEnum::from_value_and_type(simple_value).unwrap(), simple);
+        assert_eq!(
+            MyEnum::from_value_and_type(complex1_value).unwrap(),
+            complex1
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex2_value).unwrap(),
+            complex2
+        );
+        assert_eq!(
+            MyEnum::from_value_and_type(complex3_value).unwrap(),
+            complex3
+        );
+    }
+}
