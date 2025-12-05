@@ -19,7 +19,7 @@ use crate::{
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
-use crate::agentic::{agent_registry, get_resolved_agent};
+use crate::agentic::{agent_registry, is_agent_instance_active};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
@@ -54,15 +54,14 @@ impl Guest for Component {
     }
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
-        with_agent_instance_async(|resolved_agent| async move {
-            let mut agent = resolved_agent.agent.write().unwrap();
-
+        with_agent_instance_async(|agent_instance| async move {
+            let mut agent = agent_instance.write().unwrap();
             agent.invoke(method_name, input).await
         })
     }
 
     fn get_definition() -> AgentType {
-        with_agent_instance(|resolved_agent| resolved_agent.agent.read().unwrap().get_definition())
+        with_agent_instance(|agent_instance| agent_instance.read().unwrap().get_definition())
     }
 
     fn discover_agent_types() -> Result<Vec<AgentType>, AgentError> {
@@ -72,9 +71,7 @@ impl Guest for Component {
 
 impl LoadSnapshotGuest for Component {
     fn load(bytes: Vec<u8>) -> Result<(), String> {
-        let agent_id = get_resolved_agent();
-
-        if agent_id.is_some() {
+        if is_agent_instance_active() {
             return Err("Agent is already initialized".to_string());
         }
 
@@ -103,11 +100,10 @@ impl LoadSnapshotGuest for Component {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                let resolved_agent = get_resolved_agent().unwrap().clone();
-
-                let agent = resolved_agent.agent.read().unwrap();
-
-                agent.load_snapshot_base(agent_snapshot).await
+                with_agent_instance_async(|instance| async move {
+                    let agent = instance.read().unwrap();
+                    agent.load_snapshot_base(agent_snapshot).await
+                })
             },
             &AgentTypeName(agent_type_name),
         )
@@ -117,10 +113,10 @@ impl LoadSnapshotGuest for Component {
 
 impl SaveSnapshotGuest for Component {
     fn save() -> Vec<u8> {
-        with_agent_instance_async(|resolved_agent| async move {
-            let agent = resolved_agent.agent.read().unwrap();
-
-            let agent_snapshot = agent
+        with_agent_instance_async(|agent_instance| async move {
+            let agent_snapshot = agent_instance
+                .read()
+                .unwrap()
                 .save_snapshot_base()
                 .await
                 .expect("Failed to save agent snapshot");

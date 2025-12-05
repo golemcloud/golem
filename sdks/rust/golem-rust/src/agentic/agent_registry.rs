@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::Agent;
 use crate::{
-    agentic::{agent_initiator::AgentInitiator, ResolvedAgent},
+    agentic::agent_initiator::AgentInitiator,
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::ElementSchema},
 };
 use golem_wasm::golem_rpc_0_2_x::types::parse_uuid;
 use golem_wasm::{AgentId, ComponentId};
-use std::rc::Rc;
+use std::sync::RwLock;
 use std::{cell::RefCell, future::Future};
 use std::{collections::HashMap, sync::Arc};
 use wstd::runtime::block_on;
-use crate::agentic::Agent;
 
 #[derive(Default)]
 pub struct State {
@@ -48,10 +48,7 @@ pub fn get_state() -> &'static State {
     }
 }
 
-#[derive(Default)]
-pub struct AgentInstance {
-    pub agent: Box<dyn Agent>,
-}
+pub type AgentInstance = Arc<RwLock<Box<dyn Agent>>>;
 
 #[derive(Default)]
 pub struct AgentInitiators {
@@ -103,37 +100,51 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
 pub fn register_agent_instance(resolved_agent: Box<dyn Agent>) {
     let state = get_state();
 
-    state.agent_instance.borrow_mut().agent = Some(Rc::new(resolved_agent));
+    let agent_instance = Arc::new(RwLock::new(resolved_agent));
+
+    *state.agent_instance.borrow_mut() = Some(agent_instance);
 }
 
 // To be used only in agent implementation
 pub fn with_agent_instance_async<F, Fut, R>(f: F) -> R
 where
-    F: FnOnce(Rc<ResolvedAgent>) -> Fut,
+    F: FnOnce(AgentInstance) -> Fut,
     Fut: Future<Output = R>,
 {
-    let agent_instance = get_state()
-        .agent_instance
-        .borrow()
-        .agent
-        .clone()
-        .unwrap();
+    let state = get_state();
+
+    let agent_instance_optional = state.agent_instance.borrow();
+
+    let agent_instance = agent_instance_optional
+        .as_ref()
+        .expect("Agent instance not registered")
+        .clone();
 
     block_on(async move { f(agent_instance).await })
 }
 
+pub fn is_agent_instance_active() -> bool {
+    let state = get_state();
+
+    let agent = state.agent_instance.borrow();
+
+    agent.is_some()
+}
+
 pub fn with_agent_instance<F, R>(f: F) -> R
 where
-    F: FnOnce(&ResolvedAgent) -> R,
+    F: FnOnce(AgentInstance) -> R,
 {
-    let agent_instance = get_state()
-        .agent_instance
-        .borrow()
-        .agent
-        .clone()
-        .unwrap();
+    let state = get_state();
 
-    f(agent_instance.as_ref())
+    let agent = state.agent_instance.borrow();
+
+    let agent = agent
+        .as_ref()
+        .expect("Agent instance not registered")
+        .clone();
+
+    f(agent)
 }
 
 pub fn get_agent_id() -> AgentId {
@@ -151,10 +162,6 @@ pub fn get_agent_id() -> AgentId {
         },
         agent_id: raw_agent_id.clone(),
     }
-}
-
-pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {
-    get_state().agent_instance.borrow().agent.clone()
 }
 
 pub fn get_constructor_parameter_type(
