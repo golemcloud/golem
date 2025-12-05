@@ -30,7 +30,7 @@ pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use golem_common::poem::LazyEndpointExt;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};

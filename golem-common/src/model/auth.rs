@@ -17,9 +17,7 @@ use crate::{declare_enums, declare_structs, newtype_uuid};
 use base64::Engine;
 use chrono::Utc;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-use poem_openapi::types::{
-    ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
-};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
 use rand::rngs::OsRng;
 use rand::TryRngCore;
 use serde::{Deserialize, Serialize};
