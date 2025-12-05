@@ -1859,7 +1859,7 @@ struct RunningWorker {
     queue: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
-    interrupt_signal: Arc<async_mutex::Mutex<Option<InterruptKind>>>,
+    interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
 }
 
 impl RunningWorker {
@@ -1877,7 +1877,7 @@ impl RunningWorker {
         let owned_worker_id_clone = owned_worker_id.clone();
         let waiting_for_command = Arc::new(AtomicBool::new(false));
         let waiting_for_command_clone = waiting_for_command.clone();
-        let interrupt_signal = Arc::new(async_mutex::Mutex::new(None));
+        let interrupt_signal = Arc::new(async_lock::Mutex::new(None));
         let interrupt_signal_clone = interrupt_signal.clone();
 
         let span = span!(
@@ -1933,7 +1933,7 @@ impl RunningWorker {
 
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
-    ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), WorkerExecutorError> {
+    ) -> Result<(Instance, async_lock::Mutex<Store<Ctx>>), WorkerExecutorError> {
         let component_id = parent.owned_worker_id.component_id();
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
@@ -2101,7 +2101,7 @@ impl RunningWorker {
                     ),
                 )
             })?;
-        let store = async_mutex::Mutex::new(store);
+        let store = async_lock::Mutex::new(store);
         Ok((instance, store))
     }
 
@@ -2111,7 +2111,7 @@ impl RunningWorker {
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
-        interrupt_signal: Arc<async_mutex::Mutex<Option<InterruptKind>>>,
+        interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
     ) {
         let mut invocation_loop = InvocationLoop {

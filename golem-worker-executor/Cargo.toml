@@ -34,7 +34,6 @@ golem-wasm-derive = { workspace = true }
 anyhow = { workspace = true }
 applying = { workspace = true }
 async-lock = { workspace = true }
-async-mutex = { workspace = true }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }

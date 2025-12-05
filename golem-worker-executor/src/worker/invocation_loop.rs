@@ -23,7 +23,7 @@ use crate::worker::{
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;

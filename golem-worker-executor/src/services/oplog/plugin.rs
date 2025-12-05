@@ -25,7 +25,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;

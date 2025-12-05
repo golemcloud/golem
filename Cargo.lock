@@ -4784,7 +4784,6 @@ dependencies = [
  "applying",
  "assert2",
  "async-lock",
- "async-mutex",
  "async-recursion",
  "async-scoped",
  "async-trait",
