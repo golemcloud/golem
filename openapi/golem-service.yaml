@@ -4785,6 +4785,82 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/active-deployment:
+    put:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: Rollback an environment to a previous deployment
+      operationId: rollback_environment
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeploymentRollback'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CurrentDeployment'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/deployments:
     get:
       tags:
@@ -4884,7 +4960,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Deployment'
+                $ref: '#/components/schemas/CurrentDeployment'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4930,13 +5006,13 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/deployments/{deployment_id}/plan:
+  /v1/envs/{environment_id}/deployments/{deployment_id}/summary:
     get:
       tags:
       - RegistryService
       - Environment
-      summary: Get the deployment plan of a deployed deployment
-      operationId: get_environment_deployed_deployment_plan
+      summary: Get the deployment summary of a deployed deployment
+      operationId: get_deployment_summary
       parameters:
       - in: path
         name: environment_id
@@ -11588,6 +11664,30 @@ components:
       properties:
         response:
           type: string
+    CurrentDeployment:
+      title: CurrentDeployment
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        version:
+          type: string
+        deploymentHash:
+          type: string
+          format: hash
+        currentRevision:
+          type: integer
+          format: uint64
+      required:
+      - environmentId
+      - revision
+      - version
+      - deploymentHash
+      - currentRevision
     DataSchema:
       discriminator:
         propertyName: type
@@ -11634,7 +11734,7 @@ components:
       title: DeploymentCreation
       type: object
       properties:
-        currentDeploymentRevision:
+        currentRevision:
           type: integer
           format: uint64
         expectedDeploymentHash:
@@ -11650,7 +11750,7 @@ components:
       description: Planned deployment including the current revision
       type: object
       properties:
-        currentDeploymentRevision:
+        currentRevision:
           type: integer
           format: uint64
         deploymentHash:
@@ -11733,11 +11833,27 @@ components:
       - revision
       - domain
       - hash
+    DeploymentRollback:
+      title: DeploymentRollback
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        deploymentRevision:
+          type: integer
+          format: uint64
+      required:
+      - currentRevision
+      - deploymentRevision
     DeploymentSummary:
       title: DeploymentSummary
       description: Summary of all entities tracked by the deployment
       type: object
       properties:
+        deploymentRevision:
+          type: integer
+          format: uint64
         deploymentHash:
           type: string
           format: hash
@@ -11754,6 +11870,7 @@ components:
           items:
             $ref: '#/components/schemas/DeploymentPlanHttpApiDeploymentEntry'
       required:
+      - deploymentRevision
       - deploymentHash
       - components
       - httpApiDefinitions
@@ -11928,12 +12045,16 @@ components:
         revision:
           type: integer
           format: uint64
-        hash:
+        deploymentRevision:
+          type: integer
+          format: uint64
+        deploymentHash:
           type: string
           format: hash
       required:
       - revision
-      - hash
+      - deploymentRevision
+      - deploymentHash
     EnvironmentPluginGrant:
       title: EnvironmentPluginGrant
       type: object

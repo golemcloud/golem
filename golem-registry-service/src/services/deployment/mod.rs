@@ -186,22 +186,16 @@ impl DeploymentService {
             EnvironmentAction::ViewDeploymentPlan,
         )?;
 
-        let staged_revision = self
-            .deployment_repo
-            .get_next_revision_number(&environment_id.0)
-            .await?
-            .map(|r| DeploymentRevision(r as u64));
-
         let summary: DeploymentPlan = self
             .deployment_repo
             .get_staged_identity(&environment_id.0)
             .await?
-            .into_plan(staged_revision);
+            .into_plan(environment.current_deployment.as_ref().map(|e| e.revision));
 
         Ok(summary)
     }
 
-    pub async fn get_deployed_deployment_summary(
+    pub async fn get_deployment_summary(
         &self,
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -226,10 +220,9 @@ impl DeploymentService {
 
         let summary: DeploymentSummary = self
             .deployment_repo
-            .get_deployment_identity(&environment_id.0, Some(deployment_revision.into()))
+            .get_deployment_identity(&environment_id.0, deployment_revision.into())
             .await?
             .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
-            .identity
             .into();
 
         Ok(summary)

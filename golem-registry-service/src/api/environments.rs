@@ -20,7 +20,8 @@ use golem_common::model::Page;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
-    Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision, DeploymentSummary,
+    CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
+    DeploymentRollback, DeploymentSummary,
 };
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
@@ -342,6 +343,48 @@ impl EnvironmentsApi {
         Ok(Json(deployment_plan))
     }
 
+    /// Rollback an environment to a previous deployment
+    #[oai(
+        path = "/envs/:environment_id/current-deployment",
+        method = "put",
+        operation_id = "rollback_environment",
+        tag = ApiTags::Deployment
+    )]
+    async fn rollback_environment(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        payload: Json<DeploymentRollback>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<CurrentDeployment>> {
+        let record = recorded_http_api_request!(
+            "rollback_environment",
+            environment_id = environment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .rollback_environment_internal(environment_id.0, payload.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn rollback_environment_internal(
+        &self,
+        environment_id: EnvironmentId,
+        payload: DeploymentRollback,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<CurrentDeployment>> {
+        let current_deployment = self
+            .deployment_write_service
+            .rollback_environment(&environment_id, payload, &auth)
+            .await?;
+
+        Ok(Json(current_deployment))
+    }
+
     /// Get all deployments in this environment
     #[oai(
         path = "/envs/:environment_id/deployments",
@@ -395,7 +438,7 @@ impl EnvironmentsApi {
         environment_id: Path<EnvironmentId>,
         payload: Json<DeploymentCreation>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Deployment>> {
+    ) -> ApiResult<Json<CurrentDeployment>> {
         let record = recorded_http_api_request!(
             "deploy_environment",
             environment_id = environment_id.0.to_string(),
@@ -416,7 +459,7 @@ impl EnvironmentsApi {
         environment_id: EnvironmentId,
         payload: DeploymentCreation,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Deployment>> {
+    ) -> ApiResult<Json<CurrentDeployment>> {
         let deployment = self
             .deployment_write_service
             .create_deployment(&environment_id, payload, &auth)
@@ -424,20 +467,20 @@ impl EnvironmentsApi {
         Ok(Json(deployment))
     }
 
-    /// Get the deployment plan of a deployed deployment
+    /// Get the deployment summary of a deployed deployment
     #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_id/plan",
+        path = "/envs/:environment_id/deployments/:deployment_id/summary",
         method = "get",
-        operation_id = "get_environment_deployed_deployment_plan"
+        operation_id = "get_deployment_summary"
     )]
-    async fn get_environment_deployed_deployment_plan(
+    async fn get_deployment_summary(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<DeploymentSummary>> {
         let record = recorded_http_api_request!(
-            "get_environment_deployed_deployment_plan",
+            "get_deployment_summary",
             environment_id = environment_id.0.to_string(),
             deployment_id = deployment_id.0.to_string(),
         );
@@ -445,18 +488,14 @@ impl EnvironmentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_deployed_deployment_plan_internal(
-                environment_id.0,
-                deployment_id.0,
-                auth,
-            )
+            .get_deployment_summary_internal(environment_id.0, deployment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_deployed_deployment_plan_internal(
+    async fn get_deployment_summary_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_id: DeploymentRevision,
@@ -464,7 +503,7 @@ impl EnvironmentsApi {
     ) -> ApiResult<Json<DeploymentSummary>> {
         let deployment_plan = self
             .deployment_service
-            .get_deployed_deployment_summary(&environment_id, deployment_id, &auth)
+            .get_deployment_summary(&environment_id, deployment_id, &auth)
             .await?;
         Ok(Json(deployment_plan))
     }

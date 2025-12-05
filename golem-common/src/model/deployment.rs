@@ -25,23 +25,40 @@ use crate::{declare_revision, declare_structs};
 
 declare_revision!(DeploymentRevision);
 
+// Revision of the environment current_revision field, counting rollbacks as well as normal deployments
+declare_revision!(CurrentDeploymentRevision);
+
 declare_structs! {
     pub struct Deployment {
         pub environment_id: EnvironmentId,
         pub revision: DeploymentRevision,
         pub version: String,
-        pub deployment_hash: Hash
+        pub deployment_hash: Hash,
+    }
+
+    pub struct CurrentDeployment {
+        pub environment_id: EnvironmentId,
+        pub revision: DeploymentRevision,
+        pub version: String,
+        pub deployment_hash: Hash,
+
+        pub current_revision: CurrentDeploymentRevision,
     }
 
     pub struct DeploymentCreation {
-        pub current_deployment_revision: Option<DeploymentRevision>,
+        pub current_revision: Option<CurrentDeploymentRevision>,
         pub expected_deployment_hash: Hash,
         pub version: String
     }
 
+    pub struct DeploymentRollback {
+        pub current_revision: CurrentDeploymentRevision,
+        pub deployment_revision: DeploymentRevision,
+    }
+
     /// Planned deployment including the current revision
     pub struct DeploymentPlan {
-        pub current_deployment_revision: Option<DeploymentRevision>,
+        pub current_revision: Option<CurrentDeploymentRevision>,
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_definitions: Vec<DeploymentPlanHttpApiDefintionEntry>,
@@ -50,6 +67,7 @@ declare_structs! {
 
     /// Summary of all entities tracked by the deployment
     pub struct DeploymentSummary {
+        pub deployment_revision: DeploymentRevision,
         pub deployment_hash: Hash,
         pub components: Vec<DeploymentPlanComponentEntry>,
         pub http_api_definitions: Vec<DeploymentPlanHttpApiDefintionEntry>,

@@ -226,8 +226,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         a.account_id as owner_account_id,
                         COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
-                        dr.revision_id as current_deployment_revision,
-                        dr.hash as current_deployment_hash
+                        cdr.revision_id as current_deployment_revision,
+                        dr.revision_id as current_deployment_deployment_revision,
+                        dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
@@ -252,7 +253,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND cdr.revision_id = cd.current_revision_id
                     LEFT JOIN deployment_revisions dr
                         ON dr.environment_id = cdr.environment_id
-                        AND dr.revision_id = cdr.revision_id
+                        AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
                         ap.application_id = $1
@@ -296,8 +297,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         a.account_id as owner_account_id,
                         COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
-                        dr.revision_id as current_deployment_revision,
-                        dr.hash as current_deployment_hash
+                        cdr.revision_id as current_deployment_revision,
+                        dr.revision_id as current_deployment_deployment_revision,
+                        dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
@@ -328,7 +330,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND cdr.revision_id = cd.current_revision_id
                     LEFT JOIN deployment_revisions dr
                         ON dr.environment_id = cdr.environment_id
-                        AND dr.revision_id = cdr.revision_id
+                        AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
                         e.environment_id = $1
@@ -375,8 +377,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         a.account_id as owner_account_id,
                         COALESCE(esr.roles, 0) AS environment_roles_from_shares,
 
-                        dr.revision_id as current_deployment_revision,
-                        dr.hash as current_deployment_hash
+                        cdr.revision_id as current_deployment_revision,
+                        dr.revision_id as current_deployment_deployment_revision,
+                        dr.hash as current_deployment_deployment_hash
                     FROM accounts a
                     JOIN applications ap
                         ON ap.account_id = a.account_id
@@ -402,7 +405,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         AND cdr.revision_id = cd.current_revision_id
                     LEFT JOIN deployment_revisions dr
                         ON dr.environment_id = cdr.environment_id
-                        AND dr.revision_id = cdr.revision_id
+                        AND dr.revision_id = cdr.deployment_revision_id
 
                     WHERE
                         ap.application_id = $1
@@ -457,7 +460,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                       -- Hard-coded defaults
                       0 AS environment_roles_from_shares,
                       NULL AS current_deployment_revision,
-                      NULL AS current_deployment_hash;
+                      NULL AS current_deployment_deployment_revision,
+                      NULL AS current_deployment_deployment_hash;
                 "# })
                     .bind(revision.environment_id)
                     .bind(&revision.name)
@@ -477,7 +481,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                 current_deployment_revision: environment_record.current_deployment_revision,
-                current_deployment_hash: environment_record.current_deployment_hash
+                current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash
             })
         }.boxed()).await
     }
@@ -529,13 +534,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                             -- Current deployment info
                             (
-                                SELECT cdr.revision_id
+                                SELECT cd.revision_id
+                                FROM current_deployments cd
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_revision,
+
+                            (
+                                SELECT cdr.deployment_revision_id
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS current_deployment_revision,
+                            ) AS current_deployment_deployment_revision,
 
                             (
                                 SELECT dr.hash
@@ -545,9 +556,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                     AND cdr.revision_id = cd.current_revision_id
                                 JOIN deployment_revisions dr
                                     ON dr.environment_id = cdr.environment_id
-                                    AND dr.revision_id = cdr.revision_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS current_deployment_hash;
+                            ) AS current_deployment_deployment_hash;
                     "#})
                     .bind(&revision.name)
                     .bind(&revision.audit.created_at)
@@ -567,7 +578,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_hash: environment_record.current_deployment_hash
+                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
             .boxed()
@@ -622,13 +634,19 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
 
                             -- Current deployment info
                             (
-                                SELECT cdr.revision_id
+                                SELECT cd.revision_id
+                                FROM current_deployments cd
+                                WHERE cd.environment_id = environments.environment_id
+                            ) AS current_deployment_revision,
+
+                            (
+                                SELECT cdr.deployment_revision_id
                                 FROM current_deployments cd
                                 JOIN current_deployment_revisions cdr
                                     ON cdr.environment_id = cd.environment_id
                                     AND cdr.revision_id = cd.current_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS current_deployment_revision,
+                            ) AS current_deployment_deployment_revision,
 
                             (
                                 SELECT dr.hash
@@ -638,9 +656,9 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                                     AND cdr.revision_id = cd.current_revision_id
                                 JOIN deployment_revisions dr
                                     ON dr.environment_id = cdr.environment_id
-                                    AND dr.revision_id = cdr.revision_id
+                                    AND dr.revision_id = cdr.deployment_revision_id
                                 WHERE cd.environment_id = environments.environment_id
-                            ) AS current_deployment_hash;
+                            ) AS current_deployment_deployment_hash;
 
                     "#})
                     .bind(&revision.name)
@@ -660,7 +678,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     environment_roles_from_shares: environment_record.environment_roles_from_shares,
 
                     current_deployment_revision: environment_record.current_deployment_revision,
-                    current_deployment_hash: environment_record.current_deployment_hash
+                    current_deployment_deployment_revision: environment_record.current_deployment_deployment_revision,
+                    current_deployment_deployment_hash: environment_record.current_deployment_deployment_hash,
                 })
             }
             .boxed()

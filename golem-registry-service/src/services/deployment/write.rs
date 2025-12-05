@@ -26,7 +26,7 @@ use futures::TryFutureExt;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeployment, DeploymentRevision, DeploymentRollback};
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
@@ -72,6 +72,10 @@ macro_rules! ok_or_continue {
 pub enum DeploymentWriteError {
     #[error("Parent environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
+    #[error("Deployment {0} not found in the environment")]
+    DeploymentNotFound(DeploymentRevision),
+    #[error("Environment has not yet been deployed")]
+    EnvironmentNotYetDeployed,
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
     #[error("Requested deployment would not have any changes compared to current deployment")]
@@ -97,6 +101,8 @@ impl SafeDisplay for DeploymentWriteError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::DeploymentNotFound(_) => self.to_string(),
+            Self::EnvironmentNotYetDeployed => self.to_string(),
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
@@ -185,7 +191,7 @@ impl DeploymentWriteService {
         environment_id: &EnvironmentId,
         data: DeploymentCreation,
         auth: &AuthCtx,
-    ) -> Result<Deployment, DeploymentWriteError> {
+    ) -> Result<CurrentDeployment, DeploymentWriteError> {
         let environment = self
             .environment_service
             .get(environment_id, false, auth)
@@ -203,26 +209,33 @@ impl DeploymentWriteService {
             EnvironmentAction::DeployEnvironment,
         )?;
 
+        if data.current_revision
+            != environment
+                .current_deployment
+                .as_ref()
+                .map(|cd| cd.revision)
+        {
+            return Err(DeploymentWriteError::ConcurrentDeployment);
+        };
+
+        if let Some(current_deployment_hash) = environment
+            .current_deployment
+            .as_ref()
+            .map(|ld| ld.deployment_hash)
+            && data.expected_deployment_hash == current_deployment_hash
+        {
+            return Err(DeploymentWriteError::NoOpDeployment);
+        }
+
         let latest_deployment = self
             .get_latest_deployment_for_environment(&environment, auth)
             .await?;
 
-        let current_deployment_revision = latest_deployment.as_ref().map(|ld| ld.revision);
-        if data.current_deployment_revision != current_deployment_revision {
-            return Err(DeploymentWriteError::ConcurrentDeployment);
-        };
-        let next_deployment_revision = current_deployment_revision
+        let next_deployment_revision = latest_deployment
             .as_ref()
-            .map(|ld| ld.next())
+            .map(|ld| ld.revision.next())
             .transpose()?
             .unwrap_or(DeploymentRevision::INITIAL);
-
-        if let Some(latest_deployment_hash) =
-            latest_deployment.as_ref().map(|ld| ld.deployment_hash)
-            && data.expected_deployment_hash == latest_deployment_hash
-        {
-            return Err(DeploymentWriteError::NoOpDeployment);
-        }
 
         tracing::info!("Creating deployment for environment: {environment_id}");
 
@@ -289,7 +302,7 @@ impl DeploymentWriteService {
             registered_agent_types,
         );
 
-        let deployment: Deployment = self
+        let deployment: CurrentDeployment = self
             .deployment_repo
             .deploy(&auth.account_id().0, record, environment.version_check)
             .await
@@ -305,6 +318,70 @@ impl DeploymentWriteService {
             .into();
 
         Ok(deployment)
+    }
+
+    pub async fn rollback_environment(
+        &self,
+        environment_id: &EnvironmentId,
+        payload: DeploymentRollback,
+        auth: &AuthCtx,
+    ) -> Result<CurrentDeployment, DeploymentWriteError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, auth)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+
+        auth.authorize_environment_action(
+            &environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::DeployEnvironment,
+        )?;
+
+        let current_deployment = environment
+            .current_deployment
+            .ok_or(DeploymentWriteError::EnvironmentNotYetDeployed)?;
+
+        if payload.current_revision != current_deployment.revision {
+            return Err(DeploymentWriteError::ConcurrentDeployment);
+        }
+
+        if current_deployment.deployment_revision == payload.deployment_revision {
+            // environment is already at target version, nothing to do
+            return Err(DeploymentWriteError::NoOpDeployment);
+        }
+
+        let target_deployment: Deployment = self
+            .deployment_repo
+            .get_deployed_revision(&environment_id.0, payload.deployment_revision.into())
+            .await?
+            .ok_or(DeploymentWriteError::DeploymentNotFound(
+                payload.deployment_revision,
+            ))?
+            .into();
+
+        let current_deployment: CurrentDeployment = self
+            .deployment_repo
+            .set_current_deployment(
+                &auth.account_id().0,
+                &environment_id.0,
+                payload.deployment_revision.into(),
+            )
+            .await
+            .map_err(|e| match e {
+                DeployRepoError::ConcurrentModification => {
+                    DeploymentWriteError::ConcurrentDeployment
+                }
+                other => other.into(),
+            })?
+            .into_model(target_deployment.version, target_deployment.deployment_hash);
+
+        Ok(current_deployment)
     }
 
     async fn get_latest_deployment_for_environment(

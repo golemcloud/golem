@@ -19,8 +19,8 @@ use crate::model::text::component::is_sensitive_env_var_name;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
-    DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision,
+    CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
+    DeploymentPlanHttpApiDeploymentEntry,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
@@ -45,7 +45,7 @@ impl DeployQuickDiff {
             .remote_environment
             .current_deployment
             .as_ref()
-            .map(|d| &d.hash)
+            .map(|d| &d.deployment_hash)
     }
 
     pub fn is_up_to_date(&self) -> bool {
@@ -203,7 +203,7 @@ impl DeployDiff {
             })
     }
 
-    pub fn current_deployment_revision(&self) -> Option<DeploymentRevision> {
+    pub fn current_deployment_revision(&self) -> Option<CurrentDeploymentRevision> {
         self.environment
             .remote_environment
             .current_deployment

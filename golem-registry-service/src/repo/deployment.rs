@@ -80,7 +80,7 @@ pub trait DeploymentRepo: Send + Sync {
     async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
-        revision_id: Option<i64>,
+        revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>>;
 
     async fn deploy(
@@ -118,6 +118,13 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         environment_id: &Uuid,
     ) -> RepoResult<Vec<DeploymentRegisteredAgentTypeRecord>>;
+
+    async fn set_current_deployment(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 }
 
 pub struct LoggedDeploymentRepo<Repo: DeploymentRepo> {
@@ -232,14 +239,11 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
-        revision_id: Option<i64>,
+        revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>> {
         self.repo
             .get_deployment_identity(environment_id, revision_id)
-            .instrument(match revision_id {
-                Some(revision_id) => Self::span_env_and_revision(environment_id, revision_id),
-                None => Self::span_env(environment_id),
-            })
+            .instrument(Self::span_env_and_revision(environment_id, revision_id))
             .await
     }
 
@@ -326,6 +330,23 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .instrument(info_span!(
                 SPAN_NAME,
                 environment_id = %environment_id,
+            ))
+            .await
+    }
+
+    async fn set_current_deployment(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
+        self.repo
+            .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
+            .instrument(info_span!(
+                SPAN_NAME,
+                user_account_id = %user_account_id,
+                environment_id = %environment_id,
+                deployment_revision_id
             ))
             .await
     }
@@ -493,15 +514,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn get_deployment_identity(
         &self,
         environment_id: &Uuid,
-        revision_id: Option<i64>,
+        revision_id: i64,
     ) -> RepoResult<Option<DeployedDeploymentIdentity>> {
-        let deployment_revision = match revision_id {
-            Some(revision_id) => {
-                self.get_deployment_revision(environment_id, revision_id)
-                    .await?
-            }
-            None => self.get_currently_deployed_revision(environment_id).await?,
-        };
+        let deployment_revision = self
+            .get_deployment_revision(environment_id, revision_id)
+            .await?;
 
         let Some(deployment_revision) = deployment_revision else {
             return Ok(None);
@@ -596,17 +613,21 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         .await?;
                 }
 
-                let revision = Self::set_current_deployment(
+                let revision = Self::set_current_deployment_internal(
                     tx,
                     &user_account_id,
                     &deployment_revision.environment_id,
                     deployment_revision.revision_id,
-                    &deployment_revision.hash,
-                    &deployment_revision.version,
                 )
                 .await?;
 
-                Ok(revision)
+                let ext_revision = CurrentDeploymentExtRevisionRecord {
+                    revision,
+                    deployment_version: deployment_revision.version,
+                    deployment_hash: deployment_revision.hash,
+                };
+
+                Ok(ext_revision)
             }
             .boxed()
         })
@@ -822,6 +843,29 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             )
             .await
     }
+
+    async fn set_current_deployment(
+        &self,
+        user_account_id: &Uuid,
+        environment_id: &Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
+        let user_account_id = *user_account_id;
+        let environment_id = *environment_id;
+
+        self.with_tx_err("set_current_deployment", |tx| {
+            Box::pin(async move {
+                Self::set_current_deployment_internal(
+                    tx,
+                    &user_account_id,
+                    &environment_id,
+                    deployment_revision_id,
+                )
+                .await
+            })
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -896,14 +940,12 @@ trait DeploymentRepoInternal: DeploymentRepo {
         registered_agent_type: &DeploymentRegisteredAgentTypeRecord,
     ) -> RepoResult<()>;
 
-    async fn set_current_deployment(
+    async fn set_current_deployment_internal(
         tx: &mut Self::Tx,
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-        deployment_hash: &SqlBlake3Hash,
-        deployment_version: &str,
-    ) -> RepoResult<CurrentDeploymentExtRevisionRecord>;
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError>;
 
     async fn get_deployed_components(
         &self,
@@ -1171,14 +1213,12 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         Ok(())
     }
 
-    async fn set_current_deployment(
+    async fn set_current_deployment_internal(
         tx: &mut Self::Tx,
         user_account_id: &Uuid,
         environment_id: &Uuid,
         deployment_revision_id: i64,
-        deployment_hash: &SqlBlake3Hash,
-        deployment_version: &str,
-    ) -> RepoResult<CurrentDeploymentExtRevisionRecord> {
+    ) -> Result<CurrentDeploymentRevisionRecord, DeployRepoError> {
         let opt_row = tx
             .fetch_optional(
                 sqlx::query(indoc! { r#"
@@ -1192,31 +1232,25 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .await?;
 
         let revision_id: i64 = match opt_row {
-            Some(row) => row.try_get::<i64, _>(0)? + 1,
+            Some(row) => row.try_get::<i64, _>(0).map_err(RepoError::from)? + 1,
             None => 0,
         };
 
-        let revision: CurrentDeploymentExtRevisionRecord = tx
+        let revision: CurrentDeploymentRevisionRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO current_deployment_revisions
                     (environment_id, revision_id, created_at, created_by, deployment_revision_id)
                     VALUES ($1, $2, $3, $4, $5)
-                    RETURNING
-                        environment_id, revision_id, created_at, created_by,
-                        deployment_revision_id,
-
-                        $6 as deployment_hash,
-                        $7 as deployment_version
+                    RETURNING environment_id, revision_id, created_at, created_by, deployment_revision_id
                 "#})
                 .bind(environment_id)
                 .bind(revision_id)
                 .bind_revision_audit(RevisionAuditFields::new(*user_account_id))
                 .bind(deployment_revision_id)
-                .bind(deployment_hash)
-                .bind(deployment_version),
             )
-            .await?;
+            .await
+            .to_error_on_unique_violation(DeployRepoError::ConcurrentModification)?;
 
         tx.execute(
             sqlx::query(indoc! { r#"
@@ -1226,7 +1260,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 DO UPDATE SET current_revision_id = excluded.current_revision_id
             "#})
             .bind(environment_id)
-            .bind(deployment_revision_id),
+            .bind(revision_id),
         )
         .await?;
 

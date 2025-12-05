@@ -98,8 +98,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // deployment
             ("Deployment", "golem_common::model::deployment::Deployment"),
             (
+                "CurrentDeployment",
+                "golem_common::model::deployment::CurrentDeployment",
+            ),
+            (
                 "DeploymentCreation",
                 "golem_common::model::deployment::DeploymentCreation",
+            ),
+            (
+                "DeploymentRollback",
+                "golem_common::model::deployment::DeploymentRollback",
             ),
             (
                 "DeploymentPlan",

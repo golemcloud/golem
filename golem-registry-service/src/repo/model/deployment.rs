@@ -27,7 +27,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentType, RegisteredAgentType};
 use golem_common::model::component::ComponentId;
 use golem_common::model::deployment::{
-    Deployment, DeploymentPlan, DeploymentRevision, DeploymentSummary,
+    CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
+    DeploymentSummary,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -64,6 +65,18 @@ pub struct CurrentDeploymentRevisionRecord {
     pub deployment_revision_id: i64,
 }
 
+impl CurrentDeploymentRevisionRecord {
+    pub fn into_model(self, version: String, deployment_hash: Hash) -> CurrentDeployment {
+        CurrentDeployment {
+            environment_id: EnvironmentId(self.environment_id),
+            revision: self.deployment_revision_id.into(),
+            version,
+            deployment_hash,
+            current_revision: self.revision_id.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentExtRevisionRecord {
     #[sqlx(flatten)]
@@ -73,14 +86,12 @@ pub struct CurrentDeploymentExtRevisionRecord {
     pub deployment_hash: SqlBlake3Hash,
 }
 
-impl From<CurrentDeploymentExtRevisionRecord> for Deployment {
+impl From<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
     fn from(value: CurrentDeploymentExtRevisionRecord) -> Self {
-        Self {
-            environment_id: EnvironmentId(value.revision.environment_id),
-            revision: value.revision.deployment_revision_id.into(),
-            version: value.deployment_version,
-            deployment_hash: Hash::new(value.deployment_hash.into_blake3_hash()),
-        }
+        value.revision.into_model(
+            value.deployment_version,
+            Hash::new(value.deployment_hash.into_blake3_hash()),
+        )
     }
 }
 
@@ -192,12 +203,9 @@ pub struct DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
-    pub fn into_plan(
-        self,
-        current_deployment_revision: Option<DeploymentRevision>,
-    ) -> DeploymentPlan {
+    pub fn into_plan(self, current_revision: Option<CurrentDeploymentRevision>) -> DeploymentPlan {
         DeploymentPlan {
-            current_deployment_revision,
+            current_revision,
             deployment_hash: self.to_diffable().hash(),
             components: self.components.into_iter().map(|c| c.into()).collect(),
             http_api_definitions: self
@@ -212,35 +220,6 @@ impl DeploymentIdentity {
                 .collect(),
         }
     }
-}
-
-impl From<DeploymentIdentity> for DeploymentSummary {
-    fn from(value: DeploymentIdentity) -> Self {
-        Self {
-            deployment_hash: value.to_diffable().hash(),
-            components: value.components.into_iter().map(|c| c.into()).collect(),
-            http_api_definitions: value
-                .http_api_definitions
-                .into_iter()
-                .map(|had| had.into())
-                .collect(),
-            http_api_deployments: value
-                .http_api_deployments
-                .into_iter()
-                .map(|had| had.into())
-                .collect(),
-        }
-    }
-}
-
-pub struct StagedDeploymentIdentity {
-    pub latest_revision: DeploymentRevision,
-    pub identity: DeploymentIdentity,
-}
-
-pub struct DeployedDeploymentIdentity {
-    pub deployment_revision: DeploymentRevisionRecord,
-    pub identity: DeploymentIdentity,
 }
 
 impl DeploymentIdentity {
@@ -275,6 +254,38 @@ impl DeploymentIdentity {
                         diff::HashOf::from_blake3_hash(deployment.hash.into()),
                     )
                 })
+                .collect(),
+        }
+    }
+}
+
+pub struct DeployedDeploymentIdentity {
+    pub deployment_revision: DeploymentRevisionRecord,
+    pub identity: DeploymentIdentity,
+}
+
+impl From<DeployedDeploymentIdentity> for DeploymentSummary {
+    fn from(value: DeployedDeploymentIdentity) -> Self {
+        Self {
+            deployment_revision: value.deployment_revision.revision_id.into(),
+            deployment_hash: value.deployment_revision.hash.into(),
+            components: value
+                .identity
+                .components
+                .into_iter()
+                .map(|c| c.into())
+                .collect(),
+            http_api_definitions: value
+                .identity
+                .http_api_definitions
+                .into_iter()
+                .map(|had| had.into())
+                .collect(),
+            http_api_deployments: value
+                .identity
+                .http_api_deployments
+                .into_iter()
+                .map(|had| had.into())
                 .collect(),
         }
     }

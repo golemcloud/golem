@@ -152,7 +152,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
         .deploy_environment(
             &env.id.0,
             &DeploymentCreation {
-                current_deployment_revision: None,
+                current_revision: None,
                 expected_deployment_hash: plan.deployment_hash,
                 version: "0.0.1".to_string(),
             },

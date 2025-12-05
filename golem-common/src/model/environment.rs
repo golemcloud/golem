@@ -15,7 +15,7 @@
 use super::account::AccountId;
 use super::application::ApplicationId;
 use super::auth::EnvironmentRole;
-use super::deployment::DeploymentRevision;
+use super::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use super::diff::Hash;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use std::collections::HashSet;
@@ -64,8 +64,9 @@ declare_structs! {
     }
 
     pub struct EnvironmentCurrentDeploymentView {
-        pub revision: DeploymentRevision,
-        pub hash: Hash
+        pub revision: CurrentDeploymentRevision,
+        pub deployment_revision: DeploymentRevision,
+        pub deployment_hash: Hash
     }
 
     pub struct Environment {

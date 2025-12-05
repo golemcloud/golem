@@ -757,9 +757,9 @@ impl AppCommandHandler {
             Some(current_deployment) => Some(
                 clients
                     .environment
-                    .get_environment_deployed_deployment_plan(
+                    .get_deployment_summary(
                         &deploy_quick_diff.environment.environment_id.0,
-                        current_deployment.revision.0,
+                        current_deployment.deployment_revision.0,
                     )
                     .await
                     .map_service_error()?,
@@ -1119,7 +1119,7 @@ impl AppCommandHandler {
             .deploy_environment(
                 &deploy_diff.environment.environment_id.0,
                 &DeploymentCreation {
-                    current_deployment_revision: deploy_diff.current_deployment_revision(),
+                    current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: "".to_string(), // TODO: atomic
                 },
