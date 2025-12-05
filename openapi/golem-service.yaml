@@ -4785,7 +4785,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/envs/{environment_id}/active-deployment:
+  /v1/envs/{environment_id}/current-deployment:
     put:
       tags:
       - RegistryService

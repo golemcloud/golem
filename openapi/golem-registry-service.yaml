@@ -3126,7 +3126,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_deployment_plan
-  /v1/envs/{environment_id}/active-deployment:
+  /v1/envs/{environment_id}/current-deployment:
     put:
       tags:
       - RegistryService
