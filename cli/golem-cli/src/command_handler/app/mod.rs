@@ -43,6 +43,7 @@ use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
+use golem_common::model::deployment::DeploymentVersion;
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -1121,7 +1122,7 @@ impl AppCommandHandler {
                 &DeploymentCreation {
                     current_revision: deploy_diff.current_deployment_revision(),
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
-                    version: "".to_string(), // TODO: atomic
+                    version: DeploymentVersion("".to_string()), // TODO: atomic
                 },
             )
             .await

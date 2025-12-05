@@ -21,7 +21,7 @@ use golem_client::model::DeploymentCreation;
 use golem_common::model::component::{ComponentName, ComponentUpdate};
 use golem_common::model::deployment::{
     DeploymentPlan, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
-    DeploymentPlanHttpApiDeploymentEntry, DeploymentRollback,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRollback, DeploymentVersion,
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -57,7 +57,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 current_revision: None,
                 expected_deployment_hash:
                     "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
@@ -101,7 +101,7 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
                 &DeploymentCreation {
                     current_revision: None,
                     expected_deployment_hash: Hash::empty(),
-                    version: "0.0.1".to_string(),
+                    version: DeploymentVersion("0.0.1".to_string()),
                 },
             )
             .await;
@@ -134,7 +134,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: None,
                 expected_deployment_hash:
                     "970cf3d9bdda200e12eab989dd6d482e623be2654d6459e94dbf95b6aba69e29".parse()?,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
@@ -166,7 +166,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: Some(deployment_1.current_revision),
                 expected_deployment_hash:
                     "cbb574e689f0dddb384a5a412c51e0bd6a2d3012c0b49fe44fee03417aaeaf31".parse()?,
-                version: "0.0.2".to_string(),
+                version: DeploymentVersion("0.0.2".to_string()),
             },
         )
         .await?;
@@ -299,7 +299,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash: expected_hash,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;
@@ -389,6 +389,56 @@ async fn rollback(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
                 })
         )
     };
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+
+    let component = user.component(&env.id, "shopping-cart").store().await?;
+
+    let deployment_1 = user.deploy_environment(&env.id).await?;
+
+    client
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: component.revision,
+                new_file_options: BTreeMap::new(),
+                removed_files: Vec::new(),
+                dynamic_linking: None,
+                env: Some(BTreeMap::from_iter(vec![(
+                    "ENV_VAR".to_string(),
+                    "ENV_VAR_VALUE".to_string(),
+                )])),
+                agent_types: None,
+                plugin_updates: Vec::new(),
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+
+    let deployment_2 = user.deploy_environment(&env.id).await?;
+
+    {
+        let deployments = client.list_deployments(&env.id.0, None).await?;
+        assert!(
+            deployments.values == vec![deployment_1.clone().into(), deployment_2.clone().into()]
+        )
+    }
+
+    {
+        let deployments = client
+            .list_deployments(&env.id.0, Some(&deployment_2.version.0))
+            .await?;
+        assert!(deployments.values == vec![deployment_2.clone().into()])
+    }
 
     Ok(())
 }

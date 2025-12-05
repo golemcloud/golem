@@ -21,25 +21,31 @@ use super::http_api_definition::{
 };
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use crate::model::diff;
-use crate::{declare_revision, declare_structs};
+use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
+use derive_more::Display;
 
 declare_revision!(DeploymentRevision);
 
 // Revision of the environment current_revision field, counting rollbacks as well as normal deployments
 declare_revision!(CurrentDeploymentRevision);
 
+declare_transparent_newtypes! {
+    #[derive(Display, PartialOrd, Eq, Ord)]
+    pub struct DeploymentVersion(pub String);
+}
+
 declare_structs! {
     pub struct Deployment {
         pub environment_id: EnvironmentId,
         pub revision: DeploymentRevision,
-        pub version: String,
+        pub version: DeploymentVersion,
         pub deployment_hash: Hash,
     }
 
     pub struct CurrentDeployment {
         pub environment_id: EnvironmentId,
         pub revision: DeploymentRevision,
-        pub version: String,
+        pub version: DeploymentVersion,
         pub deployment_hash: Hash,
 
         pub current_revision: CurrentDeploymentRevision,
@@ -48,7 +54,7 @@ declare_structs! {
     pub struct DeploymentCreation {
         pub current_revision: Option<CurrentDeploymentRevision>,
         pub expected_deployment_hash: Hash,
-        pub version: String
+        pub version: DeploymentVersion
     }
 
     pub struct DeploymentRollback {
@@ -93,6 +99,17 @@ declare_structs! {
         pub revision: HttpApiDeploymentRevision,
         pub domain: Domain,
         pub hash: Hash,
+    }
+}
+
+impl From<CurrentDeployment> for Deployment {
+    fn from(value: CurrentDeployment) -> Self {
+        Self {
+            environment_id: value.environment_id,
+            revision: value.revision,
+            version: value.version,
+            deployment_hash: value.deployment_hash,
+        }
     }
 }
 

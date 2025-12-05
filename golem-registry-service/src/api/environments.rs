@@ -21,7 +21,7 @@ use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::deployment::{
     CurrentDeployment, Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
-    DeploymentRollback, DeploymentSummary,
+    DeploymentRollback, DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
@@ -385,41 +385,43 @@ impl EnvironmentsApi {
         Ok(Json(current_deployment))
     }
 
-    /// Get all deployments in this environment
+    /// List all deployments in this environment
     #[oai(
         path = "/envs/:environment_id/deployments",
         method = "get",
-        operation_id = "get_deployments",
+        operation_id = "list_deployments",
         tag = ApiTags::Deployment
     )]
-    async fn get_deployments(
+    async fn list_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
+        version: Query<Option<DeploymentVersion>>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Deployment>>> {
         let record = recorded_http_api_request!(
-            "get_deployments",
+            "list_deployments",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_deployments_internal(environment_id.0, auth)
+            .list_deployments_internal(environment_id.0, version.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_deployments_internal(
+    async fn list_deployments_internal(
         &self,
         environment_id: EnvironmentId,
+        version: Option<DeploymentVersion>,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<Deployment>>> {
         let deployments = self
             .deployment_service
-            .list_deployments(&environment_id, &auth)
+            .list_deployments(&environment_id, version, &auth)
             .await?;
         Ok(Json(Page {
             values: deployments,

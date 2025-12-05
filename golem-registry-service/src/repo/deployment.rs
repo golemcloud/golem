@@ -62,6 +62,7 @@ pub trait DeploymentRepo: Send + Sync {
     async fn list_deployment_revisions(
         &self,
         environment_id: &Uuid,
+        version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>>;
 
     async fn list_deployment_history(
@@ -212,10 +213,15 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
     async fn list_deployment_revisions(
         &self,
         environment_id: &Uuid,
+        version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>> {
         self.repo
-            .list_deployment_revisions(environment_id)
-            .instrument(Self::span_env(environment_id))
+            .list_deployment_revisions(environment_id, version)
+            .instrument(info_span!(
+                SPAN_NAME,
+                environment_id = %environment_id,
+                version = ?version
+            ))
             .await
     }
 
@@ -464,6 +470,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     async fn list_deployment_revisions(
         &self,
         environment_id: &Uuid,
+        version: Option<&str>,
     ) -> RepoResult<Vec<DeploymentRevisionRecord>> {
         self.with_ro("list_deployment_revisions")
             .fetch_all_as(
@@ -471,9 +478,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 SELECT environment_id, revision_id, version, hash, created_at, created_by
                 FROM deployment_revisions
                 WHERE environment_id = $1
+                    AND ($2 IS NULL OR version = $2)
                 ORDER BY revision_id
             "#})
-                .bind(environment_id),
+                .bind(environment_id)
+                .bind(version),
             )
             .await
     }

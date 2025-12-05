@@ -3207,7 +3207,7 @@ paths:
       - RegistryService
       - Environment
       - Deployment
-      summary: Get all deployments in this environment
+      summary: List all deployments in this environment
       parameters:
       - name: environment_id
         schema:
@@ -3215,6 +3215,13 @@ paths:
           format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -3269,7 +3276,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_deployments
+      operationId: list_deployments
     post:
       tags:
       - RegistryService

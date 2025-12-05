@@ -38,7 +38,7 @@ use golem_common::model::component::{
     PluginInstallation,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
-use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation};
+use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
@@ -635,7 +635,7 @@ pub trait TestDslExtended: TestDsl {
                 &DeploymentCreation {
                     current_revision: plan.current_revision,
                     expected_deployment_hash: plan.deployment_hash,
-                    version: Uuid::new_v4().to_string(),
+                    version: DeploymentVersion(Uuid::new_v4().to_string()),
                 },
             )
             .await?;

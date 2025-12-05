@@ -24,7 +24,9 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::agent::RegisteredAgentType;
-use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision, DeploymentSummary};
+use golem_common::model::deployment::{
+    DeploymentPlan, DeploymentRevision, DeploymentSummary, DeploymentVersion,
+};
 use golem_common::model::environment::Environment;
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -88,6 +90,7 @@ impl DeploymentService {
     pub async fn list_deployments(
         &self,
         environment_id: &EnvironmentId,
+        version: Option<DeploymentVersion>,
         auth: &AuthCtx,
     ) -> Result<Vec<Deployment>, DeploymentError> {
         let environment = self
@@ -109,7 +112,7 @@ impl DeploymentService {
 
         let deployments = self
             .deployment_repo
-            .list_deployment_revisions(&environment_id.0)
+            .list_deployment_revisions(&environment_id.0, version.as_ref().map(|v| v.0.as_str()))
             .await?
             .into_iter()
             .map(Deployment::from)

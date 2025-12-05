@@ -4867,8 +4867,8 @@ paths:
       - RegistryService
       - Environment
       - Deployment
-      summary: Get all deployments in this environment
-      operationId: get_deployments
+      summary: List all deployments in this environment
+      operationId: list_deployments
       parameters:
       - in: path
         name: environment_id
@@ -4879,6 +4879,13 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: version
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       responses:
         '200':
           description: ''

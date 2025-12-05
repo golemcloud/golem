@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, HeaderValue};
 use golem_client::api::RegistryServiceClient;
 use golem_client::model::DeploymentCreation;
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{DeploymentRevision, DeploymentVersion};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_definition::{
@@ -154,7 +154,7 @@ async fn shopping_cart_internal(deps: &EnvBasedTestDependencies) -> anyhow::Resu
             &DeploymentCreation {
                 current_revision: None,
                 expected_deployment_hash: plan.deployment_hash,
-                version: "0.0.1".to_string(),
+                version: DeploymentVersion("0.0.1".to_string()),
             },
         )
         .await?;

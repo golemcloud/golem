@@ -28,7 +28,7 @@ use golem_common::model::agent::{AgentType, RegisteredAgentType};
 use golem_common::model::component::ComponentId;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
-    DeploymentSummary,
+    DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -66,7 +66,11 @@ pub struct CurrentDeploymentRevisionRecord {
 }
 
 impl CurrentDeploymentRevisionRecord {
-    pub fn into_model(self, version: String, deployment_hash: Hash) -> CurrentDeployment {
+    pub fn into_model(
+        self,
+        version: DeploymentVersion,
+        deployment_hash: Hash,
+    ) -> CurrentDeployment {
         CurrentDeployment {
             environment_id: EnvironmentId(self.environment_id),
             revision: self.deployment_revision_id.into(),
@@ -89,7 +93,7 @@ pub struct CurrentDeploymentExtRevisionRecord {
 impl From<CurrentDeploymentExtRevisionRecord> for CurrentDeployment {
     fn from(value: CurrentDeploymentExtRevisionRecord) -> Self {
         value.revision.into_model(
-            value.deployment_version,
+            DeploymentVersion(value.deployment_version),
             Hash::new(value.deployment_hash.into_blake3_hash()),
         )
     }
@@ -116,7 +120,7 @@ impl From<DeploymentRevisionRecord> for Deployment {
         Self {
             environment_id: EnvironmentId(value.environment_id),
             revision: value.revision_id.into(),
-            version: value.version,
+            version: DeploymentVersion(value.version),
             deployment_hash: Hash::new(value.hash.into_blake3_hash()),
         }
     }
@@ -398,7 +402,7 @@ impl DeploymentRevisionCreationRecord {
     pub fn from_model(
         environment_id: &EnvironmentId,
         deployment_revision: DeploymentRevision,
-        version: String,
+        version: DeploymentVersion,
         hash: diff::Hash,
         components: Vec<Component>,
         http_api_definitions: Vec<HttpApiDefinition>,
@@ -410,7 +414,7 @@ impl DeploymentRevisionCreationRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: deployment_revision.into(),
-            version,
+            version: version.0,
             hash: hash.into(),
             components: components
                 .into_iter()
