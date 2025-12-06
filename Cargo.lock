@@ -281,45 +281,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-dropper"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d901072ae4dcdca2201b98beb02d31fb4b6b2472fbd0e870b12ec15b8b35b2d2"
-dependencies = [
- "async-dropper-derive",
- "async-dropper-simple",
- "async-trait",
- "futures",
- "tokio",
-]
-
-[[package]]
-name = "async-dropper-derive"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a35cf17a37761f1c88b8e770b5956820fe84c12854165b6f930c604ea186e47e"
-dependencies = [
- "async-trait",
- "proc-macro2",
- "quote",
- "syn 2.0.110",
- "tokio",
-]
-
-[[package]]
-name = "async-dropper-simple"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7c4748dfe8cd3d625ec68fc424fa80c134319881185866f9e173af9e5d8add8"
-dependencies = [
- "async-scoped",
- "async-trait",
- "futures",
- "rustc_version",
- "tokio",
-]
-
-[[package]]
 name = "async-executor"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4500,17 +4461,12 @@ name = "golem-debugging-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-dropper",
- "async-dropper-simple",
  "async-trait",
  "axum-jrpc",
- "bytes 1.11.0",
- "desert_rust",
  "futures",
  "gethostname",
  "golem-api-grpc",
  "golem-common",
- "golem-rib",
  "golem-service-base",
  "golem-test-framework",
  "golem-wasm",
@@ -4827,9 +4783,7 @@ dependencies = [
  "anyhow",
  "applying",
  "assert2",
- "async-dropper-simple",
  "async-lock",
- "async-mutex",
  "async-recursion",
  "async-scoped",
  "async-trait",

@@ -14,7 +14,7 @@
 
 use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
