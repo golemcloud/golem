@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { UnstructuredText } from './textInput';
+import { UnstructuredBinary } from './binaryInput';
+
 /**
  * Multimodal type represents a value that holds multiple types of inputs.
  *
@@ -42,4 +45,17 @@
  *
  * ```
  */
-export type Multimodal<T> = T[];
+export type MultimodalAdvanced<T> = T[];
+
+export type Multimodal = MultimodalAdvanced<BasicModality>;
+
+export type MultimodalCustom<T> = MultimodalAdvanced<CustomModality<T>>;
+
+export type BasicModality =
+  | { tag: 'text'; val: UnstructuredText }
+  | { tag: 'binary'; val: UnstructuredBinary };
+
+export type CustomModality<T> =
+  | { tag: 'text'; val: UnstructuredText }
+  | { tag: 'binary'; val: UnstructuredBinary }
+  | { tag: 'custom'; val: T };

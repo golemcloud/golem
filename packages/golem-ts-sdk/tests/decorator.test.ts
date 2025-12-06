@@ -140,14 +140,14 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expected = [
       [
-        'string',
+        'text',
         {
           tag: 'component-model',
           val: { nodes: [{ type: { tag: 'prim-string-type' } }] },
         },
       ],
       [
-        'uint8array',
+        'image',
         {
           tag: 'component-model',
           val: {
@@ -156,6 +156,39 @@ describe('Agent decorator should register the agent class and its methods into A
               { type: { tag: 'prim-u8-type' } },
             ],
           },
+        },
+      ],
+      ['un-text', { tag: 'unstructured-text', val: {} }],
+      [
+        'un-binary',
+        {
+          tag: 'unstructured-binary',
+          val: { restrictions: [{ mimeType: 'application/json' }] },
+        },
+      ],
+    ];
+
+    expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
+  });
+
+  it('should handle MultimodalBasic in method params', () => {
+    const multimodalAgentMethod = complexAgent.methods.find(
+      (method) => method.name === 'fun24',
+    );
+
+    if (!multimodalAgentMethod) {
+      throw new Error('fun24 method not found in BarAgent');
+    }
+
+    expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
+
+    const expected = [
+      ['text', { tag: 'unstructured-text', val: {} }],
+      [
+        'binary',
+        {
+          tag: 'unstructured-binary',
+          val: {},
         },
       ],
     ];
@@ -726,10 +759,10 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     // Ensures no functions or constructors are skipped
-    expect(complexAgent.methods.length).toEqual(24);
+    expect(complexAgent.methods.length).toEqual(25);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(37);
+    expect(simpleAgent.methods.length).toEqual(40);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 
@@ -784,7 +817,9 @@ describe('Annotated FooAgent class', () => {
       lowBits: BigInt(5678),
     };
 
-    process.env.GOLEM_AGENT_ID = `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+    (globalThis as any).currentAgentId =
+      `foo-agent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
+
     const fooResult = initiator.initiate({
       tag: 'tuple',
       val: [{ tag: 'component-model', val: toWitValue(value) }],
@@ -823,7 +858,9 @@ describe('Annotated SingletonAgent class', () => {
       val: [],
     };
 
-    process.env.GOLEM_AGENT_ID = `singleton-agent(${JSON.stringify(params)})`;
+    (globalThis as any).currentAgentId =
+      `singleton-agent(${JSON.stringify(params)})`;
+
     const singleton = initiator.initiate(params);
     expect(singleton.tag).toEqual('ok');
     const foo = singleton.val as ResolvedAgent;

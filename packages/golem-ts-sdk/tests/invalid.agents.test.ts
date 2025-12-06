@@ -256,6 +256,30 @@ test('Agent without BaseAgent throws reasonable error messages', () => {
   );
 });
 
+test('Agent with $ in method name is rejected', () => {
+  expect(async () => {
+    await import('./agentWithDollarInMethodName');
+  }).rejects.toThrowError(
+    "Schema generation failed for agent class AgentWithDollarInMethodName. Invalid method name `foo$`: cannot contain '$'",
+  );
+});
+
+test('Agent with reserved method name is rejected', () => {
+  expect(async () => {
+    await import('./agentWithReservedMethodName');
+  }).rejects.toThrowError(
+    'Schema generation failed for agent class AgentWithReservedMethodName. Invalid method name `initialize`: reserved method name',
+  );
+});
+
+test('Agent method with empty tuple return type is rejected', () => {
+  expect(async () => {
+    await import('./agentWithEmptyTuple');
+  }).rejects.toThrowError(
+    'Schema generation failed for agent class AgentWithEmptyTuple. Failed to construct output schema for method mysteriousArray with return type undefined: Empty tuple types are not supported.',
+  );
+});
+
 function getAnalysedTypeInFun1(
   parameterName: string,
 ): Either.Either<AnalysedType.AnalysedType, string> {

@@ -60,7 +60,15 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { AgentId, Multimodal, Result, UnstructuredText } from '../src';
+import {
+  AgentId,
+  MultimodalAdvanced,
+  Multimodal,
+  Result,
+  UnstructuredBinary,
+  UnstructuredText,
+  AgentClassName,
+} from '../src';
 import {
   serializeTsValueToBinaryReference,
   serializeTsValueToTextReference,
@@ -69,7 +77,9 @@ import {
   deserializeDataValue,
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
-import { Image, Text } from './sampleAgents';
+import { TextOrImage } from './sampleAgents';
+import { RegisteredAgentType } from 'golem:agent/host';
+import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 
 test('BarAgent can be successfully initiated', () => {
   fc.assert(
@@ -499,7 +509,7 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
   );
 });
 
-test('Invoke function that takes and returns multimodal types', () => {
+test('Invoke function that takes and returns multimodal', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
@@ -510,31 +520,58 @@ test('Invoke function that takes and returns multimodal types', () => {
 
   const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-  const multimodalInput: Multimodal<Text | Image> = [
-    'my-string-input',
-    new Uint8Array([137, 80, 78, 71]),
-  ];
-
-  fc.assert(
-    fc.property(
-      fc.string(),
-      fc.uint8Array({ minLength: 1, maxLength: 10 }),
-      (text, imageData) => {
-        const multimodalInput: Multimodal<Text | Image> = [text, imageData];
-
-        testInvoke(
-          'fun18',
-          [['param', multimodalInput]],
-          resolvedAgent,
-          multimodalInput,
-          true,
-        );
+  const multimodalInput: MultimodalAdvanced<TextOrImage> = [
+    { tag: 'un-text', val: { tag: 'inline', val: 'data' } },
+    { tag: 'un-binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    { tag: 'text', val: 'foo' },
+    { tag: 'image', val: new Uint8Array([137, 80, 78, 71]) },
+    { tag: 'un-text', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    {
+      tag: 'un-binary',
+      val: {
+        tag: 'inline',
+        val: new Uint8Array([1, 2, 3]),
+        mimeType: 'application/json',
       },
-    ),
-  );
+    },
+  ];
 
   testInvoke(
     'fun18',
+    [['param', multimodalInput]],
+    resolvedAgent,
+    multimodalInput,
+    true,
+  );
+});
+
+test('Invoke function that takes and returns multimodal basic', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const multimodalInput: Multimodal = [
+    { tag: 'binary', val: { tag: 'url', val: 'https://foo.bar/image.png' } },
+    {
+      tag: 'binary',
+      val: {
+        tag: 'inline',
+        val: new Uint8Array([1, 2, 3]),
+        mimeType: 'application/json',
+      },
+    },
+    { tag: 'text', val: { tag: 'inline', val: 'some text' } },
+    { tag: 'text', val: { tag: 'url', val: 'https://foo.bar/some-text.txt' } },
+  ];
+
+  testInvoke(
+    'fun38',
     [['param', multimodalInput]],
     resolvedAgent,
     multimodalInput,
@@ -611,6 +648,46 @@ test('Invoke function that takes and returns typed array', () => {
       },
     ),
   );
+});
+
+test('Invoke function that takes any unstructured-binary and returns any unstructured-binary', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const binary: UnstructuredBinary = {
+    tag: 'inline',
+    val: new Uint8Array([1, 2, 3]),
+    mimeType: 'application/json',
+  };
+
+  testInvoke('fun40', [['param', binary]], resolvedAgent, binary, false);
+});
+
+test('Invoke function that takes json unstructured-binary and returns json unstructured-binary', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const binary: UnstructuredBinary<['application/json']> = {
+    tag: 'inline',
+    val: new Uint8Array([1, 2, 3]),
+    mimeType: 'application/json',
+  };
+
+  testInvoke('fun40', [['param', binary]], resolvedAgent, binary, false);
 });
 
 // This is already in the above big test, but we keep it separate to have a clearer
@@ -766,10 +843,9 @@ function createInputDataValue(
       );
     }
 
-    return Either.getOrThrowWith(
-      serializeToDataValue(value, paramAnalysedType),
-      (error) => new Error(error),
-    );
+    const result = serializeToDataValue(value, paramAnalysedType);
+
+    return Either.getOrThrowWith(result, (error) => new Error(error));
   }
 
   const elementValues: ElementValue[] = parameterNameAndValues.map(
@@ -864,5 +940,10 @@ function deserializeReturnValue(
 }
 
 function overrideSelfAgentId(agentId: AgentId) {
-  process.env.GOLEM_AGENT_ID = agentId.value;
+  (globalThis as any).currentAgentId = agentId.value;
+  // vi.mock('wasi:cli/environment@0.2.3', () => ({
+  //   getEnvironment: (): [string, string][] => {
+  //     return [['GOLEM_AGENT_ID', agentId.value]];
+  //   },
+  // }));
 }

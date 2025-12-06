@@ -39,8 +39,18 @@ import {
   tuple,
 } from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
-import { convertVariantTypeNameToKebab } from './mapping/types/stringFormat';
+import {
+  convertAgentMethodNameToKebab,
+  convertVariantTypeNameToKebab,
+} from './mapping/types/stringFormat';
 import { ParameterDetail } from './mapping/values/dataValue';
+import { getTaggedUnion, TaggedUnion } from './mapping/types/taggedUnion';
+
+const MULTIMODAL_TYPE_NAMES = [
+  'Multimodal',
+  'MultimodalAdvanced',
+  'MultimodalCustom',
+];
 
 export function getConstructorDataSchema(
   agentClassName: string,
@@ -51,16 +61,14 @@ export function getConstructorDataSchema(
 
   if (
     constructorParamInfos.length === 1 &&
-    constructorParamInfos[0].type.name === 'Multimodal'
+    isNamedMultimodal(constructorParamInfos[0].type)
   ) {
     const paramType = constructorParamInfos[0].type;
 
-    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
+    if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
       const elementType = paramType.element;
-      const multimodalTypes: Type.Type[] =
-        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
 
-      const multiModalDetails = getMultimodalDetails(multimodalTypes);
+      const multiModalDetails = getMultimodalDetails(elementType);
 
       if (Either.isLeft(multiModalDetails)) {
         return Either.left(
@@ -126,10 +134,13 @@ export function getAgentMethodSchema(
     methodMetadata.map((methodInfo) => {
       const methodName = methodInfo[0];
       const signature = methodInfo[1];
-
       const parameters: MethodParams = signature.methodParams;
-
       const returnType: Type.Type = signature.returnType;
+
+      const methodNameValidation = validateMethodName(methodName);
+      if (Either.isLeft(methodNameValidation)) {
+        return Either.left(methodNameValidation.val);
+      }
 
       const baseMeta =
         AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
@@ -248,17 +259,12 @@ export function buildMethodInputSchema(
 
   if (
     paramTypesArray.length === 1 &&
-    paramTypesArray[0][1].name === 'Multimodal'
+    isNamedMultimodal(paramTypesArray[0][1])
   ) {
     const paramType = paramTypesArray[0][1];
 
-    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
-      const elementType = paramType.element;
-
-      const multimodalTypes =
-        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
-
-      const multiModalDetails = getMultimodalDetails(multimodalTypes);
+    if (isNamedMultimodal(paramType) && paramType.kind === 'array') {
+      const multiModalDetails = getMultimodalDetails(paramType.element);
 
       if (Either.isLeft(multiModalDetails)) {
         return Either.left(
@@ -342,23 +348,18 @@ export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<[TypeDetails, DataSchema], string> {
   const multiModalTarget =
-    returnType.kind === 'promise' && returnType.element.name === 'Multimodal'
+    returnType.kind === 'promise' && isNamedMultimodal(returnType.element)
       ? returnType.element
-      : returnType.name === 'Multimodal'
+      : isNamedMultimodal(returnType)
         ? returnType
         : null;
 
   if (
     multiModalTarget &&
-    multiModalTarget.name === 'Multimodal' &&
+    isNamedMultimodal(multiModalTarget) &&
     multiModalTarget.kind === 'array'
   ) {
-    const elementType = multiModalTarget.element;
-
-    const multimodalTypes =
-      elementType.kind === 'union' ? elementType.unionTypes : [elementType];
-
-    const multiModalDetails = getMultimodalDetails(multimodalTypes);
+    const multiModalDetails = getMultimodalDetails(multiModalTarget.element);
 
     if (Either.isLeft(multiModalDetails)) {
       return Either.left(
@@ -474,18 +475,59 @@ export function buildOutputSchema(
 }
 
 function getMultimodalDetails(
-  types: Type.Type[],
+  type: Type.Type,
 ): Either.Either<[string, ElementSchema, TypeInfoInternal][], string> {
-  return Either.all(
-    types.map((paramType) => {
-      const paramTypeName = paramType.name ?? paramType.kind; // For primitive types, aliases are not preserved
+  const multimodalTypes =
+    type.kind === 'union'
+      ? getTaggedUnion(type.unionTypes)
+      : getTaggedUnion([type]);
 
-      if (paramTypeName && paramTypeName === 'UnstructuredText') {
+  if (Either.isLeft(multimodalTypes)) {
+    return Either.left(
+      `failed to generate the multimodal schema: ${multimodalTypes.val}`,
+    );
+  }
+
+  const taggedUnionOpt = multimodalTypes.val;
+
+  if (Option.isNone(taggedUnionOpt)) {
+    return Either.left(
+      `multimodal type is not a tagged union: ${multimodalTypes.val}. Expected an object with a literal 'tag' and 'val' property`,
+    );
+  }
+
+  const taggedTypes = TaggedUnion.getTaggedTypes(taggedUnionOpt.val);
+
+  return Either.all(
+    taggedTypes.map((taggedTypeMetadata) => {
+      const paramTypeOpt = taggedTypeMetadata.valueType;
+
+      if (Option.isNone(paramTypeOpt)) {
+        return Either.left(
+          `Multimodal types should have a value associated with the tag ${taggedTypeMetadata.tagLiteralName}`,
+        );
+      }
+
+      const tagName = taggedTypeMetadata.tagLiteralName;
+
+      const valName = paramTypeOpt.val[0];
+
+      if (valName !== 'val') {
+        return Either.left(
+          `The value associated with the tag ${tagName} should be named 'val', found '${valName}' instead`,
+        );
+      }
+
+      const paramType = paramTypeOpt.val[1];
+
+      const typeName = paramType.name;
+
+      if (typeName && typeName === 'UnstructuredText') {
         const textDescriptor = getTextDescriptor(paramType);
 
         if (Either.isLeft(textDescriptor)) {
           return Either.left(
-            `Failed to get text descriptor for unstructured-text parameter ${paramTypeName}: ${textDescriptor.val}`,
+            `Failed to get text descriptor for unstructured-text parameter ${tagName}: ${textDescriptor.val}`,
           );
         }
 
@@ -501,18 +543,18 @@ function getMultimodalDetails(
         };
 
         return Either.right([
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ]);
       }
 
-      if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+      if (typeName && typeName === 'UnstructuredBinary') {
         const binaryDescriptor = getBinaryDescriptor(paramType);
 
         if (Either.isLeft(binaryDescriptor)) {
           return Either.left(
-            `Failed to get binary descriptor for unstructured-binary parameter ${paramTypeName}: ${binaryDescriptor.val}`,
+            `Failed to get binary descriptor for unstructured-binary parameter ${tagName}: ${binaryDescriptor.val}`,
           );
         }
 
@@ -528,7 +570,7 @@ function getMultimodalDetails(
         };
 
         return Either.right([
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ]);
@@ -552,7 +594,7 @@ function getMultimodalDetails(
           val: witType,
         };
         return [
-          convertVariantTypeNameToKebab(paramTypeName),
+          convertVariantTypeNameToKebab(tagName),
           elementSchema,
           typeInfoInternal,
         ];
@@ -1067,4 +1109,31 @@ export function getLanguageCodes(
   return Either.left(
     `Type mismatch. Expected UnstructuredText, Found ${type.name}`,
   );
+}
+
+function isNamedMultimodal(type: Type.Type): boolean {
+  if (type.name) {
+    return MULTIMODAL_TYPE_NAMES.includes(type.name);
+  }
+  return false;
+}
+
+function validateMethodName(methodName: string): Either.Either<void, string> {
+  if (methodName.includes('$')) {
+    return Either.left(
+      `Invalid method name \`${methodName}\`: cannot contain '\$'`,
+    );
+  }
+
+  const kebabMethodName = convertAgentMethodNameToKebab(methodName);
+  if (
+    kebabMethodName === 'initialize' ||
+    kebabMethodName === 'get-definition'
+  ) {
+    return Either.left(
+      `Invalid method name \`${methodName}\`: reserved method name`,
+    );
+  }
+
+  return Either.right(undefined);
 }

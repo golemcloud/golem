@@ -15,10 +15,11 @@
 import {
   agent,
   BaseAgent,
-  Multimodal,
+  MultimodalAdvanced,
   UnstructuredBinary,
   UnstructuredText,
   Result,
+  Multimodal,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -168,8 +169,8 @@ export class FooAgent extends BaseAgent {
   }
 
   async fun18(
-    param: Multimodal<Text | Image>,
-  ): Promise<Multimodal<Text | Image>> {
+    param: MultimodalAdvanced<TextOrImage>,
+  ): Promise<MultimodalAdvanced<TextOrImage>> {
     return param;
   }
 
@@ -252,6 +253,18 @@ export class FooAgent extends BaseAgent {
     return Result.ok(undefined);
   }
 
+  fun38(param: Multimodal): Promise<Multimodal> {
+    return Promise.resolve(param);
+  }
+
+  fun39(param: Multimodal): Multimodal {
+    return param;
+  }
+
+  fun40(param: UnstructuredBinary): UnstructuredBinary {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
@@ -276,6 +289,7 @@ export interface CustomData {
   value: number;
 }
 
+// Used in invoke.test.ts
 @agent({ name: 'my-complex-agent' })
 class BarAgent extends BaseAgent {
   constructor(
@@ -430,14 +444,21 @@ class BarAgent extends BaseAgent {
   };
 
   async fun23(
-    multimodalInput: Multimodal<Text | Image>,
-  ): Promise<Multimodal<Text | Image>> {
+    multimodalInput: MultimodalAdvanced<TextOrImage>,
+  ): Promise<MultimodalAdvanced<TextOrImage>> {
+    return multimodalInput;
+  }
+
+  async fun24(multimodalInput: Multimodal): Promise<Multimodal> {
     return multimodalInput;
   }
 }
 
-export type Text = string;
-export type Image = Uint8Array;
+export type TextOrImage =
+  | { tag: 'text'; val: string }
+  | { tag: 'image'; val: Uint8Array }
+  | { tag: 'un-text'; val: UnstructuredText }
+  | { tag: 'un-binary'; val: UnstructuredBinary<['application/json']> };
 
 @agent({ mode: 'ephemeral' })
 class EphemeralAgent extends BaseAgent {
