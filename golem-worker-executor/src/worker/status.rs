@@ -1376,8 +1376,6 @@ mod test {
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
                 status.owned_resources = old_status.owned_resources;
-                status.pending_invocations = old_status.pending_invocations;
-                status.pending_updates = old_status.pending_updates;
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;
