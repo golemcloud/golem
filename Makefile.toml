@@ -672,6 +672,7 @@ script = [
 [tasks.publish]
 description = "Publishes packages to crates.io"
 dependencies = [
+    "set-version",
     "publish-golem-wasm-derive",
     "publish-golem-wasm",
 ]
