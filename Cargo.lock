@@ -6804,9 +6804,9 @@ dependencies = [
 
 [[package]]
 name = "moonbit-component-generator"
-version = "0.0.9"
+version = "0.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48401b0ac8ab5f200d4efcf30a6dfec3f93a59eef5a0cc7ce04c410c20070974"
+checksum = "3f75cf734db60582ef71d402e495721d214460d67ae0ac9767110aa47f143842"
 dependencies = [
  "anyhow",
  "camino",
