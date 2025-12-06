@@ -72,39 +72,23 @@ class MyAgent extends BaseAgent {
 ```
     </Tabs.Tab>
     <Tabs.Tab>
-An agent is a Rust trait that is annotated with macro `#[agent_definition]`, and it should have a construction method returning `Self`.
-In order to use complex data types as parameters or return types of agent methods, these types need to implement the `Schema` trait (by deriving it using `#[derive(Schema)]`),
-so that the Golem runtime can serialize and deserialize them properly.
-Also note that you can also use `async` functions as agent methods in Rust. However, you don't need to use `async_trait` crate or similar, as the Golem SDK takes care of that for you.
+An agent is defined by a **trait** annotated as `#[agent_definition]` and a `struct` implementing it, annotated as `#[agent_implementation]`:
 
 ```rust
 use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait CounterAgent {
-  pub fn new(input: Id) -> Self;
-  pub fn increment(&mut self) -> u32;
+  // ...
 }
 
 struct CounterAgentImpl {
-    value: u32,
+    // ...
 }
 
 #[agent_implementation]
 impl CounterAgent for CounterAgentImpl {
-    pub fn new(input: Id) -> Self {
-        CounterAgentImpl { value: 0 }
-    }
-
-    pub fn increment(&mut self) -> u32 {
-        self.value += 1;
-        self.value
-    }
-}
-
-#[derive(Schema)]
-pub struct Id {
-    pub id: String,
+    // ...
 }
 
 ```
@@ -212,10 +196,45 @@ pub trait RequestHandler {
 
 </Tabs>
 
+Agent methods can be both sync or async.
+
 ### Supported data types
 The SDK supports a large variety of data types to be used in agent constructors and agent methods, both in parameter and return type position. When a type is not supported, it will report an error at compile time.
 
+<Tabs items={["TypeScript", "Rust"]}>
+    <Tabs.Tab>
+    In TypeScript most user-defined data type will work as expected. See the [page about data type mapping](/type-mapping) for more details.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    In Rust any data type that implements the `golem_rust::Schema` trait can be used as parameters and return types of agent metods and constructors. For user-defined types, use `#[derive(Schema)]` to derive the implementation automatically. See the [page about data type mapping](/type-mapping) for more details about the supported built-in types.
+    </Tabs.Tab>
+</Tabs>
+
 Check the [page about data type mapping](/type-mapping) to learn how each type is mapped to **Rib** (when calling the agent methods from the API gateway or the REPL) and **JSON** (when using the invocation API).
+
+### Agent mode - durable or ephemeral
+By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
+
+<Tabs items={["TypeScript", "Rust"]}>
+    <Tabs.Tab>
+    ```typescript
+    @agent({ mode: 'ephemeral' })
+    class EphemeralAgent extends BaseAgent {
+      // ...
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+    #[agent_definition(ephemeral)]
+    trait EphemeralAgent {
+      // ...
+    }  
+    ```
+    </Tabs.Tab>
+</Tabs>
 
 ## Agent configuration
 

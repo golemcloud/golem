@@ -1,4 +1,4 @@
-import { Tabs } from "nextra/components"
+import { Callout, Tabs } from "nextra/components"
 
 ## Setting up the development environment
 
@@ -9,7 +9,60 @@ Install **Node.js** and **npm** on your system by following the official [instru
 </Tabs.Tab>
 
 <Tabs.Tab>
-Golem's Rust toolchain uses Cargo as the underlying build tool.
-Install **Rust** and **Cargo** on your system by following the official [instructions](https://www.rust-lang.org/tools/install).
+### Setup Rust
+
+Developing **Golem agents** in **Rust** requires installing the latest stable compiler, enabling the WASM target and installing a specific version of `cargo-component`.
+
+#### Installing Rust
+
+Use the [official guide](https://www.rust-lang.org/learn/get-started) to install the latest **stable** version of the Rust compiler.
+
+<Callout type="info">
+For MacOS the recommended way is using `rustup` by running the following installation script:
+
+```shell
+$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+</Callout>
+
+#### Enabling WebAssembly targets
+
+With `rust` and `rustup` installed, the next step is to **enable the WebAssembly** support by running:
+
+```shell
+$ rustup target add wasm32-wasip1
+```
+
+To verify if this step was successful, run:
+
+```shell
+$ rustup target list --installed | grep wasm32-wasip1
+wasm32-wasip1
+```
+
+#### Installing `cargo-component`
+
+The last step is installing the `cargo-component` extension for Rust's `cargo` build tool. This will enable a set of subcommands for `cargo` which allows compiling Rust projects into **WebAssembly components**, required by the `golem` CLI to build Rust agents.
+
+<Callout type="warning">
+  Golem requires a **specific version** of `cargo-component`. Please make sure the correct version
+  is installed with the commands described below.
+</Callout>
+
+Install the version `0.21.1` of `cargo-component` with `cargo` itself:
+
+```shell
+$ cargo install --force cargo-component@0.21.1
+```
+
+Verify that the correct version is installed:
+
+```shell
+$ cargo component --version
+cargo-component 0.21.1
+```
+
+Please refer [to the cargo-component website](http://github.com/bytecodealliance/cargo-component) for more information.
 </Tabs.Tab>
 </Tabs>

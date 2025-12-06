@@ -39,7 +39,7 @@ These core elements are discussed in the sections that follow.
 
 Golem supports two types of agents, **ephemeral** and **durable**. Ephemeral agents are created on the fly for each invocation, and are not suitable for stateful applications. This makes them cheaper and more performant. Durable agents, on the other hand, preserve their state across invocations and provide much stronger guarantees.
 
-Whether an agent is ephemeral or durable depends on the configuration of the deployed **component**. The component type can be changed from ephemeral to durable or the other way around, but this change results in a new _component version_, and will not affect the already running agents.
+Whether an agent is ephemeral or durable depends on the **agent mode**, configurable for each agent type in code. Changing an agent's mode requires rebuilding and redeploying the component the agent is defined in.
 
 ## Identity
 

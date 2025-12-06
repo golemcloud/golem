@@ -55,6 +55,27 @@ In the following example, we have two agents defined; a weather agent with a con
 use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
+pub trait WeatherAgent {
+    fn new(location: String) -> Self;
+    async fn current_weather(&self) -> String;
+}
+
+struct WeatherAgentImpl {
+    name: String,
+}
+
+#[agent_implementation]
+impl WeatherAgent for WeatherAgentImpl {
+    fn new(location: String) -> Self {
+        // ...
+    }
+
+    async fn current_weather(&self) -> String {
+        // ...
+    }
+}
+
+#[agent_definition]
 trait ExampleAgent {
     fn new() -> Self;
     async fn run(&self, request: String);
@@ -69,42 +90,59 @@ impl ExampleAgent for ExampleAgentImpl {
     }
 
     async fn run(&self, request: String) {
-
         let weather_in_london = WeatherAgentClient::get("london".to_string());
-
-        let weather = weather_agent.current_weather().await;
-
-        println!("Request: {}, Weather: {}", request, weather);
+        // ...
     }
 }
-
-#[agent_definition]
-pub trait WeatherAgent {
-    fn new(location: String) -> Self;
-    async fn current_weather(&self) -> String;
-}
-
-struct WeatherAgentImpl {
-    name: String,
-}
-
-#[agent_implementation]
-impl WeatherAgent for WeatherAgentImpl {
-    fn new(location: String) -> Self {
-        WeatherAgentImpl { name: location }
-    }
-
-    async fn current_weather(&self) -> String {
-        format!("The current weather in {} is sunny.", self.name)
-    }
-}
-
 ```
 
-Given there is a `WeatherAgent` defined, we have a auto generated client with the name `WeatherAgentClient`,
-Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
+Given there is a `WeatherAgent` defined, we have an auto generated client with the name `WeatherAgentClient`,
+Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `current_weather` as its own methods.
 
     </Tabs.Tab>
+</Tabs>
+
+### Phantom agents
+Calling `get` **gets or creates** an agent identified by its constructor parameters. Sometimes we want to create more than one instance of the same agent (having the same constructor parameter values), especially when using **ephemeral agents**. Every possible agent has a "default" instance which is normally created by calling `get` on the client or by referring to it using the **agent ID** and can have an arbitrary number of **phantom** instances, distinguished by an additional **phantom ID** UUID. 
+
+When using **agent ID*s (for example in APIs or the CLI), phantom IDs are appended to the agent ID in square brackets:
+- Primary instance of `weather-agent` with parameter `London`: 
+  - `weather-agent("London")`
+- A phantom instance of the same agent: 
+  - `weather-agent("London")[43d9d7ab-e1d7-47e2-a213-d635eaa317a2]`
+
+Phantom agents are created through Agent-to-Agent communication or [forking](forking.mdx). To create a new phantom agent via RPC, use the alternative client constructor method:
+
+<Tabs items={["TypeScript", "Rust"]}>
+  <Tabs.Tab>
+  ```typescript
+  const phantomAgent = WeatherAgent.newPhantom("London")
+  ````
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```rust
+    let phantom_agent = WeatherAgentClient::new_phantom("London");
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+If we know the **phantom ID** of an agent, we can create a client targeting an existing phantom agent:
+
+<Tabs items={["TypeScript", "Rust"]}>
+  <Tabs.Tab>
+  ```typescript
+  const phantomAgent = WeatherAgent.newPhantom("London")
+  const phantomId = phantomAgent.getPhantomId();
+  const samePhantomAgent = WeatherAgent.getPhantom(phantomId, "London");
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```rust
+    let phantom_agent = WeatherAgentClient::new_phantom("London");
+    let phantom_id = phantom_agent.phantom_id().unwrap(); // It's an Option<Uuid>, but always Some for phantom agents
+    let same_phantom_agent = WeatherAgentClient::get_phantom(phantom_id, "London");
+    ```
+  </Tabs.Tab>
 </Tabs>
 
 ## Calling a remote agent method

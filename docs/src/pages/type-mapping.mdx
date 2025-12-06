@@ -399,7 +399,7 @@ When using the REST API, the JSON-encoded values must be extended with a JSON-en
 
 The following sections define how each WASM type and it's corresponding WAVE value encoding is mapped to Golem's value JSON format.
 
-## Primitive types
+### Primitive types
 
 | WIT type | JSON type    | Description                  |
 | -------- | ------------ | ---------------------------- |
@@ -417,7 +417,7 @@ The following sections define how each WASM type and it's corresponding WAVE val
 | char     | JSON number  | UTF-8 character              |
 | string   | JSON string  | String                       |
 
-## Tuples
+### Tuples
 
 The following WIT type:
 
@@ -437,7 +437,7 @@ and in JSON as an array of the items:
 [1234, "hello world", 103]
 ```
 
-## Lists
+### Lists
 
 The following WIT type:
 
@@ -457,7 +457,7 @@ and in JSON as an array of the items:
 ["one", "two", "three"]
 ```
 
-## Options
+### Options
 
 The following WIT type:
 
@@ -478,7 +478,7 @@ In the JSON representation we use `null` to reprsent `none` and the inner value 
 null
 ```
 
-## Results
+### Results
 
 For the following WIT type:
 
@@ -509,7 +509,7 @@ result<_, string>
 { "ok": null }
 ```
 
-## Handles
+### Handles
 
 Handles are identifying **resources** and returned by invoking **resource constructors** through the Golem invocation API. Handles are represented as strings in the JSON format
 and they are not supported by WAVE.
@@ -522,7 +522,7 @@ Example handle value in JSON representation:
 "urn:worker:component-id/worker-name/resource-id"
 ```
 
-## Records
+### Records
 
 Records are a collection of named fields. The JSON representation uses the same names as they appear in the WIT definition:
 
@@ -545,7 +545,7 @@ The JSON representation is just an object with the same field names:
 { "a": "hello", "b": 1234 }
 ```
 
-## Variants
+### Variants
 
 Variants are encoded in JSON by an **object** with a single field, where the field's name matches one of the variant's cases:
 
@@ -571,7 +571,7 @@ In JSON the object's single field encodes the case, and the value is `null` if i
 { "restricted": ["one", "two", "three"] }
 ```
 
-## Enums
+### Enums
 
 Enums are simply encoded by the case name as a JSON string.
 
@@ -599,7 +599,7 @@ and in JSON:
 "high"
 ```
 
-## Flags
+### Flags
 
 Flags represent a set of selected values.
 
