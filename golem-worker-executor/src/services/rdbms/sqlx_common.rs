@@ -487,9 +487,7 @@ impl<DB: Database> TransactionConnection<DB> {
     }
 }
 
-struct SqlxDbTransactionConnection<DB: Database>(
-    Arc<async_lock::Mutex<TransactionConnection<DB>>>,
-);
+struct SqlxDbTransactionConnection<DB: Database>(Arc<async_lock::Mutex<TransactionConnection<DB>>>);
 
 impl<DB: Database> SqlxDbTransactionConnection<DB> {
     fn new(connection: PoolConnection<DB>, open: bool) -> Self {

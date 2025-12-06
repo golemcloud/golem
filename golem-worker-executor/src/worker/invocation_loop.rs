@@ -322,6 +322,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
         loop {
             let status = self.parent.last_known_status.read().await.clone();
+            tracing::warn!(
+                "DRAIN_PENDING_FROM_STATUS PENDING INVOCATIONS: {:#?}",
+                status.pending_invocations
+            );
 
             // First, try to process a pending update
             if let Some(update) = status.pending_updates.front() {

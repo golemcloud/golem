@@ -934,11 +934,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .commit_oplog_and_update_state_internal(commit_level)
             .await;
         if changed {
-            tracing::warn!("worker state changed, acquiring instance lock");
             let instance_guard = self.instance.lock().await;
-            tracing::warn!("worker state changed, acquired instance lock");
             if let WorkerInstance::Running(running) = &*instance_guard {
-                tracing::warn!("worker state changed, sending unblock");
                 running.sender.send(WorkerCommand::Unblock).unwrap();
             };
         }
