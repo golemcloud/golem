@@ -84,14 +84,11 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
     match &ast.data {
         syn::Data::Struct(ds) => {
             let field_graphs = ds.fields.iter().enumerate().map(|(i, f)| {
-                let name = f.ident.as_ref().map(|id| id.to_string()).unwrap_or(format!("field{}", i));
                 let var_ident = f.ident.clone().unwrap_or_else(|| syn::Ident::new(&format!("field{}", i), f.span()));
                 let field_name_str = var_ident.to_string();
-
-
                 quote! {
-                    let #name = #crate_ident::agentic::ToGraph::to_graph(&self.#name, graph);
-                    field_indices.push((#field_name_str.to_string(), #name));
+                    let #var_ident = #crate_ident::agentic::ToGraph::to_graph(&self.#var_ident, graph);
+                    field_indices.push((#field_name_str.to_string(), #var_ident));
                 }
             });
 
@@ -110,34 +107,79 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
             }
         }
         syn::Data::Enum(de) => {
-            let variants_graphs = de.variants.iter().map(|v| {
+            let variant_matches = de.variants.iter().map(|v| {
                 let vname = &v.ident;
-                let payload = match &v.fields {
-                    Fields::Named(fields_named) => {
-                        let assignments = fields_named.named.iter().map(|f| {
-                            let fname = &f.ident;
-                            quote! { #fname: #crate_ident::agentic::ToGraph::to_graph(&inner.#fname, graph) }
-                        });
-                        quote! {
-                            let inner = match self { Self::#vname { #( #assignments ),* } => inner, _ => unreachable!() };
+                match &v.fields {
+                    Fields::Unit => quote! {
+                        Self::#vname => {
+                            let payload_index = None;
+                            graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
+                                #crate_ident::agentic::EnumNode {
+                                    variant: stringify!(#vname).to_string(),
+                                    payload: payload_index,
+                                }
+                            ));
                         }
-                    }
+                    },
                     Fields::Unnamed(fields_unnamed) => {
-                        let assignments = fields_unnamed.unnamed.iter().enumerate().map(|(i, _)| {
-                            let idx = syn::Index::from(i);
-                            quote! { #crate_ident::agentic::ToGraph::to_graph(&inner.#idx, graph) }
-                        });
-                        quote! {}
-                    }
-                    Fields::Unit => quote! {},
-                };
-                quote! { /* per variant logic */ }
+                        let bindings: Vec<syn::Ident> = (0..fields_unnamed.unnamed.len())
+                            .map(|i| syn::Ident::new(&format!("f{}", i), v.span()))
+                            .collect();
+
+                        let to_graph_calls: Vec<_> = bindings.iter()
+                            .map(|b| quote! { #crate_ident::agentic::ToGraph::to_graph(#b, graph) })
+                            .collect();
+
+                        let payload_expr = if bindings.len() == 1 {
+                            quote! { Some(#(#to_graph_calls),*) }
+                        } else {
+                            quote! {
+                                let mut elements = Vec::new();
+                                #(elements.push(#to_graph_calls);)*
+                                Some(elements[0])
+                            }
+                        };
+
+                        quote! {
+                            Self::#vname(#(#bindings),*) => {
+                                let payload_index = #payload_expr;
+                                graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
+                                    #crate_ident::agentic::EnumNode {
+                                        variant: stringify!(#vname).to_string(),
+                                        payload: payload_index,
+                                    }
+                                ));
+                            }
+                        }
+                    },
+                    Fields::Named(fields_named) => {
+                        let bindings: Vec<_> = fields_named.named.iter().map(|f| f.ident.clone().unwrap()).collect();
+                        let to_graph_calls = bindings.iter().map(|b| quote! { #crate_ident::agentic::ToGraph::to_graph(#b, graph) });
+                        quote! {
+                            Self::#vname { #(#bindings),* } => {
+                                let mut elements = Vec::new();
+                                #(elements.push(#to_graph_calls);)*
+                                let payload_index = Some(elements[0]);
+                                graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
+                                    #crate_ident::agentic::EnumNode {
+                                        variant: stringify!(#vname).to_string(),
+                                        payload: payload_index,
+                                    }
+                                ));
+                            }
+                        }
+                    },
+                }
             });
 
             quote! {
                 impl #crate_ident::agentic::ToGraph for #self_ident {
                     fn to_graph(&self, graph: &mut #crate_ident::agentic::Graph) -> usize {
-                        unimplemented!("Recursive enum ToGraph generation not implemented fully")
+                        let index = graph.nodes.len();
+                        match self {
+                            #(#variant_matches),*
+                        }
+                        index
                     }
                 }
             }
@@ -149,24 +191,18 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
 fn generate_from_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident) -> proc_macro2::TokenStream {
     match &ast.data {
         syn::Data::Struct(ds) => {
-            let field_graphs = ds.fields.iter().enumerate().map(|(i, f)| {
-                let name = f.ident.as_ref().map(|id| id.clone()).unwrap_or_else(|| syn::Ident::new(&format!("field{}", i), f.span()));
-                let ty = &f.ty;
-                quote! {
-                    #name: #crate_ident::agentic::FromGraph::from_graph(graph, indices[#i])?
-                }
+            let field_assigns = ds.fields.iter().enumerate().map(|(i, f)| {
+                let var_ident = f.ident.clone().unwrap_or_else(|| syn::Ident::new(&format!("field{}", i), f.span()));
+                quote! { #var_ident: #crate_ident::agentic::FromGraph::from_graph(graph, indices[#i])? }
             });
 
             quote! {
                 impl #crate_ident::agentic::FromGraph for #self_ident {
                     fn from_graph(graph: &#crate_ident::agentic::Graph, index: usize) -> Result<Self, String> {
-                        let node = &graph.nodes[index];
-                        match node {
+                        match &graph.nodes[index] {
                             #crate_ident::agentic::GraphNode::Struct(struct_node) => {
                                 let indices: Vec<usize> = struct_node.fields.iter().map(|(_, idx)| *idx).collect();
-                                Ok(Self {
-                                    #(#field_graphs),*
-                                })
+                                Ok(Self { #(#field_assigns),* })
                             }
                             _ => Err(format!("Expected Struct node at index {}", index))
                         }
@@ -175,10 +211,51 @@ fn generate_from_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Iden
             }
         }
         syn::Data::Enum(de) => {
+            let variant_matches = de.variants.iter().map(|v| {
+                let vname = &v.ident;
+                match &v.fields {
+                    Fields::Unit => quote! {
+                        stringify!(#vname) => Ok(Self::#vname),
+                    },
+                    Fields::Unnamed(fields_unnamed) => {
+                        let n = fields_unnamed.unnamed.len();
+                        let unwrap_call = if n == 1 {
+                            quote! { #crate_ident::agentic::FromGraph::from_graph(graph, payload_index)? }
+                        } else {
+                            quote! { unimplemented!("Multiple tuple fields not implemented yet") }
+                        };
+                        quote! {
+                            stringify!(#vname) => Ok(Self::#vname(#unwrap_call)),
+                        }
+                    },
+                    Fields::Named(fields_named) => {
+                        let field_assigns = fields_named.named.iter().enumerate().map(|(i, f)| {
+                            let fname = f.ident.clone().unwrap();
+                            quote! { #fname: #crate_ident::agentic::FromGraph::from_graph(graph, payload_indices[#i])? }
+                        });
+                        quote! {
+                            stringify!(#vname) => {
+                                let payload_indices = vec![payload_index];
+                                Ok(Self::#vname { #(#field_assigns),* })
+                            }
+                        }
+                    },
+                }
+            });
+
             quote! {
                 impl #crate_ident::agentic::FromGraph for #self_ident {
                     fn from_graph(graph: &#crate_ident::agentic::Graph, index: usize) -> Result<Self, String> {
-                        unimplemented!("Recursive enum FromGraph generation not implemented fully")
+                        match &graph.nodes[index] {
+                            #crate_ident::agentic::GraphNode::Enum(enum_node) => {
+                                let payload_index = enum_node.payload.ok_or("Missing payload")?;
+                                match enum_node.variant.as_str() {
+                                    #(#variant_matches)*
+                                    other => Err(format!("Unknown variant: {}", other))
+                                }
+                            }
+                            _ => Err(format!("Expected Enum node at index {}", index))
+                        }
                     }
                 }
             }
