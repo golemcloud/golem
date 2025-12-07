@@ -14,7 +14,7 @@
 
 use super::plan::PlanId;
 use crate::model::auth::AccountRole;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::{declare_revision, declare_structs, newtype_uuid};
 use uuid::uuid;
 
 newtype_uuid!(AccountId, golem_api_grpc::proto::golem::common::AccountId);
@@ -26,10 +26,6 @@ impl AccountId {
 pub static SYSTEM_ACCOUNT_ID: AccountId = AccountId::SYSTEM;
 
 declare_revision!(AccountRevision);
-
-declare_transparent_newtypes! {
-    pub struct PlanName(pub String);
-}
 
 declare_structs! {
     pub struct Account {

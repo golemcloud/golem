@@ -67,7 +67,6 @@ use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -127,8 +126,6 @@ struct Repos {
 
 impl Services {
     pub async fn new(config: &RegistryServiceConfig) -> anyhow::Result<Self> {
-        let bootstrap_auth = AuthCtx::system();
-
         let repos = make_repos(&config.db).await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
@@ -143,27 +140,40 @@ impl Services {
 
         let account_usage_service = Arc::new(AccountUsageService::new(repos.account_usage_repo));
 
-        let plan_service = Arc::new(PlanService::new(repos.plan_repo, config.plans.clone()));
+        let plan_service = Arc::new(PlanService::new(repos.plan_repo));
         plan_service
-            .create_initial_plans(&bootstrap_auth)
+            .create_initial_plans(&config.initial_plans)
             .await
             .map_err(|e| e.into_anyhow())?;
+
+        let default_plan_id = config
+            .initial_plans
+            .get("default")
+            .ok_or(anyhow!("No default plan"))?
+            .plan_id;
 
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
-            config.accounts.clone(),
+            default_plan_id,
         ));
         account_service
-            .create_initial_accounts(&bootstrap_auth)
+            .create_initial_accounts(&config.initial_accounts)
             .await
             .map_err(|e| e.into_anyhow())?;
 
         let token_service = Arc::new(TokenService::new(repos.token_repo, account_service.clone()));
-        token_service
-            .create_initial_tokens(&bootstrap_auth)
-            .await
-            .map_err(|e| e.into_anyhow())?;
+        {
+            let initial_tokens = config
+                .initial_accounts
+                .values()
+                .map(|v| (v.id, v.token.clone()))
+                .collect::<Vec<_>>();
+            token_service
+                .create_initial_tokens(&initial_tokens)
+                .await
+                .map_err(|e| e.into_anyhow())?;
+        }
 
         let auth_service = Arc::new(AuthService::new(repos.account_repo.clone()));
 
@@ -211,7 +221,7 @@ impl Services {
 
         let component_transformer_plugin_caller =
             Arc::new(ComponentTransformerPluginCallerDefault::new(
-                config.component_transformer_plugin_caller.clone(),
+                &config.component_transformer_plugin_caller,
             ));
 
         let component_write_service = Arc::new(ComponentWriteService::new(

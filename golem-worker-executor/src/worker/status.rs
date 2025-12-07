@@ -1204,11 +1204,11 @@ mod test {
 
     #[test]
     async fn non_existing_oplog() {
-        let environment_id = EnvironmentId::new_v4();
+        let environment_id = EnvironmentId::new();
         let owned_worker_id = OwnedWorkerId::new(
             &environment_id,
             &WorkerId {
-                component_id: ComponentId::new_v4(),
+                component_id: ComponentId::new(),
                 worker_name: "test-worker".to_string(),
             },
         );
@@ -1597,12 +1597,12 @@ mod test {
 
     impl TestCase {
         pub fn builder(initial_component_version: u64) -> TestCaseBuilder {
-            let environment_id = EnvironmentId::new_v4();
-            let account_id = AccountId::new_v4();
+            let environment_id = EnvironmentId::new();
+            let account_id = AccountId::new();
             let owned_worker_id = OwnedWorkerId::new(
                 &environment_id,
                 &WorkerId {
-                    component_id: ComponentId::new_v4(),
+                    component_id: ComponentId::new(),
                     worker_name: "test-worker".to_string(),
                 },
             );

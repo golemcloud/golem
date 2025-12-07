@@ -108,7 +108,7 @@ impl EnvironmentShareService {
             EnvironmentAction::CreateShare,
         )?;
 
-        let id = EnvironmentShareId::new_v4();
+        let id = EnvironmentShareId::new();
         let record = EnvironmentShareRevisionRecord::creation(id, data.roles, *auth.account_id());
 
         let result = self

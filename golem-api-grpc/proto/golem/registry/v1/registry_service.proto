@@ -53,7 +53,7 @@ service RegistryService {
 }
 
 message AuthenticateTokenRequest {
-  golem.common.UUID secret = 1;
+  string secret = 1;
 }
 
 message AuthenticateTokenResponse {

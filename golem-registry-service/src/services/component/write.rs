@@ -145,7 +145,7 @@ impl ComponentWriteService {
             )
             .await?;
 
-        let component_id = ComponentId::new_v4();
+        let component_id = ComponentId::new();
         let (wasm_hash, wasm_object_store_key) = self
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;

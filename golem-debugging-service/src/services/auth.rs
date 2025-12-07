@@ -68,7 +68,7 @@ impl GrpcAuthService {
 impl AuthService for GrpcAuthService {
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
         self.client
-            .authenticate_token(token)
+            .authenticate_token(&token)
             .await
             .map_err(|e| match e {
                 RegistryServiceError::CouldNotAuthenticate(_) => {

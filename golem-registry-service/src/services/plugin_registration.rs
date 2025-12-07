@@ -153,7 +153,7 @@ impl PluginRegistrationService {
             }
         };
 
-        let id = PluginRegistrationId::new_v4();
+        let id = PluginRegistrationId::new();
 
         let registration = PluginRegistration {
             id,

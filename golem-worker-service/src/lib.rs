@@ -30,12 +30,8 @@ pub mod swagger_ui;
 
 use crate::config::WorkerServiceConfig;
 use crate::service::Services;
-use anyhow::{anyhow, Context};
-use golem_common::config::DbConfig;
+use anyhow::anyhow;
 use golem_common::poem::LazyEndpointExt;
-use golem_service_base::db;
-use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use include_dir::{include_dir, Dir};
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
@@ -49,8 +45,6 @@ use tracing::{info, Instrument};
 
 #[cfg(test)]
 test_r::enable!();
-
-static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -76,21 +70,6 @@ impl WorkerService {
         config: WorkerServiceConfig,
         prometheus_registry: Registry,
     ) -> anyhow::Result<Self> {
-        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
-
-        match &config.db {
-            DbConfig::Postgres(c) => {
-                db::postgres::migrate(c, migrations.postgres_migrations())
-                    .await
-                    .context("Postgres DB migration")?;
-            }
-            DbConfig::Sqlite(c) => {
-                db::sqlite::migrate(c, migrations.sqlite_migrations())
-                    .await
-                    .context("Sqlite DB migration")?;
-            }
-        };
-
         let services: Services = Services::new(&config)
             .await
             .map_err(|err| anyhow!(err).context("Service initialization"))?;

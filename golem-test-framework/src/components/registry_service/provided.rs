@@ -82,7 +82,7 @@ impl RegistryService for ProvidedRegistryService {
         self.admin_account_email.clone()
     }
     fn admin_account_token(&self) -> TokenSecret {
-        self.admin_account_token
+        self.admin_account_token.clone()
     }
 
     fn default_plan(&self) -> PlanId {

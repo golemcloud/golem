@@ -13,7 +13,7 @@ export GOLEM__TRACING__FILE__ENABLED="${GOLEM__TRACING__FILE__ENABLED:=true}"
 export GOLEM__TRACING__FILE__JSON="${GOLEM__TRACING__FILE__JSON:=false}"
 export GOLEM__TRACING__STDOUT__ENABLED="${GOLEM__TRACING__STDOUT__ENABLED:=false}"
 
-ADMIN_TOKEN="5c832d93-ff85-4a8f-9803-513950fdfdb1"
+ADMIN_TOKEN="lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 
 FS_BLOB_STORAGE_DIR="../local-run/data/blob_storage"
 
@@ -50,7 +50,7 @@ GOLEM__DB__CONFIG__DATABASE="../local-run/data/golem_registry_service.db" \
 GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
 GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
 GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
-GOLEM__ACCOUNTS__ROOT__TOKEN="${ADMIN_TOKEN}" \
+GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN="${ADMIN_TOKEN}" \
 ../target/debug/golem-registry-service &
 
 registy_service_pid=$!
