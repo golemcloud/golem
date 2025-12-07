@@ -14,11 +14,12 @@
 
 use super::account::AccountId;
 use super::application::ApplicationId;
+use super::application::ApplicationName;
 use super::auth::EnvironmentRole;
 use super::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use super::diff::Hash;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 newtype_uuid!(
@@ -81,8 +82,59 @@ declare_structs! {
         pub owner_account_id: AccountId,
         /// Roles in the environment that were given to the current user by shares. The owner always has full access.
         /// Note that even if getting a deleted environment only non-deleted shares are considered.
-        pub roles_from_active_shares: HashSet<EnvironmentRole>,
+        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
 
         pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
+    }
+
+    pub struct EnvironmentSummary {
+        pub id: EnvironmentId,
+        pub revision: EnvironmentRevision,
+        pub name: EnvironmentName,
+        pub compatibility_check: bool,
+        pub version_check: bool,
+        pub security_overrides: bool,
+        pub roles_from_active_shares: BTreeSet<EnvironmentRole>,
+        pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
+    }
+
+    pub struct ApplicationSummary {
+        pub id: ApplicationId,
+        pub name: ApplicationName,
+    }
+
+    pub struct AccountSummary {
+        pub id: AccountId,
+        pub name: String,
+        pub email: String,
+    }
+
+    /// A cross-tenant, enriched view of an environment used specifically by the
+    /// `GET /environments` endpoint.
+    ///
+    /// This type exists because a user may be able to see an environment (as the
+    /// owner or through an active share) **without having access to its parent
+    /// application or owning account**. In those cases, returning only the
+    /// `Environment` model would not provide enough context for UI navigation or
+    /// for users to understand *whose* environment they are interacting with.
+    ///
+    /// `EnvironmentWithDetails` therefore bundles:
+    ///   - a summarized `Environment` (fields intrinsic to the environment),
+    ///   - minimal identifying information about the parent `Application`,
+    ///   - minimal identifying information about the owning `Account`.
+    ///
+    /// This structure is *only* used for environment discovery/listing.
+    /// All other environment endpoints (`GET /environments/:id`, updates, deletes)
+    /// continue to return the standard `Environment` model, since those requests
+    /// operate within the application/account they belong to.
+    ///
+    /// In short:
+    /// **EnvironmentWithDetails = EnvironmentSummary + minimal parent context**,
+    /// enabling safe, cross-tenant environment visibility without exposing
+    /// full application/account resources.
+    pub struct EnvironmentWithDetails {
+        pub environment: EnvironmentSummary,
+        pub application: ApplicationSummary,
+        pub account: AccountSummary
     }
 }

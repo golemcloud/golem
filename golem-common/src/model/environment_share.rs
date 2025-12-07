@@ -16,6 +16,7 @@ use super::account::AccountId;
 use super::auth::EnvironmentRole;
 use super::environment::EnvironmentId;
 use crate::{declare_revision, declare_structs, newtype_uuid};
+use std::collections::BTreeSet;
 
 newtype_uuid!(EnvironmentShareId);
 
@@ -27,16 +28,16 @@ declare_structs! {
         pub revision: EnvironmentShareRevision,
         pub environment_id: EnvironmentId,
         pub grantee_account_id: AccountId,
-        pub roles: Vec<EnvironmentRole>
+        pub roles: BTreeSet<EnvironmentRole>
     }
 
     pub struct EnvironmentShareCreation {
         pub grantee_account_id: AccountId,
-        pub roles: Vec<EnvironmentRole>
+        pub roles: BTreeSet<EnvironmentRole>
     }
 
     pub struct EnvironmentShareUpdate {
         pub current_revision: EnvironmentShareRevision,
-        pub new_roles: Vec<EnvironmentRole>
+        pub new_roles: BTreeSet<EnvironmentRole>
     }
 }

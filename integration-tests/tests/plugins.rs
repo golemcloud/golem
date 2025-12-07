@@ -949,7 +949,7 @@ async fn oplog_processor_in_different_env_after_unregistering(
     let client_2 = user_2.registry_service_client().await;
 
     user_1
-        .share_environment(&user_2.account_id, &env_1.id, &[EnvironmentRole::Admin])
+        .share_environment(&env_1.id, &user_2.account_id, &[EnvironmentRole::Admin])
         .await?;
 
     let plugin_component = user_2

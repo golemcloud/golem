@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::repo::reports::ReportsRepo;
-use golem_common::model::reports::{AccountCounts, AccountSummary};
+use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::GlobalAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
@@ -54,7 +54,7 @@ impl ReportsService {
     pub async fn get_account_summaries(
         &self,
         auth: &AuthCtx,
-    ) -> Result<Vec<AccountSummary>, ReportsError> {
+    ) -> Result<Vec<AccountSummaryReport>, ReportsError> {
         auth.authorize_global_action(GlobalAction::GetReports)?;
 
         let summaries = self
@@ -68,7 +68,10 @@ impl ReportsService {
         Ok(summaries)
     }
 
-    pub async fn get_account_counts(&self, auth: &AuthCtx) -> Result<AccountCounts, ReportsError> {
+    pub async fn get_account_counts(
+        &self,
+        auth: &AuthCtx,
+    ) -> Result<AccountCountsReport, ReportsError> {
         auth.authorize_global_action(GlobalAction::GetReports)?;
 
         let account_counts = self.reports_repo.get_account_counts().await?.into();

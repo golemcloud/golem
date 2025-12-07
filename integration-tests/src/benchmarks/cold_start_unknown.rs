@@ -320,11 +320,13 @@ impl ColdStartUnknownBenchmark {
 
     pub async fn setup_iteration(&self, config: &RunConfig) -> IterationContext {
         let user = self.deps.user().await.unwrap();
-        let (_, env) = user.app_and_env().await.unwrap();
-
         let mut worker_ids = vec![];
 
         for _ in 0..config.size {
+            // Agent types names are unique within one environment,
+            // so make sure each component get its own env
+            let (_, env) = user.app_and_env().await.unwrap();
+
             let component = user
                 .component(&env.id, &self.component_name)
                 .unique()
