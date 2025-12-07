@@ -38,8 +38,9 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
                 fn add_to_builder<B: #golem_rust_crate_ident::value_and_type::NodeBuilder>(self, builder: B) -> B::Result {
                     use #golem_rust_crate_ident::agentic::ToGraph;
 
-                    let mut graph = #golem_rust_crate_ident::agentic::Graph { nodes: vec![] };
-                    let _ = self.to_graph(&mut graph);
+                    let mut graph = #golem_rust_crate_ident::agentic::Graph { nodes: vec![], root: 0 };
+                    let result_index = self.to_graph(&mut graph);
+                    graph.root = result_index;
                     graph.add_to_builder(builder)
                 }
 
@@ -55,7 +56,7 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
                     use #golem_rust_crate_ident::agentic::FromGraph;
 
                     let graph = #golem_rust_crate_ident::agentic::Graph::from_extractor(extractor)?;
-                    Self::from_graph(&graph, 0)
+                    Self::from_graph(&graph, graph.root)
                 }
             }
         };
@@ -119,6 +120,8 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
                                     payload: payload_index,
                                 }
                             ));
+
+                            graph.nodes.len() - 1
                         }
                     },
                     Fields::Unnamed(fields_unnamed) => {
@@ -149,6 +152,8 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
                                         payload: payload_index,
                                     }
                                 ));
+
+                                graph.nodes.len() - 1
                             }
                         }
                     },
@@ -166,6 +171,8 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
                                         payload: payload_index,
                                     }
                                 ));
+
+                                graph.nodes.len() - 1
                             }
                         }
                     },
@@ -175,11 +182,9 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
             quote! {
                 impl #crate_ident::agentic::ToGraph for #self_ident {
                     fn to_graph(&self, graph: &mut #crate_ident::agentic::Graph) -> usize {
-                        let index = graph.nodes.len();
                         match self {
                             #(#variant_matches),*
                         }
-                        index
                     }
                 }
             }
@@ -298,3 +303,5 @@ fn type_contains_self(ty: &Type, self_ident: &Ident) -> bool {
         _ => false,
     }
 }
+
+

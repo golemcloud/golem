@@ -19,6 +19,7 @@ use crate::Schema;
 #[derive(Debug, Clone, Schema)]
 pub struct Graph {
     pub nodes: Vec<GraphNode>,
+    pub root: usize
 }
 
 #[derive(Debug, Clone, Schema)]
@@ -167,7 +168,7 @@ impl<T: FromGraph> FromGraph for Option<T> {
     fn from_graph(graph: &Graph, index: usize) -> Result<Self, String> {
         match &graph.nodes[index] {
             GraphNode::Option(OptionNode { some }) => {
-                Ok(some.map(|i| T::from_graph(graph, i)).transpose().unwrap())
+                some.map(|i| T::from_graph(graph, i)).transpose()
             }
             _ => Err(format!("Expected Option node at index {}", index)),
         }
@@ -254,5 +255,54 @@ impl<T: ToGraph> ToGraph for Box<T> {
 impl<T: FromGraph> FromGraph for Box<T> {
     fn from_graph(graph: &Graph, index: usize) -> Result<Self, String> {
         Ok(Box::new(T::from_graph(graph, index)?))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use golem_wasm::WitValue;
+    use test_r::test;
+
+    use crate::agentic::{FromGraph, Schema, ToGraph};
+    use crate::Schema;
+
+    #[derive(Schema, Debug)]
+    enum MyEnum {
+        A(String),
+        C(Box<MyEnum>),
+    }
+
+
+    #[test]
+    fn test_graph_serialization() {
+
+        let value =  MyEnum::C(Box::new(MyEnum::A("Hello, Graph!".to_string())));
+
+
+
+
+        let result: Result<MyEnum, String> = Schema::from_wit_value(value.to_wit_value().unwrap(), MyEnum::get_type());
+
+        dbg!(&result);
+
+        // let mut graph = crate::agentic::Graph { nodes: vec![], root: 0 };
+        //
+        // let result = value.to_graph(
+        //     &mut graph
+        // );
+        //
+        // dbg!(&result);
+        //
+        // graph.root = result;
+        //
+        // dbg!(&graph);
+        //
+        // let result = MyEnum::from_graph(&graph, graph.root).unwrap();
+        //
+        // dbg!(&result);
+
+
+        assert!(false)
     }
 }
