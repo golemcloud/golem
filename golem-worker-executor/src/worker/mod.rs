@@ -28,32 +28,34 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentFilePath, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::RevertWorkerTarget;
-use golem_common::model::{AccountId, RetryConfig};
-use golem_common::model::{ComponentFilePath, PluginInstallationId};
+use golem_common::model::worker::RevertWorkerTarget;
+use golem_common::model::RetryConfig;
 use golem_common::model::{
-    ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation, WorkerId,
+    WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -133,7 +135,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -148,7 +150,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_args,
                 worker_env,
                 worker_wasi_config_vars,
-                component_version,
+                component_revision,
                 parent,
                 invocation_context_stack,
             )
@@ -163,7 +165,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -221,7 +223,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
@@ -297,6 +299,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // just some sanity checking
         assert!(last_oplog_idx >= OplogIndex::INITIAL);
+
+        tracing::debug!("Checking worker for agent initialization: last_oplog_idx: {last_oplog_idx}; agent_id: {agent_id:?}");
 
         // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
         // We might have crashed between creating the oplog and writing it, so just check here for it.
@@ -637,9 +641,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(
         &self,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_version })
+        self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_revision })
             .await
     }
 
@@ -988,7 +992,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn activate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1000,7 +1004,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::activate_plugin(plugin_installation_id),
+            OplogEntry::activate_plugin(plugin_priority),
         )
         .await;
 
@@ -1010,7 +1014,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn deactivate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1022,7 +1026,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.add_and_commit_oplog_internal(
             &instance_guard,
-            OplogEntry::deactivate_plugin(plugin_installation_id),
+            OplogEntry::deactivate_plugin(plugin_priority),
         )
         .await;
 
@@ -1438,7 +1442,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        component_version: Option<ComponentVersion>,
+        component_revision: Option<ComponentRevision>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
@@ -1466,7 +1470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .component_service()
                     .get_metadata(
                         &component_id,
-                        Some(initial_worker_metadata.last_known_status.component_version),
+                        Some(initial_worker_metadata.last_known_status.component_revision),
                     )
                     .await?;
 
@@ -1528,7 +1532,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Create and initialize a new worker.
                 let component = this
                     .component_service()
-                    .get_metadata(&component_id, component_version)
+                    .get_metadata(&component_id, component_revision)
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
@@ -1568,8 +1572,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = WorkerStatusRecord {
-                    component_version: component.versioned_component_id.version,
-                    component_version_for_replay: component.versioned_component_id.version,
+                    component_revision: component.revision,
+                    component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component
                         .metadata
@@ -1580,7 +1584,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.id.clone())
+                        .map(|i| i.priority)
                         .collect(),
                     ..Default::default()
                 };
@@ -1590,8 +1594,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
-                    project_id: owned_worker_id.project_id(),
-                    created_by: account_id.clone(),
+                    environment_id: owned_worker_id.environment_id(),
+                    created_by: *account_id,
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
@@ -1603,11 +1607,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.worker_id.clone(),
-                    initial_worker_metadata.last_known_status.component_version,
+                    initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.project_id.clone(),
-                    initial_worker_metadata.created_by.clone(),
+                    initial_worker_metadata.environment_id,
+                    initial_worker_metadata.created_by,
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
                     initial_worker_metadata
@@ -1760,7 +1764,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 pub fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
-    component_env: HashMap<String, String>,
+    component_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
@@ -1947,18 +1951,18 @@ impl RunningWorker {
                 .cloned();
 
             let component_version = pending_update.as_ref().map_or(
-                worker_metadata.last_known_status.component_version,
+                worker_metadata.last_known_status.component_revision,
                 |update| {
-                    let target_version = *update.description.target_version();
+                    let target_revision = *update.description.target_revision();
                     info!(
-                        "Attempting {} update from {} to version {target_version}",
+                        "Attempting {} update from {} to version {target_revision}",
                         match update.description {
                             UpdateDescription::Automatic { .. } => "automatic",
                             UpdateDescription::SnapshotBased { .. } => "snapshot based",
                         },
-                        worker_metadata.last_known_status.component_version
+                        worker_metadata.last_known_status.component_revision
                     );
-                    target_version
+                    target_revision
                 },
             );
 
@@ -1971,7 +1975,7 @@ impl RunningWorker {
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
-                    if component_version != worker_metadata.last_known_status.component_version {
+                    if component_version != worker_metadata.last_known_status.component_revision {
                         // An update was attempted but the targeted version does not exist
                         warn!(
                             "Attempting update to version {component_version} failed with {error}"
@@ -1998,18 +2002,20 @@ impl RunningWorker {
             .pending_updates
             .front()
             .and_then(|update| match update.description {
-                UpdateDescription::SnapshotBased { target_version, .. } => Some(target_version),
+                UpdateDescription::SnapshotBased {
+                    target_revision, ..
+                } => Some(target_revision),
                 _ => None,
             })
             .unwrap_or(
                 worker_metadata
                     .last_known_status
-                    .component_version_for_replay,
+                    .component_revision_for_replay,
             );
 
         let context = Ctx::create(
-            worker_metadata.created_by.clone(),
-            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
+            worker_metadata.created_by,
+            OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),
@@ -2041,7 +2047,6 @@ impl RunningWorker {
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
-            parent.project_service(),
             parent.agent_types(),
             parent.shard_service(),
             pending_update,
@@ -2057,7 +2062,18 @@ impl RunningWorker {
             let current_level = store.get_fuel().unwrap_or(0);
             if store.data().is_out_of_fuel(current_level as i64) {
                 debug!("{worker_id_clone} ran out of fuel, borrowing more");
-                store.data_mut().borrow_fuel_sync();
+                store.data_mut().borrow_fuel_sync(current_level as i64);
+            }
+            // If we are still out of fuel after borrowing it means we exceeded the limits for the account
+            // and cannot borrow more. Only thing to do is suspend and try later.
+            if store.data().is_out_of_fuel(current_level as i64) {
+                debug!("{worker_id_clone} could not borrow more fuel, suspending");
+
+                // TODO: The following edge case should be improved. If there are no other workers for the account
+                // of the worker and the resource limits are updated in the cloud service (end of month, plan change)
+                // the current resource limits logic will not pick that up. It will still be picked up after a few attempts
+                // at resuming the worker (after the first usage update is sent) or an instance restart, but we should have better ux here.
+                return Err(InterruptKind::Suspend(Timestamp::now_utc()).into());
             }
 
             match store.data_mut().check_interrupt() {
@@ -2066,8 +2082,9 @@ impl RunningWorker {
             }
         });
 
-        store.set_fuel(i64::MAX as u64)?;
-        store.data_mut().borrow_fuel().await?; // Borrowing fuel for initialization and also to make sure account is in cache
+        let initial_fuel_level = i64::MAX;
+        store.set_fuel(initial_fuel_level as u64)?;
+        store.data_mut().borrow_fuel(initial_fuel_level).await?; // Borrowing fuel for initialization and also to make sure account is in cache
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 

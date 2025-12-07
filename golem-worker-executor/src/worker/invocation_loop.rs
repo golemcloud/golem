@@ -28,17 +28,18 @@ use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentId, AgentMode};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
-    GetFileSystemNodeResult, OplogIndex,
+    OplogIndex,
 };
 use golem_common::model::{
-    ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    IdempotencyKey, OwnedWorkerId, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::GetFileSystemNodeResult;
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::Value;
 use std::collections::VecDeque;
@@ -325,7 +326,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
             // First, try to process a pending update
             if let Some(update) = status.pending_updates.front() {
-                let target_version = *update.description.target_version();
+                let target_revision = *update.description.target_revision();
                 let mut store = self.store.lock().await;
                 let mut invocation = Invocation {
                     owned_worker_id: self.owned_worker_id.clone(),
@@ -333,7 +334,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     instance: self.instance,
                     store: store.deref_mut(),
                 };
-                match invocation.manual_update(target_version).await {
+                match invocation.manual_update(target_revision).await {
                     CommandOutcome::Continue => continue,
                     other => break other,
                 }
@@ -486,8 +487,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     CommandOutcome::Continue
                 }
             }
-            WorkerInvocation::ManualUpdate { target_version } => {
-                self.manual_update(target_version).await
+            WorkerInvocation::ManualUpdate { target_revision } => {
+                self.manual_update(target_revision).await
             }
         }
     }
@@ -788,12 +789,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
             worker_id = %self.owned_worker_id.worker_id,
-            target_version = %target_version,
+            target_version = %target_revision,
             agent_type = self.parent
                 .agent_id
                 .as_ref()
@@ -801,13 +802,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_version)
+        self.manual_update_inner(target_revision)
             .instrument(span)
             .await
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
         let _idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -840,7 +841,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .data()
                                 .get_public_state()
                                 .oplog()
-                                .create_snapshot_based_update_description(target_version, bytes)
+                                .create_snapshot_based_update_description(target_revision, bytes)
                                 .await
                             {
                                 Ok(update_description) => {
@@ -853,7 +854,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 }
                                 Err(error) => {
                                     self.fail_update(
-                                        target_version,
+                                        target_revision,
                                         format!(
                                             "failed to store the snapshot for manual update: {error}"
                                         ),
@@ -863,7 +864,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             }
                         } else {
                             self.fail_update(
-                                target_version,
+                                target_revision,
                                 "failed to get a snapshot for manual update: invalid snapshot result"
                                     .to_string(),
                             )
@@ -879,14 +880,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             .get_last_invocation_errors();
                         let error = error.to_string(&stderr);
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!("failed to get a snapshot for manual update: {error}"),
                         )
                             .await
                     }
                     Ok(InvokeResult::Exited { .. }) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             "failed to get a snapshot for manual update: it called exit"
                                 .to_string(),
                         )
@@ -894,7 +895,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!(
                                 "failed to get a snapshot for manual update: {interrupt_kind:?}"
                             ),
@@ -903,7 +904,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Err(error) => {
                         self.fail_update(
-                            target_version,
+                            target_revision,
                             format!("failed to get a snapshot for manual update: {error:?}"),
                         )
                             .await
@@ -912,7 +913,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             Ok(None) => {
                 self.fail_update(
-                    target_version,
+                    target_revision,
                     "failed to get a snapshot for manual update: save-snapshot is not exported"
                         .to_string(),
                 )
@@ -920,7 +921,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             Err(error) => {
                 self.fail_update(
-                    target_version,
+                    target_revision,
                     format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
                 )
                     .await
@@ -971,7 +972,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Records an attempted worker update as failed
-    async fn fail_update(&self, target_version: ComponentVersion, error: String) -> CommandOutcome {
+    async fn fail_update(
+        &self,
+        target_version: ComponentRevision,
+        error: String,
+    ) -> CommandOutcome {
         self.store
             .data()
             .on_worker_update_failed(target_version, Some(error))

@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::config::ComponentServiceConfig;
-use crate::service::compile_service::ComponentCompilationServiceImpl;
+use crate::config::RegistryServiceConfig;
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::service::compiled_component;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor::services::compiled_component;
 use grpc::CompileGrpcService;
 use prometheus::Registry;
-use service::CompilationService;
+use service::ComponentCompilationService;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -101,9 +100,9 @@ pub async fn run(
     )
     .await?;
 
-    let compilation_service = ComponentCompilationServiceImpl::new(
+    let compilation_service = ComponentCompilationService::new(
         config.compile_worker,
-        config.component_service.clone(),
+        config.registry_service.clone(),
         engine,
         compiled_component,
     )
@@ -117,7 +116,7 @@ pub async fn run(
     let grpc_port = start_grpc_server(
         address,
         compilation_service,
-        config.component_service,
+        config.registry_service,
         join_set,
     )
     .await?;
@@ -132,8 +131,8 @@ pub async fn run(
 
 async fn start_grpc_server(
     addr: SocketAddr,
-    service: Arc<dyn CompilationService + Send + Sync>,
-    component_service_config: ComponentServiceConfig,
+    service: Arc<ComponentCompilationService>,
+    component_service_config: RegistryServiceConfig,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> anyhow::Result<u16> {
     let (health_reporter, health_service) = tonic_health::server::health_reporter();

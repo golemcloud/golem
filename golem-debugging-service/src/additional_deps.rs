@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::auth::AuthService;
 use crate::debug_session::DebugSessions;
+use crate::services::auth::AuthService;
 use std::sync::Arc;
 
 #[derive(Clone)]

@@ -2,4 +2,4 @@
 
 components:
   componentname:
-    template: rust
+    templates: rust

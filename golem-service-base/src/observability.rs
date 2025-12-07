@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use axum::Router;
 use axum::body::Body;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
 use http::Response;
 use prometheus::{Encoder, Registry, TextEncoder};
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 pub async fn start_health_and_metrics_server(
     addr: impl ToSocketAddrs,

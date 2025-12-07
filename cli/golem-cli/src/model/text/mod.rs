@@ -13,18 +13,20 @@
 // limitations under the License.
 
 pub mod account;
-mod agent;
-pub mod api_definition;
-pub mod api_deployment;
-pub mod api_domain;
-pub mod api_security;
-pub mod certificate;
+pub mod agent;
+pub mod http_api_security;
+// TODO: atomic: pub mod certificate;
 pub mod component;
+pub mod diff;
+pub mod environment;
 pub mod fmt;
 pub mod help;
-pub mod plugin;
+pub mod http_api_definition;
+pub mod http_api_deployment;
+pub mod http_api_domain;
+// TODO: atomic pub mod plugin;
 pub mod profile;
-pub mod project;
+pub mod server;
 pub mod template;
 pub mod token;
 pub mod worker;

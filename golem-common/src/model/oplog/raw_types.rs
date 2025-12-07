@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::{ComponentVersion, OplogIndex};
+use crate::base_model::OplogIndex;
+use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::public_oplog_entry::{BinaryCodec, Deserialize, Serialize};
 use crate::model::oplog::OplogPayload;
@@ -279,20 +280,22 @@ pub enum PersistenceLevel {
 #[desert(evolution())]
 pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
-    Automatic { target_version: ComponentVersion },
+    Automatic { target_revision: ComponentRevision },
 
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
         payload: OplogPayload<Vec<u8>>,
     },
 }
 
 impl UpdateDescription {
-    pub fn target_version(&self) -> &ComponentVersion {
+    pub fn target_revision(&self) -> &ComponentRevision {
         match self {
-            UpdateDescription::Automatic { target_version } => target_version,
-            UpdateDescription::SnapshotBased { target_version, .. } => target_version,
+            UpdateDescription::Automatic { target_revision } => target_revision,
+            UpdateDescription::SnapshotBased {
+                target_revision, ..
+            } => target_revision,
         }
     }
 }

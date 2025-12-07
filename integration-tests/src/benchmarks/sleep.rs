@@ -18,8 +18,9 @@ use futures_concurrency::future::Join;
 use golem_common::base_model::WorkerId;
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::IntoValueAndType;
 use indoc::indoc;
 use tracing::{info, Level};
@@ -33,6 +34,7 @@ pub struct SleepBenchmarkContext {
 }
 
 pub struct SleepIterationContext {
+    user: TestUserContext<BenchmarkTestDependencies>,
     worker_ids: Vec<WorkerId>,
 }
 
@@ -85,32 +87,33 @@ impl Benchmark for Sleep {
         &self,
         benchmark_context: &Self::BenchmarkContext,
     ) -> Self::IterationContext {
+        let user = benchmark_context.deps.user().await.unwrap();
+        let (_, env) = user.app_and_env().await.unwrap();
+
         let mut worker_ids = vec![];
 
         info!("Registering component");
-        let component_id = benchmark_context
-            .deps
-            .admin()
-            .await
-            .component("benchmark_direct_rust")
+        let component = user
+            .component(&env.id, "benchmark_direct_rust")
             .name("benchmark:direct-rust")
             .store()
-            .await;
+            .await
+            .unwrap();
 
         for n in 0..self.config.size {
             let worker_id = WorkerId {
-                component_id: component_id.clone(),
+                component_id: component.id,
                 worker_name: format!("benchmark-agent(\"test-{n}\")"),
             };
             worker_ids.push(worker_id);
         }
 
-        SleepIterationContext { worker_ids }
+        SleepIterationContext { user, worker_ids }
     }
 
     async fn warmup(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
     ) {
         info!("Warming up {} workers...", context.worker_ids.len());
@@ -119,10 +122,10 @@ impl Benchmark for Sleep {
             .worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
+                let user_clone = context.user.clone();
 
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
                     vec![10u64.into_value_and_type()],
@@ -137,7 +140,7 @@ impl Benchmark for Sleep {
 
     async fn run(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) {
@@ -146,10 +149,10 @@ impl Benchmark for Sleep {
             .worker_ids
             .iter()
             .map(move |worker_id| async move {
-                let deps_clone = benchmark_context.deps.clone();
+                let user_clone = context.user.clone();
 
                 invoke_and_await(
-                    &deps_clone,
+                    &user_clone,
                     worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
                     vec![length.into_value_and_type()],
@@ -165,9 +168,9 @@ impl Benchmark for Sleep {
 
     async fn cleanup_iteration(
         &self,
-        benchmark_context: &Self::BenchmarkContext,
+        _benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
     ) {
-        delete_workers(&benchmark_context.deps, &context.worker_ids).await
+        delete_workers(&context.user, &context.worker_ids).await
     }
 }

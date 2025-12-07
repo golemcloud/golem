@@ -14,12 +14,15 @@
 
 use crate::command_handler::worker::parse_worker_error;
 use crate::command_handler::worker::stream_output::WorkerStreamOutput;
-use crate::model::{AgentLogStreamOptions, Format};
+use crate::model::format::Format;
+use crate::model::worker::AgentLogStreamOptions;
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use futures_util::future::Either;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::component::ComponentId;
 use golem_common::model::{IdempotencyKey, Timestamp, WorkerEvent};
 use native_tls::TlsConnector;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,8 +54,8 @@ impl WorkerConnection {
     /// Initializes a worker stream. Use `run_forever` to connect and output worker events.
     pub async fn new(
         worker_service_url: Url,
-        auth_token: String,
-        component_id: Uuid,
+        auth_token: TokenSecret,
+        component_id: &ComponentId,
         worker_name: String,
         connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
@@ -61,8 +64,8 @@ impl WorkerConnection {
     ) -> anyhow::Result<WorkerConnection> {
         let (request, connector) = Self::create_request(
             worker_service_url,
-            auth_token,
-            component_id,
+            auth_token.secret().to_string(),
+            component_id.0,
             worker_name,
             allow_insecure,
         )?;

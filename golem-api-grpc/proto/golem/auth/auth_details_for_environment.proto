@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.auth;
+
+import "golem/common/account_id.proto";
+import "golem/auth/environment_role.proto";
+
+message AuthDetailsForEnvironment {
+  golem.common.AccountId account_id_owning_environment = 1;
+  repeated golem.auth.EnvironmentRole environment_roles_from_shares = 2;
+}

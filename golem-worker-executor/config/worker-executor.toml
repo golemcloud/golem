@@ -13,18 +13,7 @@ ttl = "8h"
 type = "Grpc"
 
 [agent_types_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 cache_time_to_idle = "1m"
-connect_timeout = "30s"
-host = "localhost"
-port = 9092
-
-[agent_types_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
 
 [blob_storage]
 type = "LocalFileSystem"
@@ -42,23 +31,6 @@ max_capacity = 32
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
-
-[component_service]
-type = "Grpc"
-
-[component_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-connect_timeout = "30s"
-host = "localhost"
-max_component_size = 52428800
-port = 9090
-
-[component_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
 
 [engine]
 enable_fs_cache = false
@@ -118,42 +90,9 @@ max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
 
 [plugin_service]
-type = "Grpc"
-
-[plugin_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-connect_timeout = "10s"
-host = "localhost"
 plugin_cache_size = 1024
-port = 9090
-
-[plugin_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
-
-[project_service]
-type = "Grpc"
-
-[project_service.config]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-cache_time_to_idle = "12h"
-connect_timeout = "30s"
-host = "localhost"
-max_resolved_project_cache_capacity = 1024
-port = 9091
-
-[project_service.config.retries]
-max_attempts = 3
-max_delay = "1s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 3.0
 
 [public_worker_api]
-access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 connect_timeout = "10s"
 host = "localhost"
 port = 9007
@@ -174,21 +113,24 @@ max_connections = 20
 [rdbms.query]
 query_batch = 50
 
-[resource_limits]
-type = "Grpc"
-
-[resource_limits.config]
-access_token = "00000000-0000-0000-0000-000000000000"
-batch_update_interval = "1m"
+[registry_service]
+connect_timeout = "10s"
 host = "localhost"
+max_message_size = 52428800
 port = 8080
 
-[resource_limits.config.retries]
+[registry_service.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
+
+[resource_limits]
+type = "Grpc"
+
+[resource_limits.config]
+batch_update_interval = "1m"
 
 [retry]
 max_attempts = 3
@@ -281,18 +223,7 @@ without_time = false
 # type = "Grpc"
 # 
 # [agent_types_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # cache_time_to_idle = "1m"
-# connect_timeout = "30s"
-# host = "localhost"
-# port = 9092
-# 
-# [agent_types_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [blob_storage]
 # type = "S3"
@@ -326,23 +257,6 @@ without_time = false
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
-# 
-# [component_service]
-# type = "Grpc"
-# 
-# [component_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# connect_timeout = "30s"
-# host = "localhost"
-# max_component_size = 52428800
-# port = 9090
-# 
-# [component_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [engine]
 # enable_fs_cache = false
@@ -402,42 +316,9 @@ without_time = false
 # max_payload_size = 65536
 # 
 # [plugin_service]
-# type = "Grpc"
-# 
-# [plugin_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# connect_timeout = "10s"
-# host = "localhost"
 # plugin_cache_size = 1024
-# port = 9090
-# 
-# [plugin_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
-# [project_service]
-# type = "Grpc"
-# 
-# [project_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# cache_time_to_idle = "12h"
-# connect_timeout = "30s"
-# host = "localhost"
-# max_resolved_project_cache_capacity = 1024
-# port = 9091
-# 
-# [project_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [public_worker_api]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
@@ -458,21 +339,24 @@ without_time = false
 # [rdbms.query]
 # query_batch = 50
 # 
-# [resource_limits]
-# type = "Grpc"
-# 
-# [resource_limits.config]
-# access_token = "00000000-0000-0000-0000-000000000000"
-# batch_update_interval = "1m"
+# [registry_service]
+# connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 52428800
 # port = 8080
 # 
-# [resource_limits.config.retries]
+# [registry_service.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# batch_update_interval = "1m"
 # 
 # [retry]
 # max_attempts = 3
@@ -555,18 +439,7 @@ without_time = false
 # type = "Grpc"
 # 
 # [agent_types_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # cache_time_to_idle = "1m"
-# connect_timeout = "30s"
-# host = "localhost"
-# port = 9092
-# 
-# [agent_types_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [blob_storage]
 # type = "InMemory"
@@ -583,23 +456,6 @@ without_time = false
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
-# 
-# [component_service]
-# type = "Grpc"
-# 
-# [component_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# connect_timeout = "30s"
-# host = "localhost"
-# max_component_size = 52428800
-# port = 9090
-# 
-# [component_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [engine]
 # enable_fs_cache = false
@@ -646,42 +502,9 @@ without_time = false
 # max_payload_size = 65536
 # 
 # [plugin_service]
-# type = "Grpc"
-# 
-# [plugin_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# connect_timeout = "10s"
-# host = "localhost"
 # plugin_cache_size = 1024
-# port = 9090
-# 
-# [plugin_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
-# 
-# [project_service]
-# type = "Grpc"
-# 
-# [project_service.config]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
-# cache_time_to_idle = "12h"
-# connect_timeout = "30s"
-# host = "localhost"
-# max_resolved_project_cache_capacity = 1024
-# port = 9091
-# 
-# [project_service.config.retries]
-# max_attempts = 3
-# max_delay = "1s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 3.0
 # 
 # [public_worker_api]
-# access_token = "2a354594-7a63-4091-a46b-cc58d379f677"
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9007
@@ -702,21 +525,24 @@ without_time = false
 # [rdbms.query]
 # query_batch = 50
 # 
-# [resource_limits]
-# type = "Grpc"
-# 
-# [resource_limits.config]
-# access_token = "00000000-0000-0000-0000-000000000000"
-# batch_update_interval = "1m"
+# [registry_service]
+# connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 52428800
 # port = 8080
 # 
-# [resource_limits.config.retries]
+# [registry_service.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
+# 
+# [resource_limits]
+# type = "Grpc"
+# 
+# [resource_limits.config]
+# batch_update_interval = "1m"
 # 
 # [retry]
 # max_attempts = 3

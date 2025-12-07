@@ -25,6 +25,8 @@ use crate::workerctx::{
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use futures::future::Either;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::GolemRpcFutureInvokeResultGet;
 use golem_common::model::oplog::host_functions::{
@@ -41,9 +43,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcUnit,
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type;
@@ -153,7 +153,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .unwrap()
                 .create_await_interrupt_signal();
             let rpc = self.rpc();
-            let created_by = self.created_by().clone();
+            let created_by = *self.created_by();
             let worker_id = self.worker_id().clone();
 
             let either_result = futures::future::select(
@@ -357,7 +357,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let worker_id = self.worker_id().clone();
-        let created_by = self.created_by().clone();
+        let created_by = *self.created_by();
         let request = HostRequestGolemRpcInvoke {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
@@ -499,7 +499,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .invocation_context
                 .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
-                account_id: self.created_by().clone(),
+                account_id: *self.created_by(),
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
                 full_function_name: function_name,
@@ -1095,7 +1095,8 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
+    let remote_worker_id =
+        OwnedWorkerId::new(&ctx.owned_worker_id.environment_id, &remote_worker_id);
     let demand = ctx
         .rpc()
         .create_demand(

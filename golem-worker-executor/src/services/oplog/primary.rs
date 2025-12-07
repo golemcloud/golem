@@ -18,11 +18,13 @@ use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, O
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_lock::Mutex;
 use async_trait::async_trait;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PayloadId, PersistenceLevel, RawOplogPayload,
 };
 use golem_common::model::{
-    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -90,7 +92,7 @@ impl PrimaryOplogService {
             let worker_name = &key[redis_prefix.len()..];
             WorkerId {
                 worker_name: worker_name.to_string(),
-                component_id: component_id.clone(),
+                component_id: *component_id,
             }
         } else {
             panic!("Failed to get worker id from indexed storage key: {key}")
@@ -112,13 +114,14 @@ impl PrimaryOplogService {
                     "oplog",
                     "upload_payload",
                     BlobStorageNamespace::OplogPayload {
-                        project_id: owned_worker_id.project_id(),
+                        environment_id: owned_worker_id.environment_id(),
                         worker_id: owned_worker_id.worker_id(),
                     },
                     Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
-                    data,
+                    &data,
                 )
-                .await?;
+                .await
+                .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"))?;
 
             Ok(RawOplogPayload::External {
                 payload_id,
@@ -140,12 +143,13 @@ impl PrimaryOplogService {
                         "oplog",
                         "download_payload",
                         BlobStorageNamespace::OplogPayload {
-                            project_id: owned_worker_id.project_id(),
+                            environment_id: owned_worker_id.environment_id(),
                             worker_id: owned_worker_id.worker_id(),
                         },
                         Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
                     )
-                    .await?
+                    .await
+                    .map_err(|e| format!("Failed downloading oplog data from the blob store {e}"))?
                     .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
     }
 }
@@ -301,7 +305,7 @@ impl OplogService for PrimaryOplogService {
 
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -327,7 +331,7 @@ impl OplogService for PrimaryOplogService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: Self::get_worker_id_from_key(&key, component_id),
-                    project_id: project_id.clone(),
+                    environment_id: *environment_id,
                 })
                 .collect(),
         ))

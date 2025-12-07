@@ -17,9 +17,10 @@ use crate::model::WorkerConfig;
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
+use golem_common::model::component::ComponentId;
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
@@ -925,7 +926,9 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.to_string(),
-            store.data().component_metadata().owner.clone(),
+            store.data().component_metadata().environment_id,
+            store.data().component_metadata().application_id,
+            store.data().component_metadata().account_id,
         )
         .await?;
 
@@ -935,7 +938,7 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
             worker_name,
         };
         let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().project_id,
+            &store.data().owned_worker_id().environment_id,
             &remote_worker_id,
         );
         Ok(remote_worker_id)
@@ -986,7 +989,7 @@ fn resolve_worker_id<Ctx: WorkerCtx>(
     let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get an agent-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().project_id,
+        &store.data().owned_worker_id().environment_id,
         &remote_worker_id,
     );
     Ok(remote_worker_id)
@@ -997,7 +1000,7 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
     remote_worker_id: &OwnedWorkerId,
     span_id: &SpanId,
 ) -> anyhow::Result<Box<dyn RpcDemand>> {
-    let self_created_by = store.data().created_by().clone();
+    let self_created_by = *store.data().created_by();
     let self_worker_id = store.data().owned_worker_id().worker_id();
 
     let args = store.data_mut().get_arguments().await?;

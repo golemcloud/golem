@@ -1,6 +1,6 @@
 # golem-app-manifest-header
 
-templates:
+componentTemplates:
   ts:
     build:
     - command: npx tsc --noEmit false --emitDeclarationOnly --declaration --outFile ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts

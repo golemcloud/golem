@@ -21,7 +21,10 @@ path = "src/server.rs"
 harness = false
 test = false
 
-[features]
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -39,6 +42,7 @@ async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
@@ -96,6 +100,7 @@ zstd = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
 
 assert2 = { workspace = true }
 axum = { workspace = true }
@@ -108,8 +113,3 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
 system-interface = { workspace = true }
-
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-harness = false

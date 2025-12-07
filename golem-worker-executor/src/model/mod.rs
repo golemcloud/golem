@@ -15,13 +15,15 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{AccountId, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
+use golem_common::model::{OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -62,7 +64,7 @@ pub struct WorkerConfig {
     pub args: Vec<String>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub component_version_for_replay: u64,
+    pub component_version_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_wasi_config_vars: BTreeMap<String, String>,
 }
@@ -72,7 +74,7 @@ impl WorkerConfig {
         worker_args: Vec<String>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        component_version_for_replay: u64,
+        component_version_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
@@ -92,7 +94,7 @@ impl WorkerConfig {
                 && key != "GOLEM_AGENT_TYPE"
                 && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
-                && key != "GOLEM_COMPONENT_VERSION"
+                && key != "GOLEM_COMPONENT_REVISION"
         });
     }
 
@@ -100,17 +102,17 @@ impl WorkerConfig {
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
         agent_type: &Option<String>,
-        target_component_version: u64,
+        target_component_revision: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
         let component_id = &worker_id.component_id;
-        let component_version = target_component_version.to_string();
+        let component_revision = target_component_revision.to_string();
 
         Self::remove_dynamic_vars(worker_env);
         worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
         worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
+        worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
         if let Some(agent_type) = agent_type {
             worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.clone()));
         }
@@ -128,6 +130,9 @@ pub struct CurrentResourceLimits {
 
 impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
     fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
+        const _: () = {
+            assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
+        };
         Self {
             fuel: value.available_fuel,
             max_memory: value.max_memory_per_worker as usize,
@@ -672,7 +677,7 @@ impl Debug for InvocationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::ComponentId;
+    use golem_common::model::component::ComponentId;
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;

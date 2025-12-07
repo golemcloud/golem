@@ -17,7 +17,6 @@ use crate::model::text::fmt::{
     MessageWithFields, TextView,
 };
 use cli_table::Table;
-use golem_client::model::PluginInstallation;
 
 use crate::model::PluginDefinition;
 use itertools::Itertools;
@@ -101,6 +100,8 @@ impl MessageWithFields for PluginDefinition {
     }
 }
 
+// TODO: atomic
+/*
 impl MessageWithFields for PluginInstallation {
     fn message(&self) -> String {
         format!(
@@ -126,6 +127,7 @@ impl MessageWithFields for PluginInstallation {
         fields.build()
     }
 }
+*/
 
 // TODO: add component name to help with "multi-install"
 #[derive(Table)]

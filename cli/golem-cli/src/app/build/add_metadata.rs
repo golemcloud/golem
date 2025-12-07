@@ -25,10 +25,9 @@ pub async fn add_metadata_to_selected_components(
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
-        let linked_wasm = ctx.application.component_temp_linked_wasm(component_name);
-        let final_linked_wasm = ctx
-            .application
-            .component_linked_wasm(component_name, ctx.build_profile());
+        let component = ctx.application.component(component_name);
+        let temp_linked_wasm = component.temp_linked_wasm();
+        let final_linked_wasm = component.final_linked_wasm();
 
         let root_package_name = ctx.wit.root_package_name(component_name)?;
 
@@ -42,7 +41,7 @@ pub async fn add_metadata_to_selected_components(
 
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
-            || [&linked_wasm],
+            || [&temp_linked_wasm],
             || [&final_linked_wasm],
         ) {
             log_skipping_up_to_date(format!(
@@ -61,7 +60,7 @@ pub async fn add_metadata_to_selected_components(
                         component_name.as_str().log_color_highlight()
                     ),
                 );
-                add_metadata(&linked_wasm, root_package_name, &final_linked_wasm)
+                add_metadata(&temp_linked_wasm, root_package_name, &final_linked_wasm)
             }
             .await,
         )?;

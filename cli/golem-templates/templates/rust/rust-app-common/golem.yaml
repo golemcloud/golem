@@ -1,7 +1,17 @@
 # golem-app-manifest-header
 
+app: app-name
+
 includes:
 - common-*/golem.yaml
 - components-*/*/golem.yaml
 witDeps:
 - .wit/wit/deps
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
-use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::Tracing;
 use assert2::{check, let_assert};
 use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, RetryConfig};
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
+use golem_worker_executor_test_utils::{
+    start, start_customized, LastUniqueId, TestContext, WorkerExecutorTestDependencies,
+};
 use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -41,13 +42,9 @@ async fn http_client(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -68,21 +65,24 @@ async fn http_client(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-1", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
+        .start_worker_with(&component.id, "http-client-1", vec![], env, vec![])
+        .await?;
+    let rx = executor.capture_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await;
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     drop(rx);
@@ -90,10 +90,11 @@ async fn http_client(
 
     check!(
         result
-            == Ok(vec![Value::String(
+            == vec![Value::String(
                 "200 response is test-header test-body".to_string()
-            )])
+            )]
     );
+    Ok(())
 }
 
 #[test]
@@ -102,13 +103,10 @@ async fn http_client_using_reqwest(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
+
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -140,21 +138,24 @@ async fn http_client_using_reqwest(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-2").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-2")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "http-client-reqwest-1", vec![], env, vec![])
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .await??;
+
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -165,6 +166,7 @@ async fn http_client_using_reqwest(
             == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
                 .to_string()
     );
+    Ok(())
 }
 
 #[test]
@@ -173,13 +175,10 @@ async fn http_client_using_reqwest_async(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
+
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -211,27 +210,29 @@ async fn http_client_using_reqwest_async(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-3").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-3")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "http-client-reqwest-async-1",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .await??;
     let captured_body = captured_body.lock().unwrap().clone().unwrap();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -242,6 +243,8 @@ async fn http_client_using_reqwest_async(
             == "{\"name\":\"Something\",\"amount\":42,\"comments\":[\"Hello\",\"World\"]}"
                 .to_string()
     );
+
+    Ok(())
 }
 
 #[test]
@@ -250,13 +253,9 @@ async fn http_client_using_reqwest_async_parallel(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
@@ -288,19 +287,22 @@ async fn http_client_using_reqwest_async_parallel(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-3").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-3")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "http-client-reqwest-async-2",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -308,12 +310,11 @@ async fn http_client_using_reqwest_async_parallel(
             "golem:it/api.{run-parallel}",
             vec![32u16.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
     let mut captured_body = captured_body.lock().unwrap().clone();
     captured_body.sort();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -357,6 +358,8 @@ async fn http_client_using_reqwest_async_parallel(
                 r#"{"name":"Something","amount":9,"comments":["Hello","World"]}"#.to_string(),
             ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -365,13 +368,9 @@ async fn outgoing_http_contains_idempotency_key(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -398,27 +397,29 @@ async fn outgoing_http_contains_idempotency_key(
         .in_current_span(),
     );
 
-    let component_id = executor.component("http-client-2").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "http-client-2")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "outgoing-http-contains-idempotency-key",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let key = IdempotencyKey::new("177db03d-3234-4a04-8d03-e8d042348abd".to_string());
     let result = executor
         .invoke_and_await_with_key(&worker_id, &key, "golem:it/api.{run}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -429,6 +430,7 @@ async fn outgoing_http_contains_idempotency_key(
                     .to_string()
             )]
     );
+    Ok(())
 }
 
 #[test]
@@ -436,29 +438,32 @@ async fn http_response_request_chaining(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries()))
-        .await
-        .unwrap()
-        .into_admin()
-        .await;
+    let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries())).await?;
 
-    let component_id = executor.component("fetch").store().await;
+    let component = executor
+        .component(&context.default_environment_id, "fetch")
+        .store()
+        .await?;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "fetch-test-4", vec![], env, vec![])
-        .await;
-    let rx = executor.capture_output(&worker_id).await;
+        .start_worker_with(&component.id, "fetch-test-4", vec![], env, vec![])
+        .await?;
+    let rx = executor.capture_output(&worker_id).await?;
 
-    let result = executor.invoke_and_await(&worker_id, "test4", vec![]).await;
+    let result = executor
+        .invoke_and_await(&worker_id, "test4", vec![])
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     drop(rx);
 
     check!(result.is_ok());
+
+    Ok(())
 }

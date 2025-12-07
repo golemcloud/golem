@@ -38,8 +38,8 @@ pub mod bindings {
 
 use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::agent::wit_naming::ToWitNaming;
+use crate::model::component::ComponentId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
 use desert_rust::BinaryCodec;
@@ -49,6 +49,7 @@ use golem_wasm::{
     parse_value_and_type, print_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType,
 };
 use golem_wasm_derive::{FromValue, IntoValue};
+use poem_openapi::NewType;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -211,6 +212,14 @@ pub struct AgentMethod {
     pub input_schema: DataSchema,
     pub output_schema: DataSchema,
 }
+
+#[derive(
+    Debug, Clone, PartialEq, Deserialize, Serialize, NewType, BinaryCodec, IntoValue, FromValue,
+)]
+#[repr(transparent)]
+#[desert(transparent)]
+#[desert(evolution())]
+pub struct AgentTypeName(pub String);
 
 #[derive(
     Debug,

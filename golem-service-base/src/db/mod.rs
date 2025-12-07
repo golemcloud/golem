@@ -15,14 +15,17 @@
 use crate::repo::RepoError;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{future, TryFutureExt};
+use futures::future::BoxFuture;
+use futures::{TryFutureExt, future};
 use sqlx::query::{Query, QueryAs};
 use sqlx::{Database, Error, FromRow, IntoArguments, Row};
 use std::fmt::Debug;
+use tracing::{error, warn};
 
 pub mod postgres;
 pub mod sqlite;
 
+// TODO: better name, should not be in common?
 #[derive(sqlx::FromRow, Debug)]
 pub struct DBValue {
     value: Vec<u8>,
@@ -35,9 +38,8 @@ impl DBValue {
 }
 
 #[async_trait]
-pub trait Pool: Debug {
+pub trait Pool: Debug + Sync + Clone {
     type LabelledApi: LabelledPoolApi;
-    type LabelledTransaction;
     type QueryResult;
     type Db: Database + Sync;
     type Args<'a>;
@@ -47,10 +49,93 @@ pub trait Pool: Debug {
 
     /// Gets a pooled database interface for READ/WRITE operations
     fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi;
+
+    /// With_tx gets a pooled database interface for READ/WRITE operations, starts a transaction,
+    /// then executes f with the transaction as a parameter, which has to return a Result.
+    /// If f returns a RepoError or business error, then the transaction will be rolled back,
+    /// otherwise it will be committed. This means that f should not explicitly call commit or
+    /// rollback, this is ensured by only sharing a mut ref (given rollback and commit consumes the transaction).
+    ///
+    /// One reason to prefer using this function compared to direct usage of transactions is that
+    /// this style enforces calling labeled rollback on any error. In direct style, rollback is usually
+    /// only called on the sqlx::Transaction drop, unless explicitly handled by the code, which means
+    /// that those rollbacks are not visible for metrics.
+    async fn with_tx_err<R, E, F>(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        f: F,
+    ) -> Result<R, E>
+    where
+        R: Send,
+        E: Debug + Send + From<RepoError>,
+        F: for<'f> FnOnce(
+                &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, Result<R, E>>
+            + Send,
+    {
+        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
+        match f(&mut tx).await {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(err) => {
+                warn!(
+                    svc_name, api_name, error = ?err,
+                    "Rolling back, transaction failed with repo error",
+                );
+
+                // If rollback fails, we still return the original error, but log the rollback error
+                if let Err(rollback_error) = tx.rollback().await {
+                    error!(svc_name, api_name, rollback_error = %rollback_error, "Rollback failed");
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    /// A simplified version of with_tx_err for cases when there is no need for rollbacks based on
+    /// business logic and errors. See with_tx for more info.
+    async fn with_tx<R, F>(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        f: F,
+    ) -> Result<R, RepoError>
+    where
+        R: Send,
+        F: for<'f> FnOnce(
+                &'f mut <Self::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+            ) -> BoxFuture<'f, Result<R, RepoError>>
+            + Send,
+    {
+        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
+        match f(&mut tx).await {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(err) => {
+                warn!(
+                    svc_name, api_name, error = %err,
+                    "Rolling back, transaction failed with repo error",
+                );
+
+                // If rollback fails, we still return the original error, but log the rollback error
+                if let Err(err) = tx.rollback().await {
+                    error!(svc_name, api_name, error = %err, "Rollback failed");
+                }
+
+                Err(err)
+            }
+        }
+    }
 }
 
 #[async_trait]
-pub trait PoolApi {
+pub trait PoolApi: Send {
     type QueryResult;
     type Row: Row;
     type Db: Database;
@@ -107,7 +192,14 @@ pub trait PoolApi {
             .await
     }
 
-    async fn fetch_all<'a, O, A>(
+    async fn fetch_all<'a, A>(
+        &mut self,
+        query: Query<'a, Self::Db, A>,
+    ) -> Result<Vec<Self::Row>, RepoError>
+    where
+        A: 'a + IntoArguments<'a, Self::Db>;
+
+    async fn fetch_all_as<'a, O, A>(
         &mut self,
         query_as: QueryAs<'a, Self::Db, O, A>,
     ) -> Result<Vec<O>, RepoError>
@@ -121,10 +213,10 @@ pub trait LabelledPoolApi: PoolApi {
     type LabelledTransaction: LabelledPoolTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError>;
-
-    async fn commit(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError>;
-    async fn rollback(&self, tx: Self::LabelledTransaction) -> Result<(), RepoError>;
 }
 
 #[async_trait]
-pub trait LabelledPoolTransaction: PoolApi {}
+pub trait LabelledPoolTransaction: PoolApi {
+    async fn commit(self) -> Result<(), RepoError>;
+    async fn rollback(self) -> Result<(), RepoError>;
+}
