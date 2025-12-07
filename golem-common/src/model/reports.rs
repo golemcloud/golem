@@ -19,7 +19,7 @@ use chrono::Utc;
 use std::fmt::Debug;
 
 declare_structs! {
-    pub struct AccountSummary {
+    pub struct AccountSummaryReport {
         pub id: AccountId,
         pub name: String,
         pub email: String,
@@ -28,7 +28,7 @@ declare_structs! {
         pub created_at: DateTime<Utc>,
     }
 
-    pub struct AccountCounts {
+    pub struct AccountCountsReport {
         pub total_accounts: i64,
         pub total_active_accounts: i64,
         pub total_deleted_accounts: i64

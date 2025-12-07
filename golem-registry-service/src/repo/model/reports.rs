@@ -15,7 +15,7 @@
 use super::datetime::SqlDateTime;
 use crate::repo::model::audit::AuditFields;
 use golem_common::model::account::AccountId;
-use golem_common::model::reports::{AccountCounts, AccountSummary};
+use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
@@ -42,7 +42,7 @@ pub struct AccountSummaryRecord {
     pub workers_count: i64,
 }
 
-impl From<AccountSummaryRecord> for AccountSummary {
+impl From<AccountSummaryRecord> for AccountSummaryReport {
     fn from(value: AccountSummaryRecord) -> Self {
         Self {
             id: AccountId(value.account_id),
@@ -62,7 +62,7 @@ pub struct AccountCountsRecord {
     pub total_deleted_accounts: i64,
 }
 
-impl From<AccountCountsRecord> for AccountCounts {
+impl From<AccountCountsRecord> for AccountCountsReport {
     fn from(value: AccountCountsRecord) -> Self {
         Self {
             total_accounts: value.total_accounts,

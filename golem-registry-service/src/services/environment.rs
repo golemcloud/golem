@@ -22,7 +22,7 @@ use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
-    EnvironmentUpdate,
+    EnvironmentUpdate, EnvironmentWithDetails,
 };
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
@@ -30,6 +30,7 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
+use tap::Pipe;
 use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
@@ -334,5 +335,28 @@ impl EnvironmentService {
                 Err(EnvironmentError::ParentApplicationNotFound(*application_id))
             }
         }
+    }
+
+    pub async fn list_visible_environments(
+        &self,
+        auth: &AuthCtx,
+    ) -> Result<Vec<EnvironmentWithDetails>, EnvironmentError> {
+        // When we go for an admin ui / view, this should be extended with an optional, admin-only paramter that allows listing for a different account.
+        self.environment_repo
+            .list_visible_to_account(&auth.account_id().0)
+            .await?
+            .into_iter()
+            .map(EnvironmentWithDetails::from)
+            // Should not be necessary due to the repo already filtering, but check auth here to be on the safe side
+            .filter(|e| {
+                auth.authorize_environment_action(
+                    &e.account.id,
+                    &e.environment.roles_from_active_shares,
+                    EnvironmentAction::ViewEnvironment,
+                )
+                .is_ok()
+            })
+            .collect::<Vec<_>>()
+            .pipe(Ok)
     }
 }

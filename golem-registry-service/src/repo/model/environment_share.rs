@@ -21,6 +21,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentRevision};
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareId};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
+use std::collections::BTreeSet;
 use strum::IntoEnumIterator;
 use uuid::Uuid;
 
@@ -61,11 +62,15 @@ pub struct EnvironmentShareRevisionRecord {
 }
 
 impl EnvironmentShareRevisionRecord {
-    pub fn creation(id: EnvironmentShareId, roles: Vec<EnvironmentRole>, actor: AccountId) -> Self {
+    pub fn creation(
+        id: EnvironmentShareId,
+        roles: BTreeSet<EnvironmentRole>,
+        actor: AccountId,
+    ) -> Self {
         Self {
             environment_share_id: id.0,
             revision_id: EnvironmentRevision::INITIAL.into(),
-            roles: roles_to_bit_vector(&roles),
+            roles: roles_to_bit_vector(roles),
             audit: DeletableRevisionAuditFields::new(actor.0),
         }
     }
@@ -74,7 +79,7 @@ impl EnvironmentShareRevisionRecord {
         Self {
             environment_share_id: value.id.0,
             revision_id: value.revision.into(),
-            roles: roles_to_bit_vector(&value.roles),
+            roles: roles_to_bit_vector(value.roles),
             audit,
         }
     }
@@ -112,20 +117,20 @@ fn role_bit(role: &EnvironmentRole) -> i32 {
     }
 }
 
-fn roles_to_bit_vector(roles: &[EnvironmentRole]) -> i32 {
+fn roles_to_bit_vector(roles: impl IntoIterator<Item = EnvironmentRole>) -> i32 {
     let mut result: i32 = 0;
     for role in roles {
-        result |= role_bit(role)
+        result |= role_bit(&role)
     }
     result
 }
 
-pub fn environment_roles_from_bit_vector(value: i32) -> Vec<EnvironmentRole> {
-    let mut result: Vec<EnvironmentRole> = Vec::new();
+pub fn environment_roles_from_bit_vector(value: i32) -> BTreeSet<EnvironmentRole> {
+    let mut result = BTreeSet::new();
     for role in EnvironmentRole::iter() {
         let has_role = (value & role_bit(&role)) != 0;
         if has_role {
-            result.push(role);
+            result.insert(role);
         }
     }
     result

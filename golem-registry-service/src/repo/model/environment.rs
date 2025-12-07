@@ -14,21 +14,22 @@
 
 use super::datetime::SqlDateTime;
 use super::environment_share::environment_roles_from_bit_vector;
-use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
+use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
+use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
 use golem_common::model::environment::{
-    Environment, EnvironmentCreation, EnvironmentCurrentDeploymentView, EnvironmentId,
-    EnvironmentName, EnvironmentRevision,
+    AccountSummary, ApplicationSummary, Environment, EnvironmentCreation,
+    EnvironmentCurrentDeploymentView, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::RepoError;
-use sqlx::{FromRow, types::Json};
-use std::collections::{BTreeMap, HashSet};
+use sqlx::FromRow;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -145,9 +146,9 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             security_overrides: value.revision.security_overrides,
 
             owner_account_id: AccountId(value.owner_account_id),
-            roles_from_active_shares: HashSet::from_iter(environment_roles_from_bit_vector(
+            roles_from_active_shares: environment_roles_from_bit_vector(
                 value.environment_roles_from_shares,
-            )),
+            ),
 
             current_deployment: match (
                 value.current_deployment_revision,
@@ -167,11 +168,11 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
     }
 }
 
-// Special record for listing environments. Parent context is mandatory while the environment itself and all children are mandatory
+// Special record for listing environments. Parent context is mandatory while the environment itself and all children are optional
 // Simplify when https://github.com/launchbadge/sqlx/issues/2934 is fixed
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OptionalEnvironmentExtRevisionRecord {
-    pub application_id: Option<Uuid>,
+    pub application_id: Uuid,
     pub environment_id: Option<Uuid>,
     pub revision_id: Option<i64>,
     pub name: Option<String>,
@@ -196,14 +197,11 @@ impl OptionalEnvironmentExtRevisionRecord {
         AccountId(self.owner_account_id)
     }
 
-    pub fn environment_roles_from_shares(&self) -> HashSet<EnvironmentRole> {
-        HashSet::from_iter(environment_roles_from_bit_vector(
-            self.environment_roles_from_shares,
-        ))
+    pub fn environment_roles_from_shares(&self) -> BTreeSet<EnvironmentRole> {
+        environment_roles_from_bit_vector(self.environment_roles_from_shares)
     }
 
     pub fn into_revision_record(self) -> Option<EnvironmentExtRevisionRecord> {
-        let application_id = self.application_id?;
         let environment_id = self.environment_id?;
         let revision_id = self.revision_id?;
         let name = self.name?;
@@ -215,7 +213,7 @@ impl OptionalEnvironmentExtRevisionRecord {
         let version_check = self.version_check?;
         let security_overrides = self.security_overrides?;
         Some(EnvironmentExtRevisionRecord {
-            application_id,
+            application_id: self.application_id,
             revision: EnvironmentRevisionRecord {
                 environment_id,
                 revision_id,
@@ -241,75 +239,67 @@ impl OptionalEnvironmentExtRevisionRecord {
     }
 }
 
+// Special record for listing all environments visible to a particular account.
+// Includes necessary detials from higher up the hierarchy.
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentPluginInstallationRecord {
+pub struct EnvironmentWithDetailsRecord {
     pub environment_id: Uuid,
-    pub hash: SqlBlake3Hash,
-    #[sqlx(flatten)]
-    pub audit: AuditFields,
-    pub current_revision_id: i64,
+    pub environment_revision_id: i64,
+    pub environment_name: String,
+    pub environment_compatibility_check: bool,
+    pub environment_version_check: bool,
+    pub environment_security_overrides: bool,
+    pub environment_roles_from_shares: i32,
 
-    #[sqlx(skip)]
-    pub plugins: Vec<EnvironmentPluginInstallationRevisionRecord>,
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_revision: Option<i64>,
+    pub current_deployment_deployment_hash: Option<SqlBlake3Hash>,
+
+    pub application_id: Uuid,
+    pub application_name: String,
+
+    pub account_id: Uuid,
+    pub account_name: String,
+    pub account_email: String,
 }
 
-impl EnvironmentPluginInstallationRecord {
-    pub fn to_diffable(&self) -> diff::EnvironmentPluginInstallations {
-        diff::EnvironmentPluginInstallations {
-            plugins_by_priority: self
-                .plugins
-                .iter()
-                .map(|plugin| {
-                    (
-                        plugin.priority.to_string(),
-                        diff::PluginInstallation {
-                            plugin_id: plugin.plugin_id,
-                            parameters: plugin.parameters.0.clone(),
-                        },
-                    )
-                })
-                .collect(),
-        }
-    }
-
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
-    }
-
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
-    }
-}
-
-#[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentPluginInstallationRevisionRecord {
-    pub environment_id: Uuid, // NOTE: set by repo during insert
-    pub revision_id: i64,     // NOTE: set by repo during insert
-    pub priority: i32,
-    #[sqlx(flatten)]
-    pub audit: RevisionAuditFields,
-    pub plugin_id: Uuid,        // NOTE: required for insert
-    pub plugin_name: String,    // NOTE: returned by repo, not required to set
-    pub plugin_version: String, // NOTE: returned by repo, not required to set
-    pub parameters: Json<BTreeMap<String, String>>,
-}
-
-impl EnvironmentPluginInstallationRevisionRecord {
-    pub fn ensure_environment(
-        self,
-        environment_id: Uuid,
-        revision_id: i64,
-        created_by: Uuid,
-    ) -> Self {
-        Self {
-            environment_id,
-            revision_id,
-            audit: RevisionAuditFields {
-                created_by,
-                ..self.audit
+impl From<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
+    fn from(value: EnvironmentWithDetailsRecord) -> Self {
+        EnvironmentWithDetails {
+            environment: EnvironmentSummary {
+                id: EnvironmentId(value.environment_id),
+                revision: value.environment_revision_id.into(),
+                name: EnvironmentName(value.environment_name),
+                compatibility_check: value.environment_compatibility_check,
+                version_check: value.environment_version_check,
+                security_overrides: value.environment_security_overrides,
+                roles_from_active_shares: environment_roles_from_bit_vector(
+                    value.environment_roles_from_shares,
+                ),
+                current_deployment: match (
+                    value.current_deployment_revision,
+                    value.current_deployment_deployment_revision,
+                    value.current_deployment_deployment_hash,
+                ) {
+                    (Some(revision), Some(deployment_revision), Some(deployment_hash)) => {
+                        Some(EnvironmentCurrentDeploymentView {
+                            revision: revision.into(),
+                            deployment_revision: deployment_revision.into(),
+                            deployment_hash: deployment_hash.into_blake3_hash().into(),
+                        })
+                    }
+                    _ => None,
+                },
             },
-            ..self
+            application: ApplicationSummary {
+                id: ApplicationId(value.application_id),
+                name: ApplicationName(value.application_name),
+            },
+            account: AccountSummary {
+                id: AccountId(value.account_id),
+                name: value.account_name,
+                email: value.account_email,
+            },
         }
     }
 }

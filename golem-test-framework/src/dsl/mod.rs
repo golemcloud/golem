@@ -52,7 +52,7 @@ use golem_common::model::worker::{
 use golem_common::model::{IdempotencyKey, OplogIndex, ScanCursor, WorkerFilter, WorkerStatus};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::{Value, ValueAndType};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -589,8 +589,8 @@ pub trait TestDslExtended: TestDsl {
 
     async fn share_environment(
         &self,
-        grantee_account_id: &AccountId,
         environment_id: &EnvironmentId,
+        grantee_account_id: &AccountId,
         roles: &[EnvironmentRole],
     ) -> anyhow::Result<EnvironmentShare> {
         let client = self.registry_service_client().await;
@@ -600,7 +600,7 @@ pub trait TestDslExtended: TestDsl {
                 &environment_id.0,
                 &EnvironmentShareCreation {
                     grantee_account_id: *grantee_account_id,
-                    roles: roles.to_vec(),
+                    roles: BTreeSet::from_iter(roles.iter().copied()),
                 },
             )
             .await?;

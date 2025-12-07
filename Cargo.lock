@@ -4541,6 +4541,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "applying",
+ "assert2",
  "async-fs",
  "async-hash",
  "async-trait",

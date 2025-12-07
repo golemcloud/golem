@@ -292,7 +292,7 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
     let (_, env) = user_1.app_and_env().await?;
     let component = user_1.component(&env.id, "oplog-processor").store().await?;
     user_1
-        .share_environment(&user_2.account_id, &env.id, &[EnvironmentRole::Viewer])
+        .share_environment(&env.id, &user_2.account_id, &[EnvironmentRole::Viewer])
         .await?;
 
     let client = deps.registry_service().client(&user_2.token).await;

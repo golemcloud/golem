@@ -18,6 +18,7 @@ use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
+use std::collections::BTreeSet;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -31,18 +32,17 @@ async fn share_environment_with_other_user(deps: &EnvBasedTestDependencies) -> a
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
+    let share_creation = EnvironmentShareCreation {
+        grantee_account_id: user_2.account_id,
+        roles: BTreeSet::from([EnvironmentRole::Admin]),
+    };
+
     let share = client_1
-        .create_environment_share(
-            &env.id.0,
-            &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id,
-                roles: vec![EnvironmentRole::Admin],
-            },
-        )
+        .create_environment_share(&env.id.0, &share_creation)
         .await?;
 
     assert!(share.grantee_account_id == user_2.account_id);
-    assert!(share.roles == vec![EnvironmentRole::Admin]);
+    assert!(share.roles == share_creation.roles);
 
     {
         let fetched_share = client_1.get_environment_share(&share.id.0).await?;
@@ -68,14 +68,13 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
+    let share_creation = EnvironmentShareCreation {
+        grantee_account_id: user_2.account_id,
+        roles: BTreeSet::from([EnvironmentRole::Admin]),
+    };
+
     let share = client_1
-        .create_environment_share(
-            &env.id.0,
-            &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id,
-                roles: vec![EnvironmentRole::Admin],
-            },
-        )
+        .create_environment_share(&env.id.0, &share_creation)
         .await?;
 
     client_1
@@ -110,27 +109,25 @@ async fn update_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     let client_1 = deps.registry_service().client(&user_1.token).await;
 
+    let share_creation = EnvironmentShareCreation {
+        grantee_account_id: user_2.account_id,
+        roles: BTreeSet::from([EnvironmentRole::Admin]),
+    };
+
     let share = client_1
-        .create_environment_share(
-            &env.id.0,
-            &EnvironmentShareCreation {
-                grantee_account_id: user_2.account_id,
-                roles: vec![EnvironmentRole::Admin],
-            },
-        )
+        .create_environment_share(&env.id.0, &share_creation)
         .await?;
+
+    let share_update = EnvironmentShareUpdate {
+        current_revision: share.revision,
+        new_roles: BTreeSet::from([EnvironmentRole::Viewer]),
+    };
 
     let updated_share = client_1
-        .update_environment_share(
-            &share.id.0,
-            &EnvironmentShareUpdate {
-                current_revision: share.revision,
-                new_roles: vec![EnvironmentRole::Viewer],
-            },
-        )
+        .update_environment_share(&share.id.0, &share_update)
         .await?;
 
-    assert!(updated_share.roles == vec![EnvironmentRole::Viewer]);
+    assert!(updated_share.roles == share_update.new_roles);
 
     {
         let fetched_share = client_1.get_environment_share(&share.id.0).await?;

@@ -43,8 +43,8 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     let (_, shared_env) = user_2.app_and_env().await?;
     user_2
         .share_environment(
-            &user_1.account_id,
             &shared_env.id,
+            &user_1.account_id,
             &[EnvironmentRole::Admin],
         )
         .await?;
@@ -252,8 +252,8 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     let (_, shared_env) = user_2.app_and_env().await?;
     user_2
         .share_environment(
-            &user_1.account_id,
             &shared_env.id,
+            &user_1.account_id,
             &[EnvironmentRole::Admin],
         )
         .await?;

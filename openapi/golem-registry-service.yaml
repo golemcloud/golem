@@ -2846,6 +2846,65 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_application_environment
+  /v1/envs:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: List all environments that are visible to the current user, either directly or through shares.
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_EnvironmentWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_visible_environments
   /v1/envs/{environment_id}:
     get:
       tags:
@@ -5943,7 +6002,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_AccountSummary'
+                $ref: '#/components/schemas/Page_AccountSummaryReport'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6001,7 +6060,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/AccountCounts'
+                $ref: '#/components/schemas/AccountCountsReport'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6573,9 +6632,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccountRole'
-    AccountCounts:
+    AccountCountsReport:
       type: object
-      title: AccountCounts
+      title: AccountCountsReport
       required:
       - totalAccounts
       - totalActiveAccounts
@@ -6636,6 +6695,21 @@ components:
     AccountSummary:
       type: object
       title: AccountSummary
+      required:
+      - id
+      - name
+      - email
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+    AccountSummaryReport:
+      type: object
+      title: AccountSummaryReport
       required:
       - id
       - name
@@ -7185,6 +7259,18 @@ components:
       required:
       - name
       properties:
+        name:
+          type: string
+    ApplicationSummary:
+      type: object
+      title: ApplicationSummary
+      required:
+      - id
+      - name
+      properties:
+        id:
+          type: string
+          format: uuid
         name:
           type: string
     ApplicationUpdate:
@@ -7918,6 +8004,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
+    EnvironmentSummary:
+      type: object
+      title: EnvironmentSummary
+      required:
+      - id
+      - revision
+      - name
+      - compatibilityCheck
+      - versionCheck
+      - securityOverrides
+      - rolesFromActiveShares
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
+        rolesFromActiveShares:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+        currentDeployment:
+          $ref: '#/components/schemas/EnvironmentCurrentDeploymentView'
     EnvironmentUpdate:
       type: object
       title: EnvironmentUpdate
@@ -7929,6 +8047,44 @@ components:
           format: uint64
         newName:
           type: string
+    EnvironmentWithDetails:
+      type: object
+      title: EnvironmentWithDetails
+      description: |-
+        A cross-tenant, enriched view of an environment used specifically by the
+        `GET /environments` endpoint.
+
+        This type exists because a user may be able to see an environment (as the
+        owner or through an active share) **without having access to its parent
+        application or owning account**. In those cases, returning only the
+        `Environment` model would not provide enough context for UI navigation or
+        for users to understand *whose* environment they are interacting with.
+
+        `EnvironmentWithDetails` therefore bundles:
+        - a summarized `Environment` (fields intrinsic to the environment),
+        - minimal identifying information about the parent `Application`,
+        - minimal identifying information about the owning `Account`.
+
+        This structure is *only* used for environment discovery/listing.
+        All other environment endpoints (`GET /environments/:id`, updates, deletes)
+        continue to return the standard `Environment` model, since those requests
+        operate within the application/account they belong to.
+
+        In short:
+        **EnvironmentWithDetails = EnvironmentSummary + minimal parent context**,
+        enabling safe, cross-tenant environment visibility without exposing
+        full application/account resources.
+      required:
+      - environment
+      - application
+      - account
+      properties:
+        environment:
+          $ref: '#/components/schemas/EnvironmentSummary'
+        application:
+          $ref: '#/components/schemas/ApplicationSummary'
+        account:
+          $ref: '#/components/schemas/AccountSummary'
     ErrorBody:
       type: object
       title: ErrorBody
@@ -8352,16 +8508,16 @@ components:
         componentRevision:
           type: integer
           format: uint64
-    Page_AccountSummary:
+    Page_AccountSummaryReport:
       type: object
-      title: Page_AccountSummary
+      title: Page_AccountSummaryReport
       required:
       - values
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/AccountSummary'
+            $ref: '#/components/schemas/AccountSummaryReport'
     Page_Application:
       type: object
       title: Page_Application
@@ -8432,6 +8588,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentShare'
+    Page_EnvironmentWithDetails:
+      type: object
+      title: Page_EnvironmentWithDetails
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentWithDetails'
     Page_HttpApiDefinition:
       type: object
       title: Page_HttpApiDefinition

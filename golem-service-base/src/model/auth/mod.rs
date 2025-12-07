@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+mod tests;
+
 use axum::http::header;
 use golem_common::SafeDisplay;
 use golem_common::model::account::{AccountId, SYSTEM_ACCOUNT_ID};
@@ -22,7 +25,7 @@ use headers::HeaderMapExt;
 use poem::Request;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -248,7 +251,7 @@ impl SafeDisplay for AuthorizationError {
 #[derive(Debug, Clone)]
 pub struct AuthDetailsForEnvironment {
     pub account_id_owning_environment: AccountId,
-    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
+    pub environment_roles_from_shares: BTreeSet<EnvironmentRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -403,7 +406,7 @@ impl AuthCtx {
     pub fn authorize_environment_action(
         &self,
         account_owning_enviroment: &AccountId,
-        roles_from_shares: &HashSet<EnvironmentRole>,
+        roles_from_shares: &BTreeSet<EnvironmentRole>,
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
         // Environment owners, admins and system users are allowed to do everything with their environments
@@ -622,7 +625,7 @@ impl AuthCtx {
     }
 }
 
-fn has_any_role<T: Eq + Hash + Ord>(roles: &HashSet<T>, allowed: &[T]) -> bool {
+fn has_any_role<T: Eq + Hash + Ord>(roles: &BTreeSet<T>, allowed: &[T]) -> bool {
     allowed.iter().any(|r| roles.contains(r))
 }
 

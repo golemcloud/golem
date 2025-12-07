@@ -18,6 +18,7 @@ use golem_client::api::{
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
     RegistryServiceUpdateEnvironmentError,
 };
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
@@ -269,6 +270,147 @@ async fn cannot_create_two_environments_with_same_name(
             },
         )
         .await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_shows_owned_and_shared(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let grantee = deps.user().await?;
+    let client_owner = deps.registry_service().client(&owner.token).await;
+    let client_grantee = deps.registry_service().client(&grantee.token).await;
+
+    // Create two applications + environments for owner
+    let (app_1, env_1a) = owner.app_and_env().await?;
+    let env_1b = owner.env(&app_1.id).await?;
+    let (_, env_2a) = owner.app_and_env().await?;
+
+    // Share one environment with grantee
+    owner
+        .share_environment(&env_1b.id, &grantee.account_id, &[EnvironmentRole::Admin])
+        .await?;
+
+    // Owner sees all environments
+    let visible_owner = client_owner.list_visible_environments().await?;
+    let owner_env_ids: HashSet<_> = visible_owner
+        .values
+        .into_iter()
+        .map(|e| e.environment.id)
+        .collect();
+    assert!(owner_env_ids.contains(&env_1a.id));
+    assert!(owner_env_ids.contains(&env_1b.id));
+    assert!(owner_env_ids.contains(&env_2a.id));
+
+    // Grantee sees only shared environment
+    let visible_grantee = client_grantee.list_visible_environments().await?.values;
+    let grantee_env_ids: HashSet<_> = visible_grantee
+        .into_iter()
+        .map(|e| e.environment.id)
+        .collect();
+    assert!(!grantee_env_ids.contains(&env_1a.id));
+    assert!(grantee_env_ids.contains(&env_1b.id));
+    assert!(!grantee_env_ids.contains(&env_2a.id));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_excludes_deleted_entities(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let (app, env) = user.app_and_env().await?;
+
+    // Delete environment
+    client.delete_environment(&env.id.0, env.revision.0).await?;
+
+    // Deleted env should not appear
+    let visible = client.list_visible_environments().await?.values;
+    assert!(!visible.iter().any(|e| e.environment.id == env.id));
+
+    // Delete application
+    client.delete_application(&app.id.0, app.revision.0).await?;
+    let visible_after_app_delete = client.list_visible_environments().await?.values;
+    assert!(visible_after_app_delete.is_empty());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_visible_environments_multiple_accounts_isolated(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user_1 = deps.user().await?;
+    let user_2 = deps.user().await?;
+
+    let client_1 = deps.registry_service().client(&user_1.token).await;
+    let client_2 = deps.registry_service().client(&user_2.token).await;
+
+    let (_app1, env1) = user_1.app_and_env().await?;
+    let (_app2, env2) = user_2.app_and_env().await?;
+
+    // Each user sees only their own environments
+    let visible_1 = client_1.list_visible_environments().await?.values;
+    assert!(visible_1.iter().any(|e| e.environment.id == env1.id));
+    assert!(!visible_1.iter().any(|e| e.environment.id == env2.id));
+
+    let visible_2 = client_2.list_visible_environments().await?.values;
+    assert!(visible_2.iter().any(|e| e.environment.id == env2.id));
+    assert!(!visible_2.iter().any(|e| e.environment.id == env1.id));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn deleted_account_hides_shared_environments_from_grantee(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let grantee = deps.user().await?;
+
+    let owner_client = deps.registry_service().client(&owner.token).await;
+    let grantee_client = deps.registry_service().client(&grantee.token).await;
+
+    // Owner creates an application and an environment
+    let (_, env) = owner.app_and_env().await?;
+
+    // Owner shares the environment with the grantee
+    owner
+        .share_environment(&env.id, &grantee.account_id, &[EnvironmentRole::Admin])
+        .await?;
+
+    // Grantee can see the shared environment
+    let visible_before_delete = grantee_client.list_visible_environments().await?.values;
+    assert!(
+        visible_before_delete
+            .iter()
+            .any(|e| e.environment.id == env.id),
+        "Shared environment should be visible before deletion"
+    );
+
+    // Owner deletes their account
+    let owner_account_info = owner_client.get_account(&owner.account_id.0).await?;
+    owner_client
+        .delete_account(&owner_account_info.id.0, owner_account_info.revision.0)
+        .await?;
+
+    // Grantee should no longer see the environment
+    let visible_after_delete = grantee_client.list_visible_environments().await?.values;
+    assert!(
+        !visible_after_delete
+            .iter()
+            .any(|e| e.environment.id == env.id),
+        "Environment from deleted account should no longer be visible to grantee"
+    );
 
     Ok(())
 }

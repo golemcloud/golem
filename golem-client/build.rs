@@ -143,6 +143,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "EnvironmentUpdate",
                 "golem_common::model::environment::EnvironmentUpdate",
             ),
+            (
+                "EnvironmentWithDetails",
+                "golem_common::model::environment::EnvironmentWithDetails",
+            ),
             // environment_plugin_grant
             (
                 "EnvironmentPluginGrant",
@@ -199,12 +203,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // reports
             (
-                "AccountCounts",
-                "golem_common::model::reports::AccountCounts",
+                "AccountCountsReport",
+                "golem_common::model::reports::AccountCountsReport",
             ),
             (
-                "AccountSummary",
-                "golem_common::model::reports::AccountSummary",
+                "AccountSummaryReport",
+                "golem_common::model::reports::AccountSummaryReport",
             ),
             // security_scheme
             (
