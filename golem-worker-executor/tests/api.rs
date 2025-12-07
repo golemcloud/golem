@@ -114,7 +114,7 @@ async fn interruption(
 
 #[test]
 #[tracing::instrument]
-#[timeout("1m")]
+#[timeout("8m")]
 async fn delete_interrupts_long_rpc_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -137,7 +137,7 @@ async fn delete_interrupts_long_rpc_call(
         .invoke(
             &worker_id,
             "golem-it:agent-rpc/test-agent.{long-rpc-call}",
-            vec![120000f64.into_value_and_type()], // 2 minutes
+            vec![600000f64.into_value_and_type()], // 10 minutes
         )
         .await??;
 

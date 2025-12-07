@@ -128,11 +128,8 @@ pub fn update_status_with_new_entries(
         &new_entries,
     );
 
-    let pending_invocations = calculate_pending_invocations(
-        last_known.pending_invocations,
-        &deleted_regions,
-        &new_entries,
-    );
+    let pending_invocations =
+        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
     let (
         pending_updates,
         failed_updates,
@@ -421,15 +418,23 @@ fn calculate_skipped_regions(
 
 fn calculate_pending_invocations(
     initial: Vec<TimestampedWorkerInvocation>,
-    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedWorkerInvocation> {
     let mut result = initial;
-    for (idx, entry) in entries {
-        // Skipping entries in deleted regions (by revert) but not by skipped regions (by jumps and updates)
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
+    for entry in entries.values() {
+        // Here we are handling two categories of oplog entries:
+        // - "input" entries adding items to pending queues (PendingWorkerInvocation, PendingUpdate)
+        // - "output" entries removing items from pending queues when they got processed (ExportedFunctionInvoked, SuccessfulUpdate, FailedUpdate)
+        //
+        // Skipped regions does not matter for us - they are representing jumps and updates, and anything that happens in these regions
+        // is part of the history and we take it into accout (for example a new pending invocation comes in the previous iteration of a retried
+        // transaction, etc).
+        //
+        // Deleted regions are created by reverting some oplog entries; Even then, we still want to take both the input and output
+        // entries into account in deleted regions in the following way:
+        // - Incoming pending invocation or update that has not been processed yet is NOT affected by revert - they remain pending
+        // - If a pending invocation or update was attempted (no matter if succeeded or not) in the reverted region, we remove it from
+        //   the pending queue, so the revert will not make them retried.
 
         match entry {
             OplogEntry::PendingWorkerInvocation {
@@ -1403,8 +1408,6 @@ mod test {
                 status.total_linear_memory_size = old_status.total_linear_memory_size;
                 status.component_size = old_status.component_size;
                 status.owned_resources = old_status.owned_resources;
-                status.pending_invocations = old_status.pending_invocations;
-                status.pending_updates = old_status.pending_updates;
                 status.successful_updates = old_status.successful_updates;
                 status.failed_updates = old_status.failed_updates;
                 status.invocation_results = old_status.invocation_results;

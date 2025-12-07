@@ -1402,26 +1402,26 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         trap_type: &TrapType,
     ) -> RetryDecision {
-        {
-            let oplog_entry = match trap_type {
-                TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
-                TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
-                TrapType::Interrupt(InterruptKind::Jump) => None,
-                TrapType::Interrupt(InterruptKind::Restart) => None,
-                TrapType::Exit => Some(OplogEntry::exited()),
-                TrapType::Error {
-                    error: WorkerError::InvalidRequest(_),
-                    ..
-                } => None,
-                TrapType::Error { error, retry_from } => {
-                    Some(OplogEntry::error(error.clone(), *retry_from))
-                }
-            };
+        let current_idempotency_key = self.get_current_idempotency_key().await;
 
-            if let Some(entry) = oplog_entry {
-                self.public_state.worker().add_and_commit_oplog(entry).await;
-            };
-        }
+        let oplog_entry = match trap_type {
+            TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(OplogEntry::interrupted()),
+            TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
+            TrapType::Interrupt(InterruptKind::Jump) => None,
+            TrapType::Interrupt(InterruptKind::Restart) => None,
+            TrapType::Exit => Some(OplogEntry::exited()),
+            TrapType::Error {
+                error: WorkerError::InvalidRequest(_),
+                ..
+            } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
+            TrapType::Error { error, retry_from } => {
+                Some(OplogEntry::error(error.clone(), *retry_from))
+            }
+        };
+
+        if let Some(entry) = oplog_entry {
+            self.public_state.worker().add_and_commit_oplog(entry).await;
+        };
 
         // special case. We are jumping, so we will always have a detached status here.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
@@ -1855,8 +1855,8 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                    (agent_mode == AgentMode::Durable || // durable components are fully replayed
-                        (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
+                (agent_mode == AgentMode::Durable || // durable components are fully replayed
+                    (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
                 let oplog_entry = store

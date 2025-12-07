@@ -53,6 +53,7 @@ impl Guest for Component {
         )
     }
 
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
         with_agent_instance_async(|resolved_agent| async move {
@@ -77,6 +78,7 @@ impl Guest for Component {
 }
 
 impl LoadSnapshotGuest for Component {
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn load(bytes: Vec<u8>) -> Result<(), String> {
         let agent_id = get_resolved_agent();
@@ -124,6 +126,7 @@ impl LoadSnapshotGuest for Component {
 }
 
 impl SaveSnapshotGuest for Component {
+    // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     fn save() -> Vec<u8> {
         with_agent_instance_async(|resolved_agent| async move {

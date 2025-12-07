@@ -406,13 +406,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         if self.state.persistence_level != new_persistence_level {
             // commit all pending entries and change persistence level
             if self.state.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::change_persistence_level(new_persistence_level))
-                    .await;
                 self.public_state
                     .worker()
-                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .add_and_commit_oplog(OplogEntry::change_persistence_level(
+                        new_persistence_level,
+                    ))
                     .await;
             } else {
                 let oplog_index_before = self.state.current_oplog_index().await;

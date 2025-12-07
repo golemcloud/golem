@@ -23,7 +23,7 @@ use crate::worker::{
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
-use async_mutex::Mutex;
+use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
@@ -59,6 +59,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
+    pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     pub oom_retry_count: u32,
 }
 
@@ -95,6 +96,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     owned_worker_id: self.owned_worker_id.clone(),
                     parent: self.parent.clone(),
                     waiting_for_command: self.waiting_for_command.clone(),
+                    interrupt_signal: self.interrupt_signal.clone(),
                     instance: &instance,
                     store: &store,
                 };
@@ -236,6 +238,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
+    interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
 }
@@ -265,17 +268,34 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         while let Some(cmd) = self.receiver.recv().await {
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
-                WorkerCommand::Invocation => {
-                    let message = self.active.write().await.pop_front();
+                WorkerCommand::Unblock => {
+                    loop {
+                        if let Some(kind) = self.interrupt_signal.lock().await.take() {
+                            break self.interrupt(kind).await;
+                        }
 
-                    if let Some(message) = message {
-                        self.invocation(message).await
-                    } else {
-                        CommandOutcome::Continue
+                        let message = self.active.write().await.pop_front();
+
+                        let result = if let Some(message) = message {
+                            self.internal_invocation(message).await
+                        } else {
+                            // Queue is empty, use last_known_status for pending updates and invocations
+                            break self.drain_pending_from_status().await;
+                        };
+
+                        match result {
+                            CommandOutcome::Continue => {
+                                // Continue draining the queue
+                                continue;
+                            }
+                            other => {
+                                // Break out of the drain loop and handle the outcome
+                                break other;
+                            }
+                        }
                     }
                 }
                 WorkerCommand::ResumeReplay => self.resume_replay().await,
-                WorkerCommand::Interrupt(kind) => self.interrupt(kind).await,
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {
@@ -296,6 +316,60 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
+    }
+
+    /// When the main queue becomes empty, process items from last_known_status:
+    /// first pending_updates, then pending_invocations
+    async fn drain_pending_from_status(&mut self) -> CommandOutcome {
+        loop {
+            let status = self.parent.last_known_status.read().await.clone();
+
+            // First, try to process a pending update
+            if let Some(update) = status.pending_updates.front() {
+                let target_version = *update.description.target_version();
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                match invocation.manual_update(target_version).await {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            // Then, try to process a pending invocation
+            if let Some(timestamped_invocation) = status.pending_invocations.first() {
+                let idempotency_key = timestamped_invocation.invocation.idempotency_key();
+                let invocation_span = if let Some(idempotency_key) = idempotency_key {
+                    let spans = self.parent.external_invocation_spans.read().await;
+                    spans.get(idempotency_key).cloned()
+                } else {
+                    None
+                };
+
+                let invocation_span = invocation_span.unwrap_or(Span::current());
+
+                let mut store = self.store.lock().await;
+                let mut invocation = Invocation {
+                    owned_worker_id: self.owned_worker_id.clone(),
+                    parent: self.parent.clone(),
+                    instance: self.instance,
+                    store: store.deref_mut(),
+                };
+                match invocation
+                    .external_invocation(timestamped_invocation.clone(), &invocation_span)
+                    .await
+                {
+                    CommandOutcome::Continue => continue,
+                    other => break other,
+                }
+            }
+
+            break CommandOutcome::Continue;
+        }
     }
 
     /// Resumes an interrupted replay process
@@ -322,10 +396,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     /// Performs a queued invocation on the worker
     ///
-    /// The queued invocations are grouped into "external" invocations that are observable by the users
-    /// in the worker's invocation queue, oplog, etc., and some internal invocations that we use for
+    /// The queued invocations internal invocations that we use for
     /// concurrency control.
-    async fn invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
+    async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 
@@ -365,17 +438,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process a queued worker invocation
     async fn process(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
         match message {
-            QueuedWorkerInvocation::External {
-                invocation,
-                span,
-                canceled,
-            } => {
-                if !canceled {
-                    self.external_invocation(invocation, &span).await
-                } else {
-                    CommandOutcome::Continue
-                }
-            }
             QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
                 self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
