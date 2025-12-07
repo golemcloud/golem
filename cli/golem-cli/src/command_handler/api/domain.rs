@@ -16,7 +16,6 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
-use std::collections::{BTreeSet, HashSet};
 
 use crate::command::api::domain::ApiDomainSubcommand;
 use crate::error::NonSuccessfulExit;

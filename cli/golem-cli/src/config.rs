@@ -35,7 +35,7 @@ pub const CLOUD_URL: &str = "https://release.api.golem.cloud";
 pub const BUILTIN_LOCAL_URL: &str = "http://localhost:9881";
 const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
-pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
+pub const LOCAL_WELL_KNOWN_TOKEN: &str = "5c832d93-ff85-4a8f-9803-513950fdfdb1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -445,7 +445,7 @@ impl AuthenticationConfig {
         Self::OAuth2(OAuth2AuthenticationConfig { data: None })
     }
 
-    pub fn static_token(token: Uuid) -> Self {
+    pub fn static_token(token: String) -> Self {
         Self::Static(StaticAuthenticationConfig {
             secret: AuthSecret(token),
         })
@@ -453,7 +453,7 @@ impl AuthenticationConfig {
 
     pub fn static_builtin_local() -> Self {
         AuthenticationConfig::Static(StaticAuthenticationConfig {
-            secret: AuthSecret(LOCAL_WELL_KNOWN_TOKEN),
+            secret: AuthSecret(LOCAL_WELL_KNOWN_TOKEN.to_string()),
         })
     }
 
@@ -505,7 +505,7 @@ impl OAuth2AuthenticationData {
             account_id: token_with_secret.account_id.0,
             created_at: token_with_secret.created_at,
             expires_at: token_with_secret.expires_at,
-            secret: token_with_secret.secret.0.into(),
+            secret: token_with_secret.secret.secret().to_string().into(),
         }
     }
 }
@@ -558,12 +558,12 @@ pub struct AuthenticationConfigWithSource {
     pub source: AuthenticationSource,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
-pub struct AuthSecret(pub Uuid);
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AuthSecret(pub String);
 
-impl From<Uuid> for AuthSecret {
-    fn from(uuid: Uuid) -> Self {
-        Self(uuid)
+impl From<String> for AuthSecret {
+    fn from(value: String) -> Self {
+        Self(value)
     }
 }
 

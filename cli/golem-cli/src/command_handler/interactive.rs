@@ -43,7 +43,6 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
-use uuid::Uuid;
 
 // NOTE: in the interactive handler is it okay to _read_ context (e.g. read selected component names)
 //       but mutations of state or the app should be done in other handlers
@@ -732,7 +731,7 @@ impl FromStr for OptionalUrl {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct OptionalAuthSecret(Option<AuthSecret>);
 
 impl Display for OptionalAuthSecret {
@@ -751,7 +750,7 @@ impl FromStr for OptionalAuthSecret {
         if s.trim().is_empty() {
             Ok(Self(None))
         } else {
-            Ok(Self(Some(AuthSecret(Uuid::from_str(s)?))))
+            Ok(Self(Some(AuthSecret(s.to_string()))))
         }
     }
 }

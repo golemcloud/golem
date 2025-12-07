@@ -57,7 +57,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
 use url::Url;
-use uuid::Uuid;
 
 // Context is responsible for storing the CLI state,
 // but NOT responsible for producing CLI output (except for context selection logging), those should be part of the CommandHandler(s)
@@ -72,7 +71,7 @@ pub struct Context {
     manifest_environment: Option<SelectedManifestEnvironment>,
     app_context_config: Option<ApplicationContextConfig>,
     http_batch_size: u64,
-    auth_token_override: Option<Uuid>,
+    auth_token_override: Option<String>,
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
@@ -408,7 +407,7 @@ impl Context {
             .get_or_try_init(|| async {
                 let clients = GolemClients::new(
                     &self.client_config,
-                    self.auth_token_override,
+                    self.auth_token_override.clone(),
                     &self.auth_config(),
                     self.config_dir(),
                 )
@@ -436,7 +435,7 @@ impl Context {
     }
 
     pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
-        Ok(*self.golem_clients().await?.auth_token())
+        Ok(self.golem_clients().await?.auth_token().clone())
     }
 
     fn auth_config(&self) -> AuthenticationConfigWithSource {

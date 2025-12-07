@@ -22,7 +22,7 @@ use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
-use crate::error::service::{AnyhowMapServiceError, ServiceError};
+use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};

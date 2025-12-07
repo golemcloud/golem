@@ -42,7 +42,6 @@ use lenient_bool::LenientBool;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -181,7 +180,7 @@ pub struct GolemCliGlobalFlags {
     pub http_batch_size: Option<u64>,
 
     #[arg(skip)]
-    pub auth_token: Option<Uuid>,
+    pub auth_token: Option<String>,
 
     #[arg(skip)]
     pub server_no_limit_change: bool,
@@ -1486,7 +1485,6 @@ pub mod profile {
     use crate::model::format::Format;
     use clap::Subcommand;
     use url::Url;
-    use uuid::Uuid;
 
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
@@ -1509,7 +1507,7 @@ pub mod profile {
             default_format: Format,
             /// Token to use for authenticating against Golem. If not provided an OAuth2 flow will be performed when authentication is needed for the first time.
             #[arg(long)]
-            static_token: Option<Uuid>,
+            static_token: Option<String>,
             /// Accept invalid certificates.
             ///
             /// Disables certificate validation.
