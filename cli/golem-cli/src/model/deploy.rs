@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::shared_args::{DeployArgs, ForceBuildArg};
 use crate::model::worker::WorkerName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
@@ -38,4 +39,13 @@ pub struct WorkerUpdateAttempt {
     pub worker_name: WorkerName,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeployConfig {
+    pub plan: bool,
+    pub stage: bool,
+    pub approve_staging_steps: bool,
+    pub force_build: Option<ForceBuildArg>,
+    pub deploy_args: DeployArgs,
 }

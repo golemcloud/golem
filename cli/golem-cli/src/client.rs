@@ -27,7 +27,6 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use std::borrow::Cow;
 use std::path::Path;
-use uuid::Uuid;
 
 pub struct GolemClients {
     authentication: Authentication,
@@ -57,7 +56,7 @@ pub struct GolemClients {
 impl GolemClients {
     pub async fn new(
         config: &ClientConfig,
-        token_override: Option<Uuid>,
+        token_override: Option<String>,
         auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Self> {
@@ -78,7 +77,7 @@ impl GolemClients {
             .authenticate(token_override, auth_config, config_dir)
             .await?;
 
-        let security_token = Security::Bearer(authentication.0.secret.0.to_string());
+        let security_token = Security::Bearer(authentication.0.secret.secret().to_string());
 
         let registry_context = || ClientContext {
             client: service_http_client.clone(),

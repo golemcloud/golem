@@ -70,8 +70,6 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub components: IndexMap<String, Component>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub dependencies: IndexMap<String, Vec<Dependency>>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
@@ -374,6 +372,10 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<Dependency>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -30,7 +30,6 @@ use golem_common::model::login::OAuth2WebflowStateId;
 use indoc::printdoc;
 use std::path::Path;
 use tracing::info;
-use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Authentication(pub TokenWithSecret);
@@ -49,7 +48,7 @@ impl Authentication {
     pub fn from_oauth2_config(auth: OAuth2AuthenticationData) -> Self {
         Self(TokenWithSecret {
             id: auth.id.into(),
-            secret: auth.secret.0.into(),
+            secret: TokenSecret::trusted(auth.secret.0.clone()),
             account_id: auth.account_id.into(),
             created_at: auth.created_at,
             expires_at: auth.expires_at,
@@ -57,7 +56,7 @@ impl Authentication {
     }
 
     pub fn header(&self) -> String {
-        format!("bearer {}", self.0.secret)
+        format!("bearer {}", self.0.secret.secret())
     }
 
     pub fn account_id(&self) -> &AccountId {
@@ -76,13 +75,13 @@ impl Auth {
 
     pub async fn authenticate(
         &self,
-        token_override: Option<Uuid>,
+        token_override: Option<String>,
         auth_config: &AuthenticationConfigWithSource,
         config_dir: &Path,
     ) -> anyhow::Result<Authentication> {
         match token_override {
             Some(secret) => {
-                let secret: TokenSecret = secret.into();
+                let secret = TokenSecret::trusted(secret);
                 Ok(Authentication::from_token_and_secret(
                     self.token_details(&secret).await?,
                     secret,
@@ -90,7 +89,7 @@ impl Auth {
             }
             None => match &auth_config.authentication {
                 AuthenticationConfig::Static(inner) => {
-                    let secret: TokenSecret = inner.secret.0.into();
+                    let secret = TokenSecret::trusted(inner.secret.0.clone());
                     Ok(Authentication::from_token_and_secret(
                         self.token_details(&secret).await?,
                         secret,
@@ -160,7 +159,7 @@ impl Auth {
     async fn token_details(&self, token_secret: &TokenSecret) -> anyhow::Result<Token> {
         info!("Getting token info");
         let mut context = self.login_client.context.clone();
-        context.security_token = Security::Bearer(token_secret.to_string());
+        context.security_token = Security::Bearer(token_secret.secret().to_string());
 
         let client = LoginClientLive { context };
 

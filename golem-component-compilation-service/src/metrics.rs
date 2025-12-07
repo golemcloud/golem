@@ -35,7 +35,7 @@ pub fn decrement_queue_length() {
 
 lazy_static! {
     pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
-        "compilation_time_seconds",
+        "component_compilation_time_seconds",
         "Time to compile a WASM component to native code",
         DEFAULT_TIME_BUCKETS.to_vec()
     )

@@ -19,9 +19,9 @@ members = [
     "integration-tests",
     "golem-wasm",
     "golem-wasm-derive",
-    # "cli/golem",
-    # "cli/golem-cli",
-    # "cli/golem-templates",
+    "cli/golem",
+    "cli/golem-cli",
+    "cli/golem-templates",
 ]
 
 exclude = [

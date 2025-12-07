@@ -386,6 +386,77 @@ pub struct DependentComponent {
 }
 
 impl DependentComponent {
+    pub fn from_raw(
+        validation: &mut ValidationBuilder,
+        source: &Path,
+        dependency: app_raw::Dependency,
+    ) -> Option<Self> {
+        let (dep, _) = validation.with_context_returning(
+            vec![("source", source.to_string_lossy().to_string())],
+            |validation| {
+                let dep_type = DependencyType::from_str(&dependency.type_);
+                if let Ok(dep_type) = dep_type {
+                    let binary_component_source = match (dependency.target, dependency.path, dependency.url)
+                    {
+                        (Some(target_name), None, None) => Some(BinaryComponentSource::AppComponent {
+                            name: ComponentName(target_name),
+                        }),
+                        (None, Some(path), None) => Some(BinaryComponentSource::LocalFile {
+                            path: Path::new(&path).to_path_buf(),
+                        }),
+                        (None, None, Some(url)) => match Url::from_str(&url) {
+                            Ok(url) => Some(BinaryComponentSource::Url { url }),
+                            Err(_) => {
+                                validation.add_error(format!(
+                                    "Invalid URL for component dependency: {}",
+                                    url.log_color_highlight()
+                                ));
+                                None
+                            }
+                        },
+                        (None, None, None) => {
+                            validation.add_error(format!(
+                                "Missing one of the {}/{}/{} fields for component dependency",
+                                "target".log_color_error_highlight(),
+                                "path".log_color_error_highlight(),
+                                "url".log_color_error_highlight()
+                            ));
+                            None
+                        }
+                        _ => {
+                            validation.add_error(format!(
+                                "Only one of the {}/{}/{} fields can be specified for a component dependency",
+                                "target".log_color_error_highlight(),
+                                "path".log_color_error_highlight(),
+                                "url".log_color_error_highlight()
+                            ));
+                            None
+                        }
+                    };
+
+                    binary_component_source.map(|source| Self { source, dep_type })
+                } else {
+                    validation.add_error(format!(
+                        "Unknown component dependency type: {}",
+                        dependency.type_.log_color_error_highlight()
+                    ));
+                    None
+                }
+            });
+        dep
+    }
+
+    pub fn from_raw_vec(
+        validation: &mut ValidationBuilder,
+        source: &Path,
+        dependencies: Vec<app_raw::Dependency>,
+    ) -> BTreeSet<Self> {
+        dependencies
+            .into_iter()
+            .filter_map(|dependencies| Self::from_raw(validation, source, dependencies))
+            .collect()
+    }
+
     pub fn as_dependent_app_component(&self) -> Option<DependentAppComponent> {
         match &self.source {
             BinaryComponentSource::AppComponent { name } => Some(DependentAppComponent {
@@ -448,9 +519,6 @@ pub struct Application {
     wit_deps: WithSource<Vec<String>>,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
-    dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
-    dependency_sources: BTreeMap<ComponentName, BTreeMap<ComponentName, PathBuf>>,
-    no_dependencies: BTreeSet<DependentComponent>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<HttpApiDefinition>>,
@@ -521,10 +589,6 @@ impl Application {
             .collect()
     }
 
-    pub fn all_dependencies(&self) -> BTreeSet<DependentComponent> {
-        self.dependencies.values().flatten().cloned().collect()
-    }
-
     pub fn all_custom_commands(&self) -> BTreeSet<String> {
         let mut custom_commands = BTreeSet::new();
         custom_commands.extend(self.component_names().flat_map(|component_name| {
@@ -565,23 +629,13 @@ impl Application {
         &self,
         component_name: &ComponentName,
     ) -> &BTreeSet<DependentComponent> {
-        self.dependencies
+        &self
+            .components
             .get(component_name)
-            .unwrap_or(&self.no_dependencies)
-    }
-
-    pub fn dependency_source(
-        &self,
-        component_name: &ComponentName,
-        dependent_component_name: &ComponentName,
-    ) -> Option<&Path> {
-        self.dependency_sources
-            .get(component_name)
-            .and_then(|sources| {
-                sources
-                    .get(dependent_component_name)
-                    .map(|source| source.as_path())
-            })
+            .unwrap_or_else(|| panic!("Component not found: {component_name}"))
+            .value
+            .0
+            .dependencies
     }
 
     pub fn http_api_definitions(
@@ -1029,6 +1083,15 @@ impl Layer for ComponentLayer {
                     properties.env.value().clone(),
                 ),
             );
+
+            value.dependencies.apply_layer(
+                id,
+                selection,
+                (
+                    properties.dependencies_merge_mode.unwrap_or_default(),
+                    properties.dependencies.value().clone(),
+                ),
+            )
         }
 
         Ok(())
@@ -1223,6 +1286,9 @@ pub struct ComponentLayerProperties {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_merge_mode: Option<VecMergeMode>,
+    pub dependencies: VecProperty<ComponentLayer, app_raw::Dependency>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1244,6 +1310,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.plugins.unwrap_or_default().into(),
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
+            dependencies_merge_mode: value.dependencies_merge_mode,
+            dependencies: value.dependencies.unwrap_or_default().into(),
         }
     }
 }
@@ -1261,6 +1329,7 @@ impl ComponentLayerProperties {
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
+        self.dependencies.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -1298,10 +1367,11 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub component_type: AppComponentType, // TODO atomic: should be dropped?
+    pub component_type: AppComponentType,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
+    pub dependencies: BTreeSet<DependentComponent>,
 }
 
 impl ComponentProperties {
@@ -1314,6 +1384,11 @@ impl ComponentProperties {
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
+        let dependencies = DependentComponent::from_raw_vec(
+            validation,
+            source,
+            merged.dependencies.value().clone(),
+        );
 
         let properties = Self {
             source_wit: merged.source_wit.value().clone().unwrap_or_default(),
@@ -1332,6 +1407,7 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
+            dependencies,
         };
 
         for (name, value) in [
@@ -1409,7 +1485,7 @@ impl InitialComponentFile {
     ) -> Option<InitialComponentFile> {
         let source = InitialComponentFileSource::new(&file.source_path, source)
             .map_err(|err| {
-                validation.push_context("source path", file.source_path.to_string());
+                validation.push_context("source", file.source_path.to_string());
                 validation.add_error(err);
                 validation.pop_context();
             })
@@ -1549,8 +1625,8 @@ mod app_builder {
         Application, ApplicationNameAndEnvironments, BinaryComponentSource, ComponentLayer,
         ComponentLayerId, ComponentLayerProperties, ComponentLayerPropertiesKind,
         ComponentPresetName, ComponentPresetSelector, ComponentProperties, DependencyType,
-        DependentComponent, HttpApiDefinition, MultiSourceHttpApiDefinitionNames,
-        PartitionedComponentPresets, TemplateName, WithSource, DEFAULT_TEMP_DIR,
+        HttpApiDefinition, MultiSourceHttpApiDefinitionNames, PartitionedComponentPresets,
+        TemplateName, WithSource, DEFAULT_TEMP_DIR,
     };
     use crate::model::app_raw;
     use crate::model::cascade::store::Store;
@@ -1574,7 +1650,6 @@ mod app_builder {
     use std::fmt::Debug;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
-    use url::Url;
 
     // Load full manifest EXCEPT environments
     pub fn build_application(
@@ -1601,7 +1676,6 @@ mod app_builder {
         WitDeps,
         CustomCommand(String),
         Template(TemplateName),
-        Dependency((ComponentName, DependentComponent)),
         Component(ComponentName),
         HttpApiDefinition(HttpApiDefinitionName),
         HttpApiDefinitionRoute {
@@ -1627,7 +1701,6 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::WitDeps => property,
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
-                UniqueSourceCheckedEntityKey::Dependency(_) => "Dependency",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
                 UniqueSourceCheckedEntityKey::HttpApiDefinition(_) => "HTTP API Definition",
                 UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute { .. } => {
@@ -1655,14 +1728,6 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Template(template_name) => {
                     template_name.as_str().log_color_highlight().to_string()
-                }
-                UniqueSourceCheckedEntityKey::Dependency((component_name, dependent_component)) => {
-                    format!(
-                        "{} - {} - {}",
-                        component_name.as_str().log_color_highlight(),
-                        dependent_component.source.to_string().log_color_highlight(),
-                        dependent_component.dep_type.as_str().log_color_highlight(),
-                    )
                 }
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
@@ -1721,7 +1786,6 @@ mod app_builder {
 
         components:
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
-        dependencies: BTreeMap<ComponentName, BTreeSet<DependentComponent>>,
 
         raw_http_api_definitions:
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
@@ -1758,33 +1822,6 @@ mod app_builder {
             builder.validate_and_convert_http_api_definitions(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
 
-            let dependency_sources = {
-                let mut dependency_sources =
-                    BTreeMap::<ComponentName, BTreeMap<ComponentName, PathBuf>>::new();
-
-                for (key, mut sources) in builder.entity_sources {
-                    if let UniqueSourceCheckedEntityKey::Dependency((
-                        component,
-                        dependent_component,
-                    )) = key
-                    {
-                        if let Some(dependent_component) =
-                            dependent_component.as_dependent_app_component()
-                        {
-                            if !dependency_sources.contains_key(&component) {
-                                dependency_sources.insert(component.clone(), BTreeMap::new());
-                            }
-                            dependency_sources
-                                .get_mut(&component)
-                                .unwrap()
-                                .insert(dependent_component.name, sources.pop().unwrap());
-                        }
-                    }
-                }
-
-                dependency_sources
-            };
-
             let resolved_temp_dir = {
                 match builder.temp_dir.as_ref() {
                     Some(temp_dir) => temp_dir.source.join(&temp_dir.value),
@@ -1801,9 +1838,6 @@ mod app_builder {
                 resolved_temp_dir,
                 wit_deps: builder.wit_deps,
                 components: builder.components,
-                dependencies: builder.dependencies,
-                dependency_sources,
-                no_dependencies: BTreeSet::new(),
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
                 http_api_definitions: builder.http_api_definitions,
@@ -1931,15 +1965,6 @@ mod app_builder {
                                 .insert(component_name.clone(), app.source.clone());
                             self.add_component(validation, component_name, component);
                         }
-                    }
-
-                    for (component_name, component_dependencies) in app.application.dependencies {
-                        self.add_component_dependencies(
-                            validation,
-                            &app.source,
-                            component_name,
-                            component_dependencies,
-                        );
                     }
 
                     for (command_name, command) in app.application.custom_commands {
@@ -2249,87 +2274,6 @@ mod app_builder {
             );
         }
 
-        fn add_component_dependencies(
-            &mut self,
-            validation: &mut ValidationBuilder,
-            source: &Path,
-            component_name: String,
-            component_dependencies: Vec<app_raw::Dependency>,
-        ) {
-            validation.with_context(vec![("component", component_name.clone())], |validation| {
-                for dependency in component_dependencies {
-                    let dep_type = DependencyType::from_str(&dependency.type_);
-                    if let Ok(dep_type) = dep_type {
-                        let binary_component_source = match (dependency.target, dependency.path, dependency.url) {
-                            (Some(target_name), None, None) => {
-                                Some(BinaryComponentSource::AppComponent {
-                                    name: ComponentName(target_name),
-                                })
-                            }
-                            (None, Some(path), None) => {
-                                Some(BinaryComponentSource::LocalFile { path: Path::new(&path).to_path_buf() })
-                            }
-                            (None, None, Some(url)) => {
-                                match Url::from_str(&url) {
-                                    Ok(url) => {
-                                        Some(BinaryComponentSource::Url { url })
-                                    }
-                                    Err(_) => {
-                                        validation.add_error(format!(
-                                            "Invalid URL for component dependency: {}",
-                                            url.log_color_highlight()
-                                        ));
-                                        None
-                                    }
-                                }
-                            }
-                            (None, None, None) => {
-                                validation.add_error(format!(
-                                    "Missing one of the {}/{}/{} fields for component dependency",
-                                    "target".log_color_error_highlight(),
-                                    "path".log_color_error_highlight(),
-                                    "url".log_color_error_highlight()
-                                ));
-                                None
-                            }
-                            _ => {
-                                validation.add_error(format!(
-                                    "Only one of the {}/{}/{} fields can be specified for a component dependency",
-                                    "target".log_color_error_highlight(),
-                                    "path".log_color_error_highlight(),
-                                    "url".log_color_error_highlight()
-                                ));
-                                None
-                            }
-                        };
-
-                        if let Some(binary_component_source) = binary_component_source {
-                            let dependent_component = DependentComponent {
-                                source: binary_component_source,
-                                dep_type,
-                            };
-
-                            let unique_key = UniqueSourceCheckedEntityKey::Dependency((
-                                ComponentName(component_name.clone()),
-                                dependent_component.clone(),
-                            ));
-                            if self.add_entity_source(unique_key, source) {
-                                self.dependencies
-                                    .entry(ComponentName(component_name.clone()))
-                                    .or_default()
-                                    .insert(dependent_component);
-                            }
-                        }
-                    } else {
-                        validation.add_error(format!(
-                            "Unknown component dependency type: {}",
-                            dependency.type_.log_color_error_highlight()
-                        ));
-                    }
-                }
-            });
-        }
-
         fn validate_unique_sources(&mut self, validation: &mut ValidationBuilder) {
             let entity_sources = std::mem::take(&mut self.entity_sources);
             entity_sources
@@ -2349,9 +2293,10 @@ mod app_builder {
         }
 
         fn validate_dependency_targets(&mut self, validation: &mut ValidationBuilder) {
-            for (component, deps) in &self.dependencies {
-                for target in deps {
-                    let invalid_source = !self.component_names_to_source.contains_key(component);
+            for (component_name, component) in &self.components {
+                for target in &component.value.0.dependencies {
+                    let invalid_source =
+                        !self.component_names_to_source.contains_key(component_name);
                     let invalid_target = match &target.source {
                         BinaryComponentSource::AppComponent { name } => {
                             !self.component_names_to_source.contains_key(name)
@@ -2381,34 +2326,24 @@ mod app_builder {
                     };
 
                     if invalid_source || invalid_target || invalid_target_source {
-                        let source = self
-                            .entity_sources
-                            .get(&UniqueSourceCheckedEntityKey::Dependency((
-                                component.clone(),
-                                target.clone(),
-                            )))
-                            .expect("Missing sources for dependency")
-                            .first()
-                            .expect("Missing source for dependency");
-
                         validation.with_context(
-                            vec![("source", source.to_string_lossy().to_string())],
+                            vec![("source", component.source.to_string_lossy().to_string())],
                             |validation| {
                                 if invalid_source {
                                     validation.add_error(format!(
                                         "{} {} - {} references unknown component: {}\n\n{}",
                                         target.dep_type.describe(),
-                                        component.as_str().log_color_highlight(),
+                                        component_name.as_str().log_color_highlight(),
                                         target.source.to_string().log_color_highlight(),
-                                        component.as_str().log_color_error_highlight(),
-                                        self.available_components(component.as_str())
+                                        component_name.as_str().log_color_error_highlight(),
+                                        self.available_components(component_name.as_str())
                                     ))
                                 }
                                 if invalid_target {
                                     validation.add_error(format!(
                                         "{} {} - {} references unknown target component: {}\n\n{}",
                                         target.dep_type.describe(),
-                                        component.as_str().log_color_highlight(),
+                                        component_name.as_str().log_color_highlight(),
                                         target.source.to_string().log_color_highlight(),
                                         target.source.to_string().log_color_error_highlight(),
                                         self.available_components(&target.source.to_string())
@@ -2418,7 +2353,7 @@ mod app_builder {
                                     validation.add_error(format!(
                                         "{} {} - {}: this dependency type only supports local component targets\n",
                                         target.dep_type.describe(),
-                                        component.as_str().log_color_highlight(),
+                                        component_name.as_str().log_color_highlight(),
                                         target.source.to_string().log_color_highlight(),
                                     ))
                                 }
@@ -2678,7 +2613,7 @@ mod app_builder {
                                             )
                                         }
                                         _ => {
-                                         // NOP
+                                            // NOP
                                         }
                                     }
                                 },

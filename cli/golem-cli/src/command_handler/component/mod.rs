@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::app::context::{to_anyhow, ApplicationContext};
-use crate::app::yaml_edit::AppYamlEditor;
+
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
@@ -31,7 +31,7 @@ use crate::model::component::{
     ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
     SelectedComponents,
 };
-use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
@@ -489,12 +489,14 @@ impl ComponentCommandHandler {
 
     async fn cmd_add_dependency(
         &self,
-        component_name: Option<ComponentName>,
-        target_component_name: Option<ComponentName>,
-        target_component_path: Option<PathBuf>,
-        target_component_url: Option<Url>,
-        dependency_type: Option<DependencyType>,
+        _component_name: Option<ComponentName>,
+        _target_component_name: Option<ComponentName>,
+        _target_component_path: Option<PathBuf>,
+        _target_component_url: Option<Url>,
+        _dependency_type: Option<DependencyType>,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         self.ctx.silence_app_context_init().await;
 
         let Some((component_name, target_component_source, dependency_type)) = self
@@ -535,43 +537,9 @@ impl ComponentCommandHandler {
             log_action("Updated", "component dependency");
         }
 
-        Ok(())
+        Ok(())*/
+        todo!()
     }
-
-    // TODO: atomic
-    /*
-    async fn components_for_update_or_redeploy(
-        &self,
-        component_name: Option<ComponentName>,
-    ) -> anyhow::Result<Vec<Component>> {
-        let selected_component_names = self
-            .opt_select_components_by_app_dir_or_name(component_name.as_ref())
-            .await?;
-
-        let mut components = Vec::with_capacity(selected_component_names.component_names.len());
-        for component_name in &selected_component_names.component_names {
-            match self
-                .component(
-                    selected_component_names.environment.as_ref(),
-                    component_name.into(),
-                    None,
-                )
-                .await?
-            {
-                Some(component) => {
-                    components.push(component);
-                }
-                None => {
-                    log_warn(format!(
-                        "Component {} is not deployed!",
-                        component_name.0.log_color_highlight()
-                    ));
-                }
-            }
-        }
-        Ok(components)
-    }
-    */
 
     pub async fn update_workers_by_components(
         &self,
@@ -883,13 +851,13 @@ impl ComponentCommandHandler {
                     );
                     self.ctx
                         .app_handler()
-                        .deploy(
-                            false,
-                            false,
-                            false,
-                            ForceBuildArg { force_build: false },
-                            deploy_args.cloned().unwrap_or_else(DeployArgs::none),
-                        )
+                        .deploy(DeployConfig {
+                            plan: false,
+                            stage: false,
+                            approve_staging_steps: false,
+                            force_build: None,
+                            deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                        })
                         .await?;
                     self.ctx
                         .component_handler()

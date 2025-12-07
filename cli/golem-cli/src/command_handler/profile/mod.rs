@@ -29,7 +29,6 @@ use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use url::Url;
-use uuid::Uuid;
 
 pub struct ProfileCommandHandler {
     ctx: Arc<Context>,
@@ -83,7 +82,7 @@ impl ProfileCommandHandler {
         worker_url: Option<Url>,
         default_format: Format,
         allow_insecure: bool,
-        static_token: Option<Uuid>,
+        static_token: Option<String>,
     ) -> anyhow::Result<()> {
         let (name, profile, set_active) = match name {
             Some(name) => {

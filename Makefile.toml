@@ -485,6 +485,7 @@ dependencies = [
     "cli-integration-tests-group1",
     "cli-integration-tests-group2",
     "cli-integration-tests-group3",
+    "cli-integration-tests-group4",
 ]
 
 [tasks.cli-integration-tests-group1]

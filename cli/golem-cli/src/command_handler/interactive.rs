@@ -27,6 +27,7 @@ use colored::Colorize;
 use golem_client::model::{Account, HttpApiDefinitionCreation};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_templates::model::{GuestLanguage, PackageName};
 use indoc::formatdoc;
@@ -42,7 +43,6 @@ use std::sync::Arc;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use url::Url;
-use uuid::Uuid;
 
 // NOTE: in the interactive handler is it okay to _read_ context (e.g. read selected component names)
 //       but mutations of state or the app should be done in other handlers
@@ -94,6 +94,17 @@ impl InteractiveHandler {
                 environment_name.0.log_color_highlight(),
                 server_formatted.log_color_highlight(),
             },
+            None,
+        )
+    }
+
+    pub fn confirm_register_missing_domain<'a>(&self, domain: &Domain) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "The following domain is missing for deploying: {}.\nDo you want to register it for the application?",
+                domain.0.log_color_highlight()
+            ),
             None,
         )
     }
@@ -720,7 +731,7 @@ impl FromStr for OptionalUrl {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct OptionalAuthSecret(Option<AuthSecret>);
 
 impl Display for OptionalAuthSecret {
@@ -739,7 +750,7 @@ impl FromStr for OptionalAuthSecret {
         if s.trim().is_empty() {
             Ok(Self(None))
         } else {
-            Ok(Self(Some(AuthSecret(Uuid::from_str(s)?))))
+            Ok(Self(Some(AuthSecret(s.to_string()))))
         }
     }
 }

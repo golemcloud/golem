@@ -39,7 +39,7 @@ impl MessageWithFields for TokenNewView {
             .fmt_field("Account ID", &self.0.account_id, format_id)
             .field("Created at", &self.0.created_at)
             .field("Expires at", &self.0.expires_at)
-            .fmt_field("Secret (SAVE THIS)", &self.0.secret.0, |s| {
+            .fmt_field("Secret (SAVE THIS)", &self.0.secret.secret(), |s| {
                 s.to_string().bold().red().to_string()
             });
 

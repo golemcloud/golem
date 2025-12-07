@@ -187,12 +187,12 @@ async fn basic_dependencies_build(_tracing: &Tracing) {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:rust:
-              - target: app:rust
-                type: wasm-rpc
-              - target: app:rust-other
-                type: wasm-rpc
+            #
+                dependencies:
+                - target: app:rust
+                  type: wasm-rpc
+                - target: app:rust-other
+                  type: wasm-rpc
         "},
     )
     .unwrap();
@@ -204,12 +204,12 @@ async fn basic_dependencies_build(_tracing: &Tracing) {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:rust-other:
-              - target: app:rust
-                type: wasm-rpc
-              - target: app:rust-other
-                type: wasm-rpc
+            #
+                dependencies:
+                - target: app:rust
+                  type: wasm-rpc
+                - target: app:rust-other
+                  type: wasm-rpc
         "},
     )
     .unwrap();
@@ -247,8 +247,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         indoc! {"
             components:
               app:rust:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     files:
                     - sourcePath: Cargo.toml
@@ -264,11 +264,16 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Creating component app:rust"));
-    check!(outputs.stdout_contains("ro /Cargo.toml"));
-    check!(outputs.stdout_contains("rw /src/lib.rs"));
+    check!(outputs.stdout_contains_ordered([
+        "+      /Cargo.toml:",
+        "+        permissions: read-only",
+        "+      /src/lib.rs:",
+        "+        permissions: read-write",
+        "Planning",
+        "- create component app:rust",
+    ]));
 
     fs::write_str(
         ctx.cwd_path_join(
@@ -279,8 +284,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
         indoc! {"
             components:
               app:rust:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     files:
                     - sourcePath: Cargo.toml
@@ -294,17 +299,30 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
-    check!(outputs.stdout_contains("Updating component app:rust"));
-    check!(!outputs.stdout_contains("ro /Cargo.toml"));
-    check!(outputs.stdout_contains("ro /Cargo2.toml"));
-    check!(!outputs.stdout_contains("rw /src/lib.rs"));
-    check!(outputs.stdout_contains("ro /src/lib.rs"));
+    check!(outputs.stdout_contains_ordered([
+        "     filesByPath:",
+        "-      /Cargo.toml:",
+        "+      /Cargo2.toml:",
+        "         permissions: read-only",
+        "       /src/lib.rs:",
+        "-        permissions: read-write",
+        "+        permissions: read-only",
+        "Planning",
+        "- update component app:rust, changes:",
+        "  - files",
+        "    - delete file /Cargo.toml",
+        "    - create file /Cargo2.toml",
+        "    - update file /src/lib.rs, changes:",
+        "      - permissions",
+    ]));
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
-    assert2::assert!(outputs.stdout_contains("Skipping deploying component app:rust"));
+    assert2::assert!(
+        outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE")
+    );
 }
 
 #[test]
@@ -325,9 +343,11 @@ async fn custom_app_subcommand_with_builtin_name() {
     fs::append_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+
             customCommands:
               new:
                 - command: cargo tree
+
         "},
     )
     .unwrap();
@@ -370,8 +390,8 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
         indoc! {"
             components:
               app:lib:
-                template: rust
-                profiles:
+                templates: rust
+                presets:
                   debug:
                     componentType: library
                   release:
@@ -388,8 +408,8 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:main:
+            #
+                dependencies:
                 - type: wasm
                   target: app:lib
         "},
@@ -451,7 +471,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
 
     let outputs = ctx
@@ -472,6 +492,8 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     Ok(())
 }
 
+// TODO: atomic: drop or implement with modifying the manifest file directly
+#[ignore]
 #[test]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();

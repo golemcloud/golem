@@ -64,7 +64,7 @@ impl WorkerConnection {
     ) -> anyhow::Result<WorkerConnection> {
         let (request, connector) = Self::create_request(
             worker_service_url,
-            auth_token.to_string(),
+            auth_token.secret().to_string(),
             component_id.0,
             worker_name,
             allow_insecure,
