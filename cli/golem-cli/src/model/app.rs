@@ -1083,6 +1083,15 @@ impl Layer for ComponentLayer {
                     properties.env.value().clone(),
                 ),
             );
+
+            value.dependencies.apply_layer(
+                id,
+                selection,
+                (
+                    properties.dependencies_merge_mode.unwrap_or_default(),
+                    properties.dependencies.value().clone(),
+                ),
+            )
         }
 
         Ok(())
@@ -1278,7 +1287,7 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependencies_merge_mode: Option<MapMergeMode>,
+    pub dependencies_merge_mode: Option<VecMergeMode>,
     pub dependencies: VecProperty<ComponentLayer, app_raw::Dependency>,
 }
 

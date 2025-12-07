@@ -15,7 +15,7 @@
 use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;
@@ -177,25 +177,39 @@ impl ApiDeploymentCommandHandler {
         domain: &Domain,
         deployable_http_api_deployment: &[HttpApiDefinitionName],
     ) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+
         log_action(
             "Creating",
             format!("HTTP API deployment {}", domain.0.log_color_highlight()),
         );
         let _indent = LogIndent::new();
 
-        self.ctx
-            .golem_clients()
-            .await?
-            .api_deployment
-            .create_http_api_deployment(
-                &environment.environment_id.0,
-                &HttpApiDeploymentCreation {
-                    domain: domain.clone(),
-                    api_definitions: deployable_http_api_deployment.to_vec(),
-                },
-            )
-            .await
-            .map_service_error()?;
+        let create = async || {
+            clients
+                .api_deployment
+                .create_http_api_deployment(
+                    &environment.environment_id.0,
+                    &HttpApiDeploymentCreation {
+                        domain: domain.clone(),
+                        api_definitions: deployable_http_api_deployment.to_vec(),
+                    },
+                )
+                .await
+                .map_err(ServiceError::from)
+        };
+
+        let _ = match create().await {
+            Ok(result) => Ok(result),
+            Err(err) if err.is_domain_is_not_registered() => {
+                self.ctx
+                    .api_domain_handler()
+                    .register_missing_domain(&environment.environment_id, domain)
+                    .await?;
+                create().await
+            }
+            Err(err) => Err(err),
+        }?;
 
         Ok(())
     }

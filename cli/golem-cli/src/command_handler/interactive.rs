@@ -27,6 +27,7 @@ use colored::Colorize;
 use golem_client::model::{Account, HttpApiDefinitionCreation};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_templates::model::{GuestLanguage, PackageName};
 use indoc::formatdoc;
@@ -94,6 +95,17 @@ impl InteractiveHandler {
                 environment_name.0.log_color_highlight(),
                 server_formatted.log_color_highlight(),
             },
+            None,
+        )
+    }
+
+    pub fn confirm_register_missing_domain<'a>(&self, domain: &Domain) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "The following domain is missing for deploying: {}.\nDo you want to register it for the application?",
+                domain.0.log_color_highlight()
+            ),
             None,
         )
     }

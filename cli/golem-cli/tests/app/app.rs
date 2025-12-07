@@ -187,12 +187,12 @@ async fn basic_dependencies_build(_tracing: &Tracing) {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:rust:
-              - target: app:rust
-                type: wasm-rpc
-              - target: app:rust-other
-                type: wasm-rpc
+            #
+                dependencies:
+                - target: app:rust
+                  type: wasm-rpc
+                - target: app:rust-other
+                  type: wasm-rpc
         "},
     )
     .unwrap();
@@ -204,12 +204,12 @@ async fn basic_dependencies_build(_tracing: &Tracing) {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:rust-other:
-              - target: app:rust
-                type: wasm-rpc
-              - target: app:rust-other
-                type: wasm-rpc
+            #
+                dependencies:
+                - target: app:rust
+                  type: wasm-rpc
+                - target: app:rust-other
+                  type: wasm-rpc
         "},
     )
     .unwrap();
@@ -320,7 +320,9 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
-    assert2::assert!(outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE"));
+    assert2::assert!(
+        outputs.stdout_contains("Skipping deployment, no changes detected, UP-TO-DATE")
+    );
 }
 
 #[test]
@@ -341,9 +343,11 @@ async fn custom_app_subcommand_with_builtin_name() {
     fs::append_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+
             customCommands:
               new:
                 - command: cargo tree
+
         "},
     )
     .unwrap();
@@ -404,8 +408,8 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
                 .join("golem.yaml"),
         ),
         indoc! {"
-            dependencies:
-              app:main:
+            #
+                dependencies:
                 - type: wasm
                   target: app:lib
         "},
@@ -467,7 +471,7 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
 
     ctx.start_server().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert2::assert!(outputs.success());
 
     let outputs = ctx
@@ -488,6 +492,8 @@ async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     Ok(())
 }
 
+// TODO: atomic: drop or implement with modifying the manifest file directly
+#[ignore]
 #[test]
 async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();

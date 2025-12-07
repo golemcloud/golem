@@ -74,8 +74,8 @@ pub mod service {
 
     #[derive(Debug)]
     pub struct ServiceErrorResponse {
-        status_code: u16,
-        message: String,
+        pub status_code: u16,
+        pub message: String,
     }
 
     pub trait HasServiceName {
@@ -84,8 +84,21 @@ pub mod service {
 
     #[derive(Debug)]
     pub struct ServiceError {
-        service_name: &'static str,
-        kind: ServiceErrorKind,
+        pub service_name: &'static str,
+        pub kind: ServiceErrorKind,
+    }
+
+    impl ServiceError {
+        pub fn is_domain_is_not_registered(&self) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.status_code == 409
+                        && err.message.starts_with("Domain")
+                        && err.message.ends_with("is not registered")
+                }
+                _ => false,
+            }
+        }
     }
 
     #[derive(Debug)]

@@ -16,7 +16,7 @@ use crate::app::context::{to_anyhow, ApplicationContext};
 
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
@@ -31,7 +31,7 @@ use crate::model::component::{
     ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
     SelectedComponents,
 };
-use crate::model::deploy::TryUpdateAllWorkersResult;
+use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
@@ -851,13 +851,13 @@ impl ComponentCommandHandler {
                     );
                     self.ctx
                         .app_handler()
-                        .deploy(
-                            false,
-                            false,
-                            false,
-                            ForceBuildArg { force_build: false },
-                            deploy_args.cloned().unwrap_or_else(DeployArgs::none),
-                        )
+                        .deploy(DeployConfig {
+                            plan: false,
+                            stage: false,
+                            approve_staging_steps: false,
+                            force_build: None,
+                            deploy_args: deploy_args.cloned().unwrap_or_else(DeployArgs::none),
+                        })
                         .await?;
                     self.ctx
                         .component_handler()

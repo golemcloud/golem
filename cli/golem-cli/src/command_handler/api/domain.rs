@@ -16,13 +16,17 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDomainListView};
+use std::collections::{BTreeSet, HashSet};
 
 use crate::command::api::domain::ApiDomainSubcommand;
+use crate::error::NonSuccessfulExit;
 use crate::log::log_warn_action;
 use crate::model::environment::EnvironmentResolveMode;
+use anyhow::bail;
 use golem_client::api::ApiDomainClient;
-use golem_client::model::DomainRegistrationCreation;
+use golem_client::model::{DomainRegistration, DomainRegistrationCreation};
 use golem_common::model::domain_registration::Domain;
+use golem_common::model::environment::EnvironmentId;
 use std::sync::Arc;
 
 pub struct ApiDomainCommandHandler {
@@ -49,15 +53,7 @@ impl ApiDomainCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        let domains = self
-            .ctx
-            .golem_clients()
-            .await?
-            .api_domain
-            .list_environment_domain_registrations(&environment.environment_id.0)
-            .await
-            .map_service_error()?
-            .values;
+        let domains = self.list_domains(&environment.environment_id).await?;
 
         self.ctx
             .log_handler()
@@ -106,5 +102,57 @@ impl ApiDomainCommandHandler {
         log_warn_action("Deleted", "domain");
 
         Ok(())
+    }
+
+    pub async fn register_missing_domain(
+        &self,
+        environment_id: &EnvironmentId,
+        domain: &Domain,
+    ) -> anyhow::Result<()> {
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_register_missing_domain(&domain)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        let _ = self.register(environment_id, domain).await;
+
+        Ok(())
+    }
+
+    async fn register(
+        &self,
+        environment_id: &EnvironmentId,
+        domain: &Domain,
+    ) -> anyhow::Result<DomainRegistration> {
+        self.ctx
+            .golem_clients()
+            .await?
+            .api_domain
+            .create_domain_registration(
+                &environment_id.0,
+                &DomainRegistrationCreation {
+                    domain: domain.clone(),
+                },
+            )
+            .await
+            .map_service_error()
+    }
+
+    async fn list_domains(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> anyhow::Result<Vec<DomainRegistration>> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .api_domain
+            .list_environment_domain_registrations(&environment_id.0)
+            .await
+            .map_service_error()?
+            .values)
     }
 }

@@ -22,7 +22,7 @@ use crate::command_handler::app::deploy_diff::{DeployDiff, DeployQuickDiff};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
-use crate::error::service::AnyhowMapServiceError;
+use crate::error::service::{AnyhowMapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -30,6 +30,7 @@ use crate::log::{
     log_action, log_skipping_up_to_date, logln, LogColorize, LogIndent, LogOutput, Output,
 };
 use crate::model::app::{ApplicationComponentSelectMode, CleanMode, DynamicHelpSections};
+use crate::model::deploy::DeployConfig;
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::diff::log_unified_diff;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
@@ -333,8 +334,14 @@ impl AppCommandHandler {
         } else if let Some(revision) = revision {
             self.deploy_by_revision(revision, deploy_args).await
         } else {
-            self.deploy(plan, stage, approve_staging_steps, force_build, deploy_args)
-                .await
+            self.deploy(DeployConfig {
+                plan,
+                stage,
+                approve_staging_steps,
+                force_build: Some(force_build),
+                deploy_args,
+            })
+            .await
         }
     }
 
@@ -472,14 +479,7 @@ impl AppCommandHandler {
         todo!()
     }
 
-    pub async fn deploy(
-        &self,
-        plan: bool,
-        stage: bool,
-        approve_staging_steps: bool,
-        force_build: ForceBuildArg,
-        deploy_args: DeployArgs,
-    ) -> anyhow::Result<()> {
+    pub async fn deploy(&self, config: DeployConfig) -> anyhow::Result<()> {
         let environment = self
             .ctx
             .environment_handler()
@@ -488,7 +488,7 @@ impl AppCommandHandler {
 
         self.build(
             vec![],
-            Some(BuildArgs {
+            config.force_build.as_ref().map(|force_build| BuildArgs {
                 step: vec![],
                 force_build: force_build.clone(),
             }),
@@ -497,7 +497,7 @@ impl AppCommandHandler {
         .await?;
 
         let Some(deploy_diff) = self.prepare_deployment(environment).await? else {
-            if plan {
+            if config.plan {
                 log_skipping_up_to_date("planning, no changes detected");
             } else {
                 log_skipping_up_to_date("deployment, no changes detected");
@@ -506,7 +506,7 @@ impl AppCommandHandler {
             return Ok(());
         };
 
-        if plan {
+        if config.plan {
             return Ok(());
         }
 
@@ -522,16 +522,16 @@ impl AppCommandHandler {
             return Ok(());
         }
 
-        self.apply_changes_to_stage(approve_staging_steps, &deploy_diff)
+        self.apply_changes_to_stage(config.approve_staging_steps, &deploy_diff)
             .await?;
-        if stage {
+        if config.stage {
             return Ok(());
         }
 
         self.apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
-        if deploy_args.is_any_set() {
+        if config.deploy_args.is_any_set() {
             let env_deploy_args = self.ctx.deploy_args();
 
             let components = self
@@ -543,17 +543,17 @@ impl AppCommandHandler {
                 .await?
                 .values;
 
-            if let Some(update_mode) = &deploy_args.update_agents {
+            if let Some(update_mode) = &config.deploy_args.update_agents {
                 self.ctx
                     .component_handler()
                     .update_workers_by_components(&components, *update_mode, true)
                     .await?;
-            } else if deploy_args.redeploy_agents(env_deploy_args) {
+            } else if config.deploy_args.redeploy_agents(env_deploy_args) {
                 self.ctx
                     .component_handler()
                     .redeploy_workers_by_components(&components)
                     .await?;
-            } else if deploy_args.delete_agents(env_deploy_args) {
+            } else if config.deploy_args.delete_agents(env_deploy_args) {
                 self.ctx
                     .component_handler()
                     .delete_workers(&components)
