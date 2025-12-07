@@ -35,9 +35,9 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, PluginServiceConfig,
-    ResourceLimitsConfig, ResourceLimitsGrpcConfig, ShardManagerServiceConfig,
-    ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
+    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, ResourceLimitsConfig,
+    ResourceLimitsGrpcConfig, ShardManagerServiceConfig, ShardManagerServiceGrpcConfig,
+    WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::{RouteResolverConfig, WorkerServiceConfig};
 use golem_worker_service::WorkerService;
@@ -282,9 +282,6 @@ fn worker_executor_config(
             port: shard_manager_run_details.grpc_port,
             ..ShardManagerServiceGrpcConfig::default()
         }),
-        plugin_service: PluginServiceConfig {
-            ..Default::default()
-        },
         registry_service: golem_service_base::clients::RegistryServiceConfig {
             host: args.router_addr.clone(),
             port: registry_service_run_details.grpc_port,

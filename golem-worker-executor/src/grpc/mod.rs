@@ -24,7 +24,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
@@ -1249,7 +1249,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(cursor) => get_public_oplog_chunk(
                 self.component_service(),
                 self.oplog_service(),
-                self.plugins(),
                 &owned_worker_id,
                 ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1269,7 +1268,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 get_public_oplog_chunk(
                     self.component_service(),
                     self.oplog_service(),
-                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1323,7 +1321,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(cursor) => search_public_oplog(
                 self.component_service(),
                 self.oplog_service(),
-                self.plugins(),
                 &owned_worker_id,
                 ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1343,7 +1340,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 search_public_oplog(
                     self.component_service(),
                     self.oplog_service(),
-                    self.plugins(),
                     &owned_worker_id,
                     initial_component_version,
                     start,

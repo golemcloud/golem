@@ -15,11 +15,9 @@
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
-pub mod plugins;
 
 use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
-use crate::plugins::PluginsUnavailable;
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -88,7 +86,6 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
-use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -687,7 +684,6 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -722,7 +718,6 @@ impl WorkerCtx for TestWorkerCtx {
             worker_config,
             execution_status,
             file_loader,
-            plugins,
             worker_fork,
             agent_types_service,
             shard_service,
@@ -1007,14 +1002,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_plugins(
-        &self,
-        _golem_config: &GolemConfig,
-        _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService> {
-        Arc::new(PluginsUnavailable)
-    }
-
     fn create_component_service(
         &self,
         _golem_config: &GolemConfig,
@@ -1052,7 +1039,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -1090,7 +1076,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -1123,7 +1108,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -1154,7 +1138,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
             extra_deps.clone(),

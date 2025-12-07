@@ -44,7 +44,6 @@ pub struct GolemConfig {
     pub retry: RetryConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
-    pub plugin_service: PluginServiceConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
@@ -109,12 +108,6 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.shard_manager_service.to_safe_string_indented()
-        );
-        let _ = writeln!(&mut result, "plugin service:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.plugin_service.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "oplog:");
         let _ = writeln!(&mut result, "{}", self.oplog.to_safe_string_indented());
@@ -230,19 +223,6 @@ impl SafeDisplay for Limits {
             self.max_oplog_query_pages_size
         );
 
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginServiceConfig {
-    pub plugin_cache_size: usize,
-}
-
-impl SafeDisplay for PluginServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "plugin cache size: {}", self.plugin_cache_size);
         result
     }
 }
@@ -815,7 +795,6 @@ impl Default for GolemConfig {
             retry: RetryConfig::max_attempts_3(),
             compiled_component_service: CompiledComponentServiceConfig::default(),
             shard_manager_service: ShardManagerServiceConfig::default(),
-            plugin_service: PluginServiceConfig::default(),
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -882,14 +861,6 @@ impl Default for Limits {
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
-        }
-    }
-}
-
-impl Default for PluginServiceConfig {
-    fn default() -> Self {
-        Self {
-            plugin_cache_size: 1024,
         }
     }
 }

@@ -557,28 +557,6 @@ CREATE UNIQUE INDEX plugins_name_version_uk ON plugins (account_id, name, versio
 
 CREATE INDEX plugins_component_idx ON plugins (component_id, component_revision_id);
 
-CREATE TABLE component_plugin_installations
-(
-    component_id UUID      NOT NULL,
-    revision_id  BIGINT    NOT NULL,
-    priority     INT       NOT NULL,
-
-    created_at   TIMESTAMP NOT NULL,
-    created_by   UUID      NOT NULL,
-
-    plugin_id    UUID      NOT NULL,
-    parameters   JSONB     NOT NULL,
-
-    CONSTRAINT component_plugin_installations_pk
-        PRIMARY KEY (component_id, revision_id, priority),
-    CONSTRAINT component_plugin_installations_components_fk
-        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
-    CONSTRAINT component_plugin_installations_plugins_fk
-        FOREIGN KEY (plugin_id) REFERENCES plugins
-);
-
-CREATE INDEX component_plugin_installations_plugin_idx ON component_plugin_installations (plugin_id);
-
 CREATE TABLE environment_shares
 (
     environment_share_id UUID      NOT NULL,
@@ -653,6 +631,26 @@ CREATE UNIQUE INDEX environment_plugin_grants_environment_plugin_uk
 
 CREATE INDEX environment_plugin_grants_environment_id_idx ON environment_plugin_grants (environment_id);
 CREATE INDEX environment_plugin_grants_plugin_id_idx ON environment_plugin_grants (plugin_id);
+
+CREATE TABLE component_plugin_installations
+(
+    component_id UUID      NOT NULL,
+    revision_id  BIGINT    NOT NULL,
+    priority     INT       NOT NULL,
+
+    created_at   TIMESTAMP NOT NULL,
+    created_by   UUID      NOT NULL,
+
+    environment_plugin_grant_id UUID NOT NULL,
+    parameters   JSONB     NOT NULL,
+
+    CONSTRAINT component_plugin_installations_pk
+        PRIMARY KEY (component_id, revision_id, priority),
+    CONSTRAINT component_plugin_installations_components_fk
+        FOREIGN KEY (component_id, revision_id) REFERENCES component_revisions,
+    CONSTRAINT component_plugin_installations_environment_plugin_grant_id_fk
+        FOREIGN KEY (environment_plugin_grant_id) REFERENCES environment_plugin_grants
+);
 
 CREATE TABLE domain_registrations
 (

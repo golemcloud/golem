@@ -14,6 +14,7 @@
 
 use super::model::environment_plugin_grant::{
     EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
+    EnvironmentPluginGrantWithDetailsRecord,
 };
 use crate::repo::model::BindFields;
 use crate::repo::model::datetime::SqlDateTime;
@@ -38,17 +39,18 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
         &self,
         environment_plugin_grant_id: &Uuid,
         actor: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError>;
+    ) -> Result<(), EnvironmentPluginGrantRepoError>;
 
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError>;
+        include_deleted: bool,
+    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 
     async fn list_by_environment(
         &self,
         environment_id: &Uuid,
-    ) -> Result<Vec<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError>;
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 }
 
 pub struct LoggedEnvironmentPluginGrantRepo<Repo: EnvironmentPluginGrantRepo> {
@@ -87,7 +89,7 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
         &self,
         environment_plugin_grant_id: &Uuid,
         actor: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+    ) -> Result<(), EnvironmentPluginGrantRepoError> {
         let span = Self::span_id(environment_plugin_grant_id);
         self.repo
             .delete(environment_plugin_grant_id, actor)
@@ -98,10 +100,12 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+        include_deleted: bool,
+    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    {
         let span = Self::span_id(environment_plugin_grant_id);
         self.repo
-            .get_by_id(environment_plugin_grant_id)
+            .get_by_id(environment_plugin_grant_id, include_deleted)
             .instrument(span)
             .await
     }
@@ -109,7 +113,7 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
     async fn list_by_environment(
         &self,
         environment_id: &Uuid,
-    ) -> Result<Vec<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
         let span = Self::span_environment(environment_id);
         self.repo
             .list_by_environment(environment_id)
@@ -179,22 +183,18 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
         &self,
         environment_plugin_grant_id: &Uuid,
         actor: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+    ) -> Result<(), EnvironmentPluginGrantRepoError> {
         let deleted_at = SqlDateTime::now();
 
-        let result = self
-            .with_ro("get_by_id")
-            .fetch_optional_as(
-                sqlx::query_as(indoc! {r#"
+        self.with_rw("delete")
+            .execute(
+                sqlx::query(indoc! {r#"
                     UPDATE environment_plugin_grants
                     SET
                         deleted_at = $2, deleted_by = $3
                     WHERE
                         environment_plugin_grant_id = $1
                         AND deleted_at IS NULL
-                    RETURNING
-                        environment_plugin_grant_id, environment_id, plugin_id,
-                        created_at, created_by, deleted_at, deleted_by
                 "#})
                 .bind(environment_plugin_grant_id)
                 .bind(deleted_at)
@@ -202,26 +202,69 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
             )
             .await?;
 
-        Ok(result)
+        Ok(())
     }
 
     async fn get_by_id(
         &self,
         environment_plugin_grant_id: &Uuid,
-    ) -> Result<Option<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+        include_deleted: bool,
+    ) -> Result<Option<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>
+    {
         let result = self
             .with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        environment_plugin_grant_id, environment_id, plugin_id,
-                        created_at, created_by, deleted_at, deleted_by
-                    FROM environment_plugin_grants
-                    WHERE
-                        environment_plugin_grant_id = $1
-                        AND deleted_at IS NULL
+                        epg.environment_plugin_grant_id,
+                        epg.environment_id,
+                        epg.created_at,
+                        epg.created_by,
+                        epg.deleted_at,
+                        epg.deleted_by,
+
+                        p.plugin_id,
+                        p.account_id AS plugin_account_id,
+                        p.name AS plugin_name,
+                        p.version AS plugin_version,
+                        p.description AS plugin_description,
+                        p.icon AS plugin_icon,
+                        p.homepage AS plugin_homepage,
+                        p.plugin_type AS plugin_plugin_type,
+
+                        p.provided_wit_package AS plugin_provided_wit_package,
+                        p.json_schema AS plugin_json_schema,
+                        p.validate_url AS plugin_validate_url,
+                        p.transform_url AS plugin_transform_url,
+
+                        p.component_id AS plugin_component_id,
+                        p.component_revision_id AS plugin_component_revision_id,
+
+                        p.wasm_content_hash AS plugin_wasm_content_hash,
+
+                        p.created_at AS plugin_created_at,
+                        p.created_by AS plugin_created_by,
+                        p.deleted_at AS plugin_deleted_at,
+                        p.deleted_by AS plugin_deleted_by
+
+                        FROM environment_plugin_grants epg
+                        INNER JOIN plugins p
+                            ON p.plugin_id = epg.plugin_id
+                        INNER JOIN accounts pa
+                            ON pa.account_id = p.account_id
+                        WHERE
+                            epg.environment_plugin_grant_id = $1
+                            AND (
+                                $2
+                                OR (
+                                    epg.deleted_at IS NULL
+                                    AND p.deleted_at IS NULL
+                                    AND pa.deleted_at IS NULL
+                                )
+                            )
                 "#})
-                .bind(environment_plugin_grant_id),
+                .bind(environment_plugin_grant_id)
+                .bind(include_deleted),
             )
             .await?;
 
@@ -231,18 +274,52 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
     async fn list_by_environment(
         &self,
         environment_id: &Uuid,
-    ) -> Result<Vec<EnvironmentPluginGrantRecord>, EnvironmentPluginGrantRepoError> {
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
         let result = self
             .with_ro("list_by_environment")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
                     SELECT
-                        environment_plugin_grant_id, environment_id, plugin_id,
-                        created_at, created_by, deleted_at, deleted_by
-                    FROM environment_plugin_grants
+                        epg.environment_plugin_grant_id,
+                        epg.environment_id,
+                        epg.created_at,
+                        epg.created_by,
+                        epg.deleted_at,
+                        epg.deleted_by,
+
+                        p.plugin_id,
+                        p.account_id AS plugin_account_id,
+                        p.name AS plugin_name,
+                        p.version AS plugin_version,
+                        p.description AS plugin_description,
+                        p.icon AS plugin_icon,
+                        p.homepage AS plugin_homepage,
+                        p.plugin_type AS plugin_plugin_type,
+
+                        p.provided_wit_package AS plugin_provided_wit_package,
+                        p.json_schema AS plugin_json_schema,
+                        p.validate_url AS plugin_validate_url,
+                        p.transform_url AS plugin_transform_url,
+
+                        p.component_id AS plugin_component_id,
+                        p.component_revision_id AS plugin_component_revision_id,
+
+                        p.wasm_content_hash AS plugin_wasm_content_hash,
+
+                        p.created_at AS plugin_created_at,
+                        p.created_by AS plugin_created_by,
+                        p.deleted_at AS plugin_deleted_at,
+                        p.deleted_by AS plugin_deleted_by
+                    FROM environment_plugin_grants epg
+                    INNER JOIN plugins p
+                        ON p.plugin_id = epg.plugin_id
+                    INNER JOIN accounts pa
+                        ON pa.account_id = p.account_id
                     WHERE
-                        environment_id = $1
-                        AND deleted_at IS NULL
+                        epg.environment_id = $1
+                        AND epg.deleted_at IS NULL
+                        AND p.deleted_at IS NULL
+                        AND pa.deleted_at IS NULL
                 "#})
                 .bind(environment_id),
             )

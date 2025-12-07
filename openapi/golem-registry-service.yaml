@@ -2500,7 +2500,7 @@ paths:
       - RegistryService
       - EnvironmentPluginGrants
       - EnvironmentPluginGrants
-      summary: Get environment grant by id
+      summary: Get environment plugin grant by id
       parameters:
       - name: environment_plugin_grant_id
         schema:
@@ -2508,6 +2508,14 @@ paths:
           format: uuid
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: include_deleted
+        schema:
+          type: boolean
+          default: false
+        in: query
+        required: false
         deprecated: false
         explode: true
       responses:
@@ -7924,7 +7932,7 @@ components:
       required:
       - id
       - environmentId
-      - pluginRegistrationId
+      - plugin
       properties:
         id:
           type: string
@@ -7932,9 +7940,8 @@ components:
         environmentId:
           type: string
           format: uuid
-        pluginRegistrationId:
-          type: string
-          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
     EnvironmentPluginGrantCreation:
       type: object
       title: EnvironmentPluginGrantCreation
@@ -8380,11 +8387,14 @@ components:
       type: object
       title: InstalledPlugin
       required:
-      - pluginRegistrationId
+      - environmentPluginGrantId
       - priority
       - parameters
+      - pluginRegistrationId
+      - pluginName
+      - pluginVersion
       properties:
-        pluginRegistrationId:
+        environmentPluginGrantId:
           type: string
           format: uuid
         priority:
@@ -8397,6 +8407,19 @@ components:
           type: object
           additionalProperties:
             type: string
+        pluginRegistrationId:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        oplogProcessorComponentId:
+          type: string
+          format: uuid
+        oplogProcessorComponentRevision:
+          type: integer
+          format: uint64
     LinearMemory:
       type: object
       title: LinearMemory
