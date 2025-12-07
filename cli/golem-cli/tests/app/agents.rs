@@ -85,7 +85,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
         indoc! { r#"
             components:
               rust:agent:
-                template: rust
+                templates: rust
         "# },
     )
     .unwrap();
@@ -521,7 +521,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         indoc! { r#"
             components:
               ts:agent:
-                template: ts
+                templates: ts
         "# },
     )
     .unwrap();
@@ -762,7 +762,7 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
 
             dependencies:
               app:weather-agent:
@@ -795,7 +795,7 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
 
             dependencies:
               app:weather-agent:
@@ -813,7 +813,7 @@ async fn test_common_dep_plugs_errors() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
         "# },
     )
     .unwrap();
@@ -886,7 +886,7 @@ async fn test_component_env_var_substitution() {
         indoc! { r#"
             components:
               app:weather-agent:
-                template: ts
+                templates: ts
                 env:
                   NORMAL: 'REALLY'
                   VERY_CUSTOM_ENV_VAR_SECRET_1: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}'
@@ -908,11 +908,11 @@ async fn test_component_env_var_substitution() {
 
     assert!(outputs.stderr_contains_ordered([
         "key:       COMPOSED",
-        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
-        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
+        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_2",
-        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
         "Failed to prepare environment variables for component: app:weather-agent",
     ]));
 
@@ -967,7 +967,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter1:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -996,7 +996,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter2:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -1041,7 +1041,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
@@ -1078,7 +1078,7 @@ async fn test_http_api_merging() {
         indoc! { r#"
             components:
               app:counter2:
-                template: ts
+                templates: ts
 
             httpApi:
               definitions:
