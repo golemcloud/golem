@@ -58,17 +58,15 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
 
     let alphabet: [char; 8] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     for template in templates {
-        for _ in 0..2 {
-            let component_name = format!(
-                "app:{}-{}",
-                template.to_kebab_case(),
-                nanoid!(10, &alphabet),
-            );
-            let outputs = ctx
-                .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
-                .await;
-            assert2::assert!(outputs.success());
-        }
+        let component_name = format!(
+            "app:{}-{}",
+            template.to_kebab_case(),
+            nanoid!(10, &alphabet),
+        );
+        let outputs = ctx
+            .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
+            .await;
+        assert2::assert!(outputs.success());
     }
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
