@@ -23,6 +23,7 @@ pub use schema::*;
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
 pub use wit_utils::*;
+pub use generic_type::*;
 
 mod agent;
 mod agent_impl;
@@ -36,3 +37,4 @@ mod schema;
 mod unstructured_binary;
 mod unstructured_text;
 mod wit_utils;
+mod generic_type;
