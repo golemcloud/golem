@@ -135,7 +135,7 @@ impl<'a> ComponentStager<'a> {
     }
 
     pub async fn all_files(&self) -> anyhow::Result<Option<ComponentFilesArchive>> {
-        if self.diff.files_changed() {
+        if self.diff.files_changed() && self.component_deploy_properties.files.len() > 0 {
             Ok(Some(
                 IfsFileManager::new(self.ctx.file_download_client().clone())
                     .build_files_archive(self.component_deploy_properties.files.as_slice())

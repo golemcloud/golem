@@ -199,7 +199,7 @@ impl ApiDeploymentCommandHandler {
                 .map_err(ServiceError::from)
         };
 
-        let _ = match create().await {
+        let deployment = match create().await {
             Ok(result) => Ok(result),
             Err(err) if err.is_domain_is_not_registered() => {
                 self.ctx
@@ -210,6 +210,15 @@ impl ApiDeploymentCommandHandler {
             }
             Err(err) => Err(err),
         }?;
+
+        log_action(
+            "Created",
+            format!(
+                "HTTP API deployment revision {}@{}",
+                deployment.domain.0.log_color_highlight(),
+                deployment.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }
@@ -235,6 +244,19 @@ impl ApiDeploymentCommandHandler {
             .await
             .map_service_error()?;
 
+        log_action(
+            "Deleted",
+            format!(
+                "HTTP API deployment revision {}@{}",
+                http_api_deployment.domain.0.log_color_highlight(),
+                http_api_deployment
+                    .revision
+                    .0
+                    .to_string()
+                    .log_color_highlight()
+            ),
+        );
+
         Ok(())
     }
 
@@ -253,7 +275,8 @@ impl ApiDeploymentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.ctx
+        let deployment = self
+            .ctx
             .golem_clients()
             .await?
             .api_deployment
@@ -266,6 +289,15 @@ impl ApiDeploymentCommandHandler {
             )
             .await
             .map_service_error()?;
+
+        log_action(
+            "Created",
+            format!(
+                "HTTP API deployment revision {}@{}",
+                deployment.domain.0.log_color_highlight(),
+                deployment.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }

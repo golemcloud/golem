@@ -1041,7 +1041,8 @@ impl ComponentCommandHandler {
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let files = component_stager.all_files().await?;
 
-        self.ctx
+        let component = self
+            .ctx
             .golem_clients()
             .await?
             .component
@@ -1066,6 +1067,15 @@ impl ComponentCommandHandler {
             .await
             .map_service_error()?;
 
+        log_action(
+            "Created",
+            format!(
+                "component revision {}@{}",
+                component_name.0.log_color_highlight(),
+                component.revision.0.to_string().log_color_highlight()
+            ),
+        );
+
         Ok(())
     }
 
@@ -1086,6 +1096,15 @@ impl ComponentCommandHandler {
             .delete_component(&component.id.0, component.revision.0)
             .await
             .map_service_error()?;
+
+        log_action(
+            "Deleted",
+            format!(
+                "component revision {}@{}",
+                component.name.0.log_color_highlight(),
+                component.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }
@@ -1115,7 +1134,8 @@ impl ComponentCommandHandler {
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager.changed_files().await?;
 
-        self.ctx
+        let component = self
+            .ctx
             .golem_clients()
             .await?
             .component
@@ -1135,6 +1155,15 @@ impl ComponentCommandHandler {
             )
             .await
             .map_service_error()?;
+
+        log_action(
+            "Created",
+            format!(
+                "component revision {}@{}",
+                component.component_name.0.log_color_highlight(),
+                component.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }

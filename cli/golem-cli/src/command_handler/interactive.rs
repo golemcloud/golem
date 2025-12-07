@@ -102,7 +102,7 @@ impl InteractiveHandler {
         self.confirm(
             true,
             format!(
-                "The following domain is missing for deploying: {}.\nDo you want to register it for the application?",
+                "The following domain is not registered for the environment: {}\nDo you want to register it?",
                 domain.0.log_color_highlight()
             ),
             None,

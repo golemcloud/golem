@@ -1,5 +1,6 @@
-use crate::app::{cmd, flag, TestContext};
+use crate::app::{cmd, flag, replace_strings_in_file, TestContext};
 use crate::Tracing;
+use assert2::assert;
 use assert2::let_assert;
 use heck::ToKebabCase;
 use nanoid::nanoid;
@@ -27,7 +28,7 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     let app_name = "all-templates-app";
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success());
 
     let template_prefix = "  - ";
 
@@ -52,28 +53,39 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
     println!("{templates:#?}");
 
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let alphabet: [char; 8] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     for template in templates {
-        let component_name = format!(
-            "app:{}-{}",
-            template.to_kebab_case(),
-            nanoid!(10, &alphabet),
-        );
+        let component_name = format!("app:{}", template.to_kebab_case(),);
         let outputs = ctx
             .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
             .await;
-        assert2::assert!(outputs.success());
+        assert!(outputs.success());
+    }
+
+    // NOTE: renaming conflicting agent names
+    for (path, from, to) in [
+        (
+            "components-rust/app-rust/src/lib.rs",
+            "CounterAgent",
+            "RustCounterAgent",
+        ),
+        (
+            "components-ts/app-ts/src/main.ts",
+            "CounterAgent",
+            "TsCounterAgent",
+        ),
+    ] {
+        replace_strings_in_file(ctx.cwd_path_join(path), &[(from, to)]).unwrap()
     }
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success());
 
     ctx.start_server().await;
 
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
-    assert2::assert!(outputs.success());
+    assert!(outputs.success());
 }

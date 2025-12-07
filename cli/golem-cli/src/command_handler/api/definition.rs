@@ -461,7 +461,8 @@ impl ApiDefinitionCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.ctx
+        let definition = self
+            .ctx
             .golem_clients()
             .await?
             .api_definition
@@ -477,6 +478,15 @@ impl ApiDefinitionCommandHandler {
             )
             .await
             .map_service_error()?;
+
+        log_action(
+            "Created",
+            format!(
+                "HTTP API definition revision {}@{}",
+                definition.name.0.log_color_highlight(),
+                definition.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }
@@ -502,6 +512,19 @@ impl ApiDefinitionCommandHandler {
             .await
             .map_service_error()?;
 
+        log_action(
+            "Deleted",
+            format!(
+                "HTTP API definition revision {}@{}",
+                http_api_definition.name.0.log_color_highlight(),
+                http_api_definition
+                    .revision
+                    .0
+                    .to_string()
+                    .log_color_highlight()
+            ),
+        );
+
         Ok(())
     }
 
@@ -520,7 +543,8 @@ impl ApiDefinitionCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        self.ctx
+        let definition = self
+            .ctx
             .golem_clients()
             .await?
             .api_definition
@@ -534,6 +558,15 @@ impl ApiDefinitionCommandHandler {
             )
             .await
             .map_service_error()?;
+
+        log_action(
+            "Created",
+            format!(
+                "HTTP API definition revision {}@{}",
+                definition.name.0.log_color_highlight(),
+                definition.revision.0.to_string().log_color_highlight()
+            ),
+        );
 
         Ok(())
     }
