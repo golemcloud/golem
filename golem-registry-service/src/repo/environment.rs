@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::model::environment::{EnvironmentRepoError, OptionalEnvironmentExtRevisionRecord};
+use super::model::environment::{
+    EnvironmentRepoError, EnvironmentWithDetailsRecord, OptionalEnvironmentExtRevisionRecord,
+};
 use crate::repo::model::BindFields;
 pub use crate::repo::model::environment::{
-    EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentPluginInstallationRecord,
-    EnvironmentPluginInstallationRevisionRecord, EnvironmentRevisionRecord,
+    EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -72,6 +73,11 @@ pub trait EnvironmentRepo: Send + Sync {
         &self,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+
+    async fn list_visible_to_account(
+        &self,
+        account_id: &Uuid,
+    ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError>;
 }
 
 pub struct LoggedEnvironmentRepo<Repo: EnvironmentRepo> {
@@ -163,6 +169,16 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
         let span = Self::span_env(&revision.environment_id);
         self.repo.delete(revision).instrument(span).await
+    }
+
+    async fn list_visible_to_account(
+        &self,
+        account_id: &Uuid,
+    ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
+        self.repo
+            .list_visible_to_account(account_id)
+            .instrument(info_span!(SPAN_NAME, account_id = %account_id))
+            .await
     }
 }
 
@@ -381,8 +397,10 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         dr.revision_id as current_deployment_deployment_revision,
                         dr.hash as current_deployment_deployment_hash
                     FROM accounts a
-                    JOIN applications ap
+                    INNER JOIN applications ap
                         ON ap.account_id = a.account_id
+                        AND ap.deleted_at IS NULL
+
                     LEFT JOIN environments e
                         ON e.application_id = ap.application_id
                         AND e.deleted_at IS NULL
@@ -410,7 +428,6 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                     WHERE
                         ap.application_id = $1
                         AND a.deleted_at IS NULL
-                        AND ap.deleted_at IS NULL
                         AND (
                             $3
                             OR a.account_id = $2
@@ -685,6 +702,92 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .boxed()
         })
         .await
+    }
+
+    async fn list_visible_to_account(
+        &self,
+        account_id: &Uuid,
+    ) -> Result<Vec<EnvironmentWithDetailsRecord>, EnvironmentRepoError> {
+        let result = self
+            .with_ro("list_visible_to_account")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT
+                        -- Environment
+                        e.environment_id,
+                        r.revision_id AS environment_revision_id,
+                        e.name AS environment_name,
+                        r.compatibility_check AS environment_compatibility_check,
+                        r.version_check AS environment_version_check,
+                        r.security_overrides AS environment_security_overrides,
+
+                        COALESCE(esr.roles, 0) AS environment_roles_from_shares,
+
+                        -- Current deployment (optional)
+                        cdr.revision_id AS current_deployment_revision,
+                        dr.revision_id AS current_deployment_deployment_revision,
+                        dr.hash AS current_deployment_deployment_hash,
+
+                        -- Parent application
+                        ap.application_id,
+                        ap.name AS application_name,
+
+                        -- Parent account (owner of the application)
+                        a.account_id,
+                        ar.name AS account_name,
+                        ar.email AS account_email
+
+                    FROM accounts a
+                    INNER JOIN account_revisions ar
+                        ON ar.account_id = a.account_id
+                        AND ar.revision_id = a.current_revision_id
+
+                    INNER JOIN applications ap
+                        ON ap.account_id = a.account_id
+                        AND ap.deleted_at IS NULL
+
+                    INNER JOIN environments e
+                        ON e.application_id = ap.application_id
+                        AND e.deleted_at IS NULL
+
+                    INNER JOIN environment_revisions r
+                        ON r.environment_id = e.environment_id
+                        AND r.revision_id = e.current_revision_id
+
+                    -- Environment shares
+                    LEFT JOIN environment_shares es
+                        ON es.environment_id = e.environment_id
+                        AND es.grantee_account_id = $1
+                        AND es.deleted_at IS NULL
+
+                    LEFT JOIN environment_share_revisions esr
+                        ON esr.environment_share_id = es.environment_share_id
+                        AND esr.revision_id = es.current_revision_id
+
+                    -- Current deployment
+                    LEFT JOIN current_deployments cd
+                        ON cd.environment_id = e.environment_id
+                    LEFT JOIN current_deployment_revisions cdr
+                        ON cdr.environment_id = cd.environment_id
+                        AND cdr.revision_id = cd.current_revision_id
+                    LEFT JOIN deployment_revisions dr
+                        ON dr.environment_id = cdr.environment_id
+                        AND dr.revision_id = cdr.deployment_revision_id
+
+                    WHERE
+                        a.deleted_at IS NULL
+                        AND (
+                            a.account_id = $1
+                            OR esr.roles IS NOT NULL
+                        )
+
+                    ORDER BY e.name;
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+
+        Ok(result)
     }
 }
 

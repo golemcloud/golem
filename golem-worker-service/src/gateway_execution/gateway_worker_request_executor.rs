@@ -16,6 +16,7 @@ use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
+use golem_common::model::agent::{AgentId, AgentMode};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, WorkerId};
@@ -32,6 +33,7 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::debug;
+use uuid::Uuid;
 
 pub struct GatewayWorkerRequestExecutor {
     worker_service: Arc<WorkerService>,
@@ -78,10 +80,30 @@ impl GatewayWorkerRequestExecutor {
             .await
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
 
+        let mut worker_name = resolved_worker_request.worker_name;
+
+        if component.metadata.is_agent() {
+            let agent_type_name = AgentId::parse_agent_type_name(&worker_name)
+                .map_err(|err| WorkerRequestExecutorError(format!("Invalid agent ID: {err}")))?;
+            let agent_type = component
+                .metadata
+                .find_agent_type_by_wrapper_name(agent_type_name)
+                .map_err(|err| {
+                    WorkerRequestExecutorError(format!("Failed to extract agent type: {err}"))
+                })?
+                .ok_or_else(|| WorkerRequestExecutorError("Agent type not found".to_string()))?;
+
+            if agent_type.mode == AgentMode::Ephemeral {
+                let phantom_id = Uuid::new_v4();
+                let phantom_id_postfix = format!("[{phantom_id}]");
+                worker_name.push_str(&phantom_id_postfix);
+            }
+        }
+
         let worker_id = WorkerId::from_component_metadata_and_worker_id(
             component.id,
             &component.metadata,
-            resolved_worker_request.worker_name,
+            worker_name,
         )?;
 
         debug!(

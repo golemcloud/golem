@@ -188,6 +188,41 @@ impl EnvironmentsApi {
         }))
     }
 
+    /// List all environments that are visible to the current user, either directly or through shares.
+    #[oai(
+        path = "/envs",
+        method = "get",
+        operation_id = "list_visible_environments"
+    )]
+    pub async fn list_visible_environments(
+        &self,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
+        let record = recorded_http_api_request!("list_visible_environments",);
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_visible_environments_internal(auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_visible_environments_internal(
+        &self,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<EnvironmentWithDetails>>> {
+        let environments = self
+            .environment_service
+            .list_visible_environments(&auth)
+            .await?;
+        Ok(Json(Page {
+            values: environments,
+        }))
+    }
+
     /// Get environment by id.
     #[oai(
         path = "/envs/:environment_id",

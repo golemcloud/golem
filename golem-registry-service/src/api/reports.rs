@@ -16,7 +16,7 @@ use crate::api::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::reports::ReportsService;
 use golem_common::model::Page;
-use golem_common::model::reports::{AccountCounts, AccountSummary};
+use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -52,7 +52,7 @@ impl ReportsApi {
     async fn get_account_summaries_report(
         &self,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<AccountSummary>>> {
+    ) -> ApiResult<Json<Page<AccountSummaryReport>>> {
         let record = recorded_http_api_request!("get_account_summaries_report",);
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -68,7 +68,7 @@ impl ReportsApi {
     async fn get_account_summaries_report_internal(
         &self,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<AccountSummary>>> {
+    ) -> ApiResult<Json<Page<AccountSummaryReport>>> {
         let account_summaries = self.reports_service.get_account_summaries(&auth).await?;
         Ok(Json(Page {
             values: account_summaries,
@@ -83,7 +83,7 @@ impl ReportsApi {
     async fn get_account_count_report(
         &self,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<AccountCounts>> {
+    ) -> ApiResult<Json<AccountCountsReport>> {
         let record = recorded_http_api_request!("get_account_count_report",);
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -99,7 +99,7 @@ impl ReportsApi {
     async fn get_account_count_report_internal(
         &self,
         auth: AuthCtx,
-    ) -> ApiResult<Json<AccountCounts>> {
+    ) -> ApiResult<Json<AccountCountsReport>> {
         let report = self.reports_service.get_account_counts(&auth).await?;
         Ok(Json(report))
     }
