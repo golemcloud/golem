@@ -986,8 +986,6 @@ impl AgentId {
             Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
         });
 
-        let s = s.as_ref();
-
         let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
             format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
         })?;
