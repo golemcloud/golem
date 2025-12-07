@@ -908,11 +908,11 @@ async fn test_component_env_var_substitution() {
 
     assert!(outputs.stderr_contains_ordered([
         "key:       COMPOSED",
-        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
-        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
         "key:       VERY_CUSTOM_ENV_VAR_SECRET_2",
-        "templates:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
         "Failed to prepare environment variables for component: app:weather-agent",
     ]));
 
