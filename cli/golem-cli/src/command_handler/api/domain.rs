@@ -111,7 +111,7 @@ impl ApiDomainCommandHandler {
         if !self
             .ctx
             .interactive_handler()
-            .confirm_register_missing_domain(&domain)?
+            .confirm_register_missing_domain(domain)?
         {
             bail!(NonSuccessfulExit);
         }

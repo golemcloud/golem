@@ -98,7 +98,7 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_register_missing_domain<'a>(&self, domain: &Domain) -> anyhow::Result<bool> {
+    pub fn confirm_register_missing_domain(&self, domain: &Domain) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(

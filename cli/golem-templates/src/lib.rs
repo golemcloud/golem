@@ -427,7 +427,7 @@ fn transform(
             .replace("    # golem-app-manifest-dep-env-vars-doc", dep_env_vars_doc())
             .replace("    # golem-app-manifest-deps-doc", deps_doc())
             .replace("    # golem-app-manifest-env-presets",
-                     concat!("    # TODO: atomic\n")
+                     "    # TODO: atomic\n"
             )
     };
 
@@ -1022,11 +1022,10 @@ fn dep_env_vars_doc() -> &'static str {
         let mut out = String::new();
 
         for group in groups {
-            if group
+            if !group
                 .dependencies
                 .iter()
-                .find(|dep| !dep.env_vars.is_empty())
-                .is_none()
+                .any(|dep| !dep.env_vars.is_empty())
             {
                 continue;
             }
