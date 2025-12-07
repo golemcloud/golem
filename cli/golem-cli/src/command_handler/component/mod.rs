@@ -1070,7 +1070,7 @@ impl ComponentCommandHandler {
         log_action(
             "Created",
             format!(
-                "component revision {}@{}",
+                "component revision: {} {}",
                 component_name.0.log_color_highlight(),
                 component.revision.0.to_string().log_color_highlight()
             ),
@@ -1100,7 +1100,7 @@ impl ComponentCommandHandler {
         log_action(
             "Deleted",
             format!(
-                "component revision {}@{}",
+                "component revision: {} {}",
                 component.name.0.log_color_highlight(),
                 component.revision.0.to_string().log_color_highlight()
             ),
@@ -1159,7 +1159,7 @@ impl ComponentCommandHandler {
         log_action(
             "Created",
             format!(
-                "component revision {}@{}",
+                "component revision: {} {}",
                 component.component_name.0.log_color_highlight(),
                 component.revision.0.to_string().log_color_highlight()
             ),

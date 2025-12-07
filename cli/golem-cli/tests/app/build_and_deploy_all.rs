@@ -73,9 +73,19 @@ async fn build_and_deploy_all_templates(group: Option<&str>) {
             "RustCounterAgent",
         ),
         (
+            "components-rust/app-rust/golem.yaml",
+            "counter-agent",
+            "rust-counter-agent",
+        ),
+        (
             "components-ts/app-ts/src/main.ts",
             "CounterAgent",
             "TsCounterAgent",
+        ),
+        (
+            "components-ts/app-ts/golem.yaml",
+            "counter-agent",
+            "ts-counter-agent",
         ),
     ] {
         replace_strings_in_file(ctx.cwd_path_join(path), &[(from, to)]).unwrap()

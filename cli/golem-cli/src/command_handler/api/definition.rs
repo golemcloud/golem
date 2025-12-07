@@ -482,7 +482,7 @@ impl ApiDefinitionCommandHandler {
         log_action(
             "Created",
             format!(
-                "HTTP API definition revision {}@{}",
+                "HTTP API definition revision: {} {}",
                 definition.name.0.log_color_highlight(),
                 definition.revision.0.to_string().log_color_highlight()
             ),
@@ -515,7 +515,7 @@ impl ApiDefinitionCommandHandler {
         log_action(
             "Deleted",
             format!(
-                "HTTP API definition revision {}@{}",
+                "HTTP API definition revision: {} {}",
                 http_api_definition.name.0.log_color_highlight(),
                 http_api_definition
                     .revision
@@ -562,7 +562,7 @@ impl ApiDefinitionCommandHandler {
         log_action(
             "Created",
             format!(
-                "HTTP API definition revision {}@{}",
+                "HTTP API definition revision: {} {}",
                 definition.name.0.log_color_highlight(),
                 definition.revision.0.to_string().log_color_highlight()
             ),

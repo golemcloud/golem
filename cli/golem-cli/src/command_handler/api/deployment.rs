@@ -214,7 +214,7 @@ impl ApiDeploymentCommandHandler {
         log_action(
             "Created",
             format!(
-                "HTTP API deployment revision {}@{}",
+                "HTTP API deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
                 deployment.revision.0.to_string().log_color_highlight()
             ),
@@ -247,7 +247,7 @@ impl ApiDeploymentCommandHandler {
         log_action(
             "Deleted",
             format!(
-                "HTTP API deployment revision {}@{}",
+                "HTTP API deployment revision: {} {}",
                 http_api_deployment.domain.0.log_color_highlight(),
                 http_api_deployment
                     .revision
@@ -293,7 +293,7 @@ impl ApiDeploymentCommandHandler {
         log_action(
             "Created",
             format!(
-                "HTTP API deployment revision {}@{}",
+                "HTTP API deployment revision: {} {}",
                 deployment.domain.0.log_color_highlight(),
                 deployment.revision.0.to_string().log_color_highlight()
             ),
