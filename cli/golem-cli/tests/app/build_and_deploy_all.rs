@@ -3,7 +3,6 @@ use crate::Tracing;
 use assert2::assert;
 use assert2::let_assert;
 use heck::ToKebabCase;
-use nanoid::nanoid;
 use test_r::{inherit_test_dep, tag, test};
 
 inherit_test_dep!(Tracing);
