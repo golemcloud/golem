@@ -981,6 +981,20 @@ impl AgentId {
         Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
     }
 
+    pub fn parse_agent_type_name(s: &str) -> Result<&str, String> {
+        static AGENT_ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+            Regex::new(r"^([^(]+)\((.*)\)(?:\[([^\]]+)\])?$").expect("Invalid agent ID regex")
+        });
+
+        let s = s.as_ref();
+
+        let captures = AGENT_ID_REGEX.captures(s).ok_or_else(|| {
+            format!("Unexpected agent-id format - must be 'agent-type(...)' or 'agent-type(...)[uuid]', got: {s}")
+        })?;
+
+        Ok(captures.get(1).unwrap().as_str())
+    }
+
     pub fn parse_and_resolve_type(
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
