@@ -64,7 +64,6 @@ use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
-use heck::ToKebabCase;
 use http::Uri;
 use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
