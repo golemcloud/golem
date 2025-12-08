@@ -110,20 +110,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp,
                 response,
                 consumed_fuel,
-            }) => {
-                // TODO: change the type in wit
-                let bounded = if consumed_fuel > i64::MAX as u64 {
-                    i64::MAX
-                } else {
-                    consumed_fuel as i64
-                };
-
-                Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
-                    timestamp: timestamp.into(),
-                    response: response.map(golem_wasm::golem_rpc_0_2_x::types::ValueAndType::from),
-                    consumed_fuel: bounded,
-                })
-            }
+            }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
+                timestamp: timestamp.into(),
+                response: response.map(golem_wasm::golem_rpc_0_2_x::types::ValueAndType::from),
+                consumed_fuel,
+            }),
             PublicOplogEntry::Suspend(SuspendParams { timestamp }) => {
                 Self::Suspend(timestamp.into())
             }

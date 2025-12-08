@@ -132,11 +132,11 @@ oplog_entry! {
         hint: false
         raw {
             response: OplogPayload<Option<ValueAndType>>,
-            consumed_fuel: u64,
+            consumed_fuel: i64,
         }
         public {
             response: Option<ValueAndType>,
-            consumed_fuel: u64,
+            consumed_fuel: i64,
         }
     },
     /// Worker suspended

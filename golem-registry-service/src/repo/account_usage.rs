@@ -290,7 +290,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                                 ELSE total
                                             END AS value
                                         FROM (
-                                            SELECT COALESCE(SUM(CAST(cr.size)), 0) AS total
+                                            SELECT COALESCE(SUM(cr.size), 0) AS total
                                             FROM applications a
                                             JOIN environments e
                                                 ON e.application_id = a.application_id

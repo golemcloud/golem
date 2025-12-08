@@ -94,7 +94,7 @@ impl ReportsRepo for DbReportsRepo<PostgresPool> {
                         a.account_id, a.email, a.created_at,
                         r.name,
                         (
-                            SELECT COUNT(1)
+                            SELECT CAST(COUNT(1) AS NUMERIC)
                             FROM applications ap
                             JOIN environments e
                                 ON e.application_id = ap.application_id
@@ -132,9 +132,9 @@ impl ReportsRepo for DbReportsRepo<PostgresPool> {
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     SELECT
-                        (SELECT COUNT(1) FROM accounts a) as total_accounts,
-                        (SELECT COUNT(1) FROM accounts a WHERE a.deleted_at IS NULL) as total_active_accounts,
-                        (SELECT COUNT(1) FROM accounts a WHERE a.deleted_at IS NOT NULL) as total_deleted_accounts
+                        (SELECT CAST(COUNT(1) AS NUMERIC) FROM accounts a) as total_accounts,
+                        (SELECT CAST(COUNT(1) AS NUMERIC) FROM accounts a WHERE a.deleted_at IS NULL) as total_active_accounts,
+                        (SELECT CAST(COUNT(1) AS NUMERIC) FROM accounts a WHERE a.deleted_at IS NOT NULL) as total_deleted_accounts
                 "# })
             )
             .await?;

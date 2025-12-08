@@ -281,19 +281,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     )?,
                 }),
             ),
-            oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => Ok(
-                PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParams {
-                    timestamp: exported_function_completed
-                        .timestamp
-                        .ok_or("Missing timestamp field")?
-                        .into(),
-                    response: exported_function_completed
-                        .response
-                        .map(|tav| tav.try_into())
-                        .transpose()?,
-                    consumed_fuel: exported_function_completed.consumed_fuel,
-                }),
-            ),
+            oplog_entry::Entry::ExportedFunctionCompleted(exported_function_completed) => {
+                // TODO: align types
+                let consumed_fuel = if exported_function_completed.consumed_fuel > i64::MAX as u64 {
+                    i64::MAX
+                } else {
+                    exported_function_completed.consumed_fuel as i64
+                };
+
+                Ok(PublicOplogEntry::ExportedFunctionCompleted(
+                    ExportedFunctionCompletedParams {
+                        timestamp: exported_function_completed
+                            .timestamp
+                            .ok_or("Missing timestamp field")?
+                            .into(),
+                        response: exported_function_completed
+                            .response
+                            .map(|tav| tav.try_into())
+                            .transpose()?,
+                        consumed_fuel,
+                    },
+                ))
+            }
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
                 timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
@@ -649,6 +658,13 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 }
             }
             PublicOplogEntry::ExportedFunctionCompleted(exported_function_completed) => {
+                // TODO: align types
+                let consumed_fuel = if exported_function_completed.consumed_fuel < 0 {
+                    0
+                } else {
+                    exported_function_completed.consumed_fuel as u64
+                };
+
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::ExportedFunctionCompleted(
                         golem_api_grpc::proto::golem::worker::ExportedFunctionCompletedParameters {
@@ -656,7 +672,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             response: exported_function_completed
                                 .response
                                 .map(|value| value.into()),
-                            consumed_fuel: exported_function_completed.consumed_fuel,
+                            consumed_fuel,
                         },
                     )),
                 }

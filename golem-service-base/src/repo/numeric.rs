@@ -98,7 +98,8 @@ impl sqlx::Type<sqlx::Sqlite> for NumericU64 {
     }
 
     fn compatible(ty: &<sqlx::Sqlite as Database>::TypeInfo) -> bool {
-        <i64 as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+        <f64 as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+            || <i64 as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
             || <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
     }
 }
@@ -137,6 +138,29 @@ where
 {
     fn decode(value: SqliteValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         match value.type_info().name() {
+            "REAL" => {
+                let f: f64 = Decode::<sqlx::Sqlite>::decode(value)?;
+
+                if f < 0.0 {
+                    Err(anyhow!("Negative values not supported for NumericU64: {f}"))?
+                }
+
+                if f.fract() != 0.0 {
+                    Err(anyhow!(
+                        "Fractional REAL values cannot be decoded into NumericU64: {f}"
+                    ))?
+                }
+
+                let u = f as u64;
+
+                if (u as f64) != f {
+                    Err(anyhow!(
+                        "REAL value {f} cannot be safely represented as u64"
+                    ))?
+                }
+
+                Ok(NumericU64(u))
+            }
             "INTEGER" => {
                 let i: i64 = Decode::<sqlx::Sqlite>::decode(value)?;
                 if i < 0 {
