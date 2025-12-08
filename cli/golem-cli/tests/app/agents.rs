@@ -565,7 +565,7 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // function optional (that has null, defined as union)
     run_and_assert(
         &ctx,
-        "fun-optional",
+        "ts:agent/foo-agent.{fun-optional}",
         &[
             "some(case1(\"foo\"))",
             "{a: some(\"foo\")}",
@@ -577,6 +577,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
         ],
     )
     .await;
+
+    run_and_assert(&ctx, "fun-optional-q-mark", &["x", "none", r#"some("y")"#]).await;
 
     // function with a simple object
     run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
