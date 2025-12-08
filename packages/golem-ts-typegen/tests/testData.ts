@@ -166,6 +166,20 @@ class MyAgent {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
 
+  async methodWithOptionalQMark(
+    required: string,
+    optional?: number,
+  ): Promise<string> {
+    return Promise.resolve("test");
+  }
+
+  async methodWithOptionalUnion(
+    required: string,
+    optional: number | undefined,
+  ): Promise<string> {
+    return Promise.resolve("test");
+  }
+
   // type-gen does not track private functions. This can be made configurable though
   private async getWeather2(object: Object): PromiseType {
     return Promise.resolve(`Weather in is sunny!`);

@@ -265,6 +265,20 @@ export class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun41(
+    required: string,
+    optional?: number,
+  ): Promise<{ required: string; optional?: number }> {
+    return { required, optional };
+  }
+
+  async fun42(
+    required: string,
+    optional: number | undefined,
+  ): Promise<{ required: string; optional?: number }> {
+    return { required, optional };
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {

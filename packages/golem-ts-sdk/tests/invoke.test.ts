@@ -692,6 +692,72 @@ test('Invoke function that takes json unstructured-binary and returns json unstr
 
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
+test('Invoke method with optional parameter using ? syntax', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('test', classMetadata);
+
+  // Test with optional parameter provided
+  testInvoke(
+    'fun41',
+    [
+      ['required', 'hello'],
+      ['optional', 42],
+    ],
+    resolvedAgent,
+    { required: 'hello', optional: 42 },
+    false,
+  );
+
+  // Test with optional parameter omitted
+  testInvoke(
+    'fun41',
+    [['required', 'world']],
+    resolvedAgent,
+    { required: 'world', optional: undefined },
+    false,
+  );
+});
+
+test('Invoke method with optional parameter using | undefined syntax', () => {
+  overrideSelfAgentId(new AgentId('foo-agent()'));
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('test', classMetadata);
+
+  // Test with optional parameter provided
+  testInvoke(
+    'fun42',
+    [
+      ['required', 'hello'],
+      ['optional', 123],
+    ],
+    resolvedAgent,
+    { required: 'hello', optional: 123 },
+    false,
+  );
+
+  // Test with optional parameter omitted
+  testInvoke(
+    'fun42',
+    [['required', 'world']],
+    resolvedAgent,
+    { required: 'world', optional: undefined },
+    false,
+  );
+});
+
 test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
   overrideSelfAgentId(new AgentId('foo-agent()'));
 

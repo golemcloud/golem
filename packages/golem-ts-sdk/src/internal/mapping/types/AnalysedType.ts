@@ -243,14 +243,6 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
 const unionTypeMapRegistry = new Map<string, AnalysedType>();
 
 export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
-  if (Option.isSome(scope) && (scope.val.scope === "constructor" || scope.val.scope === "method")) {
-    // A question mark optional is not allowed if the scope is just method or constructor
-    // They are only allowed in objects and interface scopes.
-    if (tsType.optional) {
-      return Either.left(`Optional parameters are not supported in ${scope.val.scope}. Parameter \`${scope.val.parameterName}\` is optional. Remove \`?\` and change the type to a union with \`undefined\``);
-    }
-  }
-
   const result =
     fromTsTypeInternal(tsType, scope);
 

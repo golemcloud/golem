@@ -30,6 +30,7 @@ import {
   getRecursiveType,
   getObjectWithTypeParameter,
   getUnionWithTypeParameter,
+  getMethodParams,
 } from "./util.js";
 
 import { Type } from "@golemcloud/golem-ts-types-core";
@@ -135,5 +136,33 @@ describe("golem-ts-typegen can work correctly read types from .metadata director
     });
 
     expect(args).toEqual(["en", "de"]);
+  });
+
+  it("track optional parameters with ? syntax", () => {
+    const params = getMethodParams("MyAgent", "methodWithOptionalQMark");
+    const optionalParam = params.get("optional");
+    expect(optionalParam).toBeDefined();
+    expect(optionalParam?.optional).toBe(true);
+    expect(optionalParam?.kind).toBe("union");
+    if (optionalParam?.kind === "union") {
+      expect(optionalParam?.unionTypes.map((t) => t.kind)).toStrictEqual([
+        "undefined",
+        "number",
+      ]);
+    }
+  });
+
+  it("track optional parameters with | undefined syntax", () => {
+    const params = getMethodParams("MyAgent", "methodWithOptionalUnion");
+    const optionalParam = params.get("optional");
+    expect(optionalParam).toBeDefined();
+    expect(optionalParam?.optional).toBe(false);
+    expect(optionalParam?.kind).toBe("union");
+    if (optionalParam?.kind === "union") {
+      expect(optionalParam?.unionTypes.map((t) => t.kind)).toStrictEqual([
+        "undefined",
+        "number",
+      ]);
+    }
   });
 });

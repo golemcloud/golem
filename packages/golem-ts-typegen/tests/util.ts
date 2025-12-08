@@ -114,6 +114,33 @@ export function getUnionWithTypeParameter(): Type.Type {
   return fetchType("UnionWithTypeParameter");
 }
 
+// Fetch constructor parameters by class name
+export function getConstructorParams(
+  className: string,
+): Array<{ name: string; type: Type.Type }> {
+  const classMetadata = getAll().get(className);
+  if (!classMetadata) {
+    throw new Error(`Class ${className} not found in metadata`);
+  }
+  return classMetadata.constructorArgs;
+}
+
+// Fetch method parameters by class name and method name
+export function getMethodParams(
+  className: string,
+  methodName: string,
+): Map<string, Type.Type> {
+  const classMetadata = getAll().get(className);
+  if (!classMetadata) {
+    throw new Error(`Class ${className} not found in metadata`);
+  }
+  const method = classMetadata.methods.get(methodName);
+  if (!method) {
+    throw new Error(`Method ${methodName} not found in class ${className}`);
+  }
+  return method.methodParams;
+}
+
 // Fetch a type by its name from the loaded metadata (loaded by setup module)
 function fetchType(typeNameInTestData: string): Type.Type {
   const classMetadata = Array.from(getAll()).map(([_, v]) => v);
