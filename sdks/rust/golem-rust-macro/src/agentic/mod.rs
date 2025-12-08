@@ -21,6 +21,8 @@ pub use compile_errors::*;
 pub use multimodal_derivation::*;
 pub use schema_derivation::*;
 
+pub(crate) use recursive_schema::*;
+
 mod agent_definition_impl;
 mod agent_implementation_impl;
 mod allowed_language_derivation;
@@ -29,4 +31,5 @@ mod client_generation;
 mod compile_errors;
 mod helpers;
 mod multimodal_derivation;
+mod recursive_schema;
 mod schema_derivation;
