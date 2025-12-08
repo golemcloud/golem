@@ -61,7 +61,6 @@ pub async fn start_grpc_server(
                     services.auth_service.clone(),
                     services.environment_service.clone(),
                     services.account_usage_service.clone(),
-                    services.plugin_registration_service.clone(),
                     services.component_service.clone(),
                     services.component_resolver_service.clone(),
                     services.deployment_service.clone(),

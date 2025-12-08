@@ -2435,7 +2435,6 @@ components:
       - pluginPriority
       - pluginName
       - pluginVersion
-      - registered
       - parameters
       properties:
         pluginPriority:
@@ -2448,8 +2447,6 @@ components:
           type: string
         pluginVersion:
           type: string
-        registered:
-          type: boolean
         parameters:
           type: object
           additionalProperties:

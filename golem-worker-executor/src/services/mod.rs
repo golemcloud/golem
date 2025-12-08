@@ -21,7 +21,6 @@ pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
-pub mod plugins;
 pub mod promise;
 pub mod rdbms;
 pub mod resource_limits;
@@ -38,7 +37,6 @@ pub mod worker_proxy;
 
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
-use crate::services::plugins::PluginsService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
@@ -161,10 +159,6 @@ pub trait HasFileLoader {
     fn file_loader(&self) -> Arc<FileLoader>;
 }
 
-pub trait HasPlugins {
-    fn plugins(&self) -> Arc<dyn PluginsService>;
-}
-
 pub trait HasOplogProcessorPlugin {
     fn oplog_processor_plugin(&self) -> Arc<dyn oplog::plugin::OplogProcessorPlugin>;
 }
@@ -201,7 +195,6 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasFileLoader
-    + HasPlugins
     + HasOplogProcessorPlugin
     + HasResourceLimits
     + HasExtraDeps<Ctx>
@@ -234,7 +227,6 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasFileLoader
-            + HasPlugins
             + HasOplogProcessorPlugin
             + HasResourceLimits
             + HasExtraDeps<Ctx>
@@ -272,7 +264,6 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn PluginsService>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     extra_deps: Ctx::ExtraDeps,
@@ -305,7 +296,6 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             rdbms_service: self.rdbms_service.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
-            plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             extra_deps: self.extra_deps.clone(),
@@ -342,7 +332,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         extra_deps: Ctx::ExtraDeps,
@@ -372,7 +361,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_proxy,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
             extra_deps,
@@ -405,7 +393,6 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_proxy(),
             this.events(),
             this.file_loader(),
-            this.plugins(),
             this.oplog_processor_plugin(),
             this.resource_limits(),
             this.extra_deps(),
@@ -566,12 +553,6 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
     fn file_loader(&self) -> Arc<FileLoader> {
         self.all().file_loader.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins for T {
-    fn plugins(&self) -> Arc<dyn PluginsService> {
-        self.all().plugins.clone()
     }
 }
 

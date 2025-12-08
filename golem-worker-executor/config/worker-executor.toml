@@ -89,9 +89,6 @@ max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
 
-[plugin_service]
-plugin_cache_size = 1024
-
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
@@ -315,9 +312,6 @@ without_time = false
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
 # 
-# [plugin_service]
-# plugin_cache_size = 1024
-# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -500,9 +494,6 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
-# 
-# [plugin_service]
-# plugin_cache_size = 1024
 # 
 # [public_worker_api]
 # connect_timeout = "10s"

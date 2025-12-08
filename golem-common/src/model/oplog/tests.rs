@@ -71,7 +71,6 @@ fn create_serialization_poem_serde_equivalence() {
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
-            registered: true,
         }]),
         original_phantom_id: None,
     });
@@ -359,7 +358,6 @@ fn successful_update_serialization_poem_serde_equivalence() {
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
-            registered: true,
         }]),
     });
     let serialized = entry.to_json_string();
