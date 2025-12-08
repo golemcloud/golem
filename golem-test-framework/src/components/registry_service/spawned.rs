@@ -160,7 +160,7 @@ impl RegistryService for SpawnedRegistryService {
     }
 
     async fn kill(&self) {
-        info!("Stopping golem-component-service");
+        info!("Stopping golem-registry-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
