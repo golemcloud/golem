@@ -26,7 +26,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::OpenApi;
-use poem_openapi::param::Path;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -133,7 +133,7 @@ impl EnvironmentPluginGrantsApi {
         Ok(Json(Page { values: grants }))
     }
 
-    /// Get environment grant by id
+    /// Get environment plugin grant by id
     #[oai(
         path = "/environment-plugins/:environment_plugin_grant_id",
         method = "get",
@@ -143,17 +143,23 @@ impl EnvironmentPluginGrantsApi {
     pub async fn get_environment_plugin_grant(
         &self,
         environment_plugin_grant_id: Path<EnvironmentPluginGrantId>,
+        #[oai(default)] include_deleted: Query<bool>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let record = recorded_http_api_request!(
             "get_environment_plugin_grant",
-            environment_plugin_grant_id = environment_plugin_grant_id.0.to_string()
+            environment_plugin_grant_id = environment_plugin_grant_id.0.to_string(),
+            include_deleted = %include_deleted.0
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_plugin_grant_internal(environment_plugin_grant_id.0, auth)
+            .get_environment_plugin_grant_internal(
+                environment_plugin_grant_id.0,
+                include_deleted.0,
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -163,11 +169,12 @@ impl EnvironmentPluginGrantsApi {
     async fn get_environment_plugin_grant_internal(
         &self,
         environment_plugin_grant_id: EnvironmentPluginGrantId,
+        include_deleted: bool,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let grant = self
             .environment_plugin_grant_service
-            .get_by_id(&environment_plugin_grant_id, &auth)
+            .get_by_id(&environment_plugin_grant_id, include_deleted, &auth)
             .await?;
 
         Ok(Json(grant))

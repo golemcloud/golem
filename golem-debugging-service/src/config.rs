@@ -21,10 +21,9 @@ use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, AgentTypesServiceConfig, ComponentCacheConfig, EngineConfig, GolemConfig,
-    IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig,
-    PluginServiceConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig,
-    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
-    WorkerServiceGrpcConfig,
+    IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig,
+    ResourceLimitsConfig, SchedulerConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig, SuspendConfig, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -41,7 +40,6 @@ pub struct DebugConfig {
     pub limits: Limits,
     pub retry: RetryConfig,
     pub compiled_component_service: CompiledComponentServiceConfig,
-    pub plugin_service: PluginServiceConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
@@ -71,7 +69,6 @@ impl DebugConfig {
             limits: self.limits,
             retry: self.retry,
             compiled_component_service: self.compiled_component_service,
-            plugin_service: self.plugin_service,
             oplog: self.oplog,
             suspend: self.suspend,
             active_workers: self.active_workers,
@@ -122,7 +119,6 @@ impl Default for DebugConfig {
             limits: default_golem_config.limits,
             retry: default_golem_config.retry,
             compiled_component_service: default_golem_config.compiled_component_service,
-            plugin_service: default_golem_config.plugin_service,
             oplog: default_golem_config.oplog,
             suspend: default_golem_config.suspend,
             active_workers: default_golem_config.active_workers,

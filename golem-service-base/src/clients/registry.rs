@@ -15,7 +15,6 @@
 use super::RegistryServiceConfig;
 use crate::custom_api::CompiledRoutes;
 use crate::model::auth::{AuthCtx, AuthDetailsForEnvironment, UserAuthCtx};
-use crate::model::plugin_registration::PluginRegistration;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
@@ -24,16 +23,14 @@ use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
     GetActiveRoutesForDomainRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
     GetAllComponentVersionsRequest, GetAuthDetailsForEnvironmentRequest,
-    GetComponentMetadataRequest, GetLatestComponentMetadataRequest,
-    GetPluginRegistrationByIdRequest, GetResourceLimitsRequest, ResolveComponentRequest,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
+    GetComponentMetadataRequest, GetLatestComponentMetadataRequest, GetResourceLimitsRequest,
+    ResolveComponentRequest, UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest,
+    authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
     get_all_component_versions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_resource_limits_response, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::WorkerId;
@@ -45,7 +42,6 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{IntoAnyhow, SafeDisplay};
 use std::collections::HashMap;
 use tonic::codec::CompressionEncoding;
@@ -97,14 +93,6 @@ pub trait RegistryService: Send + Sync {
         updates: HashMap<AccountId, i64>,
         auth_ctx: &AuthCtx,
     ) -> Result<AccountResourceLimits, RegistryServiceError>;
-
-    // plugins api
-    // will return the plugin registration even if it is deleted
-    async fn get_plugin_registration_by_id(
-        &self,
-        plugin_id: &PluginRegistrationId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<PluginRegistration, RegistryServiceError>;
 
     // components api
     // will return the component even if it is deleted
@@ -377,33 +365,6 @@ impl RegistryService for GrpcRegistryService {
                 Ok(converted)
             }
             Some(batch_update_fuel_usage_response::Result::Error(error)) => Err(error.into()),
-        }
-    }
-
-    async fn get_plugin_registration_by_id(
-        &self,
-        plugin_id: &PluginRegistrationId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<PluginRegistration, RegistryServiceError> {
-        let response = self
-            .client
-            .call("get-plugin-registration-by-id", move |client| {
-                let request = GetPluginRegistrationByIdRequest {
-                    id: Some((*plugin_id).into()),
-                    auth_ctx: Some(auth_ctx.clone().into()),
-                };
-
-                Box::pin(client.get_plugin_registration_by_id(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(get_plugin_registration_by_id_response::Result::Success(payload)) => {
-                Ok(payload.plugin.ok_or("missing plugin field")?.try_into()?)
-            }
-            Some(get_plugin_registration_by_id_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

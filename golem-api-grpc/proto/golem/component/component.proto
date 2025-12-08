@@ -8,7 +8,7 @@ import "golem/common/application.proto";
 import "golem/common/hash.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
-import "golem/component/plugin_installation.proto";
+import "golem/component/plugin.proto";
 import "golem/component/component_id.proto";
 import "golem/auth/environment_role.proto";
 import "google/protobuf/timestamp.proto";

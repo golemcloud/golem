@@ -14,8 +14,6 @@ import "golem/component/component.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
 import "golem/component/dynamic_linked_instance.proto";
-import "golem/component/plugin_installation.proto";
-import "golem/component/plugin_registration.proto";
 import "golem/registry/fuel_usage_update.proto";
 import "golem/registry/registered_agent_type.proto";
 import "golem/registry/v1/registry_service_error.proto";
@@ -33,9 +31,6 @@ service RegistryService {
   rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
   rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
-
-  // plugins api
-  rpc GetPluginRegistrationById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
 
   // components api
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
@@ -142,22 +137,6 @@ message BatchUpdateFuelUsageResponse {
 
 message BatchUpdateFuelUsageSuccessResponse {
   golem.common.AccountResourceLimits account_resource_limits = 1;
-}
-
-message GetPluginRegistrationByIdRequest {
-  golem.component.PluginRegistrationId id = 1;
-  golem.auth.AuthCtx auth_ctx = 2;
-}
-
-message GetPluginRegistrationByIdResponse {
-  oneof result {
-    GetPluginRegistrationByIdSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message GetPluginRegistrationByIdSuccessResponse {
-  golem.component.PluginRegistration plugin = 1;
 }
 
 message DownloadComponentRequest {

@@ -44,7 +44,6 @@ use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
-use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -113,17 +112,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         Err(anyhow!("No grpc server in debugging service"))
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-        registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService> {
-        golem_worker_executor::services::plugins::configured(
-            registry_service,
-            &golem_config.plugin_service,
-        )
-    }
-
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<DebugContext>>,
@@ -147,7 +135,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -196,7 +183,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -229,7 +215,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -261,7 +246,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
             additional_deps,

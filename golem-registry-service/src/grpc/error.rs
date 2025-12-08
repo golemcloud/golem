@@ -18,7 +18,6 @@ use crate::services::component::ComponentError;
 use crate::services::component_resolver::ComponentResolverError;
 use crate::services::deployment::{DeployedRoutesError, DeploymentError};
 use crate::services::environment::EnvironmentError;
-use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::IntoAnyhow;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
@@ -130,23 +129,6 @@ impl From<AccountUsageError> for GrpcApiError {
             }
             AccountUsageError::Unauthorized(inner) => inner.into(),
             AccountUsageError::LimitExceeded(inner) => inner.into(),
-            _ => Self::InternalError(ErrorBody {
-                error,
-                cause: Some(value.into_anyhow()),
-            }),
-        }
-    }
-}
-
-impl From<PluginRegistrationError> for GrpcApiError {
-    fn from(value: PluginRegistrationError) -> Self {
-        let error: String = value.to_string();
-        match value {
-            PluginRegistrationError::Unauthorized(inner) => inner.into(),
-            PluginRegistrationError::ParentAccountNotFound(_)
-            | PluginRegistrationError::PluginRegistrationNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
             _ => Self::InternalError(ErrorBody {
                 error,
                 cause: Some(value.into_anyhow()),

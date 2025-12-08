@@ -164,7 +164,6 @@ impl PluginRegistrationService {
             icon: data.icon.0,
             homepage: data.homepage,
             spec,
-            deleted: false,
         };
 
         let audit = ImmutableAuditFields::new(auth.account_id().0);
