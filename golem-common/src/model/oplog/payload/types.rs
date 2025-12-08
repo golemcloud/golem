@@ -1099,6 +1099,7 @@ impl Display for SerializableHttpMethod {
 #[derive(Debug, Clone, PartialEq, IntoValue, FromValue, BinaryCodec)]
 pub struct AgentMetadataForGuests {
     pub agent_id: WorkerId,
+    pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config_vars: BTreeMap<String, String>,
     pub status: WorkerStatus,
@@ -1110,6 +1111,7 @@ impl From<WorkerMetadata> for AgentMetadataForGuests {
     fn from(value: WorkerMetadata) -> Self {
         Self {
             agent_id: value.worker_id,
+            args: vec![],
             env: value.env,
             config_vars: value.wasi_config_vars,
             status: value.last_known_status.status,
