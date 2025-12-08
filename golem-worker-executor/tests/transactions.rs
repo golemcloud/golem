@@ -152,7 +152,7 @@ async fn jump(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "runtime-service-jump", vec![], env, vec![])
+        .start_worker_with(&component.id, "runtime-service-jump", env, vec![])
         .await?;
 
     let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -319,7 +319,7 @@ async fn atomic_region(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "atomic-region", vec![], env, vec![])
+        .start_worker_with(&component.id, "atomic-region", env, vec![])
         .await?;
 
     executor
@@ -361,7 +361,7 @@ async fn idempotence_on(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "idempotence-flag", vec![], env, vec![])
+        .start_worker_with(&component.id, "idempotence-flag", env, vec![])
         .await?;
 
     executor
@@ -407,7 +407,7 @@ async fn idempotence_off(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "idempotence-flag", vec![], env, vec![])
+        .start_worker_with(&component.id, "idempotence-flag", env, vec![])
         .await?;
 
     let result = executor
@@ -455,7 +455,7 @@ async fn persist_nothing(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "persist-nothing", vec![], env, vec![])
+        .start_worker_with(&component.id, "persist-nothing", env, vec![])
         .await?;
 
     let result = executor
@@ -598,13 +598,7 @@ async fn golem_rust_atomic_region(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "golem-rust-tests-atomic-region",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "golem-rust-tests-atomic-region", env, vec![])
         .await?;
 
     executor
@@ -649,7 +643,6 @@ async fn golem_rust_idempotence_on(
         .start_worker_with(
             &component.id,
             "golem-rust-tests-idempotence-flag-on",
-            vec![],
             env,
             vec![],
         )
@@ -701,7 +694,6 @@ async fn golem_rust_idempotence_off(
         .start_worker_with(
             &component.id,
             "golem-rust-tests-idempotence-flag-off",
-            vec![],
             env,
             vec![],
         )
@@ -755,7 +747,6 @@ async fn golem_rust_persist_nothing(
         .start_worker_with(
             &component.id,
             "golem-rust-tests-persist-nothing",
-            vec![],
             env,
             vec![],
         )
@@ -811,7 +802,6 @@ async fn golem_rust_fallible_transaction(
         .start_worker_with(
             &component.id,
             "golem-rust-tests-fallible-transaction",
-            vec![],
             env,
             vec![],
         )
@@ -881,7 +871,6 @@ async fn golem_rust_infallible_transaction(
         .start_worker_with(
             &component.id,
             "golem-rust-tests-infallible-transaction",
-            vec![],
             env,
             vec![],
         )

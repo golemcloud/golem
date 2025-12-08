@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/common/uuid.proto";
+import "golem/component/component_id.proto";
+
+message PluginRegistrationId {
+  golem.common.UUID value = 1;
+}
+
+message EnvironmentPluginGrantId {
+  golem.common.UUID value = 1;
+}
+
+message PluginInstallation {
+  EnvironmentPluginGrantId environment_plugin_grant_id = 1;
+  int32 priority = 2;
+  map<string, string> parameters = 3;
+
+  PluginRegistrationId plugin_registration_id = 4;
+  string plugin_name = 5;
+  string plugin_version = 6;
+
+  optional golem.component.ComponentId oplog_processor_component_id = 7;
+  optional uint64 oplog_processor_component_version = 8;
+}

@@ -107,6 +107,11 @@ impl AccountUsage {
         self.changes.get(&usage_type).copied().unwrap_or(0)
     }
 
+    pub fn final_value(&self, usage_type: UsageType) -> i64 {
+        self.usage(usage_type)
+            .saturating_add(self.change(usage_type))
+    }
+
     pub fn add_change(&mut self, usage_type: UsageType, change: i64) -> bool {
         let limit = self.plan.limit(usage_type);
 
@@ -115,17 +120,14 @@ impl AccountUsage {
             .and_modify(|e| *e = e.saturating_add(change))
             .or_insert(change);
 
-        let change = self.change(usage_type);
-        let final_value = self.usage(usage_type).saturating_add(change);
-
-        final_value <= limit
+        self.final_value(usage_type) <= limit
     }
 
     pub fn resource_limits(&self) -> ResourceLimits {
         let available_fuel = self
             .plan
             .monthly_gas_limit
-            .saturating_sub(self.usage(UsageType::MonthlyGasLimit));
+            .saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
 
         ResourceLimits {
             available_fuel,

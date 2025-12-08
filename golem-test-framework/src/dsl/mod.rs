@@ -175,7 +175,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         name: &str,
     ) -> Self::WorkerInvocationResult<WorkerId> {
-        self.try_start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
+        self.try_start_worker_with(component_id, name, HashMap::new(), vec![])
             .await
     }
 
@@ -183,7 +183,6 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> Self::WorkerInvocationResult<WorkerId>;
@@ -193,7 +192,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         name: &str,
     ) -> anyhow::Result<WorkerId> {
-        self.start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
+        self.start_worker_with(component_id, name, HashMap::new(), vec![])
             .await
     }
 
@@ -201,7 +200,6 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId>;

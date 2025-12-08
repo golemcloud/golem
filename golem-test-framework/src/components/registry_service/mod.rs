@@ -101,7 +101,7 @@ async fn env_vars(
                 "GOLEM__COMPONENT_COMPILATION__CONFIG__PORT",
                 component_compilation_service.grpc_port().to_string(),
             ),
-        _ => builder.with_str("GOLEM__COMPILATION__TYPE", "Disabled"),
+        _ => builder.with_str("GOLEM__COMPONENT_COMPILATION__TYPE", "Disabled"),
     };
 
     builder

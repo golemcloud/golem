@@ -1089,8 +1089,8 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, ComponentOptionalComponentName, DeployArgs, NewWorkerArgument,
-        OptionalAgentTypeName, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+        AgentIdArgs, ComponentOptionalComponentName, DeployArgs, OptionalAgentTypeName, StreamArgs,
+        WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
@@ -1104,8 +1104,6 @@ pub mod worker {
         New {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Command-line arguments visible for the agent
-            arguments: Vec<NewWorkerArgument>,
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,

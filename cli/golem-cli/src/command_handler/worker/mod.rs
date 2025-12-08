@@ -16,8 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, DeployArgs, NewWorkerArgument, StreamArgs, WorkerFunctionArgument,
-    WorkerFunctionName,
+    AgentIdArgs, DeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -94,9 +93,8 @@ impl WorkerCommandHandler {
         match subcommand {
             AgentSubcommand::New {
                 agent_id: worker_name,
-                arguments,
                 env,
-            } => self.cmd_new(worker_name, arguments, env).await,
+            } => self.cmd_new(worker_name, env).await,
             AgentSubcommand::Invoke {
                 agent_id: worker_name,
                 function_name,
@@ -202,7 +200,6 @@ impl WorkerCommandHandler {
     async fn cmd_new(
         &self,
         worker_name: AgentIdArgs,
-        arguments: Vec<NewWorkerArgument>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -231,7 +228,6 @@ impl WorkerCommandHandler {
         self.new_worker(
             component.id.0,
             worker_name_match.worker_name.0.clone(),
-            arguments,
             env.into_iter().collect(),
         )
         .await?;
@@ -1071,7 +1067,6 @@ impl WorkerCommandHandler {
         &self,
         component_id: Uuid,
         worker_name: String,
-        args: Vec<String>,
         env: HashMap<String, String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
@@ -1082,9 +1077,8 @@ impl WorkerCommandHandler {
                 &component_id,
                 &WorkerCreationRequest {
                     name: worker_name,
-                    args,
                     env,
-                    wasi_config_vars: WasiConfigVars::default(),
+                    config_vars: WasiConfigVars::default(),
                 },
             )
             .await
@@ -1546,7 +1540,6 @@ impl WorkerCommandHandler {
         self.new_worker(
             worker_metadata.worker_id.component_id.0,
             worker_metadata.worker_id.worker_name,
-            worker_metadata.args,
             worker_metadata.env,
         )
         .await?;

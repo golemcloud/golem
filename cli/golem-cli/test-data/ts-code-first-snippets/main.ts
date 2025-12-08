@@ -1,4 +1,12 @@
-import {BaseAgent, Result, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, MultimodalAdvanced} from '@golemcloud/golem-ts-sdk';
+import {
+    BaseAgent,
+    Result,
+    agent,
+    UnstructuredText,
+    UnstructuredBinary,
+    WithRemoteMethods,
+    MultimodalAdvanced
+} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -152,6 +160,11 @@ class FooAgent extends BaseAgent {
             param7,)
     }
 
+    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
+        return this.barAgent.funOptionalQMark(
+            param1, param2, param3
+        )
+    }
 
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
         return await this.barAgent.funObjectComplexType(text);
@@ -170,8 +183,6 @@ class FooAgent extends BaseAgent {
     async funNumber(numberType: NumberType): Promise<NumberType> {
         return await this.barAgent.funNumber(numberType);
     }
-
-
 
 
     async funString(stringType: StringType): Promise<Types.StringType> {
@@ -344,6 +355,10 @@ class BarAgent extends BaseAgent {
         };
 
         return Promise.resolve(concatenatedResult);
+    }
+
+    async funOptionalQMark(param1: string, param2?: number, param3?: string) {
+        return Promise.resolve({param1, param2, param3})
     }
 
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {

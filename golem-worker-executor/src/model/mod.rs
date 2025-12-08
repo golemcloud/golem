@@ -61,7 +61,6 @@ impl ShardAssignmentCheck for ShardAssignment {
 /// be different for each worker.
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
-    pub args: Vec<String>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
     pub component_version_for_replay: ComponentRevision,
@@ -71,7 +70,6 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn new(
-        worker_args: Vec<String>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: ComponentRevision,
@@ -79,7 +77,6 @@ impl WorkerConfig {
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
         WorkerConfig {
-            args: worker_args,
             deleted_regions,
             total_linear_memory_size,
             component_version_for_replay,
@@ -130,9 +127,6 @@ pub struct CurrentResourceLimits {
 
 impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
     fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        const _: () = {
-            assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
-        };
         Self {
             fuel: value.available_fuel,
             max_memory: value.max_memory_per_worker as usize,

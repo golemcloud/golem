@@ -146,7 +146,7 @@ impl From<PluginInstallationDescription>
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
-            registered: plugin_installation_description.registered,
+            registered: false,
         }
     }
 }
@@ -163,7 +163,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
             plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
-            registered: value.registered,
             parameters: BTreeMap::from_iter(value.parameters),
         })
     }
@@ -210,7 +209,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .ok_or("Missing worker_id field")?
                     .try_into()?,
                 component_revision: ComponentRevision(create.component_version),
-                args: create.args,
                 env: create.env.into_iter().collect(),
                 environment_id: create
                     .environment_id
@@ -597,7 +595,6 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         timestamp: Some(create.timestamp.into()),
                         worker_id: Some(create.worker_id.into()),
                         component_version: create.component_revision.0,
-                        args: create.args,
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),

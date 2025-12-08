@@ -55,13 +55,7 @@ async fn auction_example_1(
         auction_component.id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(
-            &registry_component.id,
-            "auction-registry-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&registry_component.id, "auction-registry-1", env, vec![])
         .await?;
 
     executor.log_output(&registry_worker_id).await?;
@@ -140,13 +134,7 @@ async fn auction_example_2(
         auction_component.id.to_string(),
     );
     let registry_worker_id = executor
-        .start_worker_with(
-            &registry_component.id,
-            "auction-registry-2",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&registry_component.id, "auction-registry-2", env, vec![])
         .await?;
 
     executor.log_output(&registry_worker_id).await?;
@@ -224,7 +212,7 @@ async fn counter_resource_test_1(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-1", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-1", env, vec![])
         .await?;
 
     let result = executor
@@ -274,7 +262,7 @@ async fn counter_resource_test_2(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-2", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-2", env, vec![])
         .await?;
 
     let result1 = executor
@@ -327,7 +315,7 @@ async fn counter_resource_test_2_with_restart(
     );
 
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-2r", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-2r", env, vec![])
         .await?;
 
     let result1 = executor
@@ -383,7 +371,7 @@ async fn counter_resource_test_3(
     );
 
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-3", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-3", env, vec![])
         .await?;
 
     let result1 = executor
@@ -435,7 +423,7 @@ async fn counter_resource_test_3_with_restart(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-3r", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-3r", env, vec![])
         .await?;
 
     let result1 = executor
@@ -492,13 +480,7 @@ async fn context_inheritance(
     env.insert("TEST_CONFIG".to_string(), "123".to_string());
 
     let caller_worker_id = executor
-        .start_worker_with(
-            &caller_component.id,
-            "rpc-counters-4",
-            vec!["a".to_string(), "b".to_string(), "c".to_string()],
-            env,
-            vec![],
-        )
+        .start_worker_with(&caller_component.id, "rpc-counters-4", env, vec![])
         .await?;
 
     let result = executor
@@ -536,13 +518,7 @@ async fn context_inheritance(
     };
     env.sort_by_key(|(k, _v)| k.clone());
 
-    check!(
-        args == vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
-            Value::String("c".to_string())
-        ]
-    );
+    check!(args == vec![]);
     check!(
         env == vec![
             (
@@ -591,7 +567,7 @@ async fn counter_resource_test_5(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-5", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-5", env, vec![])
         .await?;
 
     executor.log_output(&caller_worker_id).await?;
@@ -646,7 +622,7 @@ async fn counter_resource_test_5_with_restart(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component.id, "rpc-counters-5r", vec![], env, vec![])
+        .start_worker_with(&caller_component.id, "rpc-counters-5r", env, vec![])
         .await?;
 
     executor.log_output(&caller_worker_id).await?;
@@ -718,13 +694,7 @@ async fn wasm_rpc_bug_32_test(
         counters_component.id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(
-            &caller_component.id,
-            "rpc-counters-bug32",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&caller_component.id, "rpc-counters-bug32", env, vec![])
         .await?;
 
     let result = executor
@@ -778,7 +748,6 @@ async fn error_message_non_existing_target_component(
         .start_worker_with(
             &registry_component.id,
             "auction-registry-non-existing-target",
-            vec![],
             env,
             vec![],
         )

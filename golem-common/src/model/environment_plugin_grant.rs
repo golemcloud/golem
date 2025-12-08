@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::environment::EnvironmentId;
-use super::plugin_registration::PluginRegistrationId;
+use super::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
 use crate::{declare_structs, newtype_uuid};
 
 newtype_uuid!(
@@ -25,9 +25,7 @@ declare_structs! {
     pub struct EnvironmentPluginGrant {
         pub id: EnvironmentPluginGrantId,
         pub environment_id: EnvironmentId,
-        pub plugin_registration_id: PluginRegistrationId,
-
-        // As other member of the environment can not get the referenced plugin directly, we should include the plugin here
+        pub plugin: PluginRegistrationDto
     }
 
     pub struct EnvironmentPluginGrantCreation {

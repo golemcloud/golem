@@ -1003,7 +1003,6 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
     let self_created_by = *store.data().created_by();
     let self_worker_id = store.data().owned_worker_id().worker_id();
 
-    let args = store.data_mut().get_arguments().await?;
     let mut env = store.data_mut().get_environment().await?;
     WorkerConfig::remove_dynamic_vars(&mut env);
 
@@ -1016,7 +1015,6 @@ async fn create_demand<Ctx: WorkerCtx + wasmtime_wasi::p2::bindings::cli::enviro
             remote_worker_id,
             &self_created_by,
             &self_worker_id,
-            &args,
             &env,
             config,
             stack,

@@ -622,7 +622,7 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
-dependencies = ["build-registry-service"]
+dependencies = ["build-registry-service-non-ci"]
 cwd = "./target/debug"
 script = '''
 mkdir -pv ../data

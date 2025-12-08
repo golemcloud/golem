@@ -172,12 +172,6 @@ impl MessageWithFields for WorkerGetView {
                 format_binary_size,
             )
             .fmt_field_optional(
-                "Arguments",
-                &self.metadata.args,
-                !self.metadata.args.is_empty(),
-                |args| args.join(" "),
-            )
-            .fmt_field_optional(
                 "Environment variables",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
@@ -324,10 +318,6 @@ impl TextView for PublicOplogEntry {
                 logln(format!(
                     "{pad}component revision: {}",
                     format_id(&params.component_revision),
-                ));
-                logln(format!(
-                    "{pad}args:               {}",
-                    format_id(&params.args.join(", ")),
                 ));
                 logln(format!("{pad}env:"));
                 for (k, v) in &params.env {

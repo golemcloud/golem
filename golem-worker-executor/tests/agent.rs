@@ -132,7 +132,6 @@ async fn agent_env_inheritance(
         .start_worker_with(
             &component.id,
             &format!("test-agent(\"{unique_id}\")"),
-            vec![],
             env,
             vec![],
         )

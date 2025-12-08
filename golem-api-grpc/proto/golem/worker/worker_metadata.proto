@@ -14,7 +14,6 @@ import "golem/common/environment.proto";
 message WorkerMetadata {
   WorkerId worker_id = 1;
   golem.common.AccountId created_by = 2;
-  repeated string args = 3;
   map<string, string> env = 4;
   WorkerStatus status = 5;
   uint64 component_version = 6;

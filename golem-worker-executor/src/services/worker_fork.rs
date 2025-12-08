@@ -18,7 +18,6 @@ use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
-use crate::services::plugins::PluginsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -28,7 +27,7 @@ use crate::services::{
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
-    HasPlugins, HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
+    HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
     HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
     HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
@@ -99,7 +98,6 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
-    pub plugins: Arc<dyn PluginsService>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub extra_deps: Ctx::ExtraDeps,
@@ -253,12 +251,6 @@ impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasPlugins for DefaultWorkerFork<Ctx> {
-    fn plugins(&self) -> Arc<dyn PluginsService> {
-        self.plugins.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for DefaultWorkerFork<Ctx> {
     fn oplog_processor_plugin(&self) -> Arc<dyn OplogProcessorPlugin> {
         self.oplog_processor_plugin.clone()
@@ -297,7 +289,6 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
             file_loader: self.file_loader.clone(),
-            plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
             extra_deps: self.extra_deps.clone(),
@@ -332,7 +323,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
@@ -362,7 +352,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             worker_activator,
             events,
             file_loader,
-            plugins,
             oplog_processor_plugin,
             resource_limits,
             extra_deps,
@@ -441,7 +430,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             None,
-            None,
             &InvocationContextStack::fresh(),
         )
         .await?;
@@ -453,7 +441,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             created_by: *fork_account_id,
             environment_id,
             env: initial_source_worker_metadata.env.clone(),
-            args: initial_source_worker_metadata.args.clone(),
             wasi_config_vars: initial_source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
@@ -505,7 +492,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             OplogEntry::Create {
                 timestamp,
                 component_revision,
-                args,
                 env,
                 environment_id,
                 created_by,
@@ -520,7 +506,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 timestamp,
                 worker_id: worker_id.clone(),
                 component_revision,
-                args,
                 env,
                 environment_id,
                 created_by,

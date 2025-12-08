@@ -4148,7 +4148,7 @@ paths:
       - RegistryService
       - EnvironmentPluginGrants
       - EnvironmentPluginGrants
-      summary: Get environment grant by id
+      summary: Get environment plugin grant by id
       operationId: get_environment_plugin_grant
       parameters:
       - in: path
@@ -4160,6 +4160,14 @@ paths:
           format: uuid
         explode: true
         style: simple
+      - in: query
+        name: include_deleted
+        deprecated: false
+        schema:
+          default: false
+          type: boolean
+        explode: true
+        style: form
       responses:
         '200':
           description: ''
@@ -8972,8 +8980,6 @@ components:
           type: string
         pluginVersion:
           type: string
-        registered:
-          type: boolean
         parameters:
           type: object
           additionalProperties:
@@ -8982,7 +8988,6 @@ components:
       - pluginPriority
       - pluginName
       - pluginVersion
-      - registered
       - parameters
     PublicAttribute:
       title: PublicAttribute
@@ -10163,22 +10168,17 @@ components:
       properties:
         name:
           type: string
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
             type: string
-        wasiConfigVars:
+        configVars:
           default: []
           type: array
           items:
             $ref: '#/components/schemas/WasiConfigVarsEntry'
       required:
       - name
-      - args
       - env
     WorkerCreationResponse:
       title: WorkerCreationResponse
@@ -10376,10 +10376,6 @@ components:
         createdBy:
           type: string
           format: uuid
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
@@ -10443,7 +10439,6 @@ components:
       - workerId
       - environmentId
       - createdBy
-      - args
       - env
       - wasiConfigVars
       - status
@@ -10701,10 +10696,6 @@ components:
         componentRevision:
           type: integer
           format: uint64
-        args:
-          type: array
-          items:
-            type: string
         env:
           type: object
           additionalProperties:
@@ -10738,7 +10729,6 @@ components:
       - timestamp
       - workerId
       - componentRevision
-      - args
       - env
       - createdBy
       - environmentId
@@ -12161,13 +12151,12 @@ components:
         environmentId:
           type: string
           format: uuid
-        pluginRegistrationId:
-          type: string
-          format: uuid
+        plugin:
+          $ref: '#/components/schemas/PluginRegistrationDto'
       required:
       - id
       - environmentId
-      - pluginRegistrationId
+      - plugin
     EnvironmentPluginGrantCreation:
       title: EnvironmentPluginGrantCreation
       type: object
@@ -12595,7 +12584,7 @@ components:
       title: InstalledPlugin
       type: object
       properties:
-        pluginRegistrationId:
+        environmentPluginGrantId:
           type: string
           format: uuid
         priority:
@@ -12608,10 +12597,26 @@ components:
           type: object
           additionalProperties:
             type: string
+        pluginRegistrationId:
+          type: string
+          format: uuid
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        oplogProcessorComponentId:
+          type: string
+          format: uuid
+        oplogProcessorComponentRevision:
+          type: integer
+          format: uint64
       required:
-      - pluginRegistrationId
+      - environmentPluginGrantId
       - priority
       - parameters
+      - pluginRegistrationId
+      - pluginName
+      - pluginVersion
     LinearMemory:
       title: LinearMemory
       type: object

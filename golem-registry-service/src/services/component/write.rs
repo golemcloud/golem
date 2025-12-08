@@ -38,7 +38,7 @@ use golem_common::model::component::{
 use golem_common::model::component::{ComponentId, PluginInstallation};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::widen_infallible;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
@@ -161,7 +161,7 @@ impl ComponentWriteService {
             wasm_object_store_key,
             component_creation.dynamic_linking,
             self.plugin_installations_for_new_component(
-                environment_id,
+                &environment,
                 component_creation.plugins,
                 auth,
             )
@@ -303,7 +303,7 @@ impl ComponentWriteService {
                 .dynamic_linking
                 .unwrap_or(component.metadata.dynamic_linking().clone()),
             self.update_plugin_installations(
-                &environment_id,
+                &environment,
                 component.installed_plugins,
                 component_update.plugin_updates,
                 auth,
@@ -502,7 +502,7 @@ impl ComponentWriteService {
 
     async fn plugin_installations_for_new_component(
         &self,
-        environment_id: &EnvironmentId,
+        environment: &Environment,
         plugin_installations: Vec<PluginInstallation>,
         auth: &AuthCtx,
     ) -> Result<Vec<InstalledPlugin>, ComponentError> {
@@ -520,9 +520,13 @@ impl ComponentWriteService {
             };
 
             // get the plugin details and ensure the plugin is installed to the environment
-            let plugin = self
+            let environment_plugin_grant = self
                 .environment_plugin_grant_service
-                .get_by_id(&plugin_installation.environment_plugin_grant_id, auth)
+                .get_active_by_id_for_environment(
+                    &plugin_installation.environment_plugin_grant_id,
+                    environment,
+                    auth,
+                )
                 .await
                 .map_err(|err| match err {
                     EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(grant_id) => {
@@ -531,17 +535,19 @@ impl ComponentWriteService {
                     other => other.into(),
                 })?;
 
-            // can only use plugins installed to the same environment
-            if plugin.environment_id != *environment_id {
-                return Err(ComponentError::EnvironmentPluginNotFound(
-                    plugin_installation.environment_plugin_grant_id,
-                ));
-            };
-
             result.push(InstalledPlugin {
-                plugin_registration_id: plugin.plugin_registration_id,
+                environment_plugin_grant_id: environment_plugin_grant.id,
                 parameters: plugin_installation.parameters,
                 priority: plugin_installation.priority,
+                plugin_registration_id: environment_plugin_grant.plugin.id,
+                oplog_processor_component_id: environment_plugin_grant
+                    .plugin
+                    .oplog_processor_component_id(),
+                oplog_processor_component_revision: environment_plugin_grant
+                    .plugin
+                    .oplog_processor_component_revision(),
+                plugin_name: environment_plugin_grant.plugin.name,
+                plugin_version: environment_plugin_grant.plugin.version,
             });
         }
 
@@ -550,7 +556,7 @@ impl ComponentWriteService {
 
     async fn update_plugin_installations(
         &self,
-        environment_id: &EnvironmentId,
+        environment: &Environment,
         previous: Vec<InstalledPlugin>,
         updates: Vec<PluginInstallationAction>,
         auth: &AuthCtx,
@@ -604,9 +610,13 @@ impl ComponentWriteService {
                     };
 
                     // get the plugin details and ensure the plugin is installed to the environment
-                    let plugin = self
+                    let environment_plugin_grant = self
                         .environment_plugin_grant_service
-                        .get_by_id(&inner.environment_plugin_grant_id, auth)
+                        .get_active_by_id_for_environment(
+                            &inner.environment_plugin_grant_id,
+                            environment,
+                            auth,
+                        )
                         .await
                         .map_err(|err| match err {
                             EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
@@ -615,17 +625,19 @@ impl ComponentWriteService {
                             other => other.into(),
                         })?;
 
-                    // can only use plugins installed to the same environment
-                    if plugin.environment_id != *environment_id {
-                        return Err(ComponentError::EnvironmentPluginNotFound(
-                            inner.environment_plugin_grant_id,
-                        ));
-                    };
-
                     updated.push(InstalledPlugin {
-                        plugin_registration_id: plugin.plugin_registration_id,
+                        environment_plugin_grant_id: environment_plugin_grant.id,
                         parameters: inner.parameters,
                         priority: inner.priority,
+                        plugin_registration_id: environment_plugin_grant.plugin.id,
+                        oplog_processor_component_id: environment_plugin_grant
+                            .plugin
+                            .oplog_processor_component_id(),
+                        oplog_processor_component_revision: environment_plugin_grant
+                            .plugin
+                            .oplog_processor_component_revision(),
+                        plugin_name: environment_plugin_grant.plugin.name,
+                        plugin_version: environment_plugin_grant.plugin.version,
                     });
                 }
             }
@@ -675,9 +687,6 @@ impl ComponentWriteService {
         mut component: NewComponentRevision,
         mut data: Arc<[u8]>,
     ) -> Result<(NewComponentRevision, Arc<[u8]>), ComponentError> {
-        // Auth was checked when initially installing the plugins. No need to check here (and users wouldn't be able to directly access the plugin anyway)
-        let auth = AuthCtx::system();
-
         if component.installed_plugins.is_empty() {
             return Ok((component, data));
         };
@@ -686,9 +695,11 @@ impl ComponentWriteService {
         installed_plugins.sort_by_key(|p| p.priority);
 
         for installation in installed_plugins {
+            // Auth was checked when initially installing the plugins. No need to check here (and users wouldn't be able to directly access the plugin anyway)
+            // include deleted here as the plugin might have been deleted in the meantime, but components should keep working.
             let plugin = self
                 .plugin_registration_service
-                .get_plugin(&installation.plugin_registration_id, true, &auth)
+                .get_plugin(&installation.plugin_registration_id, true, &AuthCtx::System)
                 .await?;
 
             match plugin.spec {

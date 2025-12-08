@@ -29,6 +29,7 @@ use golem_common::model::component_metadata::{ComponentMetadata, dynamic_linking
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hashable};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::blob::Blob;
@@ -257,7 +258,7 @@ impl ComponentRevisionRecord {
                     (
                         plugin.priority.to_string(),
                         diff::PluginInstallation {
-                            plugin_id: plugin.plugin_id,
+                            plugin_id: plugin.plugin_registration_id,
                             parameters: plugin.parameters.0.clone(),
                         },
                     )
@@ -356,8 +357,8 @@ impl ComponentExtRevisionRecord {
                 .revision
                 .plugins
                 .into_iter()
-                .map(|p| p.into())
-                .collect(),
+                .map(|p| p.try_into())
+                .collect::<Result<_, _>>()?,
             env: self.revision.env.0,
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
@@ -377,7 +378,6 @@ impl ComponentExtRevisionRecord {
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentFileRecord {
     pub component_id: Uuid,
-    // Note: Set by repo during insert
     pub revision_id: i64,
     pub file_path: String,
     #[sqlx(flatten)]
@@ -418,15 +418,19 @@ impl TryFrom<ComponentFileRecord> for InitialComponentFile {
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentPluginInstallationRecord {
-    pub component_id: Uuid, // NOTE: set by repo during insert
-    pub revision_id: i64,   // NOTE: set by repo during insert
+    pub component_id: Uuid,
+    pub revision_id: i64,
     pub priority: i32,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
-    pub plugin_id: Uuid,        // NOTE: required for insert
-    pub plugin_name: String,    // NOTE: returned by repo, not required to set
-    pub plugin_version: String, // NOTE: returned by repo, not required to set
+    pub environment_plugin_grant_id: Uuid,
     pub parameters: Json<BTreeMap<String, String>>,
+
+    pub plugin_registration_id: Uuid, // NOTE: not used directly in the repo, but needed for hash calculation
+    pub plugin_name: Option<String>,  // NOTE: returned by repo, not required to set
+    pub plugin_version: Option<String>, // NOTE: returned by repo, not required to set
+    pub oplog_processor_component_id: Option<Uuid>, // NOTE: returned by repo, not required to set
+    pub oplog_processor_component_revision_id: Option<i64>, // NOTE: returned by repo, not required to set
 }
 
 impl ComponentPluginInstallationRecord {
@@ -439,9 +443,7 @@ impl ComponentPluginInstallationRecord {
         Self {
             component_id,
             revision_id,
-            plugin_id: plugin_installation.plugin_registration_id.0,
-            plugin_name: "".to_string(),
-            plugin_version: "".to_string(),
+            environment_plugin_grant_id: plugin_installation.environment_plugin_grant_id.0,
             audit: RevisionAuditFields::new(actor.0),
             priority: plugin_installation.priority.0,
             parameters: Json::from(
@@ -450,17 +452,35 @@ impl ComponentPluginInstallationRecord {
                     .into_iter()
                     .collect::<BTreeMap<_, _>>(),
             ),
+            plugin_registration_id: plugin_installation.plugin_registration_id.0,
+            plugin_name: None,
+            plugin_version: None,
+            oplog_processor_component_id: None,
+            oplog_processor_component_revision_id: None,
         }
     }
 }
 
-impl From<ComponentPluginInstallationRecord> for InstalledPlugin {
-    fn from(value: ComponentPluginInstallationRecord) -> Self {
-        Self {
-            plugin_registration_id: PluginRegistrationId(value.plugin_id),
+impl TryFrom<ComponentPluginInstallationRecord> for InstalledPlugin {
+    type Error = anyhow::Error;
+    fn try_from(value: ComponentPluginInstallationRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
+            environment_plugin_grant_id: EnvironmentPluginGrantId(
+                value.environment_plugin_grant_id,
+            ),
             priority: PluginPriority(value.priority),
             parameters: value.parameters.0,
-        }
+
+            plugin_registration_id: PluginRegistrationId(value.plugin_registration_id),
+            plugin_name: value.plugin_name.ok_or(anyhow!("missing plugin name"))?,
+            plugin_version: value
+                .plugin_version
+                .ok_or(anyhow!("missing plugin version"))?,
+            oplog_processor_component_id: value.oplog_processor_component_id.map(ComponentId),
+            oplog_processor_component_revision: value
+                .oplog_processor_component_revision_id
+                .map(ComponentRevision::from),
+        })
     }
 }
 

@@ -48,7 +48,6 @@ use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
-use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -58,8 +57,8 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
+use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
-use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
@@ -167,7 +166,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
@@ -218,7 +216,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
-            &worker_config.args,
+            &[] as &[&str],
             temp_dir.path().to_path_buf(),
             stdin,
             stdout,
@@ -253,7 +251,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 rdbms_service,
                 component_service,
                 agent_types_service,
-                plugins,
                 config.clone(),
                 owned_worker_id.clone(),
                 rpc,
@@ -2256,7 +2253,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         None,
-                        None,
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
@@ -2649,7 +2645,6 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
-    plugins: Arc<dyn PluginsService>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
@@ -2731,7 +2726,6 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        plugin_service: Arc<dyn PluginsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
@@ -2767,7 +2761,6 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
-            plugins: plugin_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,
@@ -2922,12 +2915,6 @@ impl HasOplog for PrivateDurableWorkerState {
 impl HasConfig for PrivateDurableWorkerState {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
-    }
-}
-
-impl HasPlugins for PrivateDurableWorkerState {
-    fn plugins(&self) -> Arc<dyn PluginsService> {
-        self.plugins.clone()
     }
 }
 

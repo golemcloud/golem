@@ -26,7 +26,7 @@ use crate::preview2::golem_api_1_x::oplog::{
 use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
-use crate::services::{HasOplogService, HasPlugins, HasWorker};
+use crate::services::{HasOplogService, HasWorker};
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -889,14 +889,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-        let plugins = self.state.plugins();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = get_public_oplog_chunk(
             component_service,
             oplog_service,
-            plugins,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -1089,14 +1087,12 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-        let plugins = self.state.plugins();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = search_public_oplog(
             component_service,
             oplog_service,
-            plugins,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -1424,7 +1420,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
-            args: value.args,
+            args: vec![],
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),

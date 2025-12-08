@@ -253,7 +253,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
@@ -268,9 +267,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &component_id.0,
                 &WorkerCreationRequest {
                     name: name.to_string(),
-                    args,
                     env,
-                    wasi_config_vars: wasi_config_vars.into(),
+                    config_vars: wasi_config_vars.into(),
                 },
             )
             .await?;
@@ -282,11 +280,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
-        self.try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+        self.try_start_worker_with(component_id, name, env, wasi_config_vars)
             .await
     }
 
