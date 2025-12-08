@@ -848,7 +848,7 @@ impl AppCommandHandler {
                         let component_identity =
                             deploy_diff.staged_component_identity(&component_name);
 
-                        let staged_component = component_handler
+                        let component = component_handler
                             .get_component_revision_by_id(
                                 &component_identity.id,
                                 component_identity.revision,
@@ -857,16 +857,16 @@ impl AppCommandHandler {
 
                         match &kind {
                             DiffKind::Server => {
-                                deploy_diff.diffable_server_deployment.components.insert(
-                                    component_name.0,
-                                    staged_component.to_diffable().into(),
-                                );
+                                deploy_diff
+                                    .diffable_server_deployment
+                                    .components
+                                    .insert(component_name.0, component.to_diffable().into());
                             }
                             DiffKind::Stage => {
-                                deploy_diff.diffable_staged_deployment.components.insert(
-                                    component_name.0,
-                                    staged_component.to_diffable().into(),
-                                );
+                                deploy_diff
+                                    .diffable_staged_deployment
+                                    .components
+                                    .insert(component_name.0, component.to_diffable().into());
                             }
                         }
                     }
@@ -885,7 +885,7 @@ impl AppCommandHandler {
                         let definition_identity = deploy_diff
                             .staged_http_api_definition_identity(&http_api_definition_name);
 
-                        let staged_definition = http_api_definition_handler
+                        let definition = http_api_definition_handler
                             .get_http_api_definition_revision_by_id(
                                 &definition_identity.id,
                                 definition_identity.revision,
@@ -899,7 +899,7 @@ impl AppCommandHandler {
                                     .http_api_definitions
                                     .insert(
                                         http_api_definition_name.0,
-                                        staged_definition.to_diffable().into(),
+                                        definition.to_diffable().into(),
                                     );
                             }
                             DiffKind::Stage => {
@@ -908,7 +908,7 @@ impl AppCommandHandler {
                                     .http_api_definitions
                                     .insert(
                                         http_api_definition_name.0,
-                                        staged_definition.to_diffable().into(),
+                                        definition.to_diffable().into(),
                                     );
                             }
                         }
@@ -927,7 +927,7 @@ impl AppCommandHandler {
                         let deployment_identity =
                             deploy_diff.staged_http_api_deployment_identity(&domain);
 
-                        let staged_deployment = http_api_deployment_handler
+                        let deployment = http_api_deployment_handler
                             .get_http_api_deployment_revision_by_id(
                                 &deployment_identity.id,
                                 deployment_identity.revision,
@@ -939,13 +939,13 @@ impl AppCommandHandler {
                                 deploy_diff
                                     .diffable_server_deployment
                                     .http_api_deployments
-                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                                    .insert(domain.0, deployment.to_diffable().into());
                             }
                             DiffKind::Stage => {
                                 deploy_diff
                                     .diffable_staged_deployment
                                     .http_api_deployments
-                                    .insert(domain.0, staged_deployment.to_diffable().into());
+                                    .insert(domain.0, deployment.to_diffable().into());
                             }
                         }
                     }
