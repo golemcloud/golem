@@ -160,7 +160,7 @@ impl<T: ToGraph> ToGraph for Option<T> {
             some: self.as_ref().map(|v| v.to_graph(graph)),
         });
         graph.nodes.push(node);
-        index
+        graph.nodes.len() - 1
     }
 }
 
@@ -258,6 +258,12 @@ impl<T: FromGraph> FromGraph for Box<T> {
     }
 }
 
+impl<T: ToGraph> ToGraph for &T {
+    fn to_graph(&self, graph: &mut Graph) -> usize {
+        (*self).to_graph(graph)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -267,40 +273,81 @@ mod tests {
     use crate::agentic::{FromGraph, Schema, ToGraph};
     use crate::Schema;
 
-    #[derive(Schema, Debug)]
+    #[derive(Debug)]
     enum MyEnum {
         A(String),
         C(Box<MyEnum>),
+        D(Box<Option<MyEnum>>)
+    }
+
+    impl crate::agentic::ToGraph for MyEnum {
+        fn to_graph(&self, graph: &mut crate::agentic::Graph) -> usize {
+            match self {
+                Self::A(f0) => {
+                    let child_idx = crate::agentic::ToGraph::to_graph(&f0, graph);
+                    let index = graph.nodes.len();
+                    graph.nodes.push(crate::agentic::GraphNode::Enum(crate::agentic::EnumNode { variant: "A".to_string(), payload: Some(child_idx) }));
+                    index
+                }
+                Self::C(f0) => {
+                    let child_idx = crate::agentic::ToGraph::to_graph(&f0, graph);
+                    let index = graph.nodes.len();
+                    graph.nodes.push(crate::agentic::GraphNode::Enum(crate::agentic::EnumNode { variant: "C".to_string(), payload: Some(child_idx) }));
+                    index
+                }
+                Self::D(f0)
+                => {
+                    let child_idx = crate::agentic::ToGraph::to_graph(&f0, graph);
+                    let index = graph.nodes.len();
+                    graph.nodes.push(crate::agentic::GraphNode::Enum(crate::agentic::EnumNode { variant: "D".to_string(), payload: Some(child_idx) }));
+                    index
+                }
+            }
+        }
+    }
+    impl crate::agentic::FromGraph for MyEnum {
+        fn from_graph(graph: &crate::agentic::Graph, index: usize) -> Result<Self, String> {
+            match &graph.nodes[index] {
+                crate::agentic::GraphNode::Enum(enum_node) => {
+                    let payload_index = enum_node.payload.ok_or("Missing payload")?;
+                    match enum_node.variant.as_str() {
+                        "A" => Ok(Self::A(crate::agentic::FromGraph::from_graph(graph, payload_index)?)),
+                        "C" => Ok(Self::C(crate::agentic::FromGraph::from_graph(graph, payload_index)?)),
+                        "D" => Ok(Self::D(crate::agentic::FromGraph::from_graph(graph, payload_index)?)
+                        ),
+                        other => Err(format!("Unknown enum variant: {}", other)),
+                    }
+                }
+                _ => Err(format!("Expected Enum node at index {}", index)),
+            }
+        }
     }
 
 
     #[test]
     fn test_graph_serialization() {
 
-        let value =  MyEnum::C(Box::new(MyEnum::A("Hello, Graph!".to_string())));
+        // let value =  MyEnum::C(Box::new(MyEnum::C(Box::new(MyEnum::C(Box::new(MyEnum::A("Hello, Graph!".to_string())))))));
+        let value =  MyEnum::D(Box::new(Some(MyEnum::A("Hello, Graph!".to_string()))));
+       // let result: Result<MyEnum, String> = Schema::from_wit_value(value.to_wit_value().unwrap(), MyEnum::get_type());
 
+       // dbg!(&result);
 
+        let mut graph = crate::agentic::Graph { nodes: vec![], root: 0 };
 
-
-        let result: Result<MyEnum, String> = Schema::from_wit_value(value.to_wit_value().unwrap(), MyEnum::get_type());
+        let result = value.to_graph(
+            &mut graph
+        );
 
         dbg!(&result);
-
-        // let mut graph = crate::agentic::Graph { nodes: vec![], root: 0 };
         //
-        // let result = value.to_graph(
-        //     &mut graph
-        // );
+         graph.root = result;
         //
-        // dbg!(&result);
+        dbg!(&graph);
         //
-        // graph.root = result;
+        let result = MyEnum::from_graph(&graph, graph.root);
         //
-        // dbg!(&graph);
-        //
-        // let result = MyEnum::from_graph(&graph, graph.root).unwrap();
-        //
-        // dbg!(&result);
+        dbg!(&result);
 
 
         assert!(false)

@@ -81,15 +81,23 @@ pub fn derive_schema(input: TokenStream, golem_rust_crate_ident: &Ident) -> Toke
     }
 }
 
-fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident) -> proc_macro2::TokenStream {
+fn generate_to_graph(
+    ast: &DeriveInput,
+    self_ident: &Ident,
+    crate_ident: &Ident,
+) -> proc_macro2::TokenStream {
     match &ast.data {
         syn::Data::Struct(ds) => {
             let field_graphs = ds.fields.iter().enumerate().map(|(i, f)| {
-                let var_ident = f.ident.clone().unwrap_or_else(|| syn::Ident::new(&format!("field{}", i), f.span()));
+                let var_ident = f
+                    .ident
+                    .clone()
+                    .unwrap_or_else(|| syn::Ident::new(&format!("field{}", i), f.span()));
                 let field_name_str = var_ident.to_string();
+
                 quote! {
-                    let #var_ident = #crate_ident::agentic::ToGraph::to_graph(&self.#var_ident, graph);
-                    field_indices.push((#field_name_str.to_string(), #var_ident));
+                    let child_index = #crate_ident::agentic::ToGraph::to_graph(&self.#var_ident, graph);
+                    field_indices.push((#field_name_str.to_string(), child_index));
                 }
             });
 
@@ -98,84 +106,144 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
                     fn to_graph(&self, graph: &mut #crate_ident::agentic::Graph) -> usize {
                         let mut field_indices = Vec::new();
                         #(#field_graphs)*
+
                         let index = graph.nodes.len();
-                        graph.nodes.push(#crate_ident::agentic::GraphNode::Struct(
-                            #crate_ident::agentic::StructNode { fields: field_indices }
-                        ));
+                        graph.nodes.push(
+                            #crate_ident::agentic::GraphNode::Struct(
+                                #crate_ident::agentic::StructNode {
+                                    fields: field_indices
+                                }
+                            )
+                        );
                         index
                     }
                 }
             }
         }
+
         syn::Data::Enum(de) => {
             let variant_matches = de.variants.iter().map(|v| {
                 let vname = &v.ident;
+                let vname_str = vname.to_string();
+
                 match &v.fields {
                     Fields::Unit => quote! {
                         Self::#vname => {
-                            let payload_index = None;
-                            graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
-                                #crate_ident::agentic::EnumNode {
-                                    variant: stringify!(#vname).to_string(),
-                                    payload: payload_index,
-                                }
-                            ));
-
-                            graph.nodes.len() - 1
+                            let index = graph.nodes.len();
+                            graph.nodes.push(
+                                #crate_ident::agentic::GraphNode::Enum(
+                                    #crate_ident::agentic::EnumNode {
+                                        variant: #vname_str.to_string(),
+                                        payload: None,
+                                    }
+                                )
+                            );
+                            index
                         }
                     },
-                    Fields::Unnamed(fields_unnamed) => {
-                        let bindings: Vec<syn::Ident> = (0..fields_unnamed.unnamed.len())
+
+                    Fields::Unnamed(fields) => {
+                        // TODO; resivit this may be
+                        let n = fields.unnamed.len();
+                        let bindings: Vec<_> = (0..n)
                             .map(|i| syn::Ident::new(&format!("f{}", i), v.span()))
                             .collect();
 
-                        let to_graph_calls: Vec<_> = bindings.iter()
-                            .map(|b| quote! { #crate_ident::agentic::ToGraph::to_graph(#b, graph) })
-                            .collect();
+                        if n == 1 {
 
-                        let payload_expr = if bindings.len() == 1 {
-                            quote! { Some(#(#to_graph_calls),*) }
-                        } else {
+                            let b = &bindings[0];
                             quote! {
-                                let mut elements = Vec::new();
-                                #(elements.push(#to_graph_calls);)*
-                                Some(elements[0])
+                                Self::#vname(ref #b) => {
+                                    let child_idx = #crate_ident::agentic::ToGraph::to_graph(&#b, graph);
+                                    let index = graph.nodes.len();
+                                    graph.nodes.push(
+                                        #crate_ident::agentic::GraphNode::Enum(
+                                            #crate_ident::agentic::EnumNode {
+                                                variant: #vname_str.to_string(),
+                                                payload: Some(child_idx),
+                                            }
+                                        )
+                                    );
+                                    index
+                                }
                             }
-                        };
+                        } else {
 
-                        quote! {
-                            Self::#vname(#(#bindings),*) => {
-                                let payload_index = #payload_expr;
-                                graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
-                                    #crate_ident::agentic::EnumNode {
-                                        variant: stringify!(#vname).to_string(),
-                                        payload: payload_index,
-                                    }
-                                ));
+                            let pushes: Vec<proc_macro2::TokenStream> = bindings.iter().map(|b| {
+                                quote! {
+                                    children.push(#crate_ident::agentic::ToGraph::to_graph(&#b, graph));
+                                }
+                            }).collect();
 
-                                graph.nodes.len() - 1
+                            quote! {
+                                Self::#vname( #(#bindings),* ) => {
+
+                                    let mut children: Vec<usize> = Vec::new();
+                                    #(#pushes)*
+
+
+                                    let seq_idx = graph.nodes.len();
+                                    graph.nodes.push(
+                                        #crate_ident::agentic::GraphNode::Seq(
+                                            #crate_ident::agentic::SeqNode { elements: children }
+                                        )
+                                    );
+
+
+                                    let index = graph.nodes.len();
+                                    graph.nodes.push(
+                                        #crate_ident::agentic::GraphNode::Enum(
+                                            #crate_ident::agentic::EnumNode {
+                                                variant: #vname_str.to_string(),
+                                                payload: Some(seq_idx),
+                                            }
+                                        )
+                                    );
+                                    index
+                                }
                             }
                         }
-                    },
+                    }
+
+
                     Fields::Named(fields_named) => {
-                        let bindings: Vec<_> = fields_named.named.iter().map(|f| f.ident.clone().unwrap()).collect();
-                        let to_graph_calls = bindings.iter().map(|b| quote! { #crate_ident::agentic::ToGraph::to_graph(#b, graph) });
+                        let bindings: Vec<_> =
+                            fields_named.named.iter().map(|f| f.ident.clone().unwrap()).collect();
+
+                        let to_graph_children = bindings.iter().map(|b| {
+                            let name = b.to_string();
+
+                            quote! {
+                                fields.push( (#name.to_string(), #crate_ident::agentic::ToGraph::to_graph(&#b, graph)) );
+                            }
+                        });
+
                         quote! {
                             Self::#vname { #(#bindings),* } => {
-                                let mut elements = Vec::new();
-                                #(elements.push(#to_graph_calls);)*
-                                let payload_index = Some(elements[0]);
-                                graph.nodes.push(#crate_ident::agentic::GraphNode::Enum(
-                                    #crate_ident::agentic::EnumNode {
-                                        variant: stringify!(#vname).to_string(),
-                                        payload: payload_index,
-                                    }
-                                ));
 
-                                graph.nodes.len() - 1
+                                let mut fields: Vec<(String, usize)> = Vec::new();
+                                #(#to_graph_children)*
+
+                                let struct_index = graph.nodes.len();
+                                graph.nodes.push(
+                                    #crate_ident::agentic::GraphNode::Struct(
+                                        #crate_ident::agentic::StructNode { fields }
+                                    )
+                                );
+
+                                let index = graph.nodes.len();
+                                graph.nodes.push(
+                                    #crate_ident::agentic::GraphNode::Enum(
+                                        #crate_ident::agentic::EnumNode {
+                                            variant: #vname_str.to_string(),
+                                            payload: Some(struct_index),
+                                        }
+                                    )
+                                );
+                                index
                             }
                         }
-                    },
+                    }
                 }
             });
 
@@ -189,9 +257,11 @@ fn generate_to_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident)
                 }
             }
         }
+
         _ => quote! {},
     }
 }
+
 
 fn generate_from_graph(ast: &DeriveInput, self_ident: &Ident, crate_ident: &Ident) -> proc_macro2::TokenStream {
     match &ast.data {
