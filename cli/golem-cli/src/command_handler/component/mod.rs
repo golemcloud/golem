@@ -152,7 +152,7 @@ impl ComponentCommandHandler {
     async fn cmd_new(
         &self,
         template: Option<ComponentTemplateName>,
-        component_package_name: Option<PackageName>,
+        component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -173,8 +173,8 @@ impl ComponentCommandHandler {
             )
         };
 
-        let Some((template, component_package_name)) = ({
-            match (template, component_package_name) {
+        let Some((template, component_name)) = ({
+            match (template, component_name) {
                 (Some(template), Some(component_package_name)) => {
                     Some((template, component_package_name))
                 }
@@ -186,9 +186,7 @@ impl ComponentCommandHandler {
                     )?,
             }
         }) else {
-            log_error(
-                "Both TEMPLATE and COMPONENT_PACKAGE_NAME are required in non-interactive mode",
-            );
+            log_error("Both TEMPLATE and COMPONENT_NAME are required in non-interactive mode");
             logln("");
             self.ctx
                 .app_handler()
@@ -196,8 +194,6 @@ impl ComponentCommandHandler {
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
-
-        let component_name = ComponentName(component_package_name.to_string_with_colon());
 
         if existing_component_names.contains(component_name.as_str()) {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -220,7 +216,8 @@ impl ComponentCommandHandler {
             Some(component_template),
             &PathBuf::from("."),
             &application_name,
-            &component_package_name,
+            &PackageName::from_string(component_name.0.clone())
+                .expect("Failed to parse component name"),
             Some(self.ctx.template_sdk_overrides()),
         ) {
             Ok(()) => {
@@ -228,9 +225,7 @@ impl ComponentCommandHandler {
                     "Added",
                     format!(
                         "new app component {}",
-                        component_package_name
-                            .to_string_with_colon()
-                            .log_color_highlight()
+                        component_name.0.log_color_highlight()
                     ),
                 );
             }

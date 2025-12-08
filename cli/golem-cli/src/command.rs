@@ -936,7 +936,6 @@ pub mod component {
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
 
@@ -946,8 +945,8 @@ pub mod component {
         New {
             /// Template to be used for the new component
             component_template: Option<ComponentTemplateName>,
-            /// Name of the new component package in 'package:name' form
-            component_name: Option<PackageName>,
+            /// Name of the new component in 'namespace:name' form
+            component_name: Option<ComponentName>,
         },
         /// List or search component templates
         Templates {

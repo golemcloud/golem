@@ -17,10 +17,10 @@ use crate::model::agent::AgentType;
 use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinkedInstance};
-use crate::model::diff;
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
+use crate::model::{diff, validate_kebab_case_wit_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -72,8 +72,23 @@ impl TryFrom<String> for ComponentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: atomic: Add validations (non-empty, no "/", no " ", ...)
-        Ok(ComponentName(value.to_string()))
+        if value.is_empty() {
+            return Err("Component name cannot be empty".to_string());
+        }
+
+        if value.contains('@') {
+            return Err("Component name cannot contain version suffix (@version)".to_string());
+        }
+
+        let parts: Vec<&str> = value.split(':').collect();
+        if parts.len() != 2 {
+            return Err("Component name must follow the format 'namespace:name'".to_string());
+        }
+
+        validate_kebab_case_wit_identifier("Namespace", parts[0])?;
+        validate_kebab_case_wit_identifier("Name", parts[1])?;
+
+        Ok(ComponentName(value))
     }
 }
 

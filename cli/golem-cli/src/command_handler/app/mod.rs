@@ -228,15 +228,10 @@ impl AppCommandHandler {
                 }
             }
         } else {
-            for (template, component_package_name) in &components {
+            for (template, component_name) in &components {
                 log_action(
                     "Adding",
-                    format!(
-                        "component {}",
-                        component_package_name
-                            .to_string_with_colon()
-                            .log_color_highlight()
-                    ),
+                    format!("component {}", component_name.0.log_color_highlight()),
                 );
                 let (common_template, component_template) =
                     self.get_template(template, self.ctx.dev_mode())?;
@@ -245,7 +240,8 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     &application_name,
-                    component_package_name,
+                    &PackageName::from_string(component_name.0.clone())
+                        .expect("Failed to parse component name."),
                     Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {
@@ -253,9 +249,7 @@ impl AppCommandHandler {
                             "Added",
                             format!(
                                 "new app component {}",
-                                component_package_name
-                                    .to_string_with_colon()
-                                    .log_color_highlight()
+                                component_name.0.log_color_highlight()
                             ),
                         );
                     }

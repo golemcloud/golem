@@ -29,7 +29,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_templates::model::{GuestLanguage, PackageName};
+use golem_templates::model::GuestLanguage;
 use indoc::formatdoc;
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
@@ -581,7 +581,7 @@ impl InteractiveHandler {
         };
 
         let mut existing_component_names = HashSet::<String>::new();
-        let mut templated_component_names = Vec::<(String, PackageName)>::new();
+        let mut templated_component_names = Vec::<(String, ComponentName)>::new();
 
         loop {
             let Some(templated_component_name) = self
@@ -602,8 +602,7 @@ impl InteractiveHandler {
 
             match choice {
                 AddComponentOrCreateApp::AddComponent => {
-                    existing_component_names
-                        .insert(templated_component_name.1.to_string_with_colon());
+                    existing_component_names.insert(templated_component_name.1 .0.clone());
                     templated_component_names.push(templated_component_name);
                     continue;
                 }
@@ -623,7 +622,7 @@ impl InteractiveHandler {
     pub fn select_new_component_template_and_package_name(
         &self,
         existing_component_names: HashSet<String>,
-    ) -> anyhow::Result<Option<(String, PackageName)>> {
+    ) -> anyhow::Result<Option<(String, ComponentName)>> {
         let available_languages = self
             .ctx
             .templates(self.ctx.dev_mode())
@@ -678,7 +677,7 @@ impl InteractiveHandler {
                     )));
                 }
 
-                if let Err(error) = PackageName::from_str(value) {
+                if let Err(error) = ComponentName::from_str(value) {
                     return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
                 }
 
@@ -693,7 +692,7 @@ impl InteractiveHandler {
 
         Ok(Some((
             format!("{}/{}", language.id(), template.template_name),
-            PackageName::from_str(&component_name).unwrap(),
+            ComponentName::from_str(&component_name).unwrap(),
         )))
     }
 

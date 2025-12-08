@@ -64,6 +64,7 @@ use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
+use heck::ToKebabCase;
 use http::Uri;
 use poem_openapi::{Object, Union};
 use rand::prelude::IteratorRandom;
@@ -1813,4 +1814,42 @@ impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
     }
+}
+
+fn validate_kebab_case_wit_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+    if identifier.is_empty() {
+        return Err(format!("{} cannot be empty", field_name));
+    }
+
+    let first_char = identifier.chars().next().unwrap();
+    if !first_char.is_ascii_lowercase() {
+        return Err(format!(
+            "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
+            field_name, first_char
+        ));
+    }
+
+    let kebab_cased = identifier.to_kebab_case();
+    if identifier != kebab_cased {
+        return Err(format!(
+            "{} must be in kebab-case format (lowercase with hyphens). Expected '{}' but got '{}'",
+            field_name, kebab_cased, identifier
+        ));
+    }
+
+    if identifier.starts_with('-') || identifier.ends_with('-') {
+        return Err(format!(
+            "{} must not start or end with a hyphen",
+            field_name
+        ));
+    }
+
+    if identifier.contains("--") {
+        return Err(format!(
+            "{} must not contain consecutive hyphens",
+            field_name
+        ));
+    }
+
+    Ok(())
 }

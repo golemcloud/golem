@@ -18,6 +18,7 @@ use super::application::ApplicationName;
 use super::auth::EnvironmentRole;
 use super::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use super::diff::Hash;
+use crate::model::validate_kebab_case_wit_identifier;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use std::collections::BTreeSet;
 use std::str::FromStr;
@@ -38,7 +39,7 @@ impl TryFrom<String> for EnvironmentName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: atomic: Add validations
+        validate_kebab_case_wit_identifier("Environment", &value)?;
         Ok(EnvironmentName(value))
     }
 }

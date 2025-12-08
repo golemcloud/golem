@@ -15,8 +15,8 @@
 use super::component::ComponentName;
 use super::environment::EnvironmentId;
 use super::security_scheme::SecuritySchemeName;
-use crate::model::diff;
 use crate::model::Empty;
+use crate::model::{diff, validate_kebab_case_wit_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -56,7 +56,7 @@ impl TryFrom<String> for HttpApiDefinitionName {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // TODO: atomic: Add validations
+        validate_kebab_case_wit_identifier("HTTP API definition", &value)?;
         Ok(HttpApiDefinitionName(value.to_string()))
     }
 }
