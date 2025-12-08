@@ -1032,7 +1032,7 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             metadata: diff::ComponentMetadata {
-                version: Some("TODO".to_string()), // TODO: atomic
+                version: Some("".to_string()), // TODO: atomic
                 env: properties
                     .env
                     .iter()
