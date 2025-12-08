@@ -90,7 +90,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
                 None,
                 None,
                 None,
-                None,
                 &InvocationContextStack::fresh(),
             )
             .await?;
@@ -110,7 +109,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             .get_or_create_suspended(
                 created_by,
                 owned_worker_id,
-                None,
                 None,
                 None,
                 None,

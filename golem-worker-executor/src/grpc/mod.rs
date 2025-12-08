@@ -226,7 +226,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let args = request.args;
         let env = request
             .env
             .iter()
@@ -237,7 +236,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             auth_ctx.account_id(),
             &owned_worker_id,
-            Some(args),
             Some(env),
             Some(
                 request
@@ -348,7 +346,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 auth_ctx.account_id(),
                 &owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -478,7 +475,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
@@ -531,7 +527,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 auth_ctx.account_id(),
                 &owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -595,7 +590,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
-                        None,
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
@@ -620,7 +614,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         None,
                         None,
                         None,
-                        None,
                         &InvocationContextStack::fresh(),
                     )
                     .await?;
@@ -640,7 +633,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         auth_ctx.account_id(),
                         &owned_worker_id,
-                        None,
                         None,
                         None,
                         None,
@@ -710,7 +702,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
@@ -725,7 +716,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &self.services,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -822,7 +812,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             auth_ctx.account_id(),
             &owned_worker_id,
-            request.args(),
             request.env(),
             request.wasi_config_vars()?,
             None,
@@ -1107,7 +1096,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &owned_worker_id,
                             None,
                             None,
-                            None,
                             Some(metadata.last_known_status.component_revision),
                             None,
                             &InvocationContextStack::fresh(),
@@ -1128,7 +1116,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             auth_ctx.account_id(),
                             &owned_worker_id,
-                            None,
                             None,
                             None,
                             None,
@@ -1165,7 +1152,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -1212,7 +1198,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self,
                 auth_ctx.account_id(),
                 &owned_worker_id,
-                None,
                 None,
                 None,
                 None,
@@ -1560,7 +1545,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None,
                             None,
                             None,
-                            None,
                             &InvocationContextStack::fresh(),
                         )
                         .await?;
@@ -1629,7 +1613,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     auth_ctx.account_id(),
                     &owned_worker_id,
-                    None,
                     None,
                     None,
                     None,
@@ -1713,7 +1696,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
             environment_id: Some(metadata.environment_id.into()),
-            args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),
             wasi_config_vars: Some(metadata.wasi_config_vars.into()),

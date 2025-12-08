@@ -33,10 +33,9 @@ use std::fmt::{Display, Formatter};
 #[oai(rename_all = "camelCase")]
 pub struct WorkerCreationRequest {
     pub name: String,
-    pub args: Vec<String>,
     pub env: HashMap<String, String>,
     #[oai(default)]
-    pub wasi_config_vars: WasiConfigVars,
+    pub config_vars: WasiConfigVars,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -149,7 +148,6 @@ declare_structs! {
         pub worker_id: WorkerId,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
-        pub args: Vec<String>,
         pub env: HashMap<String, String>,
         pub wasi_config_vars: WasiConfigVars,
         pub status: WorkerStatus,
@@ -279,7 +277,6 @@ mod protobuf {
                     .ok_or("Missing environment_id")?
                     .try_into()?,
                 created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
-                args: value.args,
                 env: value.env,
                 wasi_config_vars: value
                     .wasi_config_vars
@@ -334,7 +331,6 @@ mod protobuf {
                 worker_id: Some(value.worker_id.into()),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
-                args: value.args,
                 env: value.env,
                 wasi_config_vars: Some(value.wasi_config_vars.into()),
                 status: value.status.into(),

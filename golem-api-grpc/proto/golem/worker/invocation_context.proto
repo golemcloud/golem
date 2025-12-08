@@ -8,7 +8,6 @@ import "golem/worker/wasi_config_vars.proto";
 
 message InvocationContext {
   golem.worker.WorkerId parent = 1;
-  repeated string args = 3;
   map<string, string> env = 4;
   optional TracingInvocationContext tracing = 5;
   WasiConfigVars wasi_config_vars = 6;

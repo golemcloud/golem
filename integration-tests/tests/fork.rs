@@ -54,13 +54,7 @@ async fn fork_interrupted_worker(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = user
-        .start_worker_with(
-            &component.id,
-            source_worker_name.as_str(),
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, source_worker_name.as_str(), env, vec![])
         .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
@@ -219,13 +213,7 @@ async fn fork_running_worker_2(
 
     let source_worker_name = Uuid::new_v4().to_string();
     let source_worker_id = user
-        .start_worker_with(
-            &component.id,
-            source_worker_name.as_str(),
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, source_worker_name.as_str(), env, vec![])
         .await?;
 
     let target_worker_name = Uuid::new_v4().to_string();
@@ -749,7 +737,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
     info!("Using environment: {:?}", env);
 
     let worker_id = user
-        .start_worker_with(&component.id, "source-worker", vec![], env, vec![])
+        .start_worker_with(&component.id, "source-worker", env, vec![])
         .await?;
 
     user.log_output(&worker_id).await?;

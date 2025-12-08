@@ -133,7 +133,6 @@ impl WorkerService for DefaultWorkerService {
                 OplogEntry::Create {
                     worker_id,
                     component_revision,
-                    args,
                     env,
                     environment_id,
                     created_by,
@@ -148,7 +147,6 @@ impl WorkerService for DefaultWorkerService {
             )) => {
                 let initial_worker_metadata = WorkerMetadata {
                     worker_id,
-                    args,
                     env,
                     wasi_config_vars,
                     environment_id,

@@ -572,7 +572,6 @@ impl FromStr for IdempotencyKey {
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -591,7 +590,6 @@ impl WorkerMetadata {
     ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
-            args: vec![],
             env: vec![],
             environment_id,
             created_by,

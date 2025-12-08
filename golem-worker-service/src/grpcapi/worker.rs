@@ -311,7 +311,6 @@ impl WorkerGrpcApi {
             .worker_service
             .create(
                 &worker_id,
-                request.args,
                 request.env,
                 wasi_config_vars,
                 request.ignore_already_existing,

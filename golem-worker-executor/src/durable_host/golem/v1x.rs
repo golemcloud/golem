@@ -1420,7 +1420,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
-            args: value.args,
+            args: vec![],
             env: value.env,
             config_vars: value.config_vars.into_iter().collect(),
             status: value.status.into(),

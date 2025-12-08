@@ -73,7 +73,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
-        let args = self.get_arguments().await?;
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
@@ -81,7 +80,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let remote_worker_id: WorkerId = worker_id.into();
 
-        construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &env, wasi_config_vars).await
     }
 
     async fn invoke_and_await(
@@ -90,7 +89,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<WitValue, golem_wasm::RpcError>> {
-        let args = self.get_arguments().await?;
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
@@ -164,7 +162,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     function_params,
                     &created_by,
                     &worker_id,
-                    &args,
                     &env,
                     wasi_config_vars,
                     stack,
@@ -224,7 +221,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Result<(), golem_wasm::RpcError>> {
-        let args = self.get_arguments().await?;
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
@@ -287,7 +283,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     function_params,
                     self.created_by(),
                     self.worker_id(),
-                    &args,
                     &env,
                     wasi_config_vars,
                     stack,
@@ -321,7 +316,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         function_name: String,
         mut function_params: Vec<WitValue>,
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
-        let args = self.get_arguments().await?;
         let mut env = self.get_environment().await?;
         WorkerConfig::remove_dynamic_vars(&mut env);
 
@@ -389,7 +383,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             function_params,
                             &created_by,
                             &worker_id,
-                            &args,
                             &env,
                             wasi_config_vars,
                             stack,
@@ -414,7 +407,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     remote_worker_id,
                     self_worker_id: worker_id,
                     self_created_by: created_by,
-                    args,
                     env,
                     wasi_config_vars,
                     function_name,
@@ -603,7 +595,6 @@ enum FutureInvokeResultState {
         remote_worker_id: OwnedWorkerId,
         self_worker_id: WorkerId,
         self_created_by: AccountId,
-        args: Vec<String>,
         env: Vec<(String, String)>,
         wasi_config_vars: BTreeMap<String, String>,
         function_name: String,
@@ -796,7 +787,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 remote_worker_id,
                                 self_worker_id,
                                 self_created_by,
-                                args,
                                 env,
                                 wasi_config_vars,
                                 function_name,
@@ -817,7 +807,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                     function_params,
                                     &self_created_by,
                                     &self_worker_id,
-                                    &args,
                                     &env,
                                     wasi_config_vars,
                                     stack,
@@ -1084,7 +1073,6 @@ impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_worker_id: WorkerId,
-    args: &[String],
     env: &[(String, String)],
     config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -1103,7 +1091,6 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             &remote_worker_id,
             ctx.created_by(),
             ctx.worker_id(),
-            args,
             env,
             config,
             stack,

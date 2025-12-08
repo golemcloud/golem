@@ -81,7 +81,6 @@ message CreateParameters {
   google.protobuf.Timestamp timestamp = 1;
   WorkerId worker_id = 2;
   uint64 component_version = 3;
-  repeated string args = 4;
   map<string, string> env = 5;
   golem.common.AccountId created_by = 6;
   optional WorkerId parent = 7;
