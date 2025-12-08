@@ -241,7 +241,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 &running_plugin.owned_worker_id,
                 None,
                 None,
-                None,
                 Some(running_plugin.component_version),
                 None,
                 &InvocationContextStack::fresh(),

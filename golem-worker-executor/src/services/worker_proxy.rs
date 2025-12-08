@@ -50,7 +50,6 @@ pub trait WorkerProxy: Send + Sync {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_account_id: &AccountId,
@@ -63,7 +62,6 @@ pub trait WorkerProxy: Send + Sync {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -77,7 +75,6 @@ pub trait WorkerProxy: Send + Sync {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -246,7 +243,6 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn start(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_account_id: &AccountId,
@@ -258,13 +254,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         let response: LaunchNewWorkerResponse = self
             .worker_service_client
             .call("launch_new_worker", move |client| {
-                let caller_args = caller_args.clone();
                 let caller_env = caller_env.clone();
                 let caller_wasi_config_vars = caller_wasi_config_vars.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_worker_id.component_id().into()),
                     name: owned_worker_id.worker_name(),
-                    args: caller_args,
                     env: caller_env,
                     wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                     ignore_already_existing: true,
@@ -293,7 +287,6 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -326,7 +319,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     invoke_parameters: invoke_parameters.clone(),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
-                        args: caller_args.clone(),
                         env: caller_env.clone(),
                         wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                         tracing: Some(caller_stack.clone().into()),
@@ -365,7 +357,6 @@ impl WorkerProxy for RemoteWorkerProxy {
         function_name: String,
         function_params: Vec<WitValue>,
         caller_worker_id: WorkerId,
-        caller_args: Vec<String>,
         caller_env: HashMap<String, String>,
         caller_wasi_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -396,7 +387,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     invoke_parameters: invoke_parameters.clone(),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_worker_id.clone().into()),
-                        args: caller_args.clone(),
                         env: caller_env.clone(),
                         wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                         tracing: Some(caller_stack.clone().into()),

@@ -244,7 +244,6 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
@@ -263,7 +262,6 @@ impl TestDsl for TestWorkerExecutor {
                 component_version: latest_version.revision.0,
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                args,
                 env,
                 wasi_config_vars: Some(BTreeMap::from_iter(wasi_config_vars).into()),
                 ignore_already_existing: false,
@@ -286,12 +284,11 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         component_id: &ComponentId,
         name: &str,
-        args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
     ) -> anyhow::Result<WorkerId> {
         let result = self
-            .try_start_worker_with(component_id, name, args, env, wasi_config_vars)
+            .try_start_worker_with(component_id, name, env, wasi_config_vars)
             .await??;
         Ok(result)
     }

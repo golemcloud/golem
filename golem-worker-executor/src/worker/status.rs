@@ -1252,7 +1252,6 @@ mod test {
                         owned_worker_id.worker_id(),
                         component_revision,
                         vec![],
-                        vec![],
                         owned_worker_id.environment_id(),
                         account_id,
                         None,

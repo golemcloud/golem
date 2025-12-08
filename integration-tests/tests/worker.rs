@@ -449,13 +449,7 @@ async fn auction_example_1(
     );
 
     let registry_worker_id = user
-        .start_worker_with(
-            &registry_component.id,
-            "auction-registry-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&registry_component.id, "auction-registry-1", env, vec![])
         .await?;
 
     user.log_output(&registry_worker_id).await?;
@@ -662,7 +656,6 @@ async fn get_running_workers(
             .start_worker_with(
                 &component.id,
                 &format!("worker-http-client-{i}"),
-                vec![],
                 env.clone(),
                 vec![],
             )
@@ -1214,13 +1207,7 @@ async fn worker_use_initial_files(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = user
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
         .await?;
 
     let result = user.invoke_and_await(&worker_id, "run", vec![]).await?;
@@ -1399,13 +1386,7 @@ async fn worker_read_files(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = user
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-3",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
         .await?;
 
     // run the worker so it can update the files.
@@ -1727,7 +1708,7 @@ async fn worker_suspends_when_running_out_of_fuel(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = user
-        .start_worker_with(&component.id, "http-client-1", vec![], env, vec![])
+        .start_worker_with(&component.id, "http-client-1", env, vec![])
         .await?;
 
     let invoker_task = tokio::spawn({

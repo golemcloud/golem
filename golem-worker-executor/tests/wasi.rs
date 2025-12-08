@@ -226,13 +226,7 @@ async fn file_write_read_delete(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "file-write-read-delete-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "file-write-read-delete-1", env, vec![])
         .await?;
 
     let result = executor
@@ -284,13 +278,7 @@ async fn initial_file_read_write(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-1",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-1", env, vec![])
         .await?;
 
     let result = executor
@@ -473,13 +461,7 @@ async fn initial_file_reading_through_api(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "initial-file-read-write-3",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "initial-file-read-write-3", env, vec![])
         .await?;
 
     // run the worker so it can update the files.
@@ -1009,16 +991,11 @@ async fn environment_service(
         .component(&context.default_environment_id, "environment-service")
         .store()
         .await?;
-    let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component.id, "environment-service-1", args, env, vec![])
+        .start_worker_with(&component.id, "environment-service-1", env, vec![])
         .await?;
-
-    let args_result = executor
-        .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
-        .await??;
 
     let env_result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
@@ -1026,12 +1003,6 @@ async fn environment_service(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    check!(
-        args_result
-            == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
-                Value::String("test-arg".to_string())
-            ])))))]
-    );
     check!(
         env_result
             == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
@@ -1104,7 +1075,7 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", vec![], env, vec![])
+        .start_worker_with(&component.id, "http-client-2", env, vec![])
         .await?;
     let rx = executor.capture_output(&worker_id).await?;
 
@@ -1194,7 +1165,7 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2", vec![], env, vec![])
+        .start_worker_with(&component.id, "http-client-2", env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -1308,7 +1279,7 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component.id, "http-client-2-async", vec![], env, vec![])
+        .start_worker_with(&component.id, "http-client-2-async", env, vec![])
         .await?;
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
@@ -1531,7 +1502,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-4", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-4", env, vec![])
         .await?;
 
     let start = Instant::now();
@@ -1576,7 +1547,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-5", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-5", env, vec![])
         .await?;
 
     let start = Instant::now();
@@ -1621,7 +1592,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-6", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-6", env, vec![])
         .await?;
 
     let start = Instant::now();
@@ -1667,7 +1638,7 @@ async fn sleep_and_awaiting_parallel_responses(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-7", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-7", env, vec![])
         .await?;
 
     let start = Instant::now();
@@ -1724,7 +1695,7 @@ async fn sleep_below_threshold_between_http_responses(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-8", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-8", env, vec![])
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1778,7 +1749,7 @@ async fn sleep_above_threshold_between_http_responses(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "clock-service-9", vec![], env, vec![])
+        .start_worker_with(&component.id, "clock-service-9", env, vec![])
         .await?;
 
     let start = Instant::now();
@@ -3155,7 +3126,6 @@ async fn wasi_config_initial_worker_config(
         .start_worker_with(
             &component.id,
             "worker-1",
-            Vec::new(),
             HashMap::new(),
             vec![
                 ("k1".to_string(), "v1".to_string()),

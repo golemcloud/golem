@@ -370,7 +370,6 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                     None,
                     None,
                     None,
-                    None,
                     &InvocationContextStack::fresh(),
                 )
                 .await?;

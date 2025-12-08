@@ -52,7 +52,6 @@ fn create_serialization_poem_serde_equivalence() {
             worker_name: "test1".to_string(),
         },
         component_revision: ComponentRevision(1),
-        args: vec!["a".to_string(), "b".to_string()],
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),

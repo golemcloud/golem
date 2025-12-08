@@ -158,7 +158,7 @@ async fn auto_update_on_running(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "auto_update_on_running", vec![], env, vec![])
+        .start_worker_with(&component.id, "auto_update_on_running", env, vec![])
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -291,13 +291,7 @@ async fn failing_auto_update_on_idle(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "failing_auto_update_on_idle",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "failing_auto_update_on_idle", env, vec![])
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -426,13 +420,7 @@ async fn failing_auto_update_on_running(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(
-            &component.id,
-            "failing_auto_update_on_running",
-            vec![],
-            env,
-            vec![],
-        )
+        .start_worker_with(&component.id, "failing_auto_update_on_running", env, vec![])
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -520,7 +508,7 @@ async fn manual_update_on_idle(
         .store()
         .await?;
     let worker_id = executor
-        .start_worker_with(&component.id, "manual_update_on_idle", vec![], env, vec![])
+        .start_worker_with(&component.id, "manual_update_on_idle", env, vec![])
         .await?;
     executor.log_output(&worker_id).await?;
 
@@ -593,7 +581,6 @@ async fn manual_update_on_idle_without_save_snapshot(
         .start_worker_with(
             &component.id,
             "manual_update_on_idle_without_save_snapshot",
-            vec![],
             env,
             vec![],
         )
@@ -664,7 +651,6 @@ async fn auto_update_on_running_followed_by_manual(
         .start_worker_with(
             &component.id,
             "auto_update_on_running_followed_by_manual",
-            vec![],
             env,
             vec![],
         )
@@ -769,7 +755,6 @@ async fn manual_update_on_idle_with_failing_load(
         .start_worker_with(
             &component.id,
             "manual_update_on_idle_with_failing_load",
-            vec![],
             env,
             vec![],
         )
@@ -839,7 +824,6 @@ async fn manual_update_on_idle_using_v11(
         .start_worker_with(
             &component.id,
             "manual_update_on_idle_using_v11",
-            vec![],
             env,
             vec![],
         )
@@ -915,7 +899,6 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
         .start_worker_with(
             &component.id,
             "manual_update_on_idle_using_golem_rust_sdk",
-            vec![],
             env,
             vec![],
         )

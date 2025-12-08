@@ -67,7 +67,6 @@ oplog_entry! {
         raw {
             worker_id: WorkerId,
             component_revision: ComponentRevision,
-            args: Vec<String>,
             env: Vec<(String, String)>,
             environment_id: EnvironmentId,
             created_by: AccountId,
@@ -81,7 +80,6 @@ oplog_entry! {
         public {
             worker_id: WorkerId,
             component_revision: ComponentRevision,
-            args: Vec<String>,
             env: BTreeMap<String, String>,
             created_by: AccountId,
             environment_id: EnvironmentId,

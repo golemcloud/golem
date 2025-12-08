@@ -34,7 +34,6 @@ use tracing::warn;
 pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
-    fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn wasi_config_vars(&self) -> Result<Option<BTreeMap<String, String>>, WorkerExecutorError>;
     fn parent(&self) -> Option<WorkerId>;
@@ -79,12 +78,6 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .ok_or(WorkerExecutorError::invalid_request("worker_id not found"))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
-    }
-
-    fn args(&self) -> Option<Vec<String>> {
-        self.proto_invocation_context()
-            .as_ref()
-            .map(|ctx| ctx.args.clone())
     }
 
     fn env(&self) -> Option<Vec<(String, String)>> {

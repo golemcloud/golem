@@ -937,7 +937,6 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             worker_name: "test".to_string(),
         },
         component_revision: ComponentRevision(1),
-        args: vec![],
         env: vec![],
         wasi_config_vars: BTreeMap::new(),
         environment_id,
@@ -1616,7 +1615,6 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         let create_entry = OplogEntry::create(
             worker_id.clone(),
             ComponentRevision(1),
-            Vec::new(),
             Vec::new(),
             environment_id,
             account_id,

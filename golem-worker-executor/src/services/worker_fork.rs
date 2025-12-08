@@ -441,7 +441,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             None,
             None,
             None,
-            None,
             &InvocationContextStack::fresh(),
         )
         .await?;
@@ -453,7 +452,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             created_by: *fork_account_id,
             environment_id,
             env: initial_source_worker_metadata.env.clone(),
-            args: initial_source_worker_metadata.args.clone(),
             wasi_config_vars: initial_source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
@@ -505,7 +503,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             OplogEntry::Create {
                 timestamp,
                 component_revision,
-                args,
                 env,
                 environment_id,
                 created_by,
@@ -520,7 +517,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 timestamp,
                 worker_id: worker_id.clone(),
                 component_revision,
-                args,
                 env,
                 environment_id,
                 created_by,

@@ -226,7 +226,6 @@ impl DebugServiceDefault {
             None,
             None,
             None,
-            None,
             &InvocationContextStack::fresh(),
         )
         .await
@@ -411,7 +410,6 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(session_data.worker_metadata.args.clone()),
             Some(session_data.worker_metadata.env.clone()),
             Some(session_data.worker_metadata.wasi_config_vars.clone()),
             Some(
@@ -539,7 +537,6 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             account_id,
             owned_worker_id,
-            Some(debug_session_data.worker_metadata.args.clone()),
             Some(debug_session_data.worker_metadata.env.clone()),
             Some(debug_session_data.worker_metadata.wasi_config_vars.clone()),
             Some(

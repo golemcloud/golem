@@ -218,7 +218,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
-            &worker_config.args,
+            &[] as &[&str],
             temp_dir.path().to_path_buf(),
             stdin,
             stdout,
@@ -2252,7 +2252,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         this,
                         &created_by,
                         &owned_worker_id,
-                        None,
                         None,
                         None,
                         None,

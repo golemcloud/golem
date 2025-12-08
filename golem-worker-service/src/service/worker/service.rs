@@ -62,7 +62,6 @@ impl WorkerService {
     pub async fn create(
         &self,
         worker_id: &WorkerId,
-        arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
@@ -76,7 +75,6 @@ impl WorkerService {
         self.create_with_component(
             worker_id,
             component,
-            arguments,
             environment_variables,
             wasi_config_vars,
             ignore_already_existing,
@@ -90,7 +88,6 @@ impl WorkerService {
         &self,
         worker_id: &WorkerId,
         component: ComponentDto,
-        arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
@@ -110,7 +107,6 @@ impl WorkerService {
             .create(
                 worker_id,
                 component.revision,
-                arguments,
                 environment_variables,
                 wasi_config_vars,
                 ignore_already_existing,
