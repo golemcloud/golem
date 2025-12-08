@@ -169,7 +169,7 @@ impl RegistryService for SpawnedRegistryService {
 
 impl Drop for SpawnedRegistryService {
     fn drop(&mut self) {
-        info!("Stopping golem-component-service");
+        info!("Stopping golem-registry-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
         }
