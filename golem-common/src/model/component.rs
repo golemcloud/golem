@@ -20,7 +20,7 @@ use crate::model::component_metadata::{dynamic_linking_to_diffable, DynamicLinke
 use crate::model::environment::EnvironmentId;
 use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::plugin_registration::PluginRegistrationId;
-use crate::model::{diff, validate_kebab_case_identifier};
+use crate::model::{diff, validate_lower_kebab_case_identifier};
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
@@ -85,8 +85,8 @@ impl TryFrom<String> for ComponentName {
             return Err("Component name must follow the format 'namespace:name'".to_string());
         }
 
-        validate_kebab_case_identifier("Namespace", parts[0])?;
-        validate_kebab_case_identifier("Name", parts[1])?;
+        validate_lower_kebab_case_identifier("Namespace", parts[0])?;
+        validate_lower_kebab_case_identifier("Name", parts[1])?;
 
         Ok(ComponentName(value))
     }

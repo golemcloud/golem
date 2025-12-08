@@ -1816,24 +1816,26 @@ impl Display for RdbmsPoolKey {
     }
 }
 
-fn validate_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
+fn validate_lower_kebab_case_identifier(field_name: &str, identifier: &str) -> Result<(), String> {
     if identifier.is_empty() {
         return Err(format!("{} cannot be empty", field_name));
     }
 
-    let first_char = identifier.chars().next().unwrap();
-    if !first_char.is_ascii_lowercase() {
+    let first = identifier.chars().next().unwrap();
+    if !matches!(first, 'a'..='z') {
         return Err(format!(
             "{} must start with a lowercase ASCII letter (a-z), but got '{}'",
-            field_name, first_char
+            field_name, first
         ));
     }
 
-    let kebab_cased = identifier.to_kebab_case();
-    if identifier != kebab_cased {
+    if !identifier
+        .chars()
+        .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    {
         return Err(format!(
-            "{} must be in kebab-case format (lowercase with hyphens). Expected '{}' but got '{}'",
-            field_name, kebab_cased, identifier
+            "{} may contain only lowercase ASCII letters (a-z), digits (0-9), and hyphens (-)",
+            field_name
         ));
     }
 
