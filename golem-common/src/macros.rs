@@ -221,7 +221,6 @@ macro_rules! declare_revision {
         impl $name {
             pub const INITIAL: Self = Self(0);
 
-            /// Returns the inner value
             pub fn get(self) -> u64 {
                 self.0
             }
@@ -239,7 +238,6 @@ macro_rules! declare_revision {
                 }
             }
 
-            /// Create a new instance from a u64, validating it is <= i64::MAX
             pub fn new(value: u64) -> anyhow::Result<Self> {
                 if value > i64::MAX as u64 {
                     Err(::anyhow::anyhow!(
