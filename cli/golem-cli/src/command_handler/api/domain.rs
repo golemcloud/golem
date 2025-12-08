@@ -63,6 +63,8 @@ impl ApiDomainCommandHandler {
     }
 
     async fn cmd_register(&self, domain: String) -> anyhow::Result<()> {
+        let domain = Domain(domain);
+
         let environment = self
             .ctx
             .environment_handler()
@@ -87,7 +89,7 @@ impl ApiDomainCommandHandler {
             .create_domain_registration(
                 &environment.environment_id.0,
                 &DomainRegistrationCreation {
-                    domain: Domain(domain),
+                    domain: domain.clone(),
                 },
             )
             .await
