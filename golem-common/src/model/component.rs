@@ -106,6 +106,12 @@ impl ComponentName {
     }
 }
 
+impl AsRef<str> for ComponentName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
 declare_structs! {
     pub struct ComponentCreation {
         pub component_name: ComponentName,

@@ -974,6 +974,17 @@ impl ComponentCommandHandler {
 
         let component = app_ctx.application.component(component_name);
         let linked_wasm_path = component.final_linked_wasm();
+        let agent_types = {
+            if app_ctx.wit.is_agent(component_name) {
+                app_ctx
+                    .wit
+                    .get_extracted_agent_types(component_name, &linked_wasm_path)
+                    .await?
+            } else {
+                vec![]
+            }
+        };
+
         if !component.component_type().is_deployable() {
             bail!("Component {component_name} is not deployable");
         }
@@ -983,6 +994,7 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             linked_wasm_path,
+            agent_types,
             files,
             dynamic_linking,
             env,
@@ -1059,15 +1071,11 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager = ComponentStager::new(
-            self.ctx.clone(),
-            component_name,
-            component_deploy_properties,
-            None,
-        );
+        let component_stager =
+            ComponentStager::new(self.ctx.clone(), component_deploy_properties, None);
 
         let linked_wasm = component_stager.open_linked_wasm().await?;
-        let agent_types: Vec<AgentType> = component_stager.agent_types().await?;
+        let agent_types: Vec<AgentType> = component_stager.agent_types().clone();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let files = component_stager.all_files().await?;
@@ -1152,15 +1160,11 @@ impl ComponentCommandHandler {
         );
         let _indent = LogIndent::new();
 
-        let component_stager = ComponentStager::new(
-            self.ctx.clone(),
-            &component.name,
-            component_deploy_properties,
-            Some(diff),
-        );
+        let component_stager =
+            ComponentStager::new(self.ctx.clone(), component_deploy_properties, Some(diff));
 
         let linked_wasm = component_stager.open_linked_wasm_if_changed().await?;
-        let agent_types = component_stager.agent_types_if_changed().await?;
+        let agent_types = component_stager.agent_types_if_changed().cloned();
 
         // NOTE: do not drop until the component is created, keeps alive the temp archive
         let changed_files = component_stager.changed_files().await?;

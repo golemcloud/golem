@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::model::app;
-use crate::model::component::ComponentDeployProperties;
+use crate::model::component::{show_exported_agents, ComponentDeployProperties};
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::component::is_sensitive_env_var_name;
 use golem_client::model::{DeploymentPlan, DeploymentSummary};
+use golem_common::model::agent::AgentType;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDefintionEntry,
@@ -26,7 +27,8 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::http_api_definition::HttpApiDefinitionName;
-use std::collections::BTreeMap;
+use itertools::Itertools;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug)]
 pub struct DeployQuickDiff {
@@ -56,7 +58,7 @@ impl DeployQuickDiff {
 #[derive(Debug)]
 pub struct DeployDiff {
     pub environment: ResolvedEnvironmentIdentity,
-    pub deployable_manifest_components: BTreeMap<ComponentName, ComponentDeployProperties>,
+    pub deployable_components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub deployable_http_api_definitions: BTreeMap<HttpApiDefinitionName, app::HttpApiDefinition>,
     pub deployable_http_api_deployments: BTreeMap<Domain, Vec<HttpApiDefinitionName>>,
     pub diffable_local_deployment: diff::Deployment,
@@ -65,8 +67,10 @@ pub struct DeployDiff {
     pub server_deployment: Option<DeploymentSummary>,
     pub diffable_server_deployment: diff::Deployment,
     pub server_deployment_hash: diff::Hash,
-    pub server_staged_deployment: DeploymentPlan,
-    pub server_staged_deployment_hash: diff::Hash,
+    pub server_agent_types: HashMap<String, Vec<AgentType>>,
+    pub staged_deployment: DeploymentPlan,
+    pub staged_deployment_hash: diff::Hash,
+    pub staged_agent_types: HashMap<String, Vec<AgentType>>,
     pub diffable_staged_deployment: diff::Deployment,
     pub diff: diff::DeploymentDiff,
     pub diff_stage: Option<diff::DeploymentDiff>,
@@ -74,10 +78,10 @@ pub struct DeployDiff {
 
 impl DeployDiff {
     pub fn is_stage_same_as_server(&self) -> bool {
-        self.server_staged_deployment_hash == self.server_deployment_hash
+        self.staged_deployment_hash == self.server_deployment_hash
     }
 
-    pub fn unified_yaml_diffs(&self, show_sensitive: bool) -> UnifiedYamlDeployDiff {
+    pub fn unified_diffs(&self, show_sensitive: bool) -> UnifiedDiffs {
         let local_for_stage = self.normalized_diff_deployment(
             show_sensitive,
             &self.diffable_local_deployment,
@@ -102,17 +106,79 @@ impl DeployDiff {
             Some(&self.diff),
         );
 
-        UnifiedYamlDeployDiff {
-            diff_stage: self.diff_stage.is_some().then(|| {
+        let local_agents_for_stage = self
+            .diff_stage
+            .as_ref()
+            .map(|diff_stage| {
+                self.deployable_components
+                    .iter()
+                    .filter(|(component_name, _)| {
+                        diff_stage.components.contains_key(&component_name.0)
+                    })
+                    .map(|(component_name, component)| {
+                        self.render_component_agents(component_name, &component.agent_types)
+                    })
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        let staged_agents = self
+            .diff_stage
+            .as_ref()
+            .map(|diff_stage| {
+                diff_stage
+                    .components
+                    .iter()
+                    .filter_map(|(component_name, _)| {
+                        self.staged_agent_types
+                            .get(component_name)
+                            .map(|agent_types| {
+                                self.render_component_agents(component_name, agent_types)
+                            })
+                    })
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        let local_agents_for_server = self
+            .deployable_components
+            .iter()
+            .filter(|(component_name, _)| self.diff.components.contains_key(&component_name.0))
+            .map(|(component_name, component)| {
+                self.render_component_agents(component_name, &component.agent_types)
+            })
+            .join("\n");
+
+        let server_agents = self
+            .diff
+            .components
+            .iter()
+            .filter_map(|(component_name, _)| {
+                self.server_agent_types
+                    .get(component_name)
+                    .map(|agent_types| self.render_component_agents(component_name, agent_types))
+            })
+            .join("\n");
+
+        UnifiedDiffs {
+            deployment_diff_stage: self.diff_stage.is_some().then(|| {
                 staged_deployment.unified_yaml_diff_with_local(
                     &local_for_stage,
                     diff::SerializeMode::ValueIfAvailable,
                 )
             }),
-            diff: server_deployment.unified_yaml_diff_with_local(
+            agent_diff_stage: {
+                let diff = diff::unified_diff(staged_agents, local_agents_for_stage);
+                (!diff.is_empty()).then_some(diff)
+            },
+            deployment_diff: server_deployment.unified_yaml_diff_with_local(
                 &local_for_server,
                 diff::SerializeMode::ValueIfAvailable,
             ),
+            agent_diff: {
+                let diff = diff::unified_diff(server_agents, local_agents_for_server);
+                (!diff.is_empty()).then_some(diff)
+            },
         }
     }
 
@@ -120,7 +186,7 @@ impl DeployDiff {
         &self,
         component_name: &ComponentName,
     ) -> &ComponentDeployProperties {
-        self.deployable_manifest_components
+        self.deployable_components
             .get(component_name)
             .unwrap_or_else(|| {
                 panic!(
@@ -162,7 +228,7 @@ impl DeployDiff {
         &self,
         component_name: &ComponentName,
     ) -> &DeploymentPlanComponentEntry {
-        self.server_staged_deployment
+        self.staged_deployment
             .components
             .iter()
             .find(|component| &component.name == component_name)
@@ -178,7 +244,7 @@ impl DeployDiff {
         &self,
         http_api_definition_name: &HttpApiDefinitionName,
     ) -> &DeploymentPlanHttpApiDefintionEntry {
-        self.server_staged_deployment
+        self.staged_deployment
             .http_api_definitions
             .iter()
             .find(|def| &def.name == http_api_definition_name)
@@ -194,7 +260,7 @@ impl DeployDiff {
         &self,
         domain: &Domain,
     ) -> &DeploymentPlanHttpApiDeploymentEntry {
-        self.server_staged_deployment
+        self.staged_deployment
             .http_api_deployments
             .iter()
             .find(|dep| &dep.domain == domain)
@@ -292,9 +358,26 @@ impl DeployDiff {
                 .collect(),
         }
     }
+
+    fn render_component_agents(
+        &self,
+        component_name: impl AsRef<str>,
+        agents: &[AgentType],
+    ) -> String {
+        format!(
+            "{}:\n{}\n",
+            component_name.as_ref(),
+            show_exported_agents(agents, false, false)
+                .into_iter()
+                .map(|l| format!("  {l}"))
+                .join("\n")
+        )
+    }
 }
 
-pub struct UnifiedYamlDeployDiff {
-    pub diff_stage: Option<String>,
-    pub diff: String,
+pub struct UnifiedDiffs {
+    pub deployment_diff_stage: Option<String>,
+    pub agent_diff_stage: Option<String>,
+    pub deployment_diff: String,
+    pub agent_diff: Option<String>,
 }

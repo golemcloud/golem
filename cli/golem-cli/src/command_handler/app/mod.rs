@@ -54,7 +54,7 @@ use golem_templates::model::{
     ApplicationName as TemplateApplicationName, GuestLanguage, PackageName, Template, TemplateName,
 };
 use itertools::Itertools;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -589,7 +589,7 @@ impl AppCommandHandler {
         let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
         debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        let unified_diffs = deploy_diff.unified_yaml_diffs(self.ctx.show_sensitive());
+        let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
         let stage_is_same_as_server = deploy_diff.is_stage_same_as_server();
 
         {
@@ -608,11 +608,15 @@ impl AppCommandHandler {
             );
 
             if !stage_is_same_as_server {
-                match &unified_diffs.diff_stage {
+                match &unified_diffs.deployment_diff_stage {
                     Some(diff) => {
                         log_action("Diffing", "with staging area");
                         let _indent = self.ctx.log_handler().nested_text_view_indent();
                         log_unified_diff(diff);
+                        if let Some(diff) = unified_diffs.agent_diff_stage {
+                            logln("");
+                            log_unified_diff(&diff);
+                        }
                     }
                     None => {
                         log_skipping_up_to_date("diffing with staging area");
@@ -628,7 +632,11 @@ impl AppCommandHandler {
                 }
 
                 let _indent = self.ctx.log_handler().nested_text_view_indent();
-                log_unified_diff(&unified_diffs.diff);
+                log_unified_diff(&unified_diffs.deployment_diff);
+                if let Some(diff) = unified_diffs.agent_diff {
+                    logln("");
+                    log_unified_diff(&diff);
+                }
             }
         }
 
@@ -798,7 +806,7 @@ impl AppCommandHandler {
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
-            deployable_manifest_components: deploy_quick_diff.deployable_manifest_components,
+            deployable_components: deploy_quick_diff.deployable_manifest_components,
             deployable_http_api_definitions: deploy_quick_diff
                 .deployable_manifest_http_api_definitions,
             deployable_http_api_deployments: deploy_quick_diff
@@ -808,8 +816,10 @@ impl AppCommandHandler {
             server_deployment,
             diffable_server_deployment,
             server_deployment_hash,
-            server_staged_deployment,
-            server_staged_deployment_hash,
+            server_agent_types: HashMap::new(),
+            staged_deployment: server_staged_deployment,
+            staged_deployment_hash: server_staged_deployment_hash,
+            staged_agent_types: HashMap::new(),
             diffable_staged_deployment: diffable_server_staged_deployment,
             diff,
             diff_stage,
@@ -839,10 +849,10 @@ impl AppCommandHandler {
 
             for (component_name, component_diff) in &diff.components {
                 match component_diff {
-                    diff::BTreeMapDiffValue::Create | diff::BTreeMapDiffValue::Delete => {
+                    diff::BTreeMapDiffValue::Create => {
                         // NOP
                     }
-                    diff::BTreeMapDiffValue::Update(_) => {
+                    diff::BTreeMapDiffValue::Update(_) | diff::BTreeMapDiffValue::Delete => {
                         let component_name = ComponentName(component_name.clone());
 
                         let component_identity =
@@ -857,16 +867,24 @@ impl AppCommandHandler {
 
                         match &kind {
                             DiffKind::Server => {
-                                deploy_diff
-                                    .diffable_server_deployment
-                                    .components
-                                    .insert(component_name.0, component.to_diffable().into());
+                                deploy_diff.diffable_server_deployment.components.insert(
+                                    component_name.0.clone(),
+                                    component.to_diffable().into(),
+                                );
+                                deploy_diff.server_agent_types.insert(
+                                    component_name.0,
+                                    component.metadata.agent_types().to_vec(),
+                                );
                             }
                             DiffKind::Stage => {
-                                deploy_diff
-                                    .diffable_staged_deployment
-                                    .components
-                                    .insert(component_name.0, component.to_diffable().into());
+                                deploy_diff.diffable_staged_deployment.components.insert(
+                                    component_name.0.clone(),
+                                    component.to_diffable().into(),
+                                );
+                                deploy_diff.staged_agent_types.insert(
+                                    component_name.0,
+                                    component.metadata.agent_types().to_vec(),
+                                );
                             }
                         }
                     }

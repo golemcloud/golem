@@ -2002,6 +2002,7 @@ impl WorkerCommandHandler {
                     component_name: component.component_name.0.clone(),
                     constructors: show_exported_agent_constructors(
                         component.metadata.agent_types(),
+                        true,
                     ),
                 });
 
