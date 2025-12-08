@@ -6650,13 +6650,13 @@ components:
       properties:
         totalAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalActiveAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalDeletedAccounts:
           type: integer
-          format: int64
+          format: uint64
     AccountCreation:
       type: object
       title: AccountCreation
@@ -6735,10 +6735,10 @@ components:
           type: string
         componentsCount:
           type: integer
-          format: int64
+          format: uint64
         workersCount:
           type: integer
-          format: int64
+          format: uint64
         createdAt:
           type: string
           format: date-time

@@ -10848,7 +10848,7 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         consumedFuel:
           type: integer
-          format: uint64
+          format: int64
       required:
       - timestamp
       - consumedFuel
@@ -11188,13 +11188,13 @@ components:
       properties:
         totalAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalActiveAccounts:
           type: integer
-          format: int64
+          format: uint64
         totalDeletedAccounts:
           type: integer
-          format: int64
+          format: uint64
       required:
       - totalAccounts
       - totalActiveAccounts
@@ -11270,10 +11270,10 @@ components:
           type: string
         componentsCount:
           type: integer
-          format: int64
+          format: uint64
         workersCount:
           type: integer
-          format: int64
+          format: uint64
         createdAt:
           type: string
           format: date-time
