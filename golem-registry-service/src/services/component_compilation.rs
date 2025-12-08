@@ -114,7 +114,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
-                        component_version: component_version.0,
+                        component_version: component_version.into(),
                         component_service_port,
                         environment_id: Some(environment_id_clone.into()),
                     };

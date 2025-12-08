@@ -151,7 +151,7 @@ pub struct InvokeResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceLimits {
-    pub available_fuel: i64,
+    pub available_fuel: u64,
     pub max_memory_per_worker: u64,
 }
 

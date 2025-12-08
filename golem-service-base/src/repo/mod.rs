@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod blob;
+pub mod numeric;
 
 use golem_common::{SafeDisplay, error_forwarding};
 use sqlx::error::ErrorKind;

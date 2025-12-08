@@ -55,7 +55,7 @@ impl ApplicationRevisionRecord {
     pub fn from_model(application: Application, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             application_id: application.id.0,
-            revision_id: application.revision.0 as i64,
+            revision_id: application.revision.into(),
             name: application.name.0,
             audit,
         }
@@ -72,13 +72,15 @@ pub struct ApplicationExtRevisionRecord {
     pub revision: ApplicationRevisionRecord,
 }
 
-impl From<ApplicationExtRevisionRecord> for Application {
-    fn from(value: ApplicationExtRevisionRecord) -> Self {
-        Self {
+impl TryFrom<ApplicationExtRevisionRecord> for Application {
+    type Error = ApplicationRepoError;
+
+    fn try_from(value: ApplicationExtRevisionRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: ApplicationId(value.revision.application_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             account_id: AccountId(value.account_id),
             name: ApplicationName(value.revision.name),
-        }
+        })
     }
 }

@@ -379,7 +379,7 @@ impl RegistryService for GrpcRegistryService {
             .call("download-component", move |client| {
                 let request = DownloadComponentRequest {
                     component_id: Some((*component_id).into()),
-                    version: component_revision.0,
+                    version: component_revision.into(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 
@@ -414,7 +414,7 @@ impl RegistryService for GrpcRegistryService {
             .call("get-component-metadata", move |client| {
                 let request = GetComponentMetadataRequest {
                     component_id: Some((*component_id).into()),
-                    version: component_revision.0,
+                    version: component_revision.into(),
                     auth_ctx: Some(auth_ctx.clone().into()),
                 };
 

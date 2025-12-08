@@ -108,7 +108,7 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
     fn try_from(value: AccountExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(Self {
             id: AccountId(value.revision.account_id),
-            revision: value.revision.revision_id.into(),
+            revision: value.revision.revision_id.try_into()?,
             name: value.revision.name,
             email: value.revision.email,
             plan_id: PlanId(value.revision.plan_id),

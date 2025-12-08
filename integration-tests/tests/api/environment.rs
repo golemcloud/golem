@@ -56,7 +56,7 @@ async fn create_and_get_environments(deps: &EnvBasedTestDependencies) -> anyhow:
     }
 
     client
-        .delete_environment(&env_2.id.0, env_2.revision.0)
+        .delete_environment(&env_2.id.0, env_2.revision.into())
         .await?;
 
     {
@@ -126,7 +126,7 @@ async fn deleting_account_hides_environments(
 
     let account = user_client.get_account(&user.account_id.0).await?;
     user_client
-        .delete_account(&account.id.0, account.revision.0)
+        .delete_account(&account.id.0, account.revision.into())
         .await?;
 
     {
@@ -162,7 +162,9 @@ async fn deleting_application_hides_environments(
 
     let (app, env) = user.app_and_env().await?;
 
-    client.delete_application(&app.id.0, app.revision.0).await?;
+    client
+        .delete_application(&app.id.0, app.revision.into())
+        .await?;
 
     {
         let result = client.list_application_environments(&app.id.0).await;
@@ -238,7 +240,7 @@ async fn cannot_create_two_environments_with_same_name(
 
     // delete the environment, now creating a new one will succeed
     client
-        .delete_environment(&env_1.id.0, env_1.revision.0)
+        .delete_environment(&env_1.id.0, env_1.revision.into())
         .await?;
 
     // create environment with reused name
@@ -256,7 +258,7 @@ async fn cannot_create_two_environments_with_same_name(
             .await?;
 
         client
-            .delete_environment(&env_3.id.0, env_3.revision.0)
+            .delete_environment(&env_3.id.0, env_3.revision.into())
             .await?;
     }
 
@@ -329,14 +331,18 @@ async fn list_visible_environments_excludes_deleted_entities(
     let (app, env) = user.app_and_env().await?;
 
     // Delete environment
-    client.delete_environment(&env.id.0, env.revision.0).await?;
+    client
+        .delete_environment(&env.id.0, env.revision.into())
+        .await?;
 
     // Deleted env should not appear
     let visible = client.list_visible_environments().await?.values;
     assert!(!visible.iter().any(|e| e.environment.id == env.id));
 
     // Delete application
-    client.delete_application(&app.id.0, app.revision.0).await?;
+    client
+        .delete_application(&app.id.0, app.revision.into())
+        .await?;
     let visible_after_app_delete = client.list_visible_environments().await?.values;
     assert!(visible_after_app_delete.is_empty());
 
@@ -400,7 +406,7 @@ async fn deleted_account_hides_shared_environments_from_grantee(
     // Owner deletes their account
     let owner_account_info = owner_client.get_account(&owner.account_id.0).await?;
     owner_client
-        .delete_account(&owner_account_info.id.0, owner_account_info.revision.0)
+        .delete_account(&owner_account_info.id.0, owner_account_info.revision.into())
         .await?;
 
     // Grantee should no longer see the environment

@@ -522,7 +522,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                         golem::worker::v1::ComponentDownloadFailed {
                             component_id: Some(component_id.into()),
-                            component_version: component_version.0,
+                            component_version: component_version.into(),
                             reason,
                         },
                     ),
@@ -537,7 +537,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                         golem::worker::v1::ComponentParseFailed {
                             component_id: Some(component_id.into()),
-                            component_version: component_version.0,
+                            component_version: component_version.into(),
                             reason,
                         },
                     ),
@@ -751,7 +751,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: ComponentRevision(component_download_failed.component_version),
+                component_version: component_download_failed.component_version.try_into()?,
                 reason: component_download_failed.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
@@ -761,7 +761,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: ComponentRevision(component_parse_failed.component_version),
+                component_version: component_parse_failed.component_version.try_into()?,
                 reason: component_parse_failed.reason,
             }),
             Some(

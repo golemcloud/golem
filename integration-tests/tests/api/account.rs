@@ -79,7 +79,7 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     assert!(updated_account.id == user.account_id);
     assert!(updated_account.name == new_name);
     assert!(updated_account.email == new_email);
-    assert!(updated_account.revision == AccountRevision(1));
+    assert!(updated_account.revision == AccountRevision::new(1)?);
 
     {
         let account_from_get = client.get_account(&user.account_id.0).await?;
@@ -107,7 +107,7 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
         // We always reorder the roles so they are consistent
         assert!(account.roles == vec![AccountRole::Admin, AccountRole::MarketingAdmin]);
-        assert!(account.revision == AccountRevision(1));
+        assert!(account.revision == AccountRevision::new(1)?);
     }
 
     {
@@ -115,14 +115,14 @@ async fn set_roles(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
             .set_account_roles(
                 &user.account_id.0,
                 &AccountSetRoles {
-                    current_revision: AccountRevision(1),
+                    current_revision: AccountRevision::new(1)?,
                     roles: vec![AccountRole::Admin],
                 },
             )
             .await?;
 
         assert!(account.roles == vec![AccountRole::Admin]);
-        assert!(account.revision == AccountRevision(2));
+        assert!(account.revision == AccountRevision::new(2)?);
     }
     Ok(())
 }

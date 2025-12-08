@@ -372,7 +372,7 @@ impl ApiDefinitionCommandHandler {
 
         clients
             .api_definition
-            .get_http_api_definition_revision(&definition.id.0, revision.0)
+            .get_http_api_definition_revision(&definition.id.0, (*revision).into())
             .await
             .map_service_error_not_found_as_opt()
     }
@@ -391,7 +391,10 @@ impl ApiDefinitionCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .api_definition
-                        .get_http_api_definition_revision(&http_api_definition_id.0, revision.0)
+                        .get_http_api_definition_revision(
+                            &http_api_definition_id.0,
+                            revision.into(),
+                        )
                         .await
                         .map_service_error()
                         .map_err(Arc::new)
@@ -425,7 +428,7 @@ impl ApiDefinitionCommandHandler {
             .api_definition
             .get_openapi_of_http_api_definition_in_deployment(
                 &environment.environment_id.0,
-                deployment_revision.0,
+                deployment_revision.into(),
                 &name.0,
             )
             .await?
@@ -484,7 +487,7 @@ impl ApiDefinitionCommandHandler {
             format!(
                 "HTTP API definition revision: {} {}",
                 definition.name.0.log_color_highlight(),
-                definition.revision.0.to_string().log_color_highlight()
+                definition.revision.to_string().log_color_highlight()
             ),
         );
 
@@ -508,7 +511,10 @@ impl ApiDefinitionCommandHandler {
             .golem_clients()
             .await?
             .api_definition
-            .delete_http_api_definition(&http_api_definition.id.0, http_api_definition.revision.0)
+            .delete_http_api_definition(
+                &http_api_definition.id.0,
+                http_api_definition.revision.into(),
+            )
             .await
             .map_service_error()?;
 
@@ -519,7 +525,6 @@ impl ApiDefinitionCommandHandler {
                 http_api_definition.name.0.log_color_highlight(),
                 http_api_definition
                     .revision
-                    .0
                     .to_string()
                     .log_color_highlight()
             ),
@@ -564,7 +569,7 @@ impl ApiDefinitionCommandHandler {
             format!(
                 "HTTP API definition revision: {} {}",
                 definition.name.0.log_color_highlight(),
-                definition.revision.0.to_string().log_color_highlight()
+                definition.revision.to_string().log_color_highlight()
             ),
         );
 

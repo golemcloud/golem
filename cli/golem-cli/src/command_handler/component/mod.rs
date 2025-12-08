@@ -903,7 +903,7 @@ impl ComponentCommandHandler {
 
                         let component = clients
                             .component
-                            .get_component_revision(&component.id.0, revision.0)
+                            .get_component_revision(&component.id.0, revision.into())
                             .await
                             .map_service_error()?;
 
@@ -1072,7 +1072,7 @@ impl ComponentCommandHandler {
             format!(
                 "component revision: {} {}",
                 component_name.0.log_color_highlight(),
-                component.revision.0.to_string().log_color_highlight()
+                component.revision.to_string().log_color_highlight()
             ),
         );
 
@@ -1093,7 +1093,7 @@ impl ComponentCommandHandler {
             .golem_clients()
             .await?
             .component
-            .delete_component(&component.id.0, component.revision.0)
+            .delete_component(&component.id.0, component.revision.into())
             .await
             .map_service_error()?;
 
@@ -1102,7 +1102,7 @@ impl ComponentCommandHandler {
             format!(
                 "component revision: {} {}",
                 component.name.0.log_color_highlight(),
-                component.revision.0.to_string().log_color_highlight()
+                component.revision.to_string().log_color_highlight()
             ),
         );
 
@@ -1161,7 +1161,7 @@ impl ComponentCommandHandler {
             format!(
                 "component revision: {} {}",
                 component.component_name.0.log_color_highlight(),
-                component.revision.0.to_string().log_color_highlight()
+                component.revision.to_string().log_color_highlight()
             ),
         );
 
@@ -1196,7 +1196,7 @@ impl ComponentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .component
-                        .get_component_revision(&component_id.0, revision.0)
+                        .get_component_revision(&component_id.0, revision.into())
                         .await
                         .map_service_error()
                         .map_err(Arc::new)

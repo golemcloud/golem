@@ -139,7 +139,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .delete_account(&account.id.0, account.revision.0)
+            .delete_account(&account.id.0, account.revision.into())
             .await
             .map_service_error()?;
 

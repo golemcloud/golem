@@ -638,7 +638,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         full_function_name: String,
         function_input: &Vec<Value>,
         output: Option<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
 
@@ -716,7 +716,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         full_function_name: String,
         function_input: &Vec<Value>,
         output: Option<Value>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
         function_result: Option<AnalysedFunctionResult>,
     ) -> Result<CommandOutcome, WorkerExecutorError> {
         let result = interpret_function_result(output, function_result).map_err(|e| {

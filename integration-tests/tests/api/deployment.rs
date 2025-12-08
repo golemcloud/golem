@@ -76,7 +76,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     // Summary of the deployed deployment is the same as the original plan
     {
         let fetched_deployment = client
-            .get_deployment_summary(&env.id.0, deployment.revision.0)
+            .get_deployment_summary(&env.id.0, deployment.revision.into())
             .await?;
         assert!(fetched_deployment.deployment_hash == plan.deployment_hash);
         assert!(fetched_deployment.components == plan.components);
@@ -175,7 +175,7 @@ async fn get_component_version_from_previous_deployment(
         let fetched_component = client
             .get_deployment_component(
                 &env.id.0,
-                deployment_1.revision.0,
+                deployment_1.revision.into(),
                 &component.component_name.0,
             )
             .await?;
@@ -186,7 +186,7 @@ async fn get_component_version_from_previous_deployment(
         let fetched_component = client
             .get_deployment_component(
                 &env.id.0,
-                deployment_2.revision.0,
+                deployment_2.revision.into(),
                 &component.component_name.0,
             )
             .await?;

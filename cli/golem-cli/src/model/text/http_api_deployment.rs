@@ -70,7 +70,7 @@ impl From<&HttpApiDeployment> for HttpApiDeploymentTableView {
             domain: value.domain.to_string(),
             id: value.id.to_string(),
             environment_id: value.environment_id.to_string(),
-            revision: value.revision.0,
+            revision: value.revision.into(),
         }
     }
 }

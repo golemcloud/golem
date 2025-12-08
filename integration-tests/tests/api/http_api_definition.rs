@@ -157,7 +157,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
         let fetched_http_api_definition = client
             .get_http_api_definition_revision(
                 &http_api_definition.id.0,
-                http_api_definition.revision.0,
+                http_api_definition.revision.into(),
             )
             .await?;
         assert!(fetched_http_api_definition == http_api_definition);
@@ -167,7 +167,7 @@ async fn update_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
         let fetched_http_api_definition = client
             .get_http_api_definition_revision(
                 &http_api_definition.id.0,
-                updated_http_api_definition.revision.0,
+                updated_http_api_definition.revision.into(),
             )
             .await?;
         assert!(fetched_http_api_definition == updated_http_api_definition);
@@ -238,7 +238,10 @@ async fn delete_http_api_definition(deps: &EnvBasedTestDependencies) -> anyhow::
         .await?;
 
     client
-        .delete_http_api_definition(&http_api_definition.id.0, http_api_definition.revision.0)
+        .delete_http_api_definition(
+            &http_api_definition.id.0,
+            http_api_definition.revision.into(),
+        )
         .await?;
 
     {
@@ -474,7 +477,7 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     client
         .delete_http_api_definition(
             &http_api_definition_1.id.0,
-            http_api_definition_1.revision.0,
+            http_api_definition_1.revision.into(),
         )
         .await?;
 
@@ -494,7 +497,7 @@ async fn http_api_definition_recreation(deps: &EnvBasedTestDependencies) -> anyh
     client
         .delete_http_api_definition(
             &http_api_definition_2.id.0,
-            http_api_definition_2.revision.0,
+            http_api_definition_2.revision.into(),
         )
         .await?;
 

@@ -65,15 +65,20 @@ impl AccountUsageService {
     pub async fn ensure_new_component_within_limits(
         &self,
         account_id: &AccountId,
-        component_size_bytes: i64,
+        component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self.get_account_usage(account_id, None).await?;
 
         self.add_checked(&mut account_usage, UsageType::TotalComponentCount, 1)?;
+
+        if component_size_bytes > i64::MAX as u64 {
+            return Err(AccountUsageError::ComponentTooLarge(component_size_bytes));
+        }
+
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
-            component_size_bytes,
+            component_size_bytes as i64,
         )?;
 
         Ok(())
@@ -82,16 +87,20 @@ impl AccountUsageService {
     pub async fn ensure_updated_component_within_limits(
         &self,
         account_id: &AccountId,
-        component_size_bytes: i64,
+        component_size_bytes: u64,
     ) -> Result<(), AccountUsageError> {
         let mut account_usage = self
             .get_account_usage(account_id, Some(UsageType::TotalComponentStorageBytes))
             .await?;
 
+        if component_size_bytes > i64::MAX as u64 {
+            return Err(AccountUsageError::ComponentTooLarge(component_size_bytes));
+        }
+
         self.add_checked(
             &mut account_usage,
             UsageType::TotalComponentStorageBytes,
-            component_size_bytes,
+            component_size_bytes as i64,
         )?;
 
         Ok(())

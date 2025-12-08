@@ -10848,7 +10848,7 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         consumedFuel:
           type: integer
-          format: int64
+          format: uint64
       required:
       - timestamp
       - consumedFuel
@@ -12868,28 +12868,28 @@ components:
           type: string
         appLimit:
           type: integer
-          format: int64
+          format: uint64
         envLimit:
           type: integer
-          format: int64
+          format: uint64
         componentLimit:
           type: integer
-          format: int64
+          format: uint64
         workerLimit:
           type: integer
-          format: int64
+          format: uint64
         workerConnectionLimit:
           type: integer
-          format: int64
+          format: uint64
         storageLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyGasLimit:
           type: integer
-          format: int64
+          format: uint64
         monthlyUploadLimit:
           type: integer
-          format: int64
+          format: uint64
         maxMemoryPerWorker:
           type: integer
           format: uint64

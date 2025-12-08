@@ -210,39 +210,139 @@ macro_rules! declare_revision {
             PartialOrd,
             Ord,
             Hash,
-            ::desert_rust::BinaryCodec,
-            ::serde::Deserialize,
             ::serde::Serialize,
             ::golem_wasm_derive::IntoValue,
-            ::golem_wasm_derive::FromValue,
             ::derive_more::Display,
-            ::derive_more::FromStr,
             poem_openapi::NewType,
         )]
         #[repr(transparent)]
-        #[desert(transparent)]
-        pub struct $name(pub u64);
+        pub struct $name(u64);
 
         impl $name {
             pub const INITIAL: Self = Self(0);
 
-            pub fn next(self) -> anyhow::Result<Self> {
-                Ok(Self(self.0.checked_add(1).ok_or(::anyhow::anyhow!(
-                    "Failed to calculate next {}",
-                    stringify!($name)
-                ))?))
+            /// Returns the inner value
+            pub fn get(self) -> u64 {
+                self.0
+            }
+
+            /// Returns the next revision, failing if it would exceed i64::MAX
+            pub fn next(self) -> ::anyhow::Result<Self> {
+                if self.0 == i64::MAX as u64 {
+                    Err(::anyhow::anyhow!(
+                        "Cannot increment {} beyond i64::MAX ({})",
+                        stringify!($name),
+                        i64::MAX
+                    ))
+                } else {
+                    Ok(Self(self.0 + 1))
+                }
+            }
+
+            /// Create a new instance from a u64, validating it is <= i64::MAX
+            pub fn new(value: u64) -> anyhow::Result<Self> {
+                if value > i64::MAX as u64 {
+                    Err(::anyhow::anyhow!(
+                        "{} value {} exceeds i64::MAX",
+                        stringify!($name),
+                        value
+                    ))
+                } else {
+                    Ok(Self(value))
+                }
             }
         }
 
-        impl From<i64> for $name {
-            fn from(value: i64) -> Self {
-                Self(value as u64)
+        impl TryFrom<i64> for $name {
+            type Error = ::anyhow::Error;
+
+            fn try_from(value: i64) -> Result<Self, Self::Error> {
+                if value < 0 {
+                    Err(::anyhow::anyhow!(
+                        "{} cannot be negative, got {}",
+                        stringify!($name),
+                        value
+                    ))
+                } else {
+                    Ok(Self(value as u64))
+                }
             }
         }
 
         impl From<$name> for i64 {
             fn from(value: $name) -> i64 {
                 value.0 as i64
+            }
+        }
+
+        impl TryFrom<u64> for $name {
+            type Error = String;
+
+            fn try_from(value: u64) -> Result<Self, Self::Error> {
+                if value > i64::MAX as u64 {
+                    Err(format!(
+                        "{} value {} exceeds i64::MAX",
+                        stringify!($name),
+                        value
+                    ))
+                } else {
+                    Ok(Self(value))
+                }
+            }
+        }
+
+        impl From<$name> for u64 {
+            fn from(value: $name) -> u64 {
+                value.0
+            }
+        }
+
+        impl ::std::str::FromStr for $name {
+            type Err = ::anyhow::Error;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let raw: i64 = s.parse()?;
+                $name::try_from(raw)
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: ::serde::de::Deserializer<'de>,
+            {
+                let value = i64::deserialize(deserializer)?;
+                $name::try_from(value).map_err(serde::de::Error::custom)
+            }
+        }
+
+        impl ::golem_wasm::FromValue for $name {
+            fn from_value(value: ::golem_wasm::Value) -> Result<Self, String> {
+                match value {
+                    ::golem_wasm::Value::U64(inner) => $name::try_from(inner),
+                    _ => Err(format!(
+                        "Unexpected value for {}: {value:?}",
+                        stringify!($name)
+                    )),
+                }
+            }
+        }
+
+        impl ::desert_rust::BinarySerializer for $name {
+            fn serialize<Output: ::desert_rust::BinaryOutput>(
+                &self,
+                context: &mut ::desert_rust::SerializationContext<Output>,
+            ) -> ::desert_rust::Result<()> {
+                ::desert_rust::BinarySerializer::serialize(&self.0, context)
+            }
+        }
+
+        impl ::desert_rust::BinaryDeserializer for $name {
+            fn deserialize<'a, 'b>(
+                context: &'a mut ::desert_rust::DeserializationContext<'b>,
+            ) -> ::desert_rust::Result<Self> {
+                let inner: u64 = ::desert_rust::BinaryDeserializer::deserialize(context)?;
+                $name::try_from(inner).map_err(::desert_rust::Error::DeserializationFailure)
             }
         }
     };

@@ -318,7 +318,7 @@ pub trait OplogOps: Oplog {
     async fn add_exported_function_completed(
         &self,
         response: &Option<ValueAndType>,
-        consumed_fuel: i64,
+        consumed_fuel: u64,
     ) -> Result<OplogEntry, String> {
         let payload = self.upload_payload(response).await?;
         let entry = OplogEntry::ExportedFunctionCompleted {

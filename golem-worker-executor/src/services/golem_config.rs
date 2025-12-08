@@ -174,7 +174,7 @@ pub struct Limits {
     pub max_concurrent_streams: u32,
     pub event_broadcast_capacity: usize,
     pub event_history_size: usize,
-    pub fuel_to_borrow: i64,
+    pub fuel_to_borrow: u64,
     #[serde(with = "humantime_serde")]
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,

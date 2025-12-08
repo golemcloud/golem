@@ -4313,7 +4313,7 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         consumedFuel:
           type: integer
-          format: int64
+          format: uint64
     r#ExportedFunctionInvokedParams:
       type: object
       title: r#ExportedFunctionInvokedParams

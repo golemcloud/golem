@@ -21,7 +21,7 @@ use super::{
     WorkerResourceId, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
-use crate::model::component::{ComponentRevision, PluginPriority};
+use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, BeginAtomicRegionParams, BeginRemoteTransactionParams,
@@ -208,7 +208,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .worker_id
                     .ok_or("Missing worker_id field")?
                     .try_into()?,
-                component_revision: ComponentRevision(create.component_version),
+                component_revision: create.component_version.try_into()?,
                 env: create.env.into_iter().collect(),
                 environment_id: create
                     .environment_id
@@ -387,7 +387,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_revision: ComponentRevision(pending_update.target_version),
+                    target_revision: pending_update.target_version.try_into()?,
                     description: pending_update
                         .update_description
                         .ok_or("Missing update_description field")?
@@ -400,7 +400,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_revision: ComponentRevision(successful_update.target_version),
+                    target_revision: successful_update.target_version.try_into()?,
                     new_component_size: successful_update.new_component_size,
                     new_active_plugins: BTreeSet::from_iter(
                         successful_update
@@ -417,7 +417,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
-                    target_revision: ComponentRevision(failed_update.target_version),
+                    target_revision: failed_update.target_version.try_into()?,
                     details: failed_update.details,
                 }))
             }
@@ -594,7 +594,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         worker_id: Some(create.worker_id.into()),
-                        component_version: create.component_revision.0,
+                        component_version: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
                         environment_id: Some(create.environment_id.into()),
@@ -774,7 +774,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::PendingUpdate(
                         golem_api_grpc::proto::golem::worker::PendingUpdateParameters {
                             timestamp: Some(pending_update.timestamp.into()),
-                            target_version: pending_update.target_revision.0,
+                            target_version: pending_update.target_revision.into(),
                             update_description: Some(pending_update.description.into()),
                         },
                     )),
@@ -785,7 +785,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::SuccessfulUpdate(
                         golem_api_grpc::proto::golem::worker::SuccessfulUpdateParameters {
                             timestamp: Some(successful_update.timestamp.into()),
-                            target_version: successful_update.target_revision.0,
+                            target_version: successful_update.target_revision.into(),
                             new_component_size: successful_update.new_component_size,
                             new_active_plugins: successful_update
                                 .new_active_plugins
@@ -801,7 +801,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::FailedUpdate(
                         golem_api_grpc::proto::golem::worker::FailedUpdateParameters {
                             timestamp: Some(failed_update.timestamp.into()),
-                            target_version: failed_update.target_revision.0,
+                            target_version: failed_update.target_revision.into(),
                             details: failed_update.details,
                         },
                     )),
@@ -1184,7 +1184,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
             ),
             worker_invocation::Invocation::ManualUpdate(manual_update) => Ok(
                 PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters {
-                    target_revision: ComponentRevision(manual_update),
+                    target_revision: manual_update.try_into()?,
                 }),
             ),
         }
@@ -1218,7 +1218,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
             PublicWorkerInvocation::ManualUpdate(manual_update) => {
                 golem_api_grpc::proto::golem::worker::WorkerInvocation {
                     invocation: Some(worker_invocation::Invocation::ManualUpdate(
-                        manual_update.target_revision.0,
+                        manual_update.target_revision.into(),
                     )),
                 }
             }

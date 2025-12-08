@@ -151,7 +151,7 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_deployment)
     }
@@ -169,7 +169,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
                 *http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -219,7 +219,7 @@ impl HttpApiDeploymentService {
                 }
                 other => other.into(),
             })?
-            .into();
+            .try_into()?;
 
         Ok(stored_http_api_deployment)
     }
@@ -237,7 +237,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
                 *http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -297,7 +297,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
                 *http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -355,8 +355,8 @@ impl HttpApiDeploymentService {
             .list_staged(&environment.id.0)
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_deployments)
     }
@@ -389,8 +389,8 @@ impl HttpApiDeploymentService {
             .list_by_deployment(&environment_id.0, deployment_revision.into())
             .await?
             .into_iter()
-            .map(|r| r.into())
-            .collect();
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(http_api_deployments)
     }
@@ -407,7 +407,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
                 *http_api_deployment_id,
             ))?
-            .into();
+            .try_into()?;
 
         let environment = self
             .environment_service
@@ -461,7 +461,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(http_api_deployment)
     }
@@ -501,7 +501,7 @@ impl HttpApiDeploymentService {
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentByDomainNotFound(
                 domain.clone(),
             ))?
-            .into();
+            .try_into()?;
 
         Ok(http_api_deployment)
     }

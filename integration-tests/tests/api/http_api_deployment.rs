@@ -143,7 +143,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         let fetched_http_api_deployment = client
             .get_http_api_deployment_revision(
                 &http_api_deployment.id.0,
-                http_api_deployment.revision.0,
+                http_api_deployment.revision.into(),
             )
             .await?;
         assert!(fetched_http_api_deployment == http_api_deployment);
@@ -153,7 +153,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         let fetched_http_api_deployment = client
             .get_http_api_deployment_revision(
                 &http_api_deployment.id.0,
-                updated_http_api_deployment.revision.0,
+                updated_http_api_deployment.revision.into(),
             )
             .await?;
         assert!(fetched_http_api_deployment == updated_http_api_deployment);
@@ -202,7 +202,10 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .await?;
 
     client
-        .delete_http_api_deployment(&http_api_deployment.id.0, http_api_deployment.revision.0)
+        .delete_http_api_deployment(
+            &http_api_deployment.id.0,
+            http_api_deployment.revision.into(),
+        )
         .await?;
 
     {
@@ -332,7 +335,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
     client
         .delete_http_api_deployment(
             &http_api_deployment_1.id.0,
-            http_api_deployment_1.revision.0,
+            http_api_deployment_1.revision.into(),
         )
         .await?;
 
@@ -346,7 +349,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
     client
         .delete_http_api_deployment(
             &http_api_deployment_2.id.0,
-            http_api_deployment_2.revision.0,
+            http_api_deployment_2.revision.into(),
         )
         .await?;
 

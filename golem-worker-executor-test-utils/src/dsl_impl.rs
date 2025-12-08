@@ -259,7 +259,7 @@ impl TestDsl for TestWorkerExecutor {
             .clone()
             .create_worker(CreateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
-                component_version: latest_version.revision.0,
+                component_version: latest_version.revision.into(),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 env,
@@ -776,7 +776,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.0,
+                target_version: target_version.into(),
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -807,7 +807,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_worker(UpdateWorkerRequest {
                 worker_id: Some(worker_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                target_version: target_version.0,
+                target_version: target_version.into(),
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
             })

@@ -868,7 +868,7 @@ mod test {
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
         };
 
         let test_case = TestCase::builder(1)
@@ -898,10 +898,10 @@ mod test {
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
         };
         let update2 = UpdateDescription::Automatic {
-            target_revision: ComponentRevision(3),
+            target_revision: ComponentRevision::new(3).unwrap(),
         };
 
         let test_case = TestCase::builder(1)
@@ -935,7 +935,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -949,7 +949,7 @@ mod test {
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .imported_function_invoked(
                 "b",
@@ -972,7 +972,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -986,7 +986,7 @@ mod test {
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .imported_function_invoked(
                 "b",
@@ -1009,7 +1009,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update2 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -1023,7 +1023,7 @@ mod test {
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .failed_update(update2)
             .exported_function_invoked("c", vec![], k2.clone())
@@ -1037,10 +1037,10 @@ mod test {
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::Automatic {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
         };
         let update2 = UpdateDescription::Automatic {
-            target_revision: ComponentRevision(3),
+            target_revision: ComponentRevision::new(3).unwrap(),
         };
 
         let test_case = TestCase::builder(1)
@@ -1075,7 +1075,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -1089,7 +1089,7 @@ mod test {
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .imported_function_invoked(
                 "b",
@@ -1113,11 +1113,11 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
         let update2 = UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision(2),
+            target_revision: ComponentRevision::new(2).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
         };
 
@@ -1131,7 +1131,7 @@ mod test {
                 DurableFunctionType::ReadLocal,
             )
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .imported_function_invoked(
                 "b",
@@ -1144,7 +1144,7 @@ mod test {
             .failed_update(update1)
             .exported_function_invoked("c", vec![], k2.clone())
             .pending_invocation(WorkerInvocation::ManualUpdate {
-                target_revision: ComponentRevision(2),
+                target_revision: ComponentRevision::new(2).unwrap(),
             })
             .exported_function_completed(None, k2)
             .pending_update(&update2, |_| {})
@@ -1611,7 +1611,7 @@ mod test {
             TestCaseBuilder::new(
                 account_id,
                 owned_worker_id,
-                ComponentRevision(initial_component_version),
+                initial_component_version.try_into().unwrap(),
             )
         }
     }

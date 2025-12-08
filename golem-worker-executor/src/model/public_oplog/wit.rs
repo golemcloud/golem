@@ -55,7 +55,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_revision: component_revision.0,
+                component_revision: component_revision.into(),
                 args: vec![],
                 env: env.into_iter().collect(),
                 created_by: created_by.into(),
@@ -110,11 +110,20 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp,
                 response,
                 consumed_fuel,
-            }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
-                timestamp: timestamp.into(),
-                response: response.map(golem_wasm::golem_rpc_0_2_x::types::ValueAndType::from),
-                consumed_fuel,
-            }),
+            }) => {
+                // TODO: change the type in wit
+                let bounded = if consumed_fuel > i64::MAX as u64 {
+                    i64::MAX
+                } else {
+                    consumed_fuel as i64
+                };
+
+                Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
+                    timestamp: timestamp.into(),
+                    response: response.map(golem_wasm::golem_rpc_0_2_x::types::ValueAndType::from),
+                    consumed_fuel: bounded,
+                })
+            }
             PublicOplogEntry::Suspend(SuspendParams { timestamp }) => {
                 Self::Suspend(timestamp.into())
             }
@@ -181,7 +190,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
@@ -191,7 +200,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
@@ -201,7 +210,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_revision: target_revision.0,
+                target_revision: target_revision.into(),
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParams { timestamp, delta }) => {
@@ -432,7 +441,7 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                     .collect(),
             }),
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Self::ManualUpdate(target_revision.0)
+                Self::ManualUpdate(target_revision.into())
             }
         }
     }
