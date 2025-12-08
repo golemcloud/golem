@@ -122,7 +122,7 @@ impl AppCommandHandler {
 
     async fn cmd_new(
         &self,
-        application_name: Option<String>,
+        application_name: Option<ApplicationName>,
         languages: Vec<GuestLanguage>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -171,7 +171,7 @@ impl AppCommandHandler {
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
         }
 
-        let app_dir = PathBuf::from(&application_name);
+        let app_dir = PathBuf::from(&application_name.0);
         if app_dir.exists() {
             bail!(
                 "Application directory already exists: {}",
@@ -188,7 +188,7 @@ impl AppCommandHandler {
             ),
         );
 
-        let application_name = TemplateApplicationName::from(application_name);
+        let application_name = TemplateApplicationName::from(application_name.0);
 
         if components.is_empty() {
             let common_templates = languages

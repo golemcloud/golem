@@ -844,6 +844,7 @@ pub mod app {
     };
     use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentRevision;
     use golem_templates::model::GuestLanguage;
 
@@ -852,7 +853,7 @@ pub mod app {
         /// Create a new application
         New {
             /// Application folder name where the new application should be created
-            application_name: Option<String>,
+            application_name: Option<ApplicationName>,
             /// Languages that the application should support
             language: Vec<GuestLanguage>,
         },
