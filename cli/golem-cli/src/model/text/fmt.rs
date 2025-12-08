@@ -15,10 +15,8 @@
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ComponentLayerId;
-use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
-use crate::model::worker::WorkerNameMatch;
 use anyhow::anyhow;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
@@ -496,46 +494,6 @@ impl Drop for NestedTextViewIndent {
             }
         }
     }
-}
-
-pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
-    format!(
-        "{}{}/{}",
-        match &worker_name_match.environment_reference() {
-            Some(environment_reference) => {
-                match environment_reference {
-                    EnvironmentReference::Environment { environment_name } => {
-                        format!("{}/", environment_name.0.blue().bold())
-                    }
-                    EnvironmentReference::ApplicationEnvironment {
-                        application_name,
-                        environment_name,
-                    } => {
-                        format!(
-                            "{}/{}/",
-                            application_name.0.blue().bold(),
-                            environment_name.0.blue().bold()
-                        )
-                    }
-                    EnvironmentReference::AccountApplicationEnvironment {
-                        account_email,
-                        application_name,
-                        environment_name,
-                    } => {
-                        format!(
-                            "{}/{}/{}/",
-                            account_email.blue().bold(),
-                            application_name.0.blue().bold(),
-                            environment_name.0.blue().bold()
-                        )
-                    }
-                }
-            }
-            None => "".to_string(),
-        },
-        worker_name_match.component_name.0.blue().bold(),
-        worker_name_match.worker_name.0.green().bold(),
-    )
 }
 
 pub fn to_colored_json<T: Serialize>(value: &T) -> anyhow::Result<String> {

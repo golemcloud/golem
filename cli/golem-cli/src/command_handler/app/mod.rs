@@ -39,12 +39,12 @@ use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::{ApplicationClient, EnvironmentClient};
+use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName, ComponentRevision};
-use golem_common::model::deployment::DeploymentVersion;
+use golem_common::model::deployment::{CurrentDeployment, DeploymentVersion};
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
@@ -431,26 +431,30 @@ impl AppCommandHandler {
     }
 
     async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
-        // TODO: atomic: missing client method
-        /*
-        let project = self
+        let environment_handler = self.ctx.environment_handler();
+
+        let environment = environment_handler
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
+        let agent_types = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(None)
-            .await?;
+            .golem_clients()
+            .await?
+            .environment
+            .list_deployment_agent_types(
+                &environment.environment_id.0,
+                current_deployment.deployment_revision.0,
+            )
+            .await
+            .map_service_error()?
+            .values;
 
-        let clients = self.ctx.golem_clients().await?;
-        let result = clients
-            .agent_types
-            .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
-            .todo: map svc err
-            .await?;
-
-        self.ctx.log_handler().log_view(&result);
+        self.ctx.log_handler().log_view(&agent_types);
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
@@ -528,7 +532,8 @@ impl AppCommandHandler {
             return Ok(());
         }
 
-        self.apply_staged_changes_to_environment(&deploy_diff)
+        let current_deployment = self
+            .apply_staged_changes_to_environment(&deploy_diff)
             .await?;
 
         if config.deploy_args.is_any_set() {
@@ -539,7 +544,10 @@ impl AppCommandHandler {
                 .golem_clients()
                 .await?
                 .environment
-                .get_environment_components(&deploy_diff.environment.environment_id.0)
+                .get_deployment_components(
+                    &current_deployment.environment_id.0,
+                    current_deployment.revision.0,
+                )
                 .await?
                 .values;
 
@@ -1110,7 +1118,7 @@ impl AppCommandHandler {
     async fn apply_staged_changes_to_environment(
         &self,
         deploy_diff: &DeployDiff,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<CurrentDeployment> {
         let clients = self.ctx.golem_clients().await?;
 
         log_action("Deploying", "staged changes to the environment");
@@ -1133,7 +1141,7 @@ impl AppCommandHandler {
         // TODO: atomic: proper view
         self.ctx.log_handler().log_serializable(&result);
 
-        Ok(())
+        Ok(result)
     }
 
     pub async fn get_remote_application(
@@ -1231,7 +1239,9 @@ impl AppCommandHandler {
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {
-        /*
+        let clients = self.ctx.golem_clients().await?;
+        let environment_handler = self.ctx.environment_handler();
+
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -1242,34 +1252,37 @@ impl AppCommandHandler {
             .collect::<Result<Vec<ComponentName>, _>>()
             .map_err(|err| anyhow!(err))?;
 
-        let environment = self
-            .ctx
-            .environment_handler()
+        let environment = environment_handler
             .resolve_environment(EnvironmentResolveMode::ManifestOnly)
             .await?;
 
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
         let mut components = Vec::with_capacity(selected_component_names.len());
         for component_name in &selected_component_names {
-            match self
-                .ctx
-                .component_handler()
-                .component(Some(&environment), component_name.into(), None)
-                .await?
+            match clients
+                .component
+                .get_deployment_component(
+                    &environment.environment_id.0,
+                    current_deployment.revision.0,
+                    &component_name.0,
+                )
+                .await
+                .map_service_error_not_found_as_opt()?
             {
                 Some(component) => {
                     components.push(component);
                 }
                 None => {
-                    log_warn(format!(
+                    log_error(format!(
                         "Component {} is not deployed!",
                         component_name.0.log_color_highlight()
                     ));
+                    bail!(NonSuccessfulExit)
                 }
             }
         }
-        Ok(components)*/
-        // TODO: atomic
-        todo!()
+        Ok(components)
     }
 
     pub async fn must_select_components(

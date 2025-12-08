@@ -412,33 +412,69 @@ impl ComponentCommandHandler {
 
     async fn cmd_update_workers(
         &self,
-        _component_name: Option<ComponentName>,
-        _update_mode: AgentUpdateMode,
-        _await_update: bool,
+        component_name: Option<ComponentName>,
+        update_mode: AgentUpdateMode,
+        await_update: bool,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
-        */
-        todo!()
     }
 
     async fn cmd_redeploy_workers(
         &self,
-        _component_name: Option<ComponentName>,
+        component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
-        // TODO: atomic
-        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
-        */
-        todo!()
+    }
+
+    async fn components_for_deploy_args(
+        &self,
+        component_name: Option<ComponentName>,
+    ) -> anyhow::Result<Vec<ComponentDto>> {
+        let clients = self.ctx.golem_clients().await?;
+        let environment_handler = self.ctx.environment_handler();
+
+        let selected_component_names = self
+            .opt_select_components_by_app_dir_or_name(component_name.as_ref())
+            .await?;
+
+        let environment = environment_handler
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+
+        let current_deployment = environment_handler.resolved_current_deployment(&environment)?;
+
+        let mut components = Vec::with_capacity(selected_component_names.component_names.len());
+        for component_name in &selected_component_names.component_names {
+            match clients
+                .component
+                .get_deployment_component(
+                    &environment.environment_id.0,
+                    current_deployment.revision.0,
+                    &component_name.0,
+                )
+                .await
+                .map_service_error_not_found_as_opt()?
+            {
+                Some(component) => {
+                    components.push(component);
+                }
+                None => {
+                    log_error(format!(
+                        "Component {} is not deployed!",
+                        component_name.0.log_color_highlight()
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+        Ok(components)
     }
 
     async fn cmd_diagnose(

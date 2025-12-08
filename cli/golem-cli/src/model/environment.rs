@@ -14,6 +14,7 @@
 
 use crate::log::LogColorize;
 use crate::model::app_raw::Environment;
+use crate::model::text::environment::format_resolved_environment_identity;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -164,6 +165,10 @@ impl ResolvedEnvironmentIdentity {
 
     pub fn is_manifest_scoped(&self) -> bool {
         self.source.is_manifest_scoped()
+    }
+
+    pub fn text_format(&self) -> String {
+        format_resolved_environment_identity(self)
     }
 }
 

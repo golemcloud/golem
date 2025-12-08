@@ -74,10 +74,9 @@ impl ApiDomainCommandHandler {
         log_action(
             "Creating",
             format!(
-                "domain registration {} for {}/{}",
+                "domain registration {} for {}",
                 domain.0.log_color_highlight(),
-                environment.application_name.0.log_color_highlight(),
-                environment.environment_name.0.log_color_highlight()
+                environment.text_format(),
             ),
         );
 
@@ -129,16 +128,14 @@ impl ApiDomainCommandHandler {
 
             if domains.is_empty() {
                 logln(format!(
-                    "No domains are registered yet for {}/{}",
-                    environment.application_name.0.log_color_highlight(),
-                    environment.environment_name.0.log_color_highlight()
+                    "No domains are registered yet for {}",
+                    environment.text_format()
                 ));
             } else {
                 logln(
                     format!(
-                        "Currently registered domains for {}/{}:",
-                        environment.application_name.0.log_color_highlight(),
-                        environment.environment_name.0.log_color_highlight()
+                        "Currently registered domains for {}:",
+                        environment.text_format()
                     )
                     .log_color_help_group()
                     .to_string(),
@@ -160,10 +157,9 @@ impl ApiDomainCommandHandler {
         log_warn_action(
             "Deleting",
             format!(
-                "domain registration {} from {}/{}",
+                "domain registration {} from {}",
                 domain.0.log_color_highlight(),
-                environment.application_name.0.log_color_highlight(),
-                environment.environment_name.0.log_color_highlight()
+                environment.text_format()
             ),
         );
         log_action("Deleted", "domain {}");
