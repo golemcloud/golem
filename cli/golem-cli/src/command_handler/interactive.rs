@@ -572,6 +572,11 @@ impl InteractiveHandler {
                         "The specified application name already exists as a directory!".to_string(),
                     )));
                 }
+
+                if let Err(error) = ApplicationName::from_str(value) {
+                    return Ok(Validation::Invalid(ErrorMessage::Custom(error)));
+                }
+
                 Ok(Validation::Valid)
             })
             .prompt()
@@ -579,6 +584,7 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let app_name = ApplicationName(app_name);
 
         let mut existing_component_names = HashSet::<String>::new();
         let mut templated_component_names = Vec::<(String, ComponentName)>::new();
@@ -689,10 +695,11 @@ impl InteractiveHandler {
         else {
             return Ok(None);
         };
+        let component_name = ComponentName(component_name);
 
         Ok(Some((
             format!("{}/{}", language.id(), template.template_name),
-            ComponentName::from_str(&component_name).unwrap(),
+            component_name,
         )))
     }
 

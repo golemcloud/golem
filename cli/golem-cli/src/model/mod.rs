@@ -37,6 +37,7 @@ use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_templates::model::{GuestLanguage, GuestLanguageTier, Template, TemplateName};
 use serde::{Deserialize, Serialize};
@@ -328,7 +329,7 @@ impl From<golem_client::model::PluginDefinition> for PluginDefinition {
 */
 
 pub struct NewInteractiveApp {
-    pub app_name: String,
+    pub app_name: ApplicationName,
     pub templated_component_names: Vec<(ComponentTemplateName, ComponentName)>,
 }
 
