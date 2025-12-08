@@ -19,8 +19,9 @@ use crate::model::text::http_api_domain::{DomainRegistrationNewView, HttpApiDoma
 
 use crate::command::api::domain::ApiDomainSubcommand;
 use crate::error::NonSuccessfulExit;
-use crate::log::log_warn_action;
+use crate::log::{log_action, log_warn_action, logln, LogColorize};
 use crate::model::environment::EnvironmentResolveMode;
+use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use golem_client::api::ApiDomainClient;
 use golem_client::model::{DomainRegistration, DomainRegistrationCreation};
@@ -68,6 +69,16 @@ impl ApiDomainCommandHandler {
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
+        log_action(
+            "Creating",
+            format!(
+                "domain registration {} for {}/{}",
+                domain.0.log_color_highlight(),
+                environment.application_name.0.log_color_highlight(),
+                environment.environment_name.0.log_color_highlight()
+            ),
+        );
+
         let domain = self
             .ctx
             .golem_clients()
@@ -89,16 +100,71 @@ impl ApiDomainCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&self, _domain: String) -> anyhow::Result<()> {
-        let _environment = self
+    async fn cmd_delete(&self, domain: String) -> anyhow::Result<()> {
+        let domain = Domain(domain);
+
+        let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
 
-        // TODO: atomic: missing client: get domain registration by domain?
+        let clients = self.ctx.golem_clients().await?;
 
-        log_warn_action("Deleted", "domain");
+        let domains = clients
+            .api_domain
+            .list_environment_domain_registrations(&environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .values;
+
+        let Some(domain_to_delete) = domains.iter().find(|d| d.domain == domain) else {
+            log_error(format!(
+                "Domain {} not found",
+                domain.0.log_color_highlight()
+            ));
+            logln("");
+
+            if domains.is_empty() {
+                logln(format!(
+                    "No domains are registered yet for {}/{}",
+                    environment.application_name.0.log_color_highlight(),
+                    environment.environment_name.0.log_color_highlight()
+                ));
+            } else {
+                logln(
+                    format!(
+                        "Currently registered domains for {}/{}:",
+                        environment.application_name.0.log_color_highlight(),
+                        environment.environment_name.0.log_color_highlight()
+                    )
+                    .log_color_help_group()
+                    .to_string(),
+                );
+                for domain in domains {
+                    logln(format!("- {}", domain.domain.0))
+                }
+            }
+
+            bail!(NonSuccessfulExit);
+        };
+
+        clients
+            .api_domain
+            .delete_domain_registrations(&domain_to_delete.id.0)
+            .await
+            .map_service_error()?;
+
+        log_warn_action(
+            "Deleting",
+            format!(
+                "domain registration {} from {}/{}",
+                domain.0.log_color_highlight(),
+                environment.application_name.0.log_color_highlight(),
+                environment.environment_name.0.log_color_highlight()
+            ),
+        );
+        log_action("Deleted", "domain {}");
 
         Ok(())
     }
