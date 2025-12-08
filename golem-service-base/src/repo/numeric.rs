@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
 use bigdecimal::ToPrimitive;
 use sqlx::Database;
+use sqlx::TypeInfo;
+use sqlx::ValueRef;
 use sqlx::decode::Decode;
 use sqlx::encode::{Encode, IsNull};
 use sqlx::error::BoxDynError;
+use sqlx::sqlite::SqliteValueRef;
 use sqlx::types::BigDecimal;
 use std::fmt;
 use std::str::FromStr;
@@ -94,36 +98,58 @@ impl sqlx::Type<sqlx::Sqlite> for NumericU64 {
     }
 
     fn compatible(ty: &<sqlx::Sqlite as Database>::TypeInfo) -> bool {
-        <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+        <i64 as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+            || <String as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
     }
 }
 
 impl<'q> Encode<'q, sqlx::Sqlite> for NumericU64
 where
+    i64: sqlx::Encode<'q, sqlx::Sqlite>,
     String: sqlx::Encode<'q, sqlx::Sqlite>,
 {
     fn encode_by_ref(
         &self,
         buf: &mut <sqlx::Sqlite as Database>::ArgumentBuffer<'q>,
     ) -> Result<IsNull, Box<dyn std::error::Error + Send + Sync>> {
-        let s = self.0.to_string();
-        s.encode_by_ref(buf)
+        if self.0 <= i64::MAX as u64 {
+            let encoded = self.0 as i64;
+            encoded.encode_by_ref(buf)
+        } else {
+            let encoded = self.0.to_string();
+            encoded.encode_by_ref(buf)
+        }
     }
 
     fn size_hint(&self) -> usize {
-        self.0.to_string().len()
+        if self.0 <= i64::MAX as u64 {
+            8
+        } else {
+            self.0.to_string().len()
+        }
     }
 }
 
 impl<'r> Decode<'r, sqlx::Sqlite> for NumericU64
 where
+    i64: sqlx::Decode<'r, sqlx::Sqlite>,
     String: sqlx::Decode<'r, sqlx::Sqlite>,
 {
-    fn decode(
-        value: <sqlx::Sqlite as Database>::ValueRef<'r>,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let s: String = String::decode(value)?;
-        let u = u64::from_str(&s)?;
-        Ok(NumericU64::new(u))
+    fn decode(value: SqliteValueRef<'r>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        match value.type_info().name() {
+            "INTEGER" => {
+                let i: i64 = Decode::<sqlx::Sqlite>::decode(value)?;
+                if i < 0 {
+                    Err(anyhow!("Negative values not supported for NumericU64: {i}"))?
+                }
+                Ok(NumericU64(i as u64))
+            }
+            "TEXT" => {
+                let s: String = Decode::<sqlx::Sqlite>::decode(value)?;
+                let u = u64::from_str(&s)?;
+                Ok(NumericU64(u))
+            }
+            other => Err(anyhow!("Unsupported type for NumericU64: {other}"))?,
+        }
     }
 }

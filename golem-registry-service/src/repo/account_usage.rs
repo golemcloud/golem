@@ -139,11 +139,11 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 sqlx::query(indoc! { r#"
                     WITH counts AS (
                         SELECT
-                            COUNT(DISTINCT a.application_id)::NUMERIC AS total_apps,
-                            COUNT(DISTINCT e.environment_id)::NUMERIC AS total_envs,
-                            COUNT(DISTINCT c.component_id)::NUMERIC AS total_components,
+                            CAST(COUNT(DISTINCT a.application_id) AS NUMERIC) AS total_apps,
+                            CAST(COUNT(DISTINCT e.environment_id) AS NUMERIC) AS total_envs,
+                            CAST(COUNT(DISTINCT c.component_id) AS NUMERIC) AS total_components,
                             CASE
-                                WHEN SUM(cr.size) > 18446744073709551615::NUMERIC
+                                WHEN SUM(cr.size) > 18446744073709551615
                                 THEN 18446744073709551615
                                 ELSE COALESCE(SUM(cr.size), 0)
                             END AS total_component_size
@@ -233,7 +233,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)::NUMERIC
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications
                                     WHERE account_id = $2 AND deleted_at IS NULL
                                 ) as value
@@ -248,7 +248,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)::NUMERIC
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     WHERE a.account_id = $2 AND a.deleted_at IS NULL AND e.deleted_at IS NULL
@@ -264,7 +264,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                         .fetch_all(
                             sqlx::query(indoc! { r#"
                                 SELECT $1 as usage_type, (
-                                    SELECT COUNT(*)::NUMERIC
+                                    SELECT CAST(COUNT(*) AS NUMERIC)
                                     FROM applications a
                                     JOIN environments e ON e.application_id = a.application_id
                                     JOIN components c ON c.environment_id = e.environment_id
@@ -285,7 +285,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                     (
                                         SELECT
                                             CASE
-                                                WHEN total > 18446744073709551615::NUMERIC
+                                                WHEN total > 18446744073709551615
                                                 THEN 18446744073709551615
                                                 ELSE total
                                             END AS value
@@ -358,7 +358,7 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                                 value = CASE
                                     WHEN account_usage_stats.value + $6 < 0
                                         THEN 0
-                                    WHEN account_usage_stats.value + $6 > 18446744073709551615::NUMERIC
+                                    WHEN account_usage_stats.value + $6 > 18446744073709551615
                                         THEN 18446744073709551615
                                     ELSE account_usage_stats.value + $6
                                 END,
@@ -370,9 +370,13 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                             UsageGrouping::Total => USAGE_KEY_TOTAL,
                             UsageGrouping::Monthly => &date_usage_key,
                         })
-                        .bind(if change < 0 { 0.into() } else { NumericU64::new(change as u64) })
+                        .bind(if change < 0 {
+                            0.into()
+                        } else {
+                            NumericU64::new(change as u64)
+                        })
                         .bind(SqlDateTime::now())
-                        .bind(change)
+                        .bind(change),
                     )
                     .await?;
                 }
