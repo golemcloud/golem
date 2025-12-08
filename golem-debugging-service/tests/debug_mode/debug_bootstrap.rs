@@ -23,7 +23,6 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
-use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms;
 use golem_worker_executor::services::resource_limits;
@@ -41,7 +40,6 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::All;
 use golem_worker_executor::{Bootstrap, RunDetails};
 use golem_worker_executor_test_utils::component_service::ComponentServiceLocalFileSystem;
-use golem_worker_executor_test_utils::plugins::PluginsUnavailable;
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
 use std::sync::Arc;
@@ -72,14 +70,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         golem_config: &GolemConfig,
     ) -> Arc<ActiveWorkers<DebugContext>> {
         Arc::new(ActiveWorkers::<DebugContext>::new(&golem_config.memory))
-    }
-
-    fn create_plugins(
-        &self,
-        _golem_config: &GolemConfig,
-        _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService> {
-        Arc::new(PluginsUnavailable)
     }
 
     fn create_component_service(
@@ -132,7 +122,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         _worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -191,7 +180,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -224,7 +212,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_types_service.clone(),
@@ -256,7 +243,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
             additional_deps,

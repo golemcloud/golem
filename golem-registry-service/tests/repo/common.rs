@@ -31,8 +31,7 @@ use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields, RevisionAuditFields,
 };
 use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentPluginInstallationRecord, ComponentRepoError,
-    ComponentRevisionRecord,
+    ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
 };
 use golem_registry_service::repo::model::datetime::SqlDateTime;
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
@@ -539,8 +538,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let component_name = "test-component";
     let component_id = new_repo_uuid();
 
-    let plugin_a = deps
-        .plugin_repo
+    deps.plugin_repo
         .create(PluginRecord {
             plugin_id: new_repo_uuid(),
             account_id: app.account_id,
@@ -563,8 +561,7 @@ pub async fn test_component_stage(deps: &Deps) {
         .unwrap()
         .unwrap();
 
-    let plugin_b = deps
-        .plugin_repo
+    deps.plugin_repo
         .create(PluginRecord {
             plugin_id: new_repo_uuid(),
             account_id: app.account_id,
@@ -615,28 +612,7 @@ pub async fn test_component_stage(deps: &Deps) {
             audit: RevisionAuditFields::new(user.revision.account_id),
             file_permissions: ComponentFilePermissions::ReadWrite.into(),
         }],
-        plugins: vec![
-            ComponentPluginInstallationRecord {
-                component_id,
-                revision_id: 0,
-                priority: 1,
-                audit: RevisionAuditFields::new(user.revision.account_id),
-                plugin_id: plugin_a.plugin_id,
-                plugin_name: plugin_a.name.clone(),
-                plugin_version: plugin_a.version.clone(),
-                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-            },
-            ComponentPluginInstallationRecord {
-                component_id,
-                revision_id: 0,
-                priority: 2,
-                audit: RevisionAuditFields::new(user.revision.account_id),
-                plugin_id: plugin_b.plugin_id,
-                plugin_name: plugin_b.name.clone(),
-                plugin_version: plugin_b.version.clone(),
-                parameters: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-            },
-        ],
+        plugins: vec![],
         files: vec![ComponentFileRecord {
             component_id,
             revision_id: 0,
@@ -716,14 +692,6 @@ pub async fn test_component_stage(deps: &Deps) {
             .map(|file| ComponentFileRecord {
                 revision_id: 1,
                 ..file.clone()
-            })
-            .collect(),
-        plugins: revision_0
-            .plugins
-            .iter()
-            .map(|plugin| ComponentPluginInstallationRecord {
-                revision_id: 1,
-                ..plugin.clone()
             })
             .collect(),
         files: revision_0

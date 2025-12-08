@@ -330,7 +330,6 @@ pub struct PluginInstallationDescription {
     pub plugin_priority: PluginPriority,
     pub plugin_name: String,
     pub plugin_version: String,
-    pub registered: bool,
     pub parameters: BTreeMap<String, String>,
 }
 

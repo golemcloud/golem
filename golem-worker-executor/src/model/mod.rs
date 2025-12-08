@@ -130,9 +130,6 @@ pub struct CurrentResourceLimits {
 
 impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResourceLimits {
     fn from(value: golem_api_grpc::proto::golem::common::ResourceLimits) -> Self {
-        const _: () = {
-            assert!(std::mem::size_of::<usize>() == 8, "Requires 64-bit usize");
-        };
         Self {
             fuel: value.available_fuel,
             max_memory: value.max_memory_per_worker as usize,

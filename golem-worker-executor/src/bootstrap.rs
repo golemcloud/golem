@@ -24,7 +24,6 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -60,14 +59,6 @@ struct ServerBootstrap {}
 impl Bootstrap<Context> for ServerBootstrap {
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Context>> {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
-    }
-
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-        registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn PluginsService> {
-        crate::services::plugins::configured(registry_service, &golem_config.plugin_service)
     }
 
     fn create_component_service(
@@ -107,7 +98,6 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
         registry_service: Arc<dyn RegistryService>,
@@ -143,7 +133,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_type_service.clone(),
@@ -176,7 +165,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_activator.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             agent_type_service.clone(),
@@ -208,7 +196,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
-            plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
             additional_deps,

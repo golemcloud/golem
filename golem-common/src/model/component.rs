@@ -153,13 +153,20 @@ declare_structs! {
     }
 
     pub struct InstalledPlugin {
-        pub plugin_registration_id: PluginRegistrationId,
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
+
+        pub plugin_registration_id: PluginRegistrationId,
+        pub plugin_name: String,
+        pub plugin_version: String,
+
+        // oplog processor only
+        pub oplog_processor_component_id: Option<ComponentId>,
+        pub oplog_processor_component_revision: Option<ComponentRevision>,
     }
 
     pub struct PluginInstallation {
-        // TODO: change this to be plugin registration id
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         /// Plugins will be applied in order of increasing priority
         pub priority: PluginPriority,
@@ -381,9 +388,18 @@ mod protobuf {
     impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(value: InstalledPlugin) -> Self {
             Self {
-                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                environment_plugin_grant_id: Some(value.environment_plugin_grant_id.into()),
                 priority: value.priority.0,
                 parameters: value.parameters.into_iter().collect(),
+
+                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                plugin_name: value.plugin_name,
+                plugin_version: value.plugin_version,
+
+                oplog_processor_component_id: value.oplog_processor_component_id.map(|v| v.into()),
+                oplog_processor_component_version: value
+                    .oplog_processor_component_revision
+                    .map(|v| v.0),
             }
         }
     }
@@ -394,12 +410,27 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::component::PluginInstallation,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
+                environment_plugin_grant_id: value
+                    .environment_plugin_grant_id
+                    .ok_or("Missing environment_plugin_grant_id")?
+                    .try_into()?,
+                priority: PluginPriority(value.priority),
+                parameters: value.parameters.into_iter().collect(),
+
                 plugin_registration_id: value
                     .plugin_registration_id
                     .ok_or("Missing plugin_registration_id")?
                     .try_into()?,
-                priority: PluginPriority(value.priority),
-                parameters: value.parameters.into_iter().collect(),
+                plugin_name: value.plugin_name,
+                plugin_version: value.plugin_version,
+
+                oplog_processor_component_id: value
+                    .oplog_processor_component_id
+                    .map(|v| v.try_into())
+                    .transpose()?,
+                oplog_processor_component_revision: value
+                    .oplog_processor_component_version
+                    .map(ComponentRevision),
             })
         }
     }

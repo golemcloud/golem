@@ -19,7 +19,6 @@ use crate::services::component::ComponentService;
 use crate::services::component_resolver::ComponentResolverService;
 use crate::services::deployment::{DeployedRoutesService, DeploymentService};
 use crate::services::environment::EnvironmentService;
-use crate::services::plugin_registration::PluginRegistrationService;
 use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -37,19 +36,16 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetAuthDetailsForEnvironmentSuccessResponse, GetComponentMetadataRequest,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetLatestComponentMetadataRequest, GetLatestComponentMetadataResponse,
-    GetLatestComponentMetadataSuccessResponse, GetPluginRegistrationByIdRequest,
-    GetPluginRegistrationByIdResponse, GetPluginRegistrationByIdSuccessResponse,
-    GetResourceLimitsRequest, GetResourceLimitsResponse, GetResourceLimitsSuccessResponse,
-    RegistryServiceError, ResolveComponentRequest, ResolveComponentResponse,
-    ResolveComponentSuccessResponse, UpdateWorkerConnectionLimitRequest,
+    GetLatestComponentMetadataSuccessResponse, GetResourceLimitsRequest, GetResourceLimitsResponse,
+    GetResourceLimitsSuccessResponse, RegistryServiceError, ResolveComponentRequest,
+    ResolveComponentResponse, ResolveComponentSuccessResponse, UpdateWorkerConnectionLimitRequest,
     UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
     authenticate_token_response, batch_update_fuel_usage_response, download_component_response,
     get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
     get_all_component_versions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_latest_component_metadata_response,
-    get_plugin_registration_by_id_response, get_resource_limits_response, registry_service_error,
-    resolve_component_response, update_worker_connection_limit_response,
-    update_worker_limit_response,
+    get_resource_limits_response, registry_service_error, resolve_component_response,
+    update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -57,11 +53,10 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::{
     proto_account_id_string, proto_application_id_string, proto_component_id_string,
-    proto_environment_id_string, proto_plugin_registration_id_string,
+    proto_environment_id_string,
 };
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
@@ -73,7 +68,6 @@ pub struct RegistryServiceGrpcApi {
     auth_service: Arc<AuthService>,
     environment_service: Arc<EnvironmentService>,
     account_usage_service: Arc<AccountUsageService>,
-    plugin_registration_service: Arc<PluginRegistrationService>,
     component_service: Arc<ComponentService>,
     component_resolver_service: Arc<ComponentResolverService>,
     deployment_service: Arc<DeploymentService>,
@@ -85,7 +79,6 @@ impl RegistryServiceGrpcApi {
         auth_service: Arc<AuthService>,
         environment_service: Arc<EnvironmentService>,
         account_usage_service: Arc<AccountUsageService>,
-        plugin_registration_service: Arc<PluginRegistrationService>,
         component_service: Arc<ComponentService>,
         component_resolver_service: Arc<ComponentResolverService>,
         deployment_service: Arc<DeploymentService>,
@@ -95,7 +88,6 @@ impl RegistryServiceGrpcApi {
             auth_service,
             environment_service,
             account_usage_service,
-            plugin_registration_service,
             component_service,
             component_resolver_service,
             deployment_service,
@@ -239,28 +231,6 @@ impl RegistryServiceGrpcApi {
 
         Ok(BatchUpdateFuelUsageSuccessResponse {
             account_resource_limits: Some(account_resource_limits.into()),
-        })
-    }
-
-    async fn get_plugin_registration_by_id_internal(
-        &self,
-        request: GetPluginRegistrationByIdRequest,
-    ) -> Result<GetPluginRegistrationByIdSuccessResponse, GrpcApiError> {
-        let auth_ctx: AuthCtx = request
-            .auth_ctx
-            .ok_or("missing auth_ctx field")?
-            .try_into()?;
-
-        let plugin_registration_id: PluginRegistrationId =
-            request.id.ok_or("missing id field")?.try_into()?;
-
-        let registration = self
-            .plugin_registration_service
-            .get_plugin(&plugin_registration_id, true, &auth_ctx)
-            .await?;
-
-        Ok(GetPluginRegistrationByIdSuccessResponse {
-            plugin: Some(registration.into()),
         })
     }
 
@@ -603,31 +573,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(BatchUpdateFuelUsageResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn get_plugin_registration_by_id(
-        &self,
-        request: Request<GetPluginRegistrationByIdRequest>,
-    ) -> Result<Response<GetPluginRegistrationByIdResponse>, tonic::Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_plugin_registration_by_id",
-            plugin_registration_id = proto_plugin_registration_id_string(&request.id)
-        );
-
-        let response = match self
-            .get_plugin_registration_by_id_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => get_plugin_registration_by_id_response::Result::Success(result),
-            Err(error) => get_plugin_registration_by_id_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(GetPluginRegistrationByIdResponse {
             result: Some(response),
         }))
     }
