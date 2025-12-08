@@ -83,19 +83,22 @@ impl DeployDiff {
             &self.diffable_local_deployment,
             self.diff_stage.as_ref(),
         );
+
+        let staged_deployment = self.normalized_diff_deployment(
+            show_sensitive,
+            &self.diffable_staged_deployment,
+            self.diff_stage.as_ref(),
+        );
+
         let local_for_server = self.normalized_diff_deployment(
             show_sensitive,
             &self.diffable_local_deployment,
             Some(&self.diff),
         );
+
         let server_deployment = self.normalized_diff_deployment(
             show_sensitive,
             &self.diffable_server_deployment,
-            self.diff_stage.as_ref(),
-        );
-        let staged_deployment = self.normalized_diff_deployment(
-            show_sensitive,
-            &self.diffable_staged_deployment,
             Some(&self.diff),
         );
 
